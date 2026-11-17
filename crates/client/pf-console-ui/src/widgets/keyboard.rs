@@ -269,8 +269,8 @@ impl Keyboard {
         p.hits(self.tray_rect)
     }
 
-    /// The screen applies `Type`/`Backspace` (charset included); a refusal
-    /// comes back as Boundary from the screen.
+    /// [`Self::edit_menu`] applies `Type`/`Backspace` (charset included); a refusal
+    /// comes back as Boundary from there.
     pub fn menu(&mut self, ev: MenuEvent) -> (KeyMsg, Option<MenuPulse>) {
         let rows = key_rows(self.layer);
         match ev {
@@ -313,7 +313,8 @@ impl Keyboard {
         }
     }
 
-    /// Step the tray toward shown/hidden. Returns 0..1; exactly 0 while hidden so the caller can skip draw.
+    /// Step the tray toward shown/hidden. Returns 0 hidden to 1 seated, up to 1.2 while the
+    /// spring overshoots; exactly 0 once hidden so the caller can skip draw.
     pub fn seat(&mut self, shown: bool, dt: f64) -> f64 {
         self.tray
             .step(if shown { 1.0 } else { 0.0 }, TRAY_K, TRAY_C, dt);

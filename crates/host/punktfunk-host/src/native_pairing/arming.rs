@@ -1,8 +1,8 @@
 //! On-demand PIN window that arms native pairing.
 //!
 //! Owns [`Armed`] behind a [`Mutex`]. A window is a PIN, an optional expiry, an
-//! optional bound fingerprint, and an optional [`super::Access`] grant. CLI
-//! `--allow-pairing` arms with no expiry; the web console arms a timed window.
+//! optional bound fingerprint, and an optional [`super::Access`] grant. The standalone
+//! `punktfunk1-host` CLI arms at start with no expiry; the web console arms a timed window.
 //! A bound fingerprint rejects other clients without consuming the PIN.
 //!
 //! Pin this via [`ArmState`]. Pairing ceremony tests live on the [`super`] facade.
@@ -10,8 +10,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// PIN window. `pin == None` is disarmed. `expires_at == None` is CLI
-/// `--allow-pairing` (no auto-disarm). `bound_fp == Some` rejects other
+/// PIN window. `pin == None` is disarmed. `expires_at == None` is the `punktfunk1-host`
+/// start-up arm (no auto-disarm). `bound_fp == Some` rejects other
 /// fingerprints without consuming the PIN.
 #[derive(Default)]
 struct Armed {
@@ -46,7 +46,7 @@ pub(super) struct ArmState {
 }
 
 impl ArmState {
-    /// Disarmed unless `arm_at_start`: then a PIN with no expiry (CLI `--allow-pairing`).
+    /// Disarmed unless `arm_at_start`: then a PIN with no expiry (the `punktfunk1-host` CLI).
     pub(super) fn new(arm_at_start: bool, fixed_pin: Option<String>) -> ArmState {
         let arm = if arm_at_start {
             Armed {

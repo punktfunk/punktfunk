@@ -1,4 +1,4 @@
-// Build src/data.json — the payload the Worker serves — from published winget manifests.
+// Build data.json — the catalogue server.mjs serves — from published winget manifests.
 //
 // Source of truth is the Gitea RELEASES, not local files: windows-host.yml attaches the manifests
 // to each stable tag, so walking releases yields every version the source should offer. That
@@ -8,11 +8,10 @@
 // Deriving from releases also means this script holds no state. Re-running it reproduces the same
 // data.json, so a lost deployment is one command away and there is no accumulated file to drift.
 //
-//   node build-data.mjs                       # from Gitea releases (what CI runs)
+//   node build-data.mjs --out data/data.json  # from Gitea releases (what CI runs)
 //   node build-data.mjs --local ../           # from a local manifest dir (dev, single version)
-//   node build-data.mjs --out src/data.json
 //
-// The `yaml` dep is a BUILD-time dependency only — the Worker ships data.json, never a parser.
+// The `yaml` dep is a BUILD-time dependency only — server.mjs reads data.json, never YAML.
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,7 +39,7 @@ const DEFAULT_LOCALE = `${PACKAGE_ID}.locale.en-US.yaml`;
 const isExtraLocale = (name) =>
   name.startsWith(`${PACKAGE_ID}.locale.`) && name.endsWith(".yaml") && name !== DEFAULT_LOCALE;
 
-/** One version's manifests -> the shape the Worker serves. */
+/** One version's manifests -> the shape handler.mjs serves. */
 function toVersionEntry(installer, locale, extraLocales = [], productCodeFallback) {
   // The REST manifest nests DefaultLocale, Locales + Installers under each version, whereas the
   // YAML splits them across files keyed by PackageVersion. Strip the per-file bookkeeping that does

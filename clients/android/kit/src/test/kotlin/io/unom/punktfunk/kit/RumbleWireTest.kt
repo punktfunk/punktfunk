@@ -58,7 +58,7 @@ class RumbleWireTest {
         assertNotEquals(stop, hold)
     }
 
-    // --- wireAmplitudeToByte (was two byte-identical private copies) ---
+    // --- wireAmplitudeToByte ---
 
     @Test
     fun `amplitude takes the high byte`() {

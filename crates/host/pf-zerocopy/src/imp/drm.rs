@@ -18,9 +18,9 @@ pub const P010: u32 = u32::from_le_bytes(*b"P010");
 
 /// The VkFormat whose colour components match `fourcc`; Vulkan does the byte swizzle.
 /// The 10-bit DRM word is Vulkan's PACK32 layout: XR30 has R in bits 20..29
-/// (`A2R10G10B10`, optional in Vulkan: a device without it drops XR30 from the capture
-/// offer), XB30 in bits 0..9 (`A2B10G10R10`). NV12 and P010 map to their two-plane
-/// formats; a consumer that samples packed RGB only refuses them itself.
+/// (`A2R10G10B10`, optional in Vulkan: without it the raw lane offers XR30 at LINEAR only),
+/// XB30 in bits 0..9 (`A2B10G10R10`). NV12 and P010 map to their two-plane formats; a
+/// consumer that samples packed RGB only refuses them itself.
 pub fn vk_format(fourcc: u32) -> Option<vk::Format> {
     Some(match fourcc {
         XR24 | AR24 => vk::Format::B8G8R8A8_UNORM,

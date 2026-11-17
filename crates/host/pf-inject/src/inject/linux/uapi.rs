@@ -1,5 +1,6 @@
-//! Device-node plumbing shared by [`crate::uinput_abi`] and the raw_gadget Deck: `open`
-//! through std (CLOEXEC, errno kept) and `ioctl` over typed references.
+//! Device-node plumbing shared by [`crate::uinput_abi`], the raw_gadget Deck and the
+//! `/dev/uinput` probes: `open` through std (CLOEXEC, errno kept) and `ioctl` over typed
+//! references.
 //!
 //! Request numbers and layouts are the 64-bit kernel ABI (x86_64 and aarch64 agree).
 

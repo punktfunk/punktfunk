@@ -4,7 +4,7 @@
 //! The `touch` model never reaches here: those contacts go on the wire as
 //! real multi-touch (`Capture::on_touch_*`).
 //!
-//! `trackpad` (default): cursor stays put on down; relative delta with mild
+//! `trackpad`: cursor stays put on down; relative delta with mild
 //! acceleration. `pointer`: cursor jumps to the finger (absolute, letterbox).
 //! Tap = left click · two-finger tap = right · two-finger drag = scroll ·
 //! tap-then-press = held left drag · three-finger tap = cycle stats overlay.
@@ -30,7 +30,7 @@ const LONG_PRESS_MS: f64 = 500.0;
 /// Q24.8 wire units per DIP of two-finger pan — `delta` is DIP × 256.
 const SCROLL_UNITS_PER_DIP: f32 = 256.0;
 /// Degrees of two-finger twist before the quick-action ring arms. Natural scrolls
-/// rotate a few degrees; much below 8° two-finger scrolling gets flaky.
+/// rotate a few degrees; a smaller twist stays a scroll.
 const DIAL_ARM_DEG: f32 = 10.0;
 /// Degrees at which the ring stays open after lift.
 const DIAL_COMMIT_DEG: f32 = 30.0;
@@ -44,7 +44,7 @@ const DIAL_FRAME_MS: f64 = 4.0;
 /// ms of stillness on the other finger: a thumb-pivot is a real twist and never
 /// completes a same-frame pair.
 const DIAL_PIVOT_MS: f64 = 50.0;
-/// Finger-px → host-px gain (~1:1).
+/// Base finger-px → host-px gain, before acceleration.
 const POINTER_SENS: f32 = 1.3;
 /// Extra gain per px/ms above `ACCEL_SPEED_FLOOR`. `ACCEL_MAX` stops a fast swipe
 /// flinging the cursor.
@@ -78,8 +78,8 @@ pub enum TouchScrollPhase {
 }
 
 /// Wire intent. `Capture` in `input.rs` sends each one and folds `CycleStats` back
-/// to the run loop; the `InputKind` translation lives there so this crate stays
-/// free of core.
+/// to the run loop; the `InputKind` translation lives there so this module takes no
+/// `punktfunk_core` dependency.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Act {
     MoveRel {
@@ -666,7 +666,7 @@ const LOGICAL_PPI: f32 = 160.0;
 
 /// The view in tenths of a millimetre, from its window pixels and display scale at
 /// [`LOGICAL_PPI`]. A Steam Deck (1280×800 at scale 1) reads 203×127 mm; its panel is
-/// 151×94 mm, so the host sees strokes 1.35× as long.
+/// 151×94 mm (LCD) or 159×100 mm (OLED), so the host sees strokes 1.27–1.35× as long.
 pub fn view_dmm(px: (u32, u32), scale: f32) -> (u16, u16) {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale

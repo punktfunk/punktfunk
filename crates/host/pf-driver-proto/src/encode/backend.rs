@@ -4,8 +4,7 @@
 //! [`EncodeProbeRequest::backend`](crate::control::EncodeProbeRequest::backend).
 //!
 //! The host picks by these numbers, the driver opens by them and names them back, so both
-//! sides read the table here rather than restating it. A doc that restated it had already
-//! drifted: Media Foundation was missing from two of them while the host was sending it.
+//! sides read the table here rather than restating it.
 
 pub const NVENC: u32 = 1;
 pub const AMF: u32 = 2;

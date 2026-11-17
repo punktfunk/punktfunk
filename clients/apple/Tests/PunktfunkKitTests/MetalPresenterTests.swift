@@ -116,8 +116,8 @@ final class MetalPresenterTests: XCTestCase {
 
     /// A 10-bit SDR session presents through the 10-bit SDR drawable: sRGB-tagged like 8-bit SDR,
     /// no EDR, no metadata — and the layer must actually vend that format, which is the one thing
-    /// the SDK's stale "two supported values" comment cannot tell us. HDR outranks the depth flag,
-    /// and an 8-bit session keeps the 8-bit drawable.
+    /// the "two supported values" comment in the macOS 27 SDK's `CAMetalLayer.h` cannot tell us.
+    /// HDR outranks the depth flag, and an 8-bit session keeps the 8-bit drawable.
     func testConfigureTenBitSDRWidensTheDrawable() throws {
         guard let presenter = MetalVideoPresenter.make() else {
             throw XCTSkip("no Metal device available in this environment")
@@ -187,10 +187,9 @@ final class MetalPresenterTests: XCTestCase {
         XCTAssertEqual(presenter.layer.pixelFormat, .bgra8Unorm)
     }
 
-    /// `render` with a freshly-allocated NV12 buffer must present without crashing or hanging — the
-    /// main-thread present path is the highest-risk part of the stage-2 rewrite. (A headless CI with no
-    /// display can still allocate a drawable from a CAMetalLayer; if it can't, render returns false,
-    /// which is also a valid non-crashing outcome.)
+    /// `render` with a freshly-allocated NV12 buffer must present without crashing or hanging.
+    /// (A headless CI with no display can still allocate a drawable from a CAMetalLayer; if it
+    /// can't, render returns false, which is also a valid non-crashing outcome.)
     func testRenderDoesNotCrashOnNV12Frame() throws {
         guard let presenter = MetalVideoPresenter.make() else {
             throw XCTSkip("no Metal device available in this environment")

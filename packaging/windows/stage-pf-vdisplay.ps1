@@ -7,14 +7,13 @@
   pf-vdisplay (our all-Rust IddCx virtual display) is BUILT FROM SOURCE per release by
   build-pf-vdisplay.ps1 (packaging/windows/drivers/), which emits the signed pf_vdisplay.{dll,inf,cat}
   + punktfunk-driver.cer into a build-output dir. pack-host-installer.ps1 passes that dir here as
-  -VendorDir; we copy it + add the nefcon tool. (The old checked-in binaries under
-  packaging/windows/pf-vdisplay/ were retired - building from source keeps the .dll/.inf/.cat in
+  -VendorDir; we copy it + add the nefcon tool. (Building from source keeps the .dll/.inf/.cat in
   lockstep; see design/windows-build-and-packaging.md.) nefcon publishes a pinned release, so we fetch +
   SHA-256-verify it (it provides nefconc.exe, used to create the root-enumerated device node - pnputil
   can't).
 
   Output (packed into the installer's staging tree): -OutDir gets pf_vdisplay.inf/.cat/.dll,
-  pf_vdisplay_seats.inf/.cat + punktfunk-driver.cer and nefconc.exe (x64).
+  pf_vdisplay_seats.inf/.cat + punktfunk-driver.cer and nefconc.exe (for -Arch).
 
 .EXAMPLE
   pwsh -File stage-pf-vdisplay.ps1 -OutDir C:\t\out\stage

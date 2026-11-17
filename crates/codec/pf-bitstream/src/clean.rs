@@ -6,8 +6,8 @@
 //! client received; this ledger is what the client decoded.
 //!
 //! Forgotten ids (evicted from the DPB, dropped at a flush) read as clean: they
-//! cannot be referenced. A resident mark never clears, so the ledger can only
-//! make a consumer more conservative.
+//! cannot be referenced. A resident mark clears only through `forgive`, so the
+//! ledger can otherwise only make a consumer more conservative.
 //!
 //! Keyed by the planner's `PicId` (`u64` in all three codecs). Empty on a healthy
 //! stream. Tests in this module pin the propagation and reuse rules.

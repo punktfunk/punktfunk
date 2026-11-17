@@ -37,7 +37,8 @@ pub const VA_PROC_COLOR_STANDARD_EXPLICIT: u32 = 13;
 /// `VAProcColorProperties::color_range`.
 pub const VA_SOURCE_RANGE_REDUCED: u8 = 1;
 pub const VA_SOURCE_RANGE_FULL: u8 = 2;
-/// `filter_flags`: the driver's best scaler (iHD's polyphase AVS) instead of its default.
+/// `filter_flags`: the driver's high-quality scaler instead of its default (iHD: AVS on the
+/// render path rather than SFC).
 pub const VA_FILTER_SCALING_HQ: u32 = 0x0000_0200;
 
 /// libva fourccs name byte order; DRM fourccs name the bit layout of a
@@ -156,8 +157,8 @@ pub struct VaProcPipelineParameterBuffer {
 }
 
 impl VaProcPipelineParameterBuffer {
-    /// Whole-picture conversion of `source`, with the colour facts `swscale` used to
-    /// be told: RGB in at full range, YUV out at `full_range` (`false` is studio), and the
+    /// Whole-picture conversion of `source`, with the colour explicit: RGB in at full
+    /// range, YUV out at `full_range` (`false` is studio), and the
     /// `colour` H.273 triple (BT.709 for SDR at either depth, BT.2020 PQ for HDR) on the YUV
     /// side — the same primaries and transfer on both sides, so the only arithmetic is the
     /// matrix. YUV in is a producer's at the session's range, and is copied.
@@ -216,7 +217,7 @@ impl VaProcPipelineParameterBuffer {
     }
 }
 
-/// Measured by `layout-probe.c` against libva 2.22 on `.50`.
+/// Measured by `layout-probe.c` against libva 2.22.
 const _: () = {
     assert!(size_of::<VaRectangle>() == 8);
     assert!(offset_of!(VaRectangle, width) == 4);
@@ -245,7 +246,7 @@ const _: () = {
 mod tests {
     use super::*;
 
-    /// The capture formats the libav path mapped, each to the surface it imports as.
+    /// Each capture format and the surface it imports as.
     /// `XR24` is the everyday one: BGRX bytes, so the libva name reverses.
     #[test]
     fn every_capture_fourcc_imports_as_the_right_surface() {

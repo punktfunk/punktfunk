@@ -407,8 +407,8 @@ mod linux_main {
     }
 
     // Direct `geteuid` — a libc crate is not worth it here, nor `rustix::process::geteuid()`:
-    // Cargo.toml's zero-dep posture is the point. `safe fn`: no arguments, no memory, cannot
-    // fail. The `unsafe extern` block is the crate's sole `unsafe_code`.
+    // Cargo.toml's short dependency list is the point. `safe fn`: no arguments, no memory,
+    // cannot fail. The `unsafe extern` block is the crate's sole `unsafe_code`.
     #[allow(unsafe_code)]
     unsafe extern "C" {
         #[link_name = "geteuid"]

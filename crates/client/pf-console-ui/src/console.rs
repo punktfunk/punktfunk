@@ -209,11 +209,12 @@ impl Console {
 
     /// Draw every tab once into `canvas` before the first [`Self::frame`], so their GPU
     /// programs compile behind the host's splash rather than on first visit. A TV's GL driver
-    /// takes 50–170 ms a program; the next frame overwrites what this draws.
+    /// compiles a program at first use, often tens of ms or more; the next frame overwrites
+    /// what this draws.
     ///
     /// `frame_done` runs after each of the tour's ~50 frames. A GPU host flushes and waits
-    /// there: the tray blurs copy the framebuffer every frame, Mali never reuses those
-    /// textures, and one flush for the whole tour allocates them all at once.
+    /// there: the tray blurs copy the framebuffer every frame, Skia never reuses those copies
+    /// on a Mali GL context, and one flush for the whole tour allocates them all at once.
     pub fn warm_up(
         &mut self,
         canvas: &Canvas,
@@ -592,7 +593,7 @@ mod tests {
     }
 
     /// Returning to the shelf on top keeps it (its posters survive the stream); another
-    /// host's shelf, a Stream entry, or a Home top re-roots as before.
+    /// host's shelf, a Stream entry, or a Home top re-roots.
     #[test]
     fn a_library_entry_for_the_shelf_on_top_is_a_no_op() {
         let stack = entry_stack(ConsoleEntry::Library(Box::new(row())), "d");

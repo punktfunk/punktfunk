@@ -4,20 +4,21 @@
 //!
 //! Pyrowave owns the Vulkan device, selected by the render GPU's vendor/device-id
 //! (`pyrowave_create_device_by_compat`). Capture CSC writes two shareable D3D11
-//! planes — full-res R8 Y + half-res R8G8 CbCr, BT.709 full range — imported as NT
-//! handles. Separate single/two-component textures import at any size; a planar
-//! NV12 does not. A shared D3D11 fence imported as a Vulkan timeline orders the
+//! planes — full-res Y + CbCr (half-res at 4:2:0), R8/R8G8 or R16/R16G16 at 10-bit,
+//! full range — imported as NT handles. Separate single/two-component textures import at
+//! any size; a planar NV12 does not. A shared D3D11 fence imported as a Vulkan timeline orders the
 //! wavelet read after convert. `encode_gpu` runs acquire/encode/release
 //! in one pyrowave submission (`VK_QUEUE_FAMILY_EXTERNAL`). Every AU is a
 //! keyframe; framing is [`crate::pyrowave_wire`].
 //!
-//! Capture: `pf-capture` `windows/idd/mod.rs`. Y on `D3d11Frame::texture`,
+//! Capture: pf-encode-session `targets.rs` (`Targets::frame`). Y on `D3d11Frame::texture`,
 //! CbCr + fence on `D3d11Frame::pyro`.
 // `unsafe_op_in_unsafe_fn` off: this file is pyrowave-sys + D3D11/Vulkan interop.
 // Clearing it means deleting markers with no caller contract, not wrapping each call.
 #![allow(unsafe_op_in_unsafe_fn)]
 
-// Every `unsafe` block in this module carries a `// SAFETY:` proof (crate root enforces it).
+// Every `unsafe` block in this module carries a `// SAFETY:` proof (the workspace denies
+// `clippy::undocumented_unsafe_blocks`).
 
 use crate::pyrowave_ffi::{packetize, pw_check};
 use crate::pyrowave_wire::{self, AuStream, FrameBudget};
@@ -34,8 +35,8 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 
 /// Headroom over the per-frame rate budget for block headers + meta.
 const BS_SLACK: usize = 256 * 1024;
-/// Import-cache cap. IDD out-ring is OUT_RING=3; growth past that is a mid-life
-/// ring recreate, after which stale imports must be evicted.
+/// Import-cache cap, above the driver's target ring (`SLOTS` in pf-vdisplay `encode/pool.rs`);
+/// growth past that is a mid-life ring recreate, after which stale imports must be evicted.
 const IMPORT_CACHE_CAP: usize = 8;
 
 /// Texture COM address plus the extent it was imported at (COM pointers recycle).
@@ -104,8 +105,9 @@ pub struct PyroWaveEncoder {
     pw_enc: pw::pyrowave_encoder,
     // Vulkan timeline alias of the capturer's D3D11 fence; null until first-frame import.
     sync: pw::pyrowave_sync_object,
-    /// Capturer ring generation the cached plane imports belong to. A recreate
-    /// bumps it; COM addresses recycle, so identity cannot rest on the pointer.
+    /// Ring generation the cached plane imports belong to; a change flushes them. COM
+    /// addresses recycle, so identity cannot rest on the pointer. `Targets` stamps `1`: an
+    /// encoder drains one ring for its whole life.
     ring_gen: Option<u32>,
     y_images: Vec<(PlaneKey, pw::pyrowave_image)>,
     cbcr_images: Vec<(PlaneKey, pw::pyrowave_image)>,
@@ -881,7 +883,7 @@ mod tests {
     }
 
     /// End-to-end on a real GPU. `#[ignore]`d; build anywhere, run on the GPU host:
-    /// `cargo test -p pf-encode --features pyrowave --no-run`
+    /// `cargo test -p pf-encode-win --features pyrowave --no-run`
     /// then `<bin> --ignored --nocapture pyrowave_win_smoke`.
     /// Square plus real streaming sizes: NVIDIA D3D11→Vulkan import is size-sensitive.
     #[test]

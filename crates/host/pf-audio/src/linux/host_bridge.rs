@@ -75,21 +75,6 @@ struct NodeInfo {
     serial: Option<String>,
     /// An output stream of a voice-chat app.
     voice: bool,
-    /// An output stream of an app in [`POW2_QUANTUM_APPS`].
-    pow2: bool,
-}
-
-/// Apps the stream sink serves one quantum per cycle, as a hardware sink does. Ryujinx and
-/// its forks play silence whenever the game's next buffer is not there when it is asked for.
-const POW2_QUANTUM_APPS: &[&str] = &["ryujinx"];
-
-/// Whether a stream's `application.process.binary` / `application.name` names one of
-/// [`POW2_QUANTUM_APPS`]. Case-insensitive: the AUR source build runs as `ryujinx`.
-fn pow2_quantum_app<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
-    names
-        .into_iter()
-        .map(str::to_ascii_lowercase)
-        .any(|n| POW2_QUANTUM_APPS.iter().any(|a| n.contains(a)))
 }
 
 struct PortInfo {
@@ -139,11 +124,6 @@ impl HostBridge {
         self.nodes.get(&id).map(|n| n.name.as_str())
     }
 
-    /// Whether an app in [`POW2_QUANTUM_APPS`] has an output stream in the graph.
-    pub(super) fn wants_pow2_quantum(&self) -> bool {
-        self.nodes.values().any(|n| n.pow2)
-    }
-
     /// Whether `name` is the output the playthrough links feed — the node
     /// that then clocks the capture group, by design.
     pub(super) fn is_host(&self, name: &str) -> bool {
@@ -162,24 +142,22 @@ impl HostBridge {
                 let Some(name) = props.get("node.name") else {
                     return;
                 };
-                let output = props.get("media.class") == Some("Stream/Output/Audio");
-                let app = || {
-                    [
-                        props.get("application.name"),
-                        props.get("application.process.binary"),
-                    ]
-                    .into_iter()
-                    .flatten()
-                };
-                let voice = output && pf_host_config::voice_app_matches(app(), &self.voice_apps);
-                let pow2 = output && pow2_quantum_app(app());
+                let voice = props.get("media.class") == Some("Stream/Output/Audio")
+                    && pf_host_config::voice_app_matches(
+                        [
+                            props.get("application.name"),
+                            props.get("application.process.binary"),
+                        ]
+                        .into_iter()
+                        .flatten(),
+                        &self.voice_apps,
+                    );
                 self.nodes.insert(
                     global.id,
                     NodeInfo {
                         name: name.to_owned(),
                         serial: props.get("object.serial").map(str::to_owned),
                         voice,
-                        pow2,
                     },
                 );
             }
@@ -393,19 +371,5 @@ impl HostBridge {
             }
         }
         wrote
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::pow2_quantum_app;
-
-    #[test]
-    fn pow2_quantum_app_matches_ryujinx_builds() {
-        assert!(pow2_quantum_app(["Ryujinx"]));
-        assert!(pow2_quantum_app(["Audio Stream", "ryujinx"]));
-        assert!(pow2_quantum_app(["Ryujinx.Ava"]));
-        assert!(!pow2_quantum_app(["wine64-preloader", "Umineko"]));
-        assert!(!pow2_quantum_app([]));
     }
 }

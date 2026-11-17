@@ -69,8 +69,8 @@ type Rect = (i32, i32, i32, i32);
 /// fractional scales.
 const LAYOUT_STEP: f64 = 16.0;
 
-/// `(x, y, x_extent, y_extent)` that put fraction `norm` of `head` at its place in the bounding
-/// box of `heads`, which a layout-mapped compositor stretches absolute motion over.
+/// `(x, y, x_extent, y_extent)` that put fraction `(fx, fy)` of `head` at its place in the
+/// bounding box of `heads`, which a layout-mapped compositor stretches absolute motion over.
 fn layout_point(heads: &[Rect], head: Rect, (fx, fy): (f64, f64)) -> (u32, u32, u32, u32) {
     let all = || heads.iter().chain(std::iter::once(&head));
     let x0 = all().map(|r| r.0).min().unwrap_or(head.0);
@@ -286,7 +286,8 @@ pub struct WlrootsInjector {
     /// Fed only the plan's key ops: it counts presses per key, and this injector outlives the
     /// session, so an unmatched down would pin its modifier for the host's lifetime.
     xkb_state: xkb::State,
-    _keymap_file: std::fs::File, // compositor mmaps this memfd; drop would unmap it
+    /// The compositor reads its own dup of this fd while handling the keymap request.
+    _keymap_file: std::fs::File,
     text: Option<TextKeyboard>,
     /// Scroll lowering, legacy and normalized; holds the sub-detent residue.
     scroll: ScrollMapper,
@@ -311,7 +312,8 @@ struct TextKeyboard {
     keyboard: ZwpVirtualKeyboardV1,
     /// `chars[i]` types on wire keycode `i + 1` (xkb `i + 9`).
     chars: Vec<char>,
-    _keymap_file: Option<std::fs::File>, // compositor mmaps this memfd; drop would unmap it
+    /// The compositor reads its own dup of this fd while handling the keymap request.
+    _keymap_file: Option<std::fs::File>,
 }
 
 impl WlrootsInjector {
@@ -366,7 +368,7 @@ impl WlrootsInjector {
         let keyboard = keyboard_mgr.create_virtual_keyboard(&seat, &qh, ());
 
         // Wire keys are US-positional; this keymap is the host layout or ISO keys
-        // type as US neighbours. `crate::layout`, not empty names: those fall
+        // type as US neighbours. `pf_host_config::layout`, not empty names: those fall
         // through to `XKB_DEFAULT_*`, which a Wayland session does not export.
         let resolved = pf_host_config::layout::system_layout();
         let (rules, model, layout, variant, options) = resolved.names.as_args();
@@ -437,7 +439,7 @@ impl WlrootsInjector {
     /// letterboxed content rect, not the streamed mode. A head created since the
     /// last read takes two roundtrips, one to bind it and one for its name; they
     /// run once per aim generation, not per motion. The head and its generation
-    /// come from one read of the aim. In layout mode only the read runs.
+    /// come from one read of the aim. In layout mode `bind_target` is `None`: no re-make.
     fn retarget(&mut self) {
         let aim = crate::aim();
         if self.globals.lacks(&aim.target) && self.lookup_gen != aim.generation {
@@ -623,7 +625,7 @@ impl WlrootsInjector {
                 self.send_modifiers();
             }
             Op::Text(cp) => self.type_text(cp)?,
-            // No virtual-touch protocol here; touch is libei only.
+            // No virtual-touch protocol on wlroots: this backend drops touch.
             Op::TouchDown { .. } | Op::TouchMove { .. } | Op::TouchUp { .. } => {}
         }
         Ok(())
@@ -731,7 +733,7 @@ impl WlrootsInjector {
 impl Drop for WlrootsInjector {
     /// Release what the devices still hold before they go: the compositor keeps a closed
     /// virtual keyboard's keys pressed (Hyprland's `release_pressed_on_close` is off by
-    /// default), and an open gesture's axis interaction outlives the pointer's destroy.
+    /// default on 0.57), and an open gesture's axis interaction outlives the pointer's destroy.
     fn drop(&mut self) {
         let t = self.now_ms();
         for op in self.plan.lift(true, false) {

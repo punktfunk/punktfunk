@@ -3,8 +3,9 @@
 //! Type **`_punktfunk._udp.local.`** (UDP: the protocol is QUIC). Port is the QUIC
 //! control/data port a client `--connect`s. TXT:
 //!
-//! - `proto` — service id ([`NATIVE_PROTO`], `punktfunk/2`). Clients drop an advert with another
-//!   value, and 0.43 and older accept only `punktfunk/1`. `wire` names the protocols answered.
+//! - `proto` — service id ([`NATIVE_PROTO`], `punktfunk/2`). The desktop and Android clients
+//!   drop an advert with another value, and 0.43 ones accept only `punktfunk/1`; the Apple
+//!   client does not read it. `wire` names the protocols answered.
 //! - `fp` — host cert SHA-256 (lowercase hex). mDNS is unauthenticated, so this is advisory;
 //!   TOFU still verifies on connect.
 //! - `pair` — `required` or `optional`.

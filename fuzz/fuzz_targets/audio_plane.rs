@@ -13,7 +13,8 @@ use punktfunk_core::audio::plane::{PlaneDecoder, PlaneFormat};
 use punktfunk_core::quic::PadAudioFrame;
 use std::time::Instant;
 
-/// Rates libopus takes, the PCM ladder's, and three a host must not send.
+/// Rates libopus takes, PCM rates (`pcm::rate_is_supported`), and 0 and 192 kHz, which a host
+/// must not send.
 const RATES: [u32; 9] = [
     0, 8_000, 12_000, 16_000, 24_000, 44_100, 48_000, 96_000, 192_000,
 ];

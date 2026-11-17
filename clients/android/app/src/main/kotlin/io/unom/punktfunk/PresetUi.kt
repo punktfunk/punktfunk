@@ -67,9 +67,8 @@ import io.unom.punktfunk.kit.R
  *
  * A chips row rather than a menu, because on touch the scopes are worth seeing at a glance and
  * there are rarely more than a handful. Managing a preset lives ON its chip: the selected one
- * grows a chevron, and tapping it again opens Edit / Duplicate / Delete anchored under it. That
- * replaced a lone overflow button parked after the LAST chip — which meant scrolling past every
- * preset to reach an action that applied to one of them, with nothing on screen saying which.
+ * grows a chevron, and tapping it again opens Edit / Duplicate / Delete anchored under it, so an
+ * action sits on the preset it applies to rather than behind a button after the last chip.
  *
  * With no presets at all the row is just "Default settings" and a "New preset" chip, which is
  * all the clutter a user who never wants this feature ever sees.
@@ -156,9 +155,7 @@ internal fun PresetScopeChips(
 }
 
 /**
- * Create or edit a preset: its name and its colour, decided together. They were two flows —
- * a name dialog at creation, "Change colour…" afterwards — which meant every preset started
- * colourless-looking until the user went hunting for a menu item, and the accent is exactly the
+ * Create or edit a preset: its name and its colour, decided together, because the accent is the
  * signal that has to be there from the first moment (it is all a bound host card's chip and a
  * pinned card's tint have to go on).
  *
@@ -246,8 +243,7 @@ private fun PresetStarter(secondScreen: Boolean, onPick: (secondScreen: Boolean)
 /**
  * The editor's body. Extracted from [PresetEditorDialog] so the screenshot harness can render
  * exactly these — a focused text field inside a Dialog window never reaches idle under Robolectric,
- * so the dialog itself is uncapturable, and an eyeballed-only layout is how this shipped once with
- * the field and its caption touching.
+ * so the dialog itself is uncapturable.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -286,14 +282,13 @@ internal fun PresetEditorFields(
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(top = 4.dp),
         )
-        // A fixed 4×2 grid rather than a flow: eight colours wrapping to whatever fits the dialog
-        // landed 6-then-2, which reads as a mistake. Two even rows read as a palette. The order is
-        // the hue sweep from PRESET_ACCENTS, so it looks like a spectrum rather than a bag.
+        // A fixed grid of SWATCHES_PER_ROW rather than a flow, which wraps to whatever fits the
+        // dialog and can end on a short row. Even rows read as a palette. The order is the hue
+        // sweep from PRESET_ACCENTS, so it looks like a spectrum rather than a bag.
         //
         // Each row FILLS the width, its swatches sharing it equally, so the palette's edges line up
-        // with the name field above it and every row is the same length. A fixed swatch size left
-        // the rows short of the dialog's edge and wrapped unevenly, which read as the grid having
-        // run out rather than as a deliberate block.
+        // with the name field above it and every row is the same length. A fixed swatch size would
+        // leave the rows short of the dialog's edge.
         Column(
             verticalArrangement = Arrangement.spacedBy(SWATCH_GAP),
             modifier = Modifier.fillMaxWidth(),
@@ -316,7 +311,7 @@ internal fun PresetEditorFields(
         }
         // "No colour" is a real choice, not only an initial state — the chip then falls back to the
         // theme's own accent, which is what a preset made before colours existed shows. It sits
-        // apart from the grid and says so in words, rather than hiding as a ninth, colourless
+        // apart from the grid and says so in words, rather than hiding as an eleventh, colourless
         // circle that breaks the palette's rhythm.
         Row(
             verticalAlignment = Alignment.CenterVertically,

@@ -25,8 +25,8 @@ const SLOTS: usize = 8;
 /// Linear image row: 4096 R8, 2048 R16 or 1024 R32 texels.
 const ROW: usize = 4096;
 
-/// Room for one AU at `width`×`height`: 6 bits a pixel at 4:2:0, 9 at 4:4:4. The bpp ceiling
-/// is 4.0 (×1.625 at 4:4:4) plus window padding.
+/// Room for one AU at `width`×`height`: 6 bits a pixel at 4:2:0, 9 at 4:4:4. That is the
+/// host's `pyrowave_bpp` maximum (×1.625 at 4:4:4, `kbps_for`) plus window padding.
 pub(super) fn au_capacity(width: u32, height: u32, chroma444: bool) -> usize {
     let px = width as usize * height as usize;
     let bytes = if chroma444 { px * 9 / 8 } else { px * 3 / 4 };

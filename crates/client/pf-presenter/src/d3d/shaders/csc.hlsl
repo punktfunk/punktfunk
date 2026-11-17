@@ -1,7 +1,7 @@
 // YCbCr -> RGB for the D3D11 presenter: the HLSL twin of pf-client-video's fullscreen.vert,
-// planar_csc.frag and tonemap.glsl. Same constant contract as the Vulkan push constants:
-// csc_rows' three rows, then params (x: mode, 1 = PQ -> SDR tonemap; y: tonemap peak;
-// zw: uv scale, display / coded). Compiled at runtime by D3DCompile (vs_5_0 / ps_5_0).
+// planar_csc.frag, nv12_csc.frag and tonemap.glsl. Same constant contract as the Vulkan push
+// constants: csc_rows' three rows, then params (x: mode, 1 = PQ -> SDR tonemap; y: tonemap
+// peak; zw: uv scale, display / coded). Compiled at runtime by D3DCompile (vs_5_0 / ps_5_0).
 
 cbuffer Csc : register(b0) {
     float4 r0;

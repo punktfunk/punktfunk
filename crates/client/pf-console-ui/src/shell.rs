@@ -1,7 +1,7 @@
 //! Console shell: the screen stack, shared chrome, and modal overlays.
 //!
 //! Screens draw content. This module owns push/pop, the pinned title, controller
-//! chip, hint bar, and connecting/wake/toast takeovers.
+//! chip, hint bar, toasts, and the connect, wake and speed takeovers.
 //!
 //! A transition is one sprung 0→1 scalar; both layers composite through
 //! `save_layer_alpha` so a screen fades as a unit. The backdrop crossfades when
@@ -63,7 +63,8 @@ const BOTTOM_BAND: f64 = 86.0;
 /// A tab switch slides the new root this share of the width.
 pub(crate) const TAB_SLIDE: f64 = 0.25;
 /// Seconds OK stays down on a remote before it opens the focused card's menu instead.
-/// UIKit's default long press, so a hold here lasts as long as one anywhere on the TV.
+/// UIKit's default long press (`minimumPressDuration`), so a hold here lasts as long as one
+/// anywhere on the TV.
 const HOLD_S: f64 = 0.5;
 
 /// Top-level tabs, in strip order.
@@ -92,7 +93,7 @@ impl Tab {
         match self {
             Tab::Hosts => pf_l10n::client::hosts_tab(),
             Tab::Games => pf_l10n::console::console_tab_games(),
-            // Named for what it lists today; a players feature would rename it back.
+            // Labelled Controllers: the tab lists the connected pads.
             Tab::Players => pf_l10n::console::console_tab_controllers(),
             Tab::Settings => pf_l10n::client::hosts_tab_settings(),
         }
@@ -179,7 +180,7 @@ impl ToastKind {
         match self {
             ToastKind::Info => (ui.fg(0.55), ToastMark::Dot),
             ToastKind::Success => (ui.accent(1.0), ToastMark::Check),
-            // Fixed RGB: `moss` accent is green, `ember` is orange — either
+            // Fixed RGB: the `emerald` accent is green, `copper` is orange — either
             // would paint a failure in the "this is fine" colour.
             ToastKind::Error => (Color4f::new(0.93, 0.31, 0.28, 1.0), ToastMark::Bang),
         }
@@ -190,7 +191,7 @@ struct Toast {
     text: String,
     at: f64,
     kind: ToastKind,
-    /// Slide-in 0 → 1. Same spring spec as the keyboard tray.
+    /// Slide-in 0 → 1 on `springs::MODAL`.
     seat: Spring,
 }
 
@@ -238,7 +239,7 @@ pub struct ConsoleOptions {
     pub platform: Platform,
     /// Skia GPU resource-cache budget, bytes. Desktop default is
     /// [`DEFAULT_GPU_CACHE_BYTES`]; a memory-tight box may go down to
-    /// [`MIN_GPU_CACHE_BYTES`] but never below it.
+    /// [`MIN_GPU_CACHE_BYTES`] and should not go below it.
     pub gpu_cache_bytes: usize,
     /// This device's own screen, for the Aspect row. `None` where streams go to a window or a
     /// TV: only a panel of an unusual shape (a phone) changes what the row offers.
@@ -296,20 +297,19 @@ impl ConsoleOptions {
 
 /// Skia GPU resource-cache ceiling (not an allocation), bytes.
 ///
-/// 160 MB. 64 MB sat under a full-grid working set (~100 MB of covers), so
-/// `GrResourceCache` evicted a third every submit and the next frame
-/// re-decoded JPEG on the render thread. A TV box passes its own through
-/// [`ConsoleOptions::gpu_cache_bytes`].
+/// 160 MB, above a 1440p screenful (~107 MB of covers plus ~25 MB of render targets): a
+/// budget under that set evicts covers the next frame draws again, and the render thread
+/// re-decodes them. A TV box passes its own through [`ConsoleOptions::gpu_cache_bytes`].
 pub const DEFAULT_GPU_CACHE_BYTES: usize = 160 << 20;
 
-/// The floor under [`ConsoleOptions::gpu_cache_bytes`], bytes.
+/// The floor a host should keep [`ConsoleOptions::gpu_cache_bytes`] above, bytes. Nothing
+/// clamps to it; the bridge's `CreateOptions` only floors at 16 MB.
 ///
 /// A screenful of covers plus the render targets is ~74 MB at `k` 1.35, the
 /// scale a 1080p surface gives. Under that the cache evicts covers it is about
 /// to draw again and the next frame re-decodes them on the render thread, which
 /// on a television costs more than the frame. 96 MB leaves that ~30% of room.
-/// It is a ceiling, not an allocation, and the shell hands its covers back
-/// before a stream takes the GPU.
+/// It is a ceiling, not an allocation.
 pub const MIN_GPU_CACHE_BYTES: usize = 96 << 20;
 
 /// The full-screen card that owns input: the connect's phase, else the wake card, else the
@@ -634,10 +634,8 @@ impl Shell {
     /// What a screen reader should speak for the focused row. `None` while a takeover owns
     /// the input, or on a screen that names no focus.
     /// `&mut` only to hand `Ctx` the settings it wants by `&mut`; nothing on this
-    /// path writes them. A host polls this once per frame, so cloning the settings
-    /// to get an `&self` here would be ~9 string allocations per frame on a still
-    /// screen — the per-frame-work-that-changes-nothing shape this shell has
-    /// already paid to remove once.
+    /// path writes them. A host polls this once per frame, so an `&self` that cloned
+    /// the settings would allocate their strings every frame of a still screen.
     pub(crate) fn focus_announcement(&mut self) -> Option<String> {
         if self.in_stream || self.takeover().is_some() {
             return None;
@@ -768,7 +766,8 @@ impl Shell {
         }
     }
 
-    /// Feeds the top screen what the service reported: pad test, other players, licences.
+    /// Feeds the top screen what the service reported: pad test, other devices, licences,
+    /// profiles and hidden titles.
     /// The host's test mode follows the test screen or a recording shortcut, whatever took
     /// it off the top.
     fn feed_top(&mut self) {

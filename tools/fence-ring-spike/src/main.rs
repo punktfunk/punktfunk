@@ -18,9 +18,9 @@
 //! Usage: `fence-ring-spike [--adapter <substr>] [--format bgra|fp16] [--rate 120]
 //!         [--secs 20] [--reader-stall-ms 0] [--kill-after 0] [--chaos]`
 //!
-//! Run per adapter on the S2 matrix box (.173 covers NVIDIA + the AMD iGPU). The production
-//! transport seals handles through the broker; this spike inherits them — same cross-process
-//! open path, simpler plumbing.
+//! Run it once per adapter. The host's driver channel duplicates its sections into WUDFHost
+//! through a handle broker (pf-capture `windows/idd/channel.rs`); this spike inherits handles
+//! instead.
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
@@ -86,7 +86,7 @@ mod win {
         retire_value: AtomicU64,
     }
 
-    /// The shared header section. Plain atomics over a mapped view, like the production ring.
+    /// The shared header section: plain atomics over a mapped view.
     #[repr(C)]
     struct Header {
         magic: AtomicU64,
@@ -167,7 +167,8 @@ mod win {
         ((l.HighPart as i64) << 32) | (l.LowPart as i64 & 0xffff_ffff)
     }
 
-    /// Pick the adapter by LUID (producer role) or description substring (parent), else adapter 0.
+    /// Pick the adapter by LUID (producer role) or description substring (parent), else the first
+    /// hardware adapter.
     fn pick_adapter(sel: &Option<String>, luid: i64) -> (IDXGIAdapter1, i64, String) {
         // SAFETY: factory/adapters/desc are plain out-param COM calls over live locals.
         unsafe {
@@ -366,7 +367,7 @@ mod win {
                 let tex = tex.expect("texture");
                 let res1: IDXGIResource1 = tex.cast().expect("IDXGIResource1");
                 // DXGI_SHARED_RESOURCE_READ | WRITE — the `windows` crate does not export the
-                // combined u32 (same local as the production ring keeps).
+                // combined u32.
                 let h = res1
                     .CreateSharedHandle(Some(&sa), 0x8000_0000 | 0x1, PCWSTR::null())
                     .expect("CreateSharedHandle(texture)");
@@ -518,7 +519,7 @@ mod win {
                     let seq = s.seq.load(Ordering::Acquire);
                     if seq <= last_seq {
                         // Older than what was already delivered: newest-wins DROPS it (a stream
-                        // must never show it) — S2 finding, first matrix run under --chaos.
+                        // must never show it).
                         if s.state
                             .compare_exchange(PUBLISHED, FREE, Ordering::AcqRel, Ordering::Acquire)
                             .is_ok()

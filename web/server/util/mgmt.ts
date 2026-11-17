@@ -6,10 +6,10 @@ import { createError, type H3Event, proxyRequest } from "h3";
 import { loadEnvFiles } from "../../nitro-entry/env-files.mjs";
 import { dirPrefix } from "../../nitro-entry/tls-paths.mjs";
 
-/** The management API the proxy forwards to (loopback by default — never LAN-exposed). It serves
- * HTTPS with the host's self-signed identity cert, so the proxy relaxes verification for that ONE
- * loopback hop via Bun's per-request `tls` option (`relayToMgmt`, util/forward.ts). There is
- * deliberately no process-wide NODE_TLS_REJECT_UNAUTHORIZED — see .env.example. */
+/** The management API the proxy forwards to (loopback by default). It serves HTTPS with the
+ * host's self-signed identity cert, so the proxy pins that ONE loopback hop via Bun's per-request
+ * `tls` option (`loopbackTls`). There is deliberately no process-wide
+ * NODE_TLS_REJECT_UNAUTHORIZED — see .env.example. */
 export function mgmtUrl(): string {
 	// Blank counts as UNSET, which `??` alone would not do. On a packaged install this value comes
 	// from ~/.config/punktfunk/mgmt-endpoint (written by the host's `serve` with the port it really
@@ -69,7 +69,7 @@ let warnedUnpinned = false;
  * `native-cert.pem` sibling of the `cert.pem` the launcher names when it exists (a host that
  * took the identity split serves it), then the legacy cert. The sibling is found by the entry's
  * own `dirPrefix` (nitro-entry/tls-paths.mjs), so a cert under any other name has none.
- * Bun's fetch honours only the first `ca` entry, so the order is the pin. Re-read every few
+ * Bun's fetch trusts every `ca` entry (bun 1.4.4), so either cert passes the pin. Re-read every few
  * seconds so a re-minted identity is picked up without a restart. */
 function hostIdentityCerts(): string[] {
 	const now = Date.now();
@@ -94,8 +94,9 @@ function hostIdentityCerts(): string[] {
 const CERT_CACHE_MS = 10_000;
 let certCache: { at: number; pems: string[] } = { at: 0, pems: [] };
 
-/** Whether `url`'s host is a loopback address — the only place the proxy relaxes TLS verification
- * for the host's self-signed cert. IPv4 127.0.0.0/8, IPv6 ::1, and the `localhost` name. */
+/** Whether `url`'s host is a loopback address — the only place the proxy departs from normal TLS
+ * verification, for the host's self-signed cert. IPv4 127.0.0.0/8, IPv6 ::1, and the `localhost`
+ * name. */
 export function isLoopbackUrl(url: string): boolean {
 	let host: string;
 	try {

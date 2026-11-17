@@ -1,12 +1,13 @@
 //! PipeWire playback (decoded PCM → stream) and mic uplink (capture → Opus → 0xCB).
 //!
-//! Playback matches the host virtual-mic producer: the pump pushes one decoded
-//! frame per arrival; PipeWire pulls quanta on the device clock. Prime ~3 quanta,
-//! cap the ring, re-prime after a real drain.
+//! Playback: the pump pushes one decoded frame per arrival; PipeWire pulls quanta on
+//! the device clock. `TUNING` sets the ring's prime depth and `hard_cap_ms`, and the
+//! ring re-primes after a real drain.
 //!
 //! Opens at the session-negotiated [`PlaybackFormat`]: 48 kHz / 5 ms Opus (`0xC9`)
-//! or 48/96 kHz PCM of 1–5 ms (`0xD3`, `design/hi-res-audio.md`). Graph format is
-//! F32LE at every rate — core already decoded to f32 (process-callback `stride`).
+//! or lossless PCM of 1–5 ms at any `pcm::rate_is_supported` rate (`0xD3`,
+//! `design/hi-res-audio.md`). Graph format is F32LE at every rate — core already
+//! decoded to f32 (process-callback `stride`).
 
 use anyhow::{anyhow, Context, Result};
 use punktfunk_core::client::NativeClient;
@@ -105,7 +106,7 @@ pub struct PlaybackFormat {
     pub channels: u32,
     /// 48_000 on Opus; any `pcm::rate_is_supported` rate on lossless.
     pub rate_hz: u32,
-    /// One protocol frame in µs: 5_000 on Opus; lossless from path MTU (4 ms at 48/24, 2 ms at 96/24).
+    /// One protocol frame in µs: 5_000 on Opus; lossless from path MTU (`pcm::frame_us_for`).
     /// Sizes the graph quantum and the policy's shed/floor arithmetic.
     pub frame_us: u32,
 }
@@ -208,7 +209,6 @@ impl Drop for AudioPlayer {
 }
 
 /// This backend's de-jitter numbers, named so the decode thread reads what the callback runs.
-/// If they drift, one platform quietly carries a third of another's slack.
 pub(crate) const TUNING: punktfunk_core::audio::JitterTuning =
     punktfunk_core::audio::JitterTuning::PIPEWIRE;
 
@@ -286,7 +286,6 @@ fn pw_thread(
     // Settings speaker pick; unset/empty = PipeWire's default routing.
     if let Ok(target) = std::env::var("PUNKTFUNK_AUDIO_SINK") {
         if !target.is_empty() {
-            // Raw key: `keys::TARGET_OBJECT` is feature-gated on a newer libpipewire than we require.
             props.insert("target.object", target);
         }
     }
@@ -370,9 +369,10 @@ fn pw_thread(
                     chunk.clear();
                     let _ = ud.recycle.try_send(chunk);
                 }
-                // `requested` is this cycle's quantum; the mapped buffer is sized for PipeWire's
-                // `quantum-limit` (8192 ≈ 170 ms). Filling to capacity taught the policy a 170 ms
-                // drain and lifted the underrun floor above any sync target. `requested == 0` → capacity.
+                // `requested` is this cycle's quantum; the mapped buffer is sized for
+                // PipeWire's `quantum-limit` (8192 ≈ 170 ms). Filling to capacity would teach
+                // the policy a 170 ms drain and lift the underrun floor above any sync
+                // target. `requested == 0` → capacity.
                 let requested = usize::try_from(buffer.requested()).unwrap_or(0);
                 // F32LE at every rate and depth. Core already decoded 16/24-bit to f32; S24 would
                 // rewrite this callback to carry bits that already fit in the f32 mantissa.
@@ -502,9 +502,9 @@ pub struct MicStreamer {
 }
 
 impl MicStreamer {
-    /// `muted` is in-stream (B4): the callback keeps pulling and discards frames.
-    /// Stopping the stream was rejected — unmute re-primes the device and re-runs
-    /// source selection, so the first second back is glitchy.
+    /// `muted` is in-stream (B4): the callback keeps pulling and discards frames. The
+    /// stream is never stopped: unmute would re-prime the device and re-run source
+    /// selection, so the first second back is glitchy.
     ///
     /// `echo_cancel` is the Settings toggle; `PUNKTFUNK_NO_AEC=1` overrides it off.
     ///
@@ -569,7 +569,7 @@ fn aec_enabled(echo_cancel: bool) -> bool {
 /// the first echo-cancelled source so a desktop already running `module-echo-cancel`
 /// does not feed the downlink back into the host mic. `None` = PipeWire default.
 ///
-/// Preference only: `pw_context_load_module` is not safely exposed in pipewire 0.9.
+/// Preference only: `pw_context_load_module` is not safely exposed in pipewire 0.10.
 fn mic_capture_target(echo_cancel: bool) -> Option<String> {
     if let Ok(target) = std::env::var("PUNKTFUNK_AUDIO_SOURCE") {
         if !target.is_empty() {
@@ -644,7 +644,6 @@ fn mic_thread(
         *pw::keys::NODE_LATENCY     => "480/48000",
     };
     if let Some(target) = mic_capture_target(echo_cancel) {
-        // Raw key: `keys::TARGET_OBJECT` is feature-gated on a newer libpipewire than we require.
         props.insert("target.object", target);
     }
     let stream = pw::stream::StreamBox::new(&core, "punktfunk-mic-capture", props)

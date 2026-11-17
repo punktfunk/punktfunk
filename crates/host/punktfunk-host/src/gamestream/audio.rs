@@ -356,7 +356,7 @@ fn audio_body(
         )
     };
     // Snap to a legal Opus frame (48 kHz × {5,10} ms = 240/480). Parse already
-    // clamps; a bad value here would reach the encoder.
+    // snaps; a bad value here would reach the encoder.
     let frame_ms = if params.packet_duration_ms >= 10 {
         10
     } else {

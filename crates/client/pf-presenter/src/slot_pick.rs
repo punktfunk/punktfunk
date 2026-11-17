@@ -100,9 +100,9 @@ impl SlotPick {
     /// A window closed: `misses` frames landed past their aimed latch — or were replaced
     /// before a latch took them, which is how a missed latch reads under MAILBOX — and
     /// `early` a slot before it. Two or more misses, outnumbering the early landings two to
-    /// one, widen the margin a step; early landings outnumbering the misses narrow it. A
-    /// window split between the two says the stamps straddle a latch; nothing moves. `true`
-    /// when it widened.
+    /// one, widen the margin a step; early landings outnumbering the misses two to one narrow
+    /// it. A window split between the two says the stamps straddle a latch; nothing moves.
+    /// `true` when it widened.
     pub(crate) fn note_window(&mut self, misses: u32, early: u32) -> bool {
         if misses > 1 && misses > early.saturating_mul(2) {
             let before = self.margin_ns;

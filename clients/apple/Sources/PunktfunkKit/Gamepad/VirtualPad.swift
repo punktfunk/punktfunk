@@ -175,7 +175,7 @@ public func padControls(layout: String, w: Float, h: Float) -> [PadControl] {
                               kind: .stick(axisX: GamepadWire.axisRSX, axisY: GamepadWire.axisRSY)))
     }
     // Measured against the clusters, not guessed from the width: between `narrow` and about
-    // 900 points the right stick still spreads into the bottom corner, near enough to sit on Start.
+    // 850 points the right stick still spreads into the bottom corner, near enough to sit on Start.
     func middle(_ y: Float) -> [PadControl] {
         [disc("select", "Select", "⧉", GamepadWire.back, w / 2 - 64, y, P.smallRadius),
          disc("guide", "Guide", "◎", GamepadWire.guide, w / 2, y, P.smallRadius),
@@ -251,7 +251,7 @@ public func triggerWire(y: Float, h: Float) -> Int32 {
 /// `GamepadManager`'s one allocator, its Arrival before any input, held state flushed and its
 /// Remove on `close` — a real controller's lifetime, the way `Sc2Capture` claims one. Declared an
 /// Xbox 360 pad: the XInput identity every host builds, and the glyphs the layer draws. Main
-/// actor, like the capture.
+/// actor, like `GamepadCapture`.
 @MainActor
 public final class VirtualPadWire {
     public let pad: UInt8

@@ -3,7 +3,7 @@
 //! check of a host's signature over its browser plane's certificate hash.
 //! Trust is the SHA-256 of the host's self-signed leaf (TOFU-pinned), not a CA
 //! chain. QUIC connect, game-library HTTP, and the tray status poll share this
-//! verifier. Behind the light `tls` feature (rustls + sha2, no QUIC runtime);
+//! verifier. Behind the light `tls` feature (rustls, webpki and sha2, no QUIC runtime);
 //! the heavier `quic` feature pulls it in.
 
 use std::sync::{Arc, Mutex};

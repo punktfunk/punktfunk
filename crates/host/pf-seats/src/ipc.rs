@@ -728,7 +728,8 @@ mod tests {
         );
     }
 
-    /// The unlock commands and answers as the door and the supervisor share them (CONTRACT §4).
+    /// The unlock commands and answers as the door and the supervisor share them
+    /// (`multi-seat-contract.md`, "Who opens a person's seat").
     /// A password rides the frame and never a command's `Debug`.
     #[test]
     fn the_unlock_frames_round_trip() {

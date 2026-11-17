@@ -1,4 +1,4 @@
-//! Windows `SendInput` injection (Win32 KeyboardAndMouse) — analogue of [`super::wlr`]:
+//! Windows `SendInput` injection (Win32 KeyboardAndMouse) — analogue of the Linux `wlr` backend:
 //! absolute mouse over the streamed output ([`crate::stream_target`]), relative mouse
 //! for games, scancode keyboard, scroll, buttons. Survives UAC/lock by Sunshine's
 //! retry-on-failure: the thread stays bound and only reattaches
@@ -335,7 +335,7 @@ impl SendInputInjector {
 
 /// Client (0..w,0..h) → STREAMED output rect ([`crate::stream_target`]; whole virtual desktop
 /// only as fallback) → 0..65535 over the virtual desktop for MOUSEEVENTF_VIRTUALDESK. Mapping
-/// over the desktop alone is the Extend-topology offset bug (design/pen-tablet-input.md).
+/// over the desktop alone is the Extend-topology offset bug ([`crate::stream_target`]).
 /// `None` for a zero extent, which the contract drops.
 fn abs_move_input(event: &InputEvent) -> Option<MOUSEINPUT> {
     let (ax, ay) = crate::stream_target::desktop_px_to_virtualdesk(abs_desktop_px(event)?);

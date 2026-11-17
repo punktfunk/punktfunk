@@ -3,7 +3,7 @@ import XCTest
 @testable import PunktfunkKit
 
 /// Reset reads back as a fresh install through the console document, which carries every key the
-/// app owns, and leaves only records behind: hosts, presets and the default host.
+/// app owns. It leaves hosts, presets, the default host and the console's saved base document.
 final class SettingsResetTests: XCTestCase {
     func testResetReadsAsAFreshInstallAndKeepsHostRecords() throws {
         let suite = "settings-reset-tests"

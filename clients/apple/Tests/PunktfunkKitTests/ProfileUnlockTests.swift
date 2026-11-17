@@ -1,6 +1,6 @@
-// Profile unlock (CONTRACT §3, §6) and a locked profile's PIN: the signed messages through the
-// core's builder, a software P-256 key standing in for the Secure Enclave, the rejection, the
-// flow's choices, and `clients/shared/profile-unlock-vectors.json`.
+// Profile unlock and a locked profile's PIN (`multi-seat-contract.md`): the signed messages
+// through the core's builder, a software P-256 key standing in for the Secure Enclave, the
+// rejection, the flow's choices, and `clients/shared/profile-unlock-vectors.json`.
 
 import CryptoKit
 import PunktfunkCore
@@ -56,7 +56,7 @@ private final class PromptScript: @unchecked Sendable {
 }
 
 final class ProfileUnlockTests: XCTestCase {
-    // CONTRACT §3's vector.
+    // The seat form's vector (`multi-seat-contract.md`, `challenge`).
     private let challenge = Data(1...32)
     private let seat = "0123456789abcdef0123456789abcdef"
     private let device = Data(repeating: 0xaa, count: 32)

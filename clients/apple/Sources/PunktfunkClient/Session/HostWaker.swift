@@ -1,15 +1,15 @@
 // Wake a sleeping host and WAIT for it to come back before proceeding.
 //
 // A magic packet is fire-and-forget, and a cold box can take 20–60 s to POST, boot, and start
-// answering again — far longer than a connect attempt will sit. The old path fired a packet and
-// immediately dialed, so a genuinely-asleep host just failed. This drives a visible "Waking…"
-// state instead: it polls `isOnline` about once a second, (re-)sends the packet while that stays
+// answering again — far longer than a connect attempt will sit. A packet followed by an immediate
+// dial fails a genuinely-asleep host. So this drives a visible "Waking…"
+// state: it polls `isOnline` about once a second, (re-)sends the packet while that stays
 // false, and on success runs `onOnline` (the real connect for a Wake-&-Connect, or nothing for an
 // explicit wake-only); on timeout it parks in a retry/cancel state. One wake at a time.
 //
 // `isOnline` is async because the only trustworthy answer costs a round trip: mDNS presence is a
-// cache a sleeping host keeps warm for up to 75 minutes, so waiting on it both returned true for a
-// host that never woke and never returned true for a routed host that does not advertise at all.
+// cache a sleeping host keeps warm for up to 75 minutes, so waiting on it would return true for a
+// host that never woke and never return true for a routed host that does not advertise at all.
 
 import Foundation
 import PunktfunkKit
@@ -105,8 +105,7 @@ final class HostWaker: ObservableObject {
                     return
                 }
                 // Checked before sent, so a host that is already up never gets a packet. Re-sent
-                // on a cadence because a single one can be missed, and some NICs only wake on a
-                // fresh packet after dropping into a deeper sleep state.
+                // on a cadence because a single one can be missed.
                 if sentAt.map({ elapsed - $0 >= resend }) ?? true {
                     sentAt = elapsed
                     Self.sendPacket(macs: macs, lastIP: lastIP)

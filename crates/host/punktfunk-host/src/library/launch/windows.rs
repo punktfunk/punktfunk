@@ -4,7 +4,8 @@
 
 use super::*;
 
-/// Each activation below was checked on a real install; an unverified one ships a dead tile.
+/// Add a store here only once its activation works on a real install; an unverified one ships a
+/// dead tile.
 pub(super) const LAUNCHER_UI_STORES: &[&str] = &[
     "playnite",
     "epic",
@@ -150,10 +151,10 @@ pub fn launch_title(id: &str) -> Result<WindowsLaunch> {
     Ok(WindowsLaunch { pid, owns_game })
 }
 
-/// Pure map from [`LaunchSpec`] to a spawn recipe. `None` = no Windows recipe.
+/// Map from [`LaunchSpec`] to a spawn recipe; it spawns nothing. `None` = no Windows recipe.
 ///
 /// CreateProcessAsUserW does no shell or protocol resolution: URI/flags go to
-/// a concrete EXE as argv. `exec` is absent; [`exec_recipe`] builds it from the manifest.
+/// a concrete EXE as argv. `exec` and `emulator` are absent; [`exec_recipe`] builds them first.
 fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
     match spec.kind.as_str() {
         "steam_appid" => {
@@ -699,7 +700,7 @@ fn exe_from_shell_command(command: &str) -> Option<&str> {
 
 /// Playnite install dirs as art roots. Portable keeps covers beside the exe
 /// (`<PlayniteDir>\library\files\…`); the users base cannot see that tree.
-/// Same shape as [`super::art::steam_art_roots`]. Candidates come from host
+/// Same shape as `steam_art_roots` in `art/windows.rs`. Candidates come from host
 /// registry/fs probes, not the plugin lane that supplies the art path; any user's hive may
 /// name one, so each is on a local disk before any probe, and counts only with a Playnite
 /// program in it: a user can make a root only of a folder they could write into.

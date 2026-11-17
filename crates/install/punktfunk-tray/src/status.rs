@@ -26,7 +26,7 @@ pub enum ServiceState {
     Failed(String),
 }
 
-/// `GET /api/v1/local/summary` (`LocalSummary` in mgmt.rs). Unknown fields are ignored.
+/// `GET /api/v1/local/summary` (`LocalSummary` in mgmt/host.rs). Unknown fields are ignored.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
 pub struct Summary {
     pub version: String,
@@ -359,7 +359,7 @@ fn agent(pin: Option<[u8; 32]>) -> ureq::Agent {
     )
 }
 
-/// SCM name written by `punktfunk-host service install` (`windows/service.rs`).
+/// SCM name written by `punktfunk-host service install` (`windows/service/mod.rs`).
 #[cfg(windows)]
 pub const SERVICE_NAME: &str = "PunktfunkHost";
 

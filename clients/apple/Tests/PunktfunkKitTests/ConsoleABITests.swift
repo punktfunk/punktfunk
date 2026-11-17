@@ -112,8 +112,9 @@ final class ConsoleABITests: XCTestCase {
         }
     }
 
-    /// A pad's Back on a card climbs to its tab, where the press is the system's: an Apple app
-    /// cannot close itself, so the console raises no Quit and `at_root` hands Menu to tvOS.
+    /// A pad's Back on a card climbs to its tab, and Back there raises no Quit: where the app
+    /// can quit the console asks first, and where it cannot the press is the system's
+    /// (`at_root` hands Menu to tvOS).
     func testBackClimbsToTheTabAndRaisesNoQuit() {
         XCTAssertTrue(punktfunk_console_menu(console, 5, 1), "Back on a card is the console's")
         XCTAssertTrue(punktfunk_console_at_root(console), "and lands on the tab")

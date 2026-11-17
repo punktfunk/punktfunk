@@ -19,8 +19,7 @@ pub const MIN_BITRATE_KBPS: u32 = 500;
 
 /// Adaptive-FEC band. A clean link decays to [`FEC_MIN`]; loss ramps toward
 /// [`FEC_MAX`]. 5 % is 4 parity shards on a ~110 KB frame (2 on a 30 KB one) —
-/// the burst a clean link still drops. A 1 % floor left one, so the cleanest
-/// link lost a frame to two packets. A session opens at
+/// the burst a clean link still drops. A session opens at
 /// [`FEC_ADAPTIVE_START`], before any loss report has sized it.
 pub const FEC_MIN: u8 = 5;
 pub const FEC_MAX: u8 = 50;
@@ -81,8 +80,8 @@ pub fn encoder_kbps_for_budget(
 }
 
 /// Inverse: the wire spend of an encoder rate. A short apply reports this so
-/// the client's climb base tracks wire truth. Rounds up where the derivation
-/// rounds down, so a roundtrip never inflates the budget the client believes.
+/// the client's climb base tracks wire truth. Rounds down like the derivation,
+/// so a roundtrip never inflates the budget the client believes.
 pub fn budget_kbps_for_encoder(
     encoder_kbps: u32,
     audio_kbps: u32,
@@ -267,9 +266,9 @@ pub fn fec_pct_for_loss(shards: u32, loss_ppm: u32, fps: u32) -> u8 {
 /// One window's FEC target. `unrecovered_run` is the consecutive report
 /// windows a keyframe ask landed in — frames parity could not repair.
 ///
-/// Three terms, the largest wins: the band [`adapt_fec`] reads off this
-/// window, the parity the link's measured loss asks of a frame the size this
-/// budget buys, and [`FEC_STEP`] for the first [`FEC_STEP_WINDOWS`] of a run.
+/// The larger of two terms, plus a step: the band [`adapt_fec`] reads off this
+/// window or the parity the link's measured loss asks of a frame the size this
+/// budget buys, plus [`FEC_STEP`] for the first [`FEC_STEP_WINDOWS`] of a run.
 /// A run past that is loss no per-frame parity bridges, so the step is not
 /// added again. Inside a run the target never falls: frames are still dying.
 /// Outside one it decays a point per window, so a burst every few seconds
@@ -317,9 +316,7 @@ mod tests {
         assert!(adapt_fec(u32::MAX) <= FEC_MAX);
     }
 
-    /// The integer form is the `f64` one the host shipped, for every loss a
-    /// report can carry. Floating point decided a parity percent for three
-    /// releases; this pins that nothing moved when it stopped.
+    /// The integer form is the `f64` one, for every loss a report can carry.
     #[test]
     fn the_integer_band_is_the_float_one_it_replaced() {
         let float_form = |loss_ppm: u32| -> u8 {
@@ -332,8 +329,8 @@ mod tests {
         }
     }
 
-    /// A 1080p30 tunnel at 8.5 Mbps: the frame the rig measures, 19–30 data
-    /// shards. Every test below that names a frame means this one.
+    /// A 1080p30 tunnel at 8.5 Mbps: 23 wire shards a frame, inside the 19–30 the rig's
+    /// 7–11 Mbps span gives. Every test below that names a frame means this one.
     fn tunnel() -> FrameBudget {
         FrameBudget {
             budget_kbps: 8_500,
@@ -416,8 +413,8 @@ mod tests {
     }
 
     /// What the rule asks for costs the wire at most the one shard a percent
-    /// rounds up into, and where [`LOSS_PCT_MAX`] clamped it, no more than the
-    /// session spends today: on a frame that small the two-shard floor is a
+    /// rounds up into, and where [`LOSS_PCT_MAX`] clamped it, no more than
+    /// [`FEC_MIN`] spends: on a frame that small the two-shard floor is a
     /// bigger share of the budget than the quarter the ceiling allows, so the
     /// clamped cell buys its parity out of the same wire.
     #[test]
@@ -448,8 +445,8 @@ mod tests {
         assert!(clamped > 20, "only {clamped} cells reached the ceiling");
     }
 
-    /// A link with nothing to answer is exactly today's session: the band's
-    /// floor, whatever frame the budget buys.
+    /// A link with nothing to answer gets the band's floor, whatever frame the
+    /// budget buys.
     #[test]
     fn a_clean_link_asks_for_the_floor_and_nothing_more() {
         for shards in [1u32, 2, 9, 20, 40, 120, 4_000] {
@@ -499,9 +496,9 @@ mod tests {
     }
 
     /// The rig's tunnel: 19–30 wire shards a frame at 0.7 %, where two parity
-    /// shards lose a frame every forty seconds. The rule asks for three or
-    /// four, as a percent the budget spends out of the encoder's rate — and
-    /// the percent it names buys exactly that, no shard over.
+    /// shards lose a frame every 28–110 s at 30 fps, about once a minute at 23.
+    /// The rule asks for three or four, as a percent the budget spends out of
+    /// the encoder's rate — and the percent it names buys exactly that, no shard over.
     #[test]
     fn the_tunnels_frame_asks_for_the_parity_its_loss_needs() {
         let asked: Vec<(u32, u8, u32)> = [19u32, 23, 27, 30]

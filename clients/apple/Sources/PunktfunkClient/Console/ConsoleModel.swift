@@ -32,7 +32,7 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         /// The console's launch hold went up (`true`) or let go.
         var holding: (Bool) -> Void
         var paired: (StoredHost, Data) -> Void
-        /// The shell asked to quit, or took no Back (a TV's, which belongs to the system).
+        /// The shell asked to quit, or the pad's Back found it at its root. Only a Mac acts on it.
         var quit: () -> Void
     }
 

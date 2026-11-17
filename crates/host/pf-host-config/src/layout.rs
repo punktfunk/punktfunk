@@ -1,19 +1,21 @@
 //! Where the host session's keyboard layout comes from.
 //!
 //! The key wire is US-positional: a client sends the Windows VK of the
-//! physical key, [`vk_to_evdev`](super::keymap::vk_to_evdev) turns that into
+//! physical key, `pf_inject::vk_to_evdev` turns that into
 //! an evdev code, and the **session keymap** decides the character. Host
 //! layout must match the client's printed layout, or ISO keys scramble
 //! (`#`→`\`, `ä`→`'`, y↔z).
 //!
-//! A Wayland compositor never reads `/etc/X11/xorg.conf.d/00-keyboard.conf`
+//! A Wayland compositor does not parse `/etc/X11/xorg.conf.d/00-keyboard.conf`
 //! (`localectl` writes it for Xorg). libxkbcommon's fallback stops at
-//! `XKB_DEFAULT_*`, which no session manager exports. Compiling from empty
-//! names on a configured German box still yields evdev/pc105/us.
+//! `XKB_DEFAULT_*`, which Plasma's startup sets from localed and sway, Hyprland and
+//! gamescope sessions leave unset. Compiling from empty names on a configured German
+//! box still yields evdev/pc105/us.
 //!
-//! [`system_layout`] reads what the machine recorded. Advisory for backends
-//! whose keymap we do not own (libei/KWin/gamescope — see
-//! [`crate::text_input_supported`]); there it only feeds the diagnostic.
+//! [`system_layout`] reads what the machine recorded. Its callers are the
+//! wlroots virtual keyboard in `pf-inject`, which compiles its keymap from it,
+//! and `pf-vdisplay`'s gamescope (`XKB_DEFAULT_*` for a session it spawns,
+//! `setxkbmap` into an attached Xwayland). No other backend reads it.
 
 use std::path::{Path, PathBuf};
 
@@ -101,7 +103,7 @@ pub struct SystemLayout {
 
 /// What `localectl set-x11-keymap` writes.
 const X11_CONF_DIR: &str = "/etc/X11/xorg.conf.d";
-/// systemd ≥ 249 mirrors the X11 keymap here as `XKBLAYOUT=` / `XKBVARIANT=`.
+/// systemd ≥ 253 mirrors the X11 keymap here as `XKBLAYOUT=` / `XKBVARIANT=`.
 const VCONSOLE_CONF: &str = "/etc/vconsole.conf";
 
 /// Host keyboard layout: `XKB_DEFAULT_*` → `/etc/X11/xorg.conf.d/*keyboard*.conf`

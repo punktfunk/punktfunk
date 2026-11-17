@@ -70,7 +70,7 @@ export type LockCard = {
 	holder: string;
 	/** The owner's name, when it opens with the owner's lock. */
 	owner?: string;
-	/** Wrong PINs in the last 15 minutes, on a lock of its own. */
+	/** Wrong PINs within the host's `PIN_WINDOW` (pf-seats), on a lock of its own. */
 	failedPins?: number;
 	/** Opens the dialog that locks it, or the one that manages it when locked. */
 	onOpen?: () => void;

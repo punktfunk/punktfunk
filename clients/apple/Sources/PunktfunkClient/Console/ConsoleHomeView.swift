@@ -18,7 +18,7 @@ struct ConsoleHomeView: View {
     /// Something to say that has no screen of its own — a deep link that went nowhere. The
     /// console shows it as a toast; the app's alert stays out of the way while the console is up.
     @Binding var notice: String?
-    /// A pairing asked for outside the console (the trust card's "Pair instead", a Mac host
+    /// A pairing asked for outside the console (the trust card's "Pair with PIN…", a Mac host
     /// window): the console's Pair screen takes it. Cleared once taken.
     @Binding var pairing: StoredHost?
     /// A link waiting on the player's word: the console asks, in place of a system alert.
@@ -36,8 +36,7 @@ struct ConsoleHomeView: View {
     let connectShelf: (LibraryTarget) -> Void
     let wakeOnly: (StoredHost) -> Void
     /// The console asked to quit: a Mac's exit question answered yes, or a Back the console
-    /// did not take. On a TV the press is the system's, so nothing is bound while the console
-    /// sits at its root and this never fires there.
+    /// did not take. Only a Mac acts on it (`ContentView.quitApp`).
     var onQuit: () -> Void = {}
     /// The host parked the connect for its operator; the console draws the wait.
     var awaitingApproval = false

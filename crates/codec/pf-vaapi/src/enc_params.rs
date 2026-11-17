@@ -28,7 +28,7 @@ use crate::enc_h264::VaEncMiscParameterHrd;
 use crate::enc_h264::VaEncMiscParameterRateControl;
 use crate::enc_h264::VaEncSequenceParameterBufferH264;
 
-/// A macroblock is 16×16; every VAAPI dimension is counted in them.
+/// A macroblock is 16×16; the H.264 VA buffers count dimensions in them.
 const MB: u32 = 16;
 
 /// Frames an H.264 DPB holds for the kept pair: pin, candidate, the last picture, the one
@@ -54,7 +54,7 @@ pub struct SessionParams {
     pub max_num_reorder_frames: u32,
     pub initial_qp: u8,
     /// VBV depth in frames of bits. One holds picture size roughly constant and
-    /// takes motion as a QP dip; the libav path's `PUNKTFUNK_VBV_FRAMES` knob.
+    /// takes motion as a QP dip. Filled from `PUNKTFUNK_VBV_FRAMES`.
     pub vbv_frames: f32,
     /// The range the VPP writes and the VUI states, either codec; `false` is studio.
     pub full_range: bool,
@@ -72,7 +72,7 @@ impl SessionParams {
     }
 
     /// Macroblocks in a picture — the slice's `num_macroblocks` when it is the
-    /// whole frame, which is the only shape WP2 emits.
+    /// whole frame, which is the only shape the encoder emits.
     pub fn mbs_per_picture(&self) -> u32 {
         u32::from(self.width_in_mbs()) * u32::from(self.height_in_mbs())
     }
@@ -81,7 +81,7 @@ impl SessionParams {
     ///
     /// `bitstream_restriction` is the point of packing our own: it states the
     /// reorder bound, so a client outputs on it instead of holding pictures until
-    /// the DPB fills. AMF and Media Foundation have no API for this at all.
+    /// the DPB fills. AMF (SDK 1.5.3) and Media Foundation (SDK 10.0.26100) have no API for it.
     pub fn sps(&self) -> Rc<Sps> {
         let mut sps = SpsBuilder::new()
             .seq_parameter_set_id(0)
@@ -106,7 +106,7 @@ impl SessionParams {
             .bitstream_restriction(self.max_num_reorder_frames)
             .build();
         // The colour a decoder sizes its matrix from: BT.709 at the range the VPP writes. Left
-        // untagged, ffmpeg reads a small stream as 601, and a client that trusts the SPS would
+        // untagged, swscale reads any stream as 601, and a client that trusts the SPS would
         // too. The builder has no setter; the Rc is still ours.
         let vui = &mut Rc::get_mut(&mut sps)
             .expect("fresh from build, unshared")
@@ -321,7 +321,7 @@ impl SessionParams {
 ///
 /// radeonsi regenerates the PPS from these bits, not from the packed one, so a bit
 /// that disagrees with the PPS is a stream whose PPS disagrees with the host's.
-/// Every picture here is a reference: the next P has only this one to point at.
+/// Every picture here is a reference: a P names its reference by slot ([`PictureSlice`]).
 pub fn va_pic_fields(pps: &Pps, is_idr: bool) -> u32 {
     // idr_pic_flag:1 | reference_pic_flag:2 | entropy_coding_mode:1 |
     // weighted_pred:1 | weighted_bipred_idc:2 | constrained_intra_pred:1 |
@@ -515,9 +515,9 @@ mod tests {
         assert_eq!(small.sps().level_idc as u8, Level::L4_1 as u8);
     }
 
-    /// The anchor's reach is the level's DPB. 1440p100 has the room a Wi-Fi loss
-    /// report needs; 4K60 sits just over `MaxLumaPs * 3/4`, where the level allows
-    /// five, and asking for eight there would write a non-conforming SPS.
+    /// The anchor's reach is the level's DPB. 4K60 sits just over `MaxLumaPs * 3/4`,
+    /// where the level allows five, and asking for eight there would write a
+    /// non-conforming SPS.
     #[test]
     fn the_dpb_ceiling_follows_the_level() {
         let qhd = SessionParams {
@@ -624,7 +624,7 @@ mod tests {
             );
         }
         // E.2.1: never below max_num_ref_frames, or a conforming decoder livelocks
-        // waiting for a DPB that can never drain (the sweep's S-77).
+        // waiting for a DPB that can never drain.
         assert!(
             sps.vui_parameters.max_dec_frame_buffering >= u32::from(sps.max_num_ref_frames),
             "max_dec_frame_buffering must not sit below max_num_ref_frames"

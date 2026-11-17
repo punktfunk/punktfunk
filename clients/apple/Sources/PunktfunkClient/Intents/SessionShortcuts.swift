@@ -1,4 +1,5 @@
-// Siri / Shortcuts / Spotlight surface (design §M4, extended by client-deep-links.md §6).
+// Siri / Shortcuts / Spotlight surface (design/apple-live-activities-and-widgets.md §8, extended
+// by design/client-deep-links.md §6).
 // Deliberately thin: every action already has an internal entry point — the deep-link router
 // (connect / connect-and-launch / connect-with-a-preset, and the `browse` route into a host's
 // library), the in-process end-session hook, and the existing Wake-on-LAN path — so these
@@ -108,7 +109,8 @@ enum IntentError: Error, CustomLocalizedStringResourceConvertible {
 #if os(iOS)
 /// Zero-setup Siri / Spotlight phrases. Parameterized phrases resolve a `HostEntity` by name; stays
 /// well under the 10-shortcut cap. Phrases stay host-parameterized — App Shortcut phrases can't
-/// embed a second arbitrary `AppEntity`, so the preset is picked in the Shortcuts editor.
+/// embed a second arbitrary `AppEntity`, so the preset is picked in the Shortcuts editor. Both
+/// limits checked on Xcode 27.1.
 ///
 /// A phrase must be a string literal. `AppShortcuts.xcstrings`, which `pf-l10n` writes from the
 /// `apple_shortcut_*_phrase` messages, is keyed by these exact English phrases.

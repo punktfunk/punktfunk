@@ -12,8 +12,8 @@ use jni::sys::jlong;
 use jni::EnvUnowned;
 
 /// `NativeBridge.nativeNetworkCheck(handle): DoubleArray?` — run the network check over this
-/// session and return its report. Blocking for ten to twenty seconds: call it off the main
-/// thread. `null` on a `0` handle or when the check could not run.
+/// session and return its report. Blocking for several seconds, longer on a lossy link: call it
+/// off the main thread. `null` on a `0` handle or when the check could not run.
 ///
 /// Layout: `[ceilingKbps, wall, hasClean, cleanRateKbps, cleanLossPct, cleanJitterUs,
 /// clientIfaceKind, clientLinkMbps, clientRcvbufKb, hostIfaceKind, hostLinkMbps,

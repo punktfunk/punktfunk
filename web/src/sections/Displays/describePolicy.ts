@@ -9,8 +9,7 @@ import { m } from "@/paraglide/messages";
 export interface DescribeOptions {
 	/**
 	 * A session is streaming right now. The host applies a policy at the next connect, so this
-	 * is the only condition under which the "not yet" tail is true — stating it unconditionally
-	 * is what made the old pending note noise on an idle host.
+	 * is the only condition under which the "not yet" tail is true.
 	 */
 	live?: boolean;
 	/** Name the device instead of "each device" — the per-device sheet (§6.2). */

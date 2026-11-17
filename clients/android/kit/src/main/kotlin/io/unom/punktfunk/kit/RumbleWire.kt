@@ -3,10 +3,9 @@ package io.unom.punktfunk.kit
 /**
  * The two conversions every rumble path in this module needs, in one place.
  *
- * Both used to be transcribed per call site: [wireAmplitudeToByte] existed twice, byte-identical,
- * in `GamepadFeedback` and `DsDevice`; [unpackRumbleEvent] was inline bit-shifting in the poll loop
- * with no test on either side of the JNI boundary. Neither is complicated — which is exactly why a
- * silent divergence between copies would have been hard to notice.
+ * [wireAmplitudeToByte] serves both `GamepadFeedback` and `DsDevice`; [unpackRumbleEvent] serves
+ * `GamepadFeedback`'s poll loop. One copy of each, so `RumbleWireTest` pins the JNI layout and
+ * the amplitude rounding for every caller.
  */
 
 /**

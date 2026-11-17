@@ -1,6 +1,6 @@
 # The guided installer's engine (design/installer-v2.md). Deliberately tiny: no tokio, no
 # async, no platform crates — it has to build static against musl in seconds and run on a box
-# where nothing is installed yet. The TUI deps (cliclack/crossterm) arrive with M2.
+# where nothing is installed yet.
 [package]
 name = "punktfunk-setup"
 version.workspace = true
@@ -21,8 +21,9 @@ pf-l10n = { path = "../../../l10n", features = ["tools", "os"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# NLA network categories for the D12 probe — the one question no locale-safe exe can answer.
-# Target-gated: the static musl build never sees it, so D8's tiny-dep promise holds.
+# Windows-only system calls: NLA network categories for the D12 probe (no locale-safe exe
+# answers that), plus the SCM, shell links, the registry and Appx presence. Target-gated: the
+# static musl build never sees them, so D8's tiny-dep promise holds.
 [target.'cfg(windows)'.dependencies]
 getrandom = "0.4"
 windows = { version = "0.62", features = [

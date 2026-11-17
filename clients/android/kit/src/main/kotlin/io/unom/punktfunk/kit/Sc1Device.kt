@@ -6,8 +6,9 @@ package io.unom.punktfunk.kit
  * goes to the host as-is; this parser only feeds the typed mirror and menu navigation, in the
  * Steam Controller 2's button layout so that code serves both pads unchanged.
  *
- * Ground truth: SDL `SDL_hidapi_steam.c` + `steam/controller_constants.h`. The tables shared with
- * the Apple client and core are pinned by `clients/shared/sc1-vectors.json`.
+ * Ground truth: SDL `SDL_hidapi_steam.c` and `steam/controller_{constants,structs}.h`; the
+ * haptic pulse's swapped sides come from the kernel's `hid-steam.c`. The tables shared with the
+ * Apple client and core are pinned by `clients/shared/sc1-vectors.json`.
  */
 object Sc1Device {
     /** The wired pad; Steam claims it on [WIRED_IFACE]. */

@@ -77,14 +77,10 @@ fn hr_success(hr: NTSTATUS) -> bool {
 /// Whether the swap-chain processing device's GPU scheduling is raised to REALTIME (the IddCx
 /// 1.9 `IddCxSetRealtimeGPUPriority` DDI — "higher priority than any regular application can
 /// set"). Default **ON**: minimum latency at every layer — a GPU-saturating game must not starve
-/// the leg that feeds every captured frame into the encoder. The 2026-08 default-OFF (after an
-/// RX 9070 XT field A/B blamed this raise for a metronomic ~1.8 s capture-stall class) at most
-/// masked that still-unattributed stall — confirmed cases kept arriving with the raise off —
-/// while regressing loaded NVIDIA boxes into feed starvation, so it was reverted. The per-box
-/// A/B escape hatch remains: `setx /M PFVD_NO_RT_GPU 1` (any value) + a device restart disables
-/// the raise — read via [`crate::log::knob`] (process environment, then the machine one, because WUDFHost's
-/// own environment is stale until a reboot. The old `PFVD_RT_GPU` opt-in ladder
-/// (off/thread/realtime) is gone; a stale `PFVD_RT_GPU` now just matches the default.
+/// the leg that feeds every captured frame into the encoder. `setx /M PFVD_NO_RT_GPU 1` (any
+/// non-empty value) + a device restart disables the raise, for a per-box A/B. It is read via
+/// [`crate::log::knob`] (process environment, then the machine one, because WUDFHost's own
+/// environment is stale until a reboot). `PFVD_RT_GPU` is not read.
 fn rt_gpu_enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
@@ -311,7 +307,7 @@ impl Ctx {
         );
         // Best-effort, never fatal (see [`rt_gpu_enabled`]), issued while our borrowed device
         // reference is alive: IddCx uses it synchronously. The DDI may still decline (E_NOTIMPL
-        // on pre-WDDM-3.0 hardware).
+        // on a WDDM 1.x device).
         if rt_gpu_enabled() {
             let rt = IDARG_IN_SETREALTIMEGPUPRIORITY {
                 pDevice: dxgi_device.as_raw().cast(),

@@ -3,8 +3,9 @@
 // macOS takes mouse motion and buttons from StreamLayerView's NSEvent monitor under cursor
 // disassociation, as the mouse's own counts before macOS acceleration: the host applies its
 // pointer curve once. Its keys come from NSEvent too. GCMouse there can stay silent and never
-// sees a trackpad, so macOS installs no GameController handlers. iOS and tvOS keep GCMouse (raw
-// under pointer lock) and GCKeyboard, whose HID keycodes map to the host's Windows VKs.
+// sees a trackpad, so macOS installs no GameController handlers. iOS, tvOS and visionOS keep
+// GCMouse (raw under pointer lock) and GCKeyboard, whose HID keycodes map to the host's
+// Windows VKs.
 // Fractional motion carries per axis so slow, sub-pixel moves survive the integer wire.
 //
 // GC delivers only while the app is active, so everything held is released on
@@ -70,9 +71,9 @@ public final class InputCapture {
     private var motionDebugCount = 0
     private var motionDebugTick = Date.distantPast
 
-    /// One-shot twin of `suppressedButton` for the ⌘⎋ toggle: the physical Esc also
-    /// reaches GCKeyboard, racing the NSEvent monitor — latched here so it can't type
-    /// an Escape into the host in either toggle direction.
+    /// One-shot twin of `suppressedButton` for the ⌘⎋ toggle: the toggle's Esc (taken by the
+    /// NSEvent monitor on macOS, the GCKeyboard handler on iOS and visionOS) is latched here so
+    /// it can't type an Escape into the host in either toggle direction.
     private var suppressedVK: UInt32?
     /// Physical ⌘ keys currently held. Off macOS the GC handler tracks them in both capture
     /// states, for the ⌘⎋ toggle; macOS tracks them only while forwarding, for the chord flush.
@@ -90,14 +91,14 @@ public final class InputCapture {
     #endif
 
     #if !os(macOS)
-    /// The key currently auto-repeating, and the timer driving it. iOS/tvOS only — see
+    /// The key currently auto-repeating, and the timer driving it. Off macOS only — see
     /// `startAutoRepeat`. Main-queue only, like every other field here.
     private var autoRepeatVK: UInt32?
     private var autoRepeatTimer: Timer?
     #endif
 
-    /// The keyboard's shortcuts (design/client-shortcuts.md §4), fed every physical key in both
-    /// capture states. Built at `start`, when `onShortcut` is known.
+    /// The keyboard's shortcuts, fed every physical key in both capture states. Built at
+    /// `start`, when `onShortcut` is known.
     private var keyEngine = Shortcuts.Engine([], device: .keyboard)
     /// Physical keys the engine counts as down (Windows VKs, both sides of each modifier).
     private var shortcutKeys: Set<UInt32> = []
@@ -306,8 +307,8 @@ public final class InputCapture {
         })
         // Runs before any menu key equivalent and StreamLayerView's keyDown, the host's only key
         // path on macOS, so an event it swallows must be handled or forwarded right here.
-        // ⌘⎋ is the client's in both states, then the keyboard shortcuts. Every other ⌘ chord,
-        // ⌃⌘F included, is the host's while captured (`forwardsCommandChord`).
+        // ⌘⎋ is the client's in both states, then the keyboard shortcuts. With `inhibit_shortcuts`
+        // on, every other ⌘ chord, ⌃⌘F included, is the host's while captured.
         #if os(macOS)
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.keyDown, .keyUp, .flagsChanged]
@@ -351,9 +352,10 @@ public final class InputCapture {
                event.isARepeat ? self.firedVKs.contains(vk) : self.shortcutTakes(vk, down: true) {
                 return nil
             }
-            // Every OTHER ⌘ chord is the HOST's while captured, or the menu takes ⌘Q first. It is
-            // sent from here, since returning nil also skips StreamLayerView's keyDown; a chord
-            // with no host VK is swallowed. The ⌘ itself already went out as a flagsChanged.
+            // With `inhibit_shortcuts` on, every OTHER ⌘ chord is the HOST's while captured, or
+            // the menu takes ⌘Q first. It is sent from here, since returning nil also skips
+            // StreamLayerView's keyDown; a chord with no host VK is swallowed. The ⌘ itself
+            // already went out as a flagsChanged.
             if Self.forwardsCommandChord(
                 keyCode: event.keyCode, flags: flags, forwarding: self.forwarding,
                 inhibitShortcuts: self.connection.settings.inhibitShortcuts
@@ -575,7 +577,8 @@ public final class InputCapture {
     /// VKs here while captured. Mirrors `sendButton` — gated by `forwarding`, honours the
     /// ⌘⎋ toggle's `suppressedVK` latch, and tracks into `pressedVKs` so releaseAll()/blur
     /// flushes anything still held (a flagsChanged up can be missed on focus change). macOS
-    /// has no GCKeyboard send (that path is iOS-only now), so this is the single key source.
+    /// has no GCKeyboard send (that path exists only off macOS), so this is the single key
+    /// source.
     public func sendKey(_ vk: UInt32, down: Bool) {
         guard forwarding else { return }
         // The ⌘⎋ toggle's Esc is latched here (see the keyDown monitor) so it never types
@@ -911,8 +914,7 @@ public final class InputCapture {
             if self.shortcutTakes(vk, down: pressed) { return }
             #endif
             guard self.forwarding else { return }
-            // Release direction of the toggle: GC's Esc-down can beat the NSEvent
-            // monitor — never type Esc into the host while ⌘ is held (⌘⎋ is reserved).
+            // Never type Esc into the host while ⌘ is held (⌘⎋ is reserved).
             if vk == 0x1B, !self.cmdKeysDown.isEmpty {
                 return
             }

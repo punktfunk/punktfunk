@@ -118,7 +118,10 @@ private fun squareIcon(art: Bitmap): Bitmap {
     return Bitmap.createScaledBitmap(square, 256, 256, true)
 }
 
-/** Any other type makes the file picker append its own extension to `.punktfunk`. */
+/**
+ * The local storage provider (AOSP main) appends a type's registered extension after
+ * `.punktfunk` (text/plain → `.txt`); octet-stream gets none.
+ */
 internal const val LAUNCHER_FILE_MIME = "application/octet-stream"
 
 /** `Halo: Reach` → `Halo Reach.punktfunk`: a name every SD-card file system takes. */

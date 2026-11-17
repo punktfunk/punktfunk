@@ -1,4 +1,4 @@
-//! In-process transport for unit tests and the C ABI harness. Two cross-wired
+//! In-process transport for tests, harnesses and the host's spike loopback. Two cross-wired
 //! [`LoopbackTransport`]s form a host↔client link, with optional deterministic loss so
 //! tests can exercise FEC recovery without a real network.
 
@@ -88,7 +88,7 @@ impl LoopbackTransport {
 }
 
 /// Create a connected `(host, client)` pair. `host_drop_period` injects loss on the
-/// host→client (video) path; `client_drop_period` on the reverse (input) path.
+/// host→client (video) path; `client_drop_period` on the reverse path.
 pub fn loopback_pair(
     host_drop_period: u32,
     client_drop_period: u32,

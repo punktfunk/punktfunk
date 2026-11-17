@@ -5,10 +5,10 @@
 .DESCRIPTION
   Reads live-g4-<Tag>.log (leg markers), host.log over the run window, g4-<Tag>-status.jsonl
   (timed control-plane samples) and the pre/post snapshots, and prints one section per criterion
-  with the numbers behind it. Criterion 1 attributes every gap over 2 s: it is outside our path
-  only when the co-timed stall line says compose-silence with zero DXGI presents AND the DxgKrnl
-  ETW bracket names a display DDI. Everything else counts against us, and a gap with no ETW
-  evidence at all is reported as UNATTRIBUTED, never as excluded.
+  with the numbers behind it. Criterion 1 attributes every gap of -GapBar or more: it is outside
+  our path only when the co-timed stall line says compose-silence with zero DXGI presents AND the
+  DxgKrnl ETW bracket names a display DDI. Everything else counts against us, and a gap with no
+  ETW evidence at all is reported as UNATTRIBUTED, never as excluded.
 
   Run after the soak:  pwsh -NoProfile -File C:\Users\Public\g4-report.ps1 -Tag g4n
 #>

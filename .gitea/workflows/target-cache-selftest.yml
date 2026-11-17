@@ -66,7 +66,8 @@ jobs:
           test ! -e target
           mkdir target
           echo healed > target/marker
-      # The same condition as ci.yml's `rust` job, less the push filter.
+      # Saves once Build passed, as ci.yml's `rust` job does; that job also requires a push and
+      # a compile.
       - name: Save target
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.target.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

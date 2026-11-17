@@ -47,8 +47,7 @@ struct ScreenshotHostView: View {
     init(scene: ShotScene) {
         self.scene = scene
         // Pin the palette for the capture. The console reads the LIVE `uiPalette` default,
-        // and a reused Simulator (or a dev Mac) carries whatever was last picked there — the
-        // Apple TV set once shipped out on a sunset palette that a test device had persisted.
+        // and a reused Simulator (or a dev Mac) carries whatever was last picked there.
         // Idempotent, and only ever runs in shot mode (this view exists behind that gate).
         UserDefaults.standard.set(
             ProcessInfo.processInfo.environment["PUNKTFUNK_SHOT_PALETTE"] ?? "violet",
@@ -189,7 +188,7 @@ private struct MacShotWindowConfigurator: NSViewRepresentable {
 /// PUNKTFUNK_SHOT_SELFCAPTURE=<dir>: once the scene is ready the app captures its own windows
 /// through ScreenCaptureKit and exits. A process may capture its own windows without a Screen
 /// Recording grant (macOS 14.4+), and materials come out as on screen. Only this process's
-/// windows go in, front to back over the canvas: sheets and the Settings window land in the
+/// windows go in, back to front over the canvas: sheets and the Settings window land in the
 /// shot, the menu bar, the desktop and other apps do not.
 enum MacSelfCapture {
     /// The canvas in the top-left global space, set by the window configurator.
@@ -326,12 +325,10 @@ private struct IOSOrientationConfigurator: UIViewControllerRepresentable {
 
 /// Asks the window scene to rotate, from a place where there IS a window.
 ///
-/// The previous version made the request inside `updateUIViewController`, where `view.window` is
-/// still nil: SwiftUI makes exactly one update pass for a representable mounted as a `.background`,
-/// before the hierarchy is in a window, so the `guard` fell through and nothing ever asked again.
-/// Every scene declared `.landscape` — the stream hero and the trust card — was therefore captured
-/// in PORTRAIT at the portrait App Store size. Overriding `supportedInterfaceOrientations` as well
-/// keeps the scene from rotating back if the simulator reports a device orientation change.
+/// SwiftUI makes exactly one update pass for a representable mounted as a `.background`, before
+/// the hierarchy is in a window, so `view.window` is still nil there: `applyGeometry` falls back
+/// to the connected scene, and `viewDidAppear` asks again. Overriding `supportedInterfaceOrientations` as well keeps the scene from rotating back
+/// if the simulator reports a device orientation change.
 final class ShotOrientationController: UIViewController {
     var mask: UIInterfaceOrientationMask
 
@@ -356,8 +353,7 @@ final class ShotOrientationController: UIViewController {
         let scene = view.window?.windowScene
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         guard let scene else { return }
-        // Report a refusal instead of silently shipping the wrong orientation — that is exactly
-        // how every landscape scene went out as a portrait PNG for as long as it did.
+        // Report a refusal instead of silently shipping the wrong orientation.
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
             print("PF_SHOT_ORIENTATION_REFUSED \(error.localizedDescription)")
             fflush(stdout)

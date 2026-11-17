@@ -28,8 +28,8 @@
       bun2nix,
     }:
     let
-      # Linux/x86_64 only — the host encodes with desktop NVENC and CI publishes no aarch64 leg
-      # (mirrors the RPM's `ExclusiveArch: x86_64`). Add a system here once there's an arm64 build.
+      # Linux/x86_64 only — the host encodes with desktop NVENC and nix.yml has no aarch64 leg.
+      # The RPM's `ExclusiveArch` also lists aarch64. Add a system here once there's an arm64 build.
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
 
@@ -38,8 +38,8 @@
 
       overlays = [
         (import rust-overlay)
-        # nixpkgs lags bun; the web console and plugin runner exec this one. Same release as
-        # the deb/rpm/arch/windows pins — bump them together (SHASUMS256.txt, as SRI).
+        # nixpkgs lags bun; the web console and plugin runner exec this one. The release is the
+        # one in ci/bun.env; scripts/ci/check-bun-nix.sh fails when this overlay disagrees.
         (final: prev: {
           bun = prev.bun.overrideAttrs (old: {
             version = "1.4.4";
@@ -154,7 +154,7 @@
         }
       );
 
-      # `nix flake check` builds every package.
+      # `nix flake check` builds these (the host package carries the tray; gamescope is left out).
       checks = forAllSystems (
         system:
         let

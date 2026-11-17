@@ -32,7 +32,7 @@ export interface PluginManifest {
 /** An id names the plugin's state dir and socket: one lowercase path component. */
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Read `package.json`'s `punktfunk` block, or `undefined` when there is none or its id is unusable. */
+/** Read `package.json`'s `punktfunk` block; `undefined` unless `schema` is 1 and the id is valid. */
 export const readManifest = (packageDir: string): PluginManifest | undefined => {
 	try {
 		const pkg = JSON.parse(

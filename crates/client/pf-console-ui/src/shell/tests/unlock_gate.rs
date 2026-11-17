@@ -188,7 +188,7 @@ fn pending_on_an_unlock_dial_is_the_desktop_starting() {
     assert!(card.request_access && card.starting.is_none());
 }
 
-/// A host that can't carry an unlock gets today's dial: no prompt, the host answers.
+/// A host that can't carry an unlock gets the plain dial: no prompt, the host answers.
 #[test]
 fn a_host_without_the_prompt_dials_as_it_stands() {
     let (mut s, console, _bus, row) = shell_for(Some("kid"), false);

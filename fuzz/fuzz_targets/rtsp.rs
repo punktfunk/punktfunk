@@ -1,7 +1,7 @@
 //! The GameStream RTSP text layer on bytes a LAN peer sends before any pairing check.
 //!
-//! punktfunk-host is a binary crate, so nothing links it: the std-only half of its RTSP module
-//! is included by path. A finding is a panic in a pre-auth handler.
+//! punktfunk-host is a binary crate, so nothing links it: the std-and-anyhow half of its RTSP
+//! module is included by path. A finding is a panic in a pre-auth handler.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

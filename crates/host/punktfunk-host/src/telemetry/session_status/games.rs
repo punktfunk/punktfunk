@@ -30,10 +30,9 @@ pub struct GameSnapshot {
 
 /// Compat plane's launched game, while it has one.
 ///
-/// GameStream is not in the native registry: that holds the loop's `Arc`
-/// handles, which the compat plane does not have. One `AppState.launch`
-/// means one slot; this is what keeps a Moonlight game on `/status`
-/// alongside a native session.
+/// The compat plane's registry entry carries no lease (`game: None`), so this
+/// slot is what keeps a Moonlight game on `/status`. One `AppState.launch`
+/// means one slot.
 fn gs_game() -> &'static Mutex<Option<Arc<crate::gamelease::LeaseShared>>> {
     static SLOT: OnceLock<Mutex<Option<Arc<crate::gamelease::LeaseShared>>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
@@ -59,7 +58,8 @@ impl Drop for GamestreamGameGuard {
 
 /// Every launched game the host currently knows: live sessions first, then
 /// the compat plane, then games waiting out a reconnect window, then launches
-/// still running with no session ([`crate::launchreg::detached`]).
+/// still running with no session ([`crate::launchreg::detached`]), then
+/// launches still waiting for their session ([`waiting_launch`]).
 ///
 /// Sources stay separate — a grace-pending or detached game has no session
 /// to hang off, and omitting it would hide a game the player can still end.
@@ -88,7 +88,7 @@ pub fn games() -> Vec<GameSnapshot> {
             .unwrap_or_else(|e| e.into_inner())
             .iter()
             .map(|g| GameSnapshot {
-                // Compat plane has no session id. State is never `grace` while
+                // The slot holds no session id. State is never `grace` while
                 // streaming, so the console tells this from a grace row by state.
                 session_id: None,
                 client: g.client.clone(),

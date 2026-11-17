@@ -842,7 +842,7 @@ mod tests {
         assert!(pad.release().is_empty());
     }
 
-    /// #2129: the exit chord in every press order, at three paces, released either way round.
+    /// The exit chord in every press order, at three paces, released either way round.
     /// Guide never reaches the host, Select at most as one plain hold, and End stream fires
     /// once. The worker polls every 10 ms.
     #[test]
@@ -1019,7 +1019,7 @@ mod tests {
         assert_eq!(route(up(B), &host(), &mut pad, ms(120)), [off(B)]);
     }
 
-    /// a05b711ac: a raw Steam Controller runs the mask, system buttons and ring chord itself.
+    /// A raw Steam Controller runs the mask, system buttons and ring chord itself.
     #[test]
     fn a_raw_steam_controller_reads_the_same_asks() {
         let none = Sc2Gate::default();

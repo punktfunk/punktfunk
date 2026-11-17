@@ -2,7 +2,7 @@
 //! so the tops of thousands of rows are a running sum, and only the rows on screen hold widgets.
 //! A row leaving the screen goes back to a pool of its kind and is shown again for the next one.
 //!
-//! GTK's own list keeps up to 200 rows alive around its anchor and rebinds them as the anchor
+//! GTK 4.20's own list keeps about 200 rows alive around its anchor and rebinds them as the anchor
 //! moves; with a grid row of posters each, that is the cost this widget exists to avoid.
 
 use super::rows::{Caption, Row};

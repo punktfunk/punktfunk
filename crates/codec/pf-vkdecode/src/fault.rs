@@ -9,7 +9,7 @@
 //! `Flip` XORs one payload byte and may stay valid syntax, so neither planner
 //! nor driver is guaranteed to report it. Missing `queryResultStatusSupport`
 //! is unmeasured, not clean. Unselected AUs are borrowed; owned bytes exist
-//! only on the selected call. Runs after `PUNKTFUNK_AU_DUMP`, so dumps stay
+//! only on the selected call. Runs after `PUNKTFUNK_DUMP_VIDEO`, so dumps stay
 //! clean wire input. Evidence: `tests/fault_detection.rs`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

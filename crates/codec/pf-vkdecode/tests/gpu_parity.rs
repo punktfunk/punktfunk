@@ -6,7 +6,8 @@
 //! also prove three- and four-byte Annex-B start codes produce identical pixels;
 //! AV1 OBUs are length-delimited, so there is no prefix-width leg. The fixtures and
 //! their CPU guards are `pf_bitstream::testing::parity`'s; the guards here cover this
-//! file's four-byte rewrite and frame-0 blob. Files do not cover packetisation or loss.
+//! file's four-byte rewrite, frame-0 blob and deblock mutation. Files do not cover
+//! packetisation or loss.
 //!
 //! Needs a Vulkan Video device for the codec/profile under test. RADV also needs
 //! `RADV_PERFTEST=video_decode`. Select a GPU with `PF_VKD_SMOKE_VENDOR=0x1002`
@@ -16,7 +17,8 @@
 //! cargo test -p pf-vkdecode --test gpu_parity -- --ignored --nocapture
 //! ```
 //!
-//! Inputs live under `tests/data`. The legs assert; they write no evidence files.
+//! Goldens and host streams live under `tests/data`. The parity legs assert and write no
+//! files; the field-triage legs write their hashes next to the capture.
 
 mod common;
 
@@ -607,10 +609,9 @@ fn h264_four_byte_start_codes_decode_bit_identically() {
     );
 }
 
-/// Host low-delay H.264. The conformance vector never aliases setup and a
-/// reference onto one DPB slot; this stream does ([`parity::H264_LOWDELAY`]).
-/// DISTINCT hands the aliased reference the setup's array layer; COINCIDE drops it
-/// from `pReferenceSlots`.
+/// Host low-delay H.264 ([`parity::H264_LOWDELAY`]). The sliding-window unmark and the
+/// eviction share an AU, so a removed picture is still named by that AU's references;
+/// `plan_to_vk` defers its release. The vendored vector never reaches that shape.
 #[test]
 #[ignore = "needs a Vulkan Video H.264 decode device (fleet boxes; see module docs)"]
 fn low_delay_host_h264_every_frame_hashes_bit_identical_to_libavcodec() {

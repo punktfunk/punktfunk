@@ -1,15 +1,19 @@
 //! Client → host input events, plus the GameStream decoded-frame vocabulary injectors share.
 //!
-//! Input rides the same datagram plane as video, tagged [`INPUT_MAGIC`] so a session
-//! demultiplexes by the first byte. Every native event is a fixed [`INPUT_WIRE_LEN`]-byte
-//! little-endian [`InputEvent`] (`#[repr(C)]` as `PunktfunkInputEvent`). Variant field
-//! packing lives on [`InputKind`]. Capability-gated tags (`GamepadState`/`Remove`/`Arrival`,
-//! `TextInput`) are ignored by hosts that never advertised the matching `HOST_CAP_*`.
+//! Each event rides one QUIC datagram of v2 kind `InputState` ([`crate::quic::v2::dgram`]),
+//! led by [`INPUT_MAGIC`]. Toward a host advertising
+//! [`HOST_CAP2_INPUT_EDGES`](crate::quic::HOST_CAP2_INPUT_EDGES), key, mouse-button and text
+//! edges ride the control stream instead. Every native event is a fixed [`INPUT_WIRE_LEN`]-byte
+//! little-endian [`InputEvent`] (`#[repr(C)]` as `PunktfunkInputEvent`), plus one screen byte
+//! past the first screen ([`InputEvent::wire`]). Variant field packing lives on [`InputKind`].
+//! Capability-gated tags (`GamepadState`/`Remove`/`Arrival`, `TextInput`, `Scroll`) are ignored
+//! by hosts that never advertised the matching `HOST_CAP_*` / `HOST_CAP2_*` bit.
 //!
 //! Motion units and the rest-pose accel are pinned by `pf-inject`'s `motion_contract` test
 //! against [`gamepad::MOTION_GYRO_LSB_PER_DEG_S`] / [`gamepad::MOTION_NEUTRAL_ACCEL`].
 
-/// Wire tag: input datagram vs video packet.
+/// Wire tag of an [`InputEvent`] datagram; an `InputState` datagram led by
+/// [`RICH_INPUT_MAGIC`](crate::quic::RICH_INPUT_MAGIC) carries rich input instead.
 pub const INPUT_MAGIC: u8 = 0xC8;
 
 /// Serialized [`InputEvent`] size (tag + fields). The C struct is larger (`_pad`).
@@ -107,9 +111,10 @@ pub fn decode_gamepad_remove(flags: u32) -> (u8, u8) {
 pub const SCROLL_FLAG_PRECISE: u32 = 1;
 
 /// Pixels one detent of a [`SCROLL_FLAG_PRECISE`] delta is worth — the inverse of the
-/// 0.1-units-per-point factor SDL and the Apple clients use to put measured pixels INTO
-/// 120-space. Undoing it exactly is what makes the content travel as far as the finger; any
-/// other value re-introduces a scale factor.
+/// 0.1-units-per-point factor SDL 3.4 uses on macOS and Wayland, and [`scroll::ScrollOutput`]
+/// applies toward an older host, to put measured pixels INTO 120-space. Undoing it exactly is
+/// what makes the content travel as far as the finger; any other value re-introduces a scale
+/// factor.
 pub const PRECISE_PX_PER_DETENT: f64 = 10.0;
 
 /// [`InputKind::GamepadArrival`] `flags` bit 8: this pad renders haptics
@@ -362,7 +367,8 @@ pub mod gamepad {
     /// Back grip L5 — SDL `LeftPaddle2` / GameStream `PADDLE4`.
     pub const BTN_PADDLE4: u32 = 0x0008_0000;
     /// DualSense touchpad click. Moonlight `buttonFlags2 << 16` so GameStream clients
-    /// land on the same bit. Only the DualSense backend has this button.
+    /// land on the same bit. The DualSense and DualShock 4 backends click their touchpad, the
+    /// Steam Deck and Steam Controller 2 backends their right pad; the others drop it.
     pub const BTN_TOUCHPAD: u32 = 0x10_0000;
     /// Misc / capture — Deck `…`/quick-access, Share/Capture / GameStream `MISC`.
     pub const BTN_MISC1: u32 = 0x0020_0000;
@@ -392,7 +398,7 @@ pub mod gamepad {
     /// Saturates at `i16::MAX / 20` ≈ ±1638 °/s (a real DualSense is ±2000). Every
     /// capture path scales *into* these units and every host backend *from* them;
     /// `pf-inject`'s `motion_contract` pins the calibration blobs against this number.
-    /// Lifting the clip is a wire-v2 change, not a quiet re-tune.
+    /// Lifting the clip is a wire change, not a quiet re-tune.
     pub const MOTION_GYRO_LSB_PER_DEG_S: i32 = 20;
     /// Accel scale: DualSense raw `i16` LSBs per g. Saturates at ±3.28 g (device ±4 g).
     /// Same pin as [`MOTION_GYRO_LSB_PER_DEG_S`].
@@ -975,7 +981,7 @@ mod tests {
         );
     }
 
-    /// Inverse of host `inject::vk_to_evdev`. Generic-modifier VKs collapse onto the
+    /// Inverse of host `pf_inject::vk_to_evdev`. Generic-modifier VKs collapse onto the
     /// left-hand evdev codes and are omitted here.
     #[test]
     fn roundtrips_through_the_host_table() {

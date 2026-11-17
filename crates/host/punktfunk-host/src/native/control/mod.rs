@@ -30,8 +30,8 @@ use punktfunk_core::quic::v2::{dgram::Feedback, io as v2io, msg as v2msg};
 use punktfunk_core::quic::{AckReason, ClipControl, ClipOffer, ClipState};
 
 /// The ack this client can read. The reason byte goes only to a client that
-/// asked for it (`EXT_ABR_ACK_REASON`); every other client gets the nine bytes
-/// it has always got, whatever the host knows.
+/// asked for it (`EXT_ABR_ACK_REASON`); every other client gets the rate alone,
+/// whatever the host knows.
 fn bitrate_ack(kbps: u32, why: AckReason, client_reads_reason: bool) -> BitrateChanged {
     BitrateChanged {
         bitrate_kbps: kbps,
@@ -156,14 +156,14 @@ fn probe_bound(target_kbps: u32, ports: crate::send_pacing::Ports) -> u32 {
 /// Whether this probe request is as short as a bring-up ramp step.
 ///
 /// The length bound is the ramp's exemption from the spacing. Without it a
-/// client could hold the window open with 5 s bursts at the probe ceiling,
-/// which is the uplink-pinning the spacing exists against.
+/// client could hold the window open with `MAX_PROBE_MS` bursts at the probe
+/// ceiling, which is the uplink-pinning the spacing exists against.
 fn is_ramp_length(req: &ProbeShaped) -> bool {
     req.duration_ms <= super::stream::RAMP_STEP_MAX_MS
 }
 
-/// One speed-test burst per 10 s. Each burst is already clamped (5 s, 10 Gbps);
-/// without a count cap a client can pause video and pin the uplink.
+/// One speed-test burst per 10 s. Each burst is already clamped (`MAX_PROBE_MS`,
+/// `MAX_PROBE_KBPS`); without a count cap a client can pause video and pin the uplink.
 ///
 /// A ramp step neither waits on the spacing nor starts it: a ramp cut short
 /// by the first frame asks for its burst two seconds later, and that burst is
@@ -208,8 +208,8 @@ impl ProbeSpacing {
     }
 }
 
-/// Named fields, not a 30-argument spawn: `retarget_rx` and `gap_rx` are both
-/// bare `u32`, so a positional swap would compile and fail at runtime.
+/// Named fields, not a 30-argument spawn: `client_codecs`, `preferred_codec` and
+/// `host_codecs` are all bare `u8`, so a positional swap would compile and fail at runtime.
 pub(super) struct Task {
     pub(super) ctrl_send: super::link::CtlSend,
     pub(super) ctrl_recv: super::link::CtlReader,
@@ -247,8 +247,8 @@ pub(super) struct Task {
     /// the governor divides, and the shard the parity rule sizes against.
     pub(super) wire_bytes: u64,
     /// Client set `EXT_ABR_ACK_REASON` in its `ClientHello`: its `BitrateChanged`
-    /// may carry the reason byte. Clear for every shipped client, which rejects
-    /// a longer ack, and for every client behind a host without `HOST_CAP2_EXT`.
+    /// may carry the reason byte. Core sets it for every embedder; a client that
+    /// leaves it clear gets the rate alone ([`bitrate_ack`]).
     pub(super) ack_reason: bool,
     /// The client's feedback datagrams, from the session's datagram reader.
     pub(super) feedback_rx: tokio::sync::mpsc::Receiver<punktfunk_core::quic::v2::dgram::Feedback>,
@@ -299,7 +299,7 @@ pub(super) struct Task {
 
 /// How long one control-stream write waits for the client's credit, as `start_for_dial` bounds
 /// its own. A reading client frees credit within a round trip and a dead path closes at the
-/// default QUIC idle timeout first, so only a client whose reader stopped waits 10 s.
+/// default QUIC idle timeout first, so only a client whose reader stopped waits it out.
 const SEND_WAIT: std::time::Duration = super::PENDING_EVERY;
 
 /// What the client hears about a delivered mode.
@@ -395,7 +395,8 @@ struct Closed {
     screens_ask: bool,
     /// The input thread is the only sender, and it ends with the session.
     pad_slots: bool,
-    /// `--open` anonymous sessions never spawn deadline/watch; the sender drops at once.
+    /// Deadline/watch and the management route hold the senders; an anonymous session
+    /// spawns no deadline/watch.
     access: bool,
     /// The clipboard coordinator is gone.
     clip_offer: bool,
@@ -797,8 +798,8 @@ impl ControlTask {
             .await
     }
 
-    /// The encode loop's newest cursor shape; an error is the encode loop gone. A shape of
-    /// ≤ ~58 KiB fits the u16 frame (`cursor_fwd` downscales).
+    /// The encode loop's newest cursor shape; an error is the encode loop gone. A shape at
+    /// most `CURSOR_SHAPE_MAX_SIDE` a side fits the u16 frame (`cursor_fwd` downscales).
     async fn on_cursor_shape(
         &mut self,
         changed: Result<(), tokio::sync::watch::error::RecvError>,
@@ -1085,8 +1086,8 @@ fn poke_capture(poke: &super::wiring::ArrivalPoke) {
 }
 
 /// Reported loss at which send offload is suspected of costing delivered throughput. 0.4 % is
-/// what the 2026-07-14 Linux GSO A/B produced at a rate `sendmmsg` carried clean; under it the
-/// offload is not the discriminator.
+/// what a Linux GSO A/B produced at a rate `sendmmsg` carried clean; under it the offload is
+/// not the discriminator.
 const OFFLOAD_LOSS_PPM: u32 = 4_000;
 /// Windows over [`OFFLOAD_LOSS_PPM`] before the downshift (~1.5 s), so one Wi-Fi scan or BT
 /// coexistence burst cannot strip the offload.
@@ -1694,7 +1695,7 @@ pub(crate) mod tests {
     }
 
     /// A client whose `ClientHello` set no `abr_features` gets an ack without a reason,
-    /// whatever the host knows about the refusal: a 0.43 client rejects any other ack.
+    /// whatever the host knows about the refusal.
     #[test]
     fn a_client_that_did_not_ask_gets_no_reason() {
         use punktfunk_core::quic::v2::msg::{decode, V2Message};
@@ -1814,7 +1815,7 @@ pub(crate) mod tests {
         for ms in [0, 72] {
             assert!(spacing.admit(at(ms), true, true), "an in-window step");
         }
-        // The rig: the window closed at 103 ms, the re-ask arrived at 157 ms.
+        // The window closes at 103 ms; the re-ask arrives at 157 ms.
         assert!(
             spacing.admit(at(157), true, false),
             "a re-ask across the close"

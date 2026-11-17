@@ -13,7 +13,7 @@ export interface HostStore {
   /**
    * Why the list is empty, when it is empty for a reason other than an empty LAN. Rendering
    * any of these as "No hosts yet" would blame the user's network for the plugin's problem:
-   *   "client-outdated"    — the installed client predates `punktfunk discover`
+   *   "client-outdated"    — the installed client predates a verb the scan calls
    *   "client-unavailable" — there is no client installed at all
    *   "list-failed"        — the refresh itself blew up (backend down, call threw)
    */

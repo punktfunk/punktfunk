@@ -1,13 +1,12 @@
 //! The scroll of a read-only page: Up and Down step, Left and Right page, a wheel steps,
 //! a finger drags and its fling coasts. A step or a page glides there on the focus spring,
-//! the same travel as a list following its cursor. The licences and the stream controls
-//! share it.
+//! the same travel as a list following its cursor. The licences screen scrolls with it.
 
 use crate::anim::{springs, Spring};
 use crate::pointer::{Pointer, PointerKind};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 
-/// Up and Down move this many steps; a fling decays at this rate per second.
+/// Up, Down and a wheel step move this many lines; a fling decays at this rate per second.
 const STEP_LINES: f64 = 3.0;
 const FLING_DECAY: f64 = 4.0;
 

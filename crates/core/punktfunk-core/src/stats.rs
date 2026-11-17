@@ -23,7 +23,7 @@ pub struct Stats {
     pub packets_received: u64,
     pub packets_dropped: u64,
     /// WouldBlock on send: the kernel send buffer was full. Distinct from
-    /// `packets_dropped` (recv-side reassembler rejects).
+    /// `packets_dropped` (receive-side rejects).
     pub packets_send_dropped: u64,
     pub fec_recovered_shards: u64,
     /// Recovered shards that later arrived: reordering reconstructed the block

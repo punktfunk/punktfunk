@@ -1,8 +1,7 @@
 // In-memory brute-force throttle for the login gate. The password compare is constant-time (no
-// timing leak), but nothing bounded the *volume* of guesses — a LAN peer could hammer
+// timing leak) but does not bound the *volume* of guesses — a LAN peer could hammer
 // PUNKTFUNK_UI_PASSWORD at network speed against a console that is, by design, LAN-exposed. This is
-// the console analogue of the host's PAIRING_COOLDOWN / single-use pairing PIN: every other secret
-// gate in the project is rate-limited, so this one is too.
+// the console analogue of the host's PAIRING_COOLDOWN, which caps the rate of online PIN guessing.
 //
 // State is a module-level Map — it lives for the lifetime of the single Bun/Nitro server process,
 // which is exactly the scope we want (a restart clearing it is fine; lockouts are short). Keyed on
@@ -11,8 +10,9 @@
 // botnet-style spread across many IPs still can't get unlimited aggregate guesses.
 
 /** Backoff schedule. After `FREE_ATTEMPTS` failures from an IP, each further failure locks that IP
- * for `BASE_LOCKOUT_MS * 2^(n)` up to `MAX_LOCKOUT_MS`. Generous enough never to bother a human who
- * fat-fingered their password a couple of times, punishing enough to make brute force hopeless. */
+ * for `BASE_LOCKOUT_MS * 2^(over - 1)`, `over` being the failures past `FREE_ATTEMPTS`, up to
+ * `MAX_LOCKOUT_MS`. Generous enough never to bother a human who fat-fingered their password a
+ * couple of times, punishing enough to make brute force hopeless. */
 const FREE_ATTEMPTS = 5;
 const BASE_LOCKOUT_MS = 1_000;
 const MAX_LOCKOUT_MS = 5 * 60_000; // 5 minutes

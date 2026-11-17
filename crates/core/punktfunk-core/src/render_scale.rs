@@ -20,7 +20,7 @@ pub const PRESETS: [f64; 9] = [0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
 
 /// Per-axis encoder ceiling for a client `codec` string. H.264 is 4096;
 /// everything else (including `"auto"`, which negotiates HEVC/AV1) is 8192 —
-/// same walls as `pf-encode`'s `codec.rs::max_dimension`.
+/// same walls as `pf-encode-core`'s `Codec::max_dimension`.
 pub fn max_dimension(codec: &str) -> u32 {
     if codec == "h264" {
         4096
@@ -56,7 +56,7 @@ pub fn preset_index(scale: f64) -> Option<usize> {
 }
 
 /// Scale a base size: keep aspect, even-floor, uniform-clamp so neither axis
-/// exceeds `max_dim`. Each axis floors at 320×200 (host rejects smaller).
+/// exceeds `max_dim`. Each axis floors at 320×200, the clients' own minimum mode.
 pub fn apply(base_w: u32, base_h: u32, scale: f64, max_dim: u32) -> (u32, u32) {
     let scale = sanitize(scale);
     let mut w = base_w.max(1) as f64 * scale;

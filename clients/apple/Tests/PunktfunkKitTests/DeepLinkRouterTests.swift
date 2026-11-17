@@ -1,5 +1,5 @@
-// What a `punktfunk://` link is allowed to do. The connect and browse routes ran these rules
-// side by side with no test between them, and had drifted.
+// What a `punktfunk://` link is allowed to do. The connect and browse routes share these rules,
+// and a test holds them to the same verdict.
 
 import XCTest
 

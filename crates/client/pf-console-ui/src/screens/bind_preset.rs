@@ -24,8 +24,7 @@ pub(crate) struct BindPresetScreen {
     /// Host primary key (fingerprint or `addr:port`), never a pinned-card composite.
     host_key: String,
     host_name: String,
-    /// Catalog snapshot at construction. The console cannot create presets, so
-    /// this list cannot change while the screen is open.
+    /// Catalog snapshot at construction; it is not refreshed while the screen is open.
     presets: Vec<(String, String)>,
     /// Set when the menu was raised on a title rather than the host tile. Same catalog
     /// and same radio behaviour either way — only the binding it writes differs.

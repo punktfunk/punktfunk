@@ -12,7 +12,7 @@ import org.robolectric.annotation.Config
 
 /** The console's state is reached on the main thread only; any other thread hands work over. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36]) // Robolectric 4.16 has no SDK 37 image yet; the app targets 37
+@Config(sdk = [36]) // Robolectric has no SDK 37 image yet; the app targets 37
 class MainConfinedTest {
     @Test
     fun another_thread_hands_work_over_and_cannot_touch_the_state() {

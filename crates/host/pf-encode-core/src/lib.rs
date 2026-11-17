@@ -4,7 +4,7 @@
 //! the slot-RFI policy, the loss-recovery env knobs, and the PyroWave wire
 //! framing.
 //!
-//! Speaks `pf-frame` only, so the IddCx driver can host it through
+//! Speaks `pf-frame` and `pf-driver-proto` only, so the IddCx driver can host it through
 //! `pf-encode-win` without QUIC or GPU inventory. Backend selection stays in
 //! `pf-encode`. Evidence: `design/windows-video-plane-overhaul.md` §2.6.
 

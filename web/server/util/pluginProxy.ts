@@ -10,7 +10,8 @@ import { isError } from "h3";
 import { mgmtFetch } from "./forward";
 import { consoleOriginPort, pluginOriginPort } from "./pluginOrigin";
 
-/** A plugin id — its `definePlugin` name; the same shape the host validates. */
+/** A plugin id — its `definePlugin` name. The host's `valid_id` (plugin_host/plugins/manifest.rs)
+ * also takes a leading digit, and caps the length at 64. */
 export const PLUGIN_ID_RE = /^[a-z][a-z0-9-]*$/;
 
 /**
@@ -171,7 +172,8 @@ export async function callPlugin(
 				headers: { ...headers, authorization: `Bearer ${cred.secret}` },
 			});
 		} catch {
-			// ponytail: a person's dead port stays cached for its 15 s; the operator's is dropped.
+			// A person's dead port stays cached until the TTL in personPlugins.ts ends; the
+			// operator's credential is dropped.
 			if (!person) bustCredential(id);
 			return null;
 		}

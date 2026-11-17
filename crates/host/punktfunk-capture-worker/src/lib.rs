@@ -1,11 +1,12 @@
 //! The Windows capture worker: Windows Graphics Capture and the encoder for one session that
 //! streams a monitor the host did not create.
 //!
-//! Windows Graphics Capture does not activate for SYSTEM, so the host starts this process with
-//! the signed-in user's token and drives it over two pipes ([`pf_driver_proto::worker`]). It
-//! captures one monitor ([`source`]), encodes with the driver's own session loop
-//! (`pf-encode-session`) fed from [`pool`], and publishes into the AU section the host created,
-//! so the host reads a worker's session exactly as it reads the driver's.
+//! Windows Graphics Capture does not activate for SYSTEM (checked on Windows 11 build 26300), so
+//! the host starts this process with the signed-in user's token and drives it over two pipes
+//! ([`pf_driver_proto::worker`]). It captures one monitor ([`source`]), encodes with the
+//! driver's own session loop (`pf-encode-session`) fed from [`pool`], and publishes into the AU
+//! section the host created, so the host reads a worker's session exactly as it reads the
+//! driver's.
 //!
 //! The process is the unit of recovery. It owns no display, changes no topology and keeps
 //! nothing the host cannot rebuild by starting another one; it exits when the host closes its

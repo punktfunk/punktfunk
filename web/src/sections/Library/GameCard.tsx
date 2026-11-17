@@ -99,12 +99,12 @@ export const SelectCover: FC<{
 
 /**
  * A poster that opens the entry's page. The cover prefers the 2:3 portrait; on a load error it
- * falls back to the wide header, then to the title. Only what a cover cannot say sits on it: a
- * console's platform, Hidden, the host's stream settings, and the install mark; the source is
- * the entry page's. Hide and delete appear on hover, on a pointer that can hover; a phone
- * manages a title on its page. In selection mode the card is one checkbox. In a profile's view
- * its hide and its own stream settings carry its mark, and a game only it has is marked so and
- * deletes rather than hides.
+ * falls back to the wide header, then to the icon, else the title. Only what a cover cannot say
+ * sits on it: a console's platform, Hidden, the host's stream settings, and the install mark;
+ * the source is the entry page's. Hide and delete appear on hover, on a pointer that can hover;
+ * a phone manages a title on its page. In selection mode the card is one checkbox. In a
+ * profile's view its hide and its own stream settings carry its mark, and a game only it has is
+ * marked so and deletes rather than hides.
  */
 export const GameCard: FC<GameCardProps> = ({
 	game,

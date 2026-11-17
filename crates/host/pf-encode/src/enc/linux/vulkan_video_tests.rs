@@ -200,7 +200,8 @@ fn imported_release_returns_ownership_in_general() {
     assert_eq!(b.new_layout, vk::ImageLayout::GENERAL);
 }
 
-/// The latch needs every gate at once; the 780M's measured caps pass, each missing one fails.
+/// The latch needs every gate at once: RADV's reported caps (Mesa 26.3) pass, and dropping the
+/// extension, the feature, ROW mode, partition independence or the cycle length fails.
 #[test]
 fn intra_refresh_latch_needs_every_gate() {
     use crate::vk_intra_refresh as vir;
@@ -425,7 +426,7 @@ fn vulkan_smoke_rgb_av1() {
 }
 
 /// Wave smoke frame plan, 256×256 (4 CTB rows → cycle 4): IDR + 2 P, then an RFI with
-/// every reference tainted, which used to force an IDR and now starts a wave.
+/// every reference tainted, which starts a wave, not an IDR.
 const WAVE_START: usize = 3;
 const WAVE_CYCLE: usize = 4;
 
@@ -692,7 +693,7 @@ fn run_smoke_10bit_sdr(codec: Codec) -> Option<Vec<crate::EncodedFrame>> {
     };
     let (w, h) = (env_dim("PF_SMOKE_W", 256), env_dim("PF_SMOKE_H", 256));
     // ten_bit + SDR: an 8-bit capture at depth 10. want_rgb=false forces the compute CSC (the
-    // 709 10-bit shader), the path a composited-cursor desktop always takes.
+    // 709 10-bit shader), the path a cursor-blending session opens on.
     let mut enc = match VulkanVideoEncoder::open_opts_depth(
         codec, w, h, 60, 10_000_000, false, true, false,
     ) {
@@ -739,7 +740,7 @@ fn vulkan_smoke_10bit_sdr() {
     }
 }
 
-/// AV1 10-bit SDR — the AMD/Intel path VAAPI cannot serve.
+/// AV1 10-bit SDR. On AMD/Intel only Vulkan Video encodes AV1; the native VAAPI encoder does not.
 #[test]
 #[ignore = "needs a real VK_KHR_video_encode_av1 device with a 10-bit profile"]
 fn vulkan_smoke_10bit_sdr_av1() {
@@ -748,7 +749,6 @@ fn vulkan_smoke_10bit_sdr_av1() {
     }
 }
 
-/// 24-bpp CPU session via `normalize_cpu_rgb`. Frames alternate Rgb/Bgr (staging re-key).
 /// A cursor-blend session leaves the CSC for EFC once no cursor reaches it and returns on
 /// the first visible one; every frame comes back, with an IDR at each move.
 #[test]
@@ -824,6 +824,7 @@ fn vulkan_encode_cursor_switch_follows_the_cursor() {
     );
 }
 
+/// 24-bpp CPU session via `normalize_cpu_rgb`. Frames alternate Rgb/Bgr (staging re-key).
 fn run_smoke_cpu24(rgb_direct: bool) -> Option<Vec<crate::EncodedFrame>> {
     let env_dim = |k: &str, d: u32| {
         std::env::var(k)

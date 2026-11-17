@@ -98,13 +98,14 @@ pub struct AppState {
     pub streaming: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Deliberate end (compat-plane stand-in for native `QUIT_CODE`; RTSP has none).
     ///
-    /// Set by `/cancel`, management stop, and the launched game exiting. An ENet vanish
-    /// leaves it clear. Virtual-display linger and end-game policy both read it. Cleared
-    /// by `/launch`.
+    /// Set by [`AppState::quit_session`] and by a deliberate end of the stream's
+    /// [`Lifecycle`](crate::lifecycle::Lifecycle): `/cancel`, management stop, the launched
+    /// game exiting, among others. An ENet vanish leaves it clear. Virtual-display linger and
+    /// end-game policy both read it. Cleared by `/launch`.
     pub quit: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Audio thread running, and its keep-running flag.
     pub audio_streaming: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// The media threads PLAY started. `/resume` and the next PLAY wait on them, so the old
+    /// The media threads PLAY started. `/resume` and the next `/launch` wait on them, so the old
     /// capturer-pool and lease teardown finish before a successor starts; the flags cannot
     /// say once `end_session` has lowered them.
     #[cfg(feature = "gamestream")]
@@ -121,8 +122,8 @@ pub struct AppState {
     /// summary. One session at a time on this plane, so the video thread clears them at
     /// stream start — without that, `session.ended` would report zeros nobody counted.
     pub counters: Arc<crate::session_status::SessionCounters>,
-    /// Persistent audio capturer. Reused when channel count matches (drained so no stale
-    /// audio is sent); dropped and reopened when a session negotiates a different count.
+    /// Persistent audio capturer. Reused while it still fits the session (drained so no stale
+    /// audio is sent); dropped and reopened otherwise ([`crate::audio::take_parked_capture`]).
     pub audio_cap: std::sync::Arc<std::sync::Mutex<Option<Box<dyn crate::audio::AudioCapturer>>>>,
     /// Shared streaming-stats recorder. The same `Arc` is handed to mgmt, GameStream, and
     /// native loops so one capture spans whichever path is streaming.
@@ -239,8 +240,6 @@ pub fn serve(
         crate::native_pairing::NativePairing::load_with(None, None, false)
             .context("native pairing store")?,
     );
-    // Native identity first. If GameStream writes `cert.pem` before a native pair
-    // exists, the console starts and serves the SAN-less RSA cert.
     let native_ident = crate::identity::load_or_adopt(&np).context("native host identity")?;
     #[cfg(feature = "gamestream")]
     let gs = crate::gamestream::GsState::new(

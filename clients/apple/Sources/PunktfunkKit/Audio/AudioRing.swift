@@ -22,7 +22,7 @@ func audioMsToSamples(rateHz: Int, channels: Int, ms: Int) -> Int {
 /// (`testTheShippingRateLadderRoundTripsMsToSamplesExactly`).
 ///
 /// `samples` arrives from a caller and nothing bounds it — `setSyncTarget(Int.max / 2)` is a real
-/// call this file's own tests make — and `samples * 1_000` on that would TRAP, taking the process
+/// call `AudioRingDriftTests` makes — and `samples * 1_000` on that would TRAP, taking the process
 /// down from wherever it was asked (the drain thread, or the render callback). Core widens to u128
 /// for the same reason; Swift has no u128, so the multiply reports its overflow and saturates.
 /// Saturating rather than wrapping, because a wrapped duration is a tiny one: a fuse that blows
@@ -441,7 +441,7 @@ struct AvSync {
 
 // MARK: - Drought concealment
 
-/// Bounded concealment of a packet DROUGHT — the Apple leg of the policy the three Rust clients
+/// Bounded concealment of a packet DROUGHT — the Apple leg of the policy the Rust clients
 /// share (`punktfunk_core::audio::DroughtConceal`; design/host-source-stutter-fixes.md, WP-C1).
 ///
 /// The decode path already conceals a SEQ GAP: core's in-ABI decoder synthesizes the packets the
@@ -454,12 +454,11 @@ struct AvSync {
 ///
 /// So a drought that is draining the ring gets concealed too, from the same decoder state
 /// (`PunktfunkConnection.audioPlc`), for a bounded time. The BOUND is denominated in TIME, never in
-/// frames or callbacks: that is the recorded lesson from the very fuse this protects, where a count
-/// gave an iPad a third of a Mac's slack (`JitterPolicy.deprimeMS`, and
+/// frames or callbacks, like the de-prime fuse it protects (`JitterPolicy.deprimeMS`, and
 /// `testDeprimeFuseIsADurationNotACallbackCount`). What it COUNTS is frames — one per synthesized
 /// packet, which is what the drain thread actually produces — and the resolved frame length is what
-/// converts between the two. Those are the same discipline, not opposite ones: the policy is stated
-/// in time and the conversion is exact, instead of a frame being assumed to be 5 ms.
+/// converts between the two: the policy is stated in time and the conversion is exact, instead of
+/// a frame being assumed to be 5 ms.
 ///
 /// Time is passed IN, so the policy stays as deterministic as the ring's own.
 struct DroughtConceal {
@@ -504,7 +503,7 @@ struct DroughtConceal {
     /// Concealed since the last real packet, in ms — the figure the `maxMS` budget bounds.
     private var concealedMS: Int { concealed * frameUs / 1_000 }
 
-    /// Concealment over the session, ms — what the 10 s `plc_ms=` line reports. Concealment must be
+    /// Concealment over the session, ms — what `AudioDrain`'s `plc_ms=` line reports. It must be
     /// visible: a policy that quietly papers over a failing link is a policy that hides the bug.
     var totalMS: Int { total * frameUs / 1_000 }
 
@@ -533,10 +532,11 @@ struct DroughtConceal {
 
 /// CoreAudio channel layout for the canonical wire order FL FR FC LFE RL RR [SL SR]. nil for
 /// stereo (the standard layout is correct). For 5.1/7.1 we list explicit channel labels via
-/// `kAudioChannelLayoutTag_UseChannelDescriptions` — preset tags (DTS_5_1 etc.) don't reliably
-/// match Moonlight's order. 7.1 follows `kAudioChannelLayoutTag_WAVE_7_1` (WASAPI 0x63F):
-/// wire 4-5, the WAVE *back* pair, are RearSurround*; 6-7, the *side* pair, are Left/RightSurround.
-/// 5.1 keeps Left/RightSurround for its back pair: that is where a 5.1 device has speakers.
+/// `kAudioChannelLayoutTag_UseChannelDescriptions`, in the orders of the `MPEG_5_1_A` and
+/// `WAVE_7_1` presets; other presets (AAC, DTS) order them differently. 7.1 follows `WAVE_7_1`
+/// (WASAPI 0x63F): wire 4-5, the WAVE *back* pair, are RearSurround*; 6-7, the *side* pair, are
+/// Left/RightSurround. 5.1 keeps Left/RightSurround for its back pair: that is where a 5.1 device
+/// has speakers.
 func wireChannelLayout(channels: Int) -> AVAudioChannelLayout? {
     let labels: [AudioChannelLabel]
     switch channels {

@@ -1,7 +1,8 @@
 // Where a bare launch opens: the host list, the default host's library, or its stream.
 //
-// The Swift half of the cross-client start-screen policy — `crates/client/pf-client-core/src/start.rs`
-// is the other, and `clients/shared/start-screen-vectors.json` holds them to the same answers.
+// The Swift half of the cross-client start-screen policy. The others are
+// `crates/client/pf-client-core/src/start.rs` and Android's `StartScreen.kt`;
+// `clients/shared/start-screen-vectors.json` holds all three to the same answers.
 // Lives in the dependency-free shared module because a widget or an App Intent that wants to
 // act on "your host" needs the same resolution the app boots with.
 
@@ -87,8 +88,8 @@ public enum StartScreen: Equatable, Sendable {
     }
 
     /// The saved-host store as the app last wrote it, in store order. For the readers that hold
-    /// no `HostStore` — the settings footer, an App Intent, the widget. Store order, not recency:
-    /// the derived rule counts paired records rather than picking a recent one.
+    /// no `HostStore`, such as the settings footer. Store order, not recency: the derived rule
+    /// counts paired records rather than picking a recent one.
     public static func savedHosts() -> [StoredHost] {
         StoredHost.loadAll(recentFirst: false)
     }

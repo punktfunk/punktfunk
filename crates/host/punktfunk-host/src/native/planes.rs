@@ -16,8 +16,8 @@ use std::sync::Arc;
 /// (`compositor_route::session_is_isolated`) gets its own; everyone else shares the
 /// host-lifetime ones. Dropping it closes the pinned EIS connection and the isolated mic.
 pub(super) struct SessionPlanes {
-    /// Linux only. Identity is the device-fingerprint prefix, so keep-alive hands a kept spawn
-    /// back to the same client.
+    /// Linux only. Its id is the profile's (`seat_id`), so keep-alive hands a kept spawn back
+    /// to the same profile.
     pub(super) isolation: Option<crate::vdisplay::SessionIsolation>,
     /// Pointer and keyboard: the pinned injector, else the host-lifetime one. Swappable.
     pub(super) input_route: input::InputRoute,

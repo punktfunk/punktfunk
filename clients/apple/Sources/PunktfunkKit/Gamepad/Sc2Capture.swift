@@ -1,12 +1,14 @@
 // Captured Steam Controller 2 pads: the glue between a transport link and the punktfunk wire.
 // Exactly one transport runs (`startTransport`): `Sc2UsbLink` for a wired pad or a Puck (macOS
 // only), else `Sc2BleLink`. Running both would double-feed a pad that is charging and paired.
-// A 2015 pad (`Sc1Device`), on a Mac's USB or on Bluetooth, rides the same path as pref 5.
+// A 2015 pad (`Sc1Device`), on a Mac's USB or on Bluetooth, rides the same path as
+// `.steamController`.
 //
 // Each HID source (a USB collection or the BLE link) is its own `PadSource` with its own wire
-// slot, so a Puck with four pads claims four. A slot is claimed on the source's first state report
-// (arrival pref 9, or 10 for a Puck slot) and released on link drop, suspend, stop or a Puck
-// disconnect; the index comes from `GamepadManager.reserveExternalPadIndex()`.
+// slot, so a Puck with four pads claims four. A slot is claimed on the source's first state
+// report (arrival `.steamController2`, `.steamController2Puck` for a Puck slot) and released on
+// link drop, suspend, stop or a Puck disconnect; the index comes from
+// `GamepadManager.reserveExternalPadIndex()`.
 //
 // - Raw plane: every report goes to core (`sendHidReport`), which gates it (`setSc2Gate`).
 // - Typed mirror: buttons, sticks and triggers also go out typed, for a host that degraded the kind.
@@ -36,8 +38,8 @@ public final class Sc2Capture {
         qos: .userInteractive)
     private var link: Sc2BleLink!
     #if os(macOS)
-    /// The USB transport — wired pads or a Puck dongle. macOS only: IOKit HID device access is
-    /// not available to apps on iOS, which is why BLE remains the only iOS transport.
+    /// The USB transport — wired pads or a Puck dongle. macOS only: the iOS SDK (27.1) ships no
+    /// IOHID headers, which is why BLE remains the only iOS transport.
     private var usbLink: Sc2UsbLink!
     #endif
     /// Which transport `start` engaged. Exactly one runs at a time, deliberately: a single pad
@@ -283,9 +285,8 @@ public final class Sc2Capture {
     /// alternative, running both, double-feeds a pad that is simultaneously charging and paired.
     /// The check opens nothing, so it cannot prompt or disturb a device another app holds.
     ///
-    /// ponytail: the choice is made once per stream, so plugging a pad in mid-session keeps the
-    /// BLE link it started with. Re-evaluate on an IOKit matching callback if that proves
-    /// annoying on glass; a stream restart already picks the cable up today.
+    /// The choice is made once per stream, so plugging a pad in mid-session keeps the BLE link
+    /// it started with; the next stream picks the cable up.
     private func startTransport() {
         // The link being replaced never fires `onSourceClosed` from its own `stop()`, so its
         // claimed slots would survive the switch: the host keeps a frozen virtual pad for the
@@ -422,7 +423,7 @@ public final class Sc2Capture {
             // Lazy slot claim on the source's FIRST parsed state report, BEFORE any input. The
             // claim hops to the main actor; this source's reports drop until it lands —
             // idempotent snapshots at ~66 Hz, nothing is missed. `claimPending` also clears on
-            // a full table (all 16 indices taken), so a later report simply retries.
+            // a full table (every `GamepadWire.maxPads` index taken), so a later report retries.
             let shouldClaim = isState && !src.claimPending
             if shouldClaim { src.claimPending = true }
             lock.unlock()
@@ -531,8 +532,9 @@ public final class Sc2Capture {
     // MARK: - Slot lifecycle
 
     /// Reserve a wire index on the main actor and finish `source`'s claim under the lock. On
-    /// success sends `gamepadArrival` (pref 9, or 10 for a Puck slot) — the declaration the
-    /// host builds the virtual SC2 from — before any input can flow on that index.
+    /// success sends `gamepadArrival` (`.steamController2`, `.steamController2Puck` for a Puck
+    /// slot, `.steamController` for a 2015 pad) — the declaration the host builds the virtual
+    /// pad from — before any input can flow on that index.
     private func claimSlot(source: UInt64, for src: PadSource) {
         // The host builds the virtual pad from the identity, so it is read before the arrival.
         readIdentity(source: source) { [weak self] identity in
@@ -589,8 +591,8 @@ public final class Sc2Capture {
                     return
                 }
                 guard let index else {
-                    // All 16 wire indices taken — drop reports until one frees (a later
-                    // report retries).
+                    // Every wire index (`GamepadWire.maxPads`) is taken — drop reports until
+                    // one frees (a later report retries).
                     self.lock.unlock()
                     return
                 }

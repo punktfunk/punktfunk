@@ -37,10 +37,7 @@ try {
   # The removal MUST succeed before the copy. A merge of two builds is not a degraded
   # install, it is a dead one: Nitro's entry.mjs imports its siblings by content hash, so a
   # stale chunks/_ next to a new entry.mjs makes every page 200 with a bun ResolveMessage
-  # body instead of the app. Observed on .173 2026-07-31 (an older task-based copy of this
-  # script could not unlock the files under the supervised-child host, its
-  # -ErrorAction SilentlyContinue swallowed that, and the console served a JSON error for
-  # hours while the probe below reported success).
+  # body instead of the app.
   Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue
   if (Test-Path $dst) {
     throw "could not remove $dst (files still locked - is another bun/host still running?). Refusing to copy over it: a mixed .output serves errors, not the console."
@@ -57,7 +54,7 @@ finally {
 #
 # The BODY is the check, not the status code: a bun that started but cannot resolve its own
 # chunks answers 200 with a ResolveMessage JSON, so a code-only probe reports a healthy
-# console that serves nothing but an error (exactly how the .173 breakage stayed invisible).
+# console that serves nothing but an error.
 $body = $null
 for ($i = 0; $i -lt 15; $i++) {
   Start-Sleep 2

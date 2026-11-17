@@ -72,8 +72,8 @@ pub(crate) struct SwDeviceProfile<'a> {
     /// Distinct namespaces per type (`pf_pad_<idx>` vs `pf_ds4_<idx>`) so two types never reuse
     /// a devnode shell.
     pub instance: &'a str,
-    /// `Data1` of the ContainerId — a per-family tag (`"PFDS"` pads, `"PFMO"` mouse) so two
-    /// families at the same index never share a container (Windows would group them as one
+    /// `Data1` of the ContainerId — a per-family tag (`"PFDS"`, `"PFXB"`, `"PFMO"` mouse, …) so
+    /// two families at the same index never share a container (Windows would group them as one
     /// device).
     pub container_tag: u32,
     /// Also stamped into the devnode Location, which the driver reads as its bootstrap-mailbox
@@ -95,7 +95,7 @@ pub(crate) struct SwDeviceProfile<'a> {
     /// The `SWD\<enumerator>\<instance>` namespace. hidclass names the HID child after it, so a
     /// pad Steam must recognise carries its VID/PID here (`VID_054C&PID_0CE6&MI_03`,
     /// `VID_045E&PID_0B13`): Steam merges a pad's views by that token in the path, and under
-    /// `punktfunk` it listed the same pad twice.
+    /// `punktfunk` it would list the same pad twice.
     pub enumerator: &'a str,
     /// A binary device property the driver reads at `EvtDeviceAdd`: `(fmtid, pid, bytes)`.
     pub property: Option<(u128, u32, &'a [u8])>,
@@ -197,7 +197,7 @@ pub(crate) fn verify_fence(instance_id: Option<&str>, at: FenceAt) -> Result<()>
     Ok(())
 }
 
-/// `id`'s HID children. hidclass makes them ~40 ms after the driver starts; the caller has
+/// `id`'s HID children, which hidclass makes shortly after the driver starts; the caller has
 /// already waited for that, so 500 ms more is the margin.
 fn hid_children(id: &str, pad: bool) -> Result<Vec<String>> {
     let deadline = Instant::now() + Duration::from_millis(500);
@@ -231,9 +231,8 @@ fn hid_children(id: &str, pad: bool) -> Result<Vec<String>> {
 ///   `HID\VID_…` child ids a genuine USB DualSense exposes.
 /// - a deterministic per-pad `pContainerId` (the null sentinel trips an `xinput1_4` slot skip).
 ///
-/// Enumerator names must not contain `_` (`punktfunk`, not `pf_dualsense`) and `pCallback` is
-/// mandatory — either yields `E_INVALIDARG`. The caller must be Administrator (the host runs as
-/// LocalSystem).
+/// `pCallback` is mandatory; without it the call yields `E_INVALIDARG`. The caller must be
+/// Administrator (the host runs as LocalSystem).
 pub(crate) fn create_swdevice(p: &SwDeviceProfile) -> Result<(SwDevice, Option<String>)> {
     let session = pad_session()
         .context("fence the devnode to this host's session: the session id is unknown")

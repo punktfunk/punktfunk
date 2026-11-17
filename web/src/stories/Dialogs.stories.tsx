@@ -7,9 +7,8 @@ import { m } from "@/paraglide/messages";
 /**
  * The console's confirm/prompt, in place of `window.confirm` / `window.prompt`.
  *
- * These replaced sixteen native calls. The native ones could not be storied at all — a browser
- * dialog is chrome, outside the page and outside any screenshot — which is part of why they went
- * unnoticed for so long in an otherwise fully-branded console.
+ * A native dialog cannot be storied: it is browser chrome, outside the page and outside any
+ * screenshot.
  *
  * `open` fires the dialog on mount so the screenshot harness catches it without an interaction.
  */

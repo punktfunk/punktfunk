@@ -12,7 +12,7 @@ Usage:  python3 unsafe-census.py <repo-root> [--json | --baseline <path> | --wri
 committed file. A rise fails; so does a baseline left above today's count, because that slack is
 where a later rise hides. `--write-baseline` regenerates the file.
 
-Method (and its error bars) are documented in the report; in short:
+Method:
   0. Take the crate scope from `cargo metadata` (see scope_roots), so a new crate is counted.
   1. Strip line/block comments and string/char literals (a hand-rolled scanner).
   2. Resolve each crate's module tree from lib.rs/main.rs, propagating `#[cfg(..)]`
@@ -329,10 +329,8 @@ FENCE_ALLOW = re.compile(r'#!\s*\[\s*allow\s*\(\s*unsafe_op_in_unsafe_fn')
 FORBID = re.compile(r'#!\s*\[\s*forbid\s*\(\s*unsafe_code')
 REPRC = re.compile(r'#\s*\[\s*repr\s*\(\s*C')
 # NOTE: the `const _: () = { ... };` BLOCK form is as common in this tree as the direct
-# `const _: () = assert!(...)` form (18 files use it, incl. the C ABI, gamepad.rs and
-# idd/probes.rs). An earlier version of this regex matched only the direct form and
-# therefore reported 102 unguarded repr(C) declarations where the true number is 60 —
-# it counted three well-guarded files as defenceless. Keep both alternatives.
+# `const _: () = assert!(...)` form. A regex matching only the direct form counts files that
+# guard their layout through a block as defenceless. Keep both alternatives.
 LAYOUT_ASSERT = re.compile(
     r'const\s+_\s*:\s*\(\)\s*=\s*(?:assert!|\{)'
     r'|assert_eq!\s*\(\s*(?:std\s*::\s*mem\s*::\s*)?size_of'
@@ -352,10 +350,10 @@ def test_spans(src):
 
 # ⚠ The cache MUST hold a strong reference to `src`. Keying on `id(src)` alone is a real bug:
 # CPython recycles object addresses, so once the previous file's source string is collected a
-# NEW file's string can be allocated at the SAME address and silently hit the stale entry. That
-# made `test_ops` — and therefore the shipped-code metric — vary run to run (observed 694..721
-# on an unchanged tree). Storing the string beside its spans keeps the address un-recyclable
-# for exactly as long as the entry is live, which is what makes `id()` a sound key here.
+# NEW file's string can be allocated at the SAME address and silently hit the stale entry,
+# which makes `test_ops` — and therefore the shipped-code metric — vary run to run. Storing the
+# string beside its spans keeps the address un-recyclable for exactly as long as the entry is
+# live, which is what makes `id()` a sound key here.
 _TS_CACHE = {}
 def in_test_mod(src, idx):
     key = id(src)

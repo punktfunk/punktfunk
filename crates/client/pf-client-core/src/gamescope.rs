@@ -2,7 +2,6 @@
 //!
 //! `GAMESCOPE_WAYLAND_DISPLAY` is not proof: the flatpak sets it on every launch so the
 //! vendored gamescope WSI layer can negotiate HDR10 (`packaging/flatpak/io.unom.punktfunk.yml`).
-//! Callers that treated the variable as Gaming Mode then fullscreened a GNOME/KDE session.
 //!
 //! [`under_gamescope`] is the only check. Proof is `WAYLAND_DISPLAY` naming gamescope's
 //! socket, by name or by inode (a flatpak may bind it as `wayland-0`); with no

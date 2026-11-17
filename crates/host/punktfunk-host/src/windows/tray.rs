@@ -63,7 +63,7 @@ pub fn main(args: &[String]) -> Result<()> {
     }
 }
 
-/// `punktfunk-tray.exe` next to this executable. The `trayicon` task is optional, so absence is not an error.
+/// `punktfunk-tray.exe` next to this executable; its absence is not an error.
 pub fn tray_exe() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
@@ -71,7 +71,7 @@ pub fn tray_exe() -> Option<PathBuf> {
         .filter(|p| p.exists())
 }
 
-/// THIS session: the tray holds a `Local\` mutex, which resolves per logon session — a process
+/// THIS session: the tray holds a `Local\` mutex, which resolves per WTS session — a process
 /// scan would see another user's tray and suppress the console one. Best-effort: a failed open
 /// reads as not running — a hint, never proof for a kill.
 pub fn is_running() -> bool {
@@ -137,7 +137,7 @@ fn ensure() {
 
 /// Starts a tray for the caller's WTS session.
 ///
-/// Console callers avoid a duplicate visible in the process snapshot. Seat
+/// Console callers return early when [`is_running`] finds this session's tray. Seat
 /// callers launch and let the tray's session-local mutex resolve duplicates;
 /// a console tray must not suppress theirs. SYSTEM drops to the session user,
 /// while an interactive caller keeps its token.
@@ -171,10 +171,10 @@ pub fn start() -> Result<(Option<u32>, &'static str)> {
 
 /// Stops the tray in this session; the console path can reap stale peers.
 ///
-/// `--quit` posts `WM_CLOSE` through the session-local tray mutex so the icon is
-/// removed cleanly. A seat host never uses global `taskkill`, which would kill
-/// other seats. Console supervision restarts its tray while the HKLM opt-in
-/// remains present.
+/// `--quit` posts `WM_CLOSE` to the tray's window so the icon is removed cleanly.
+/// A seat host with the tray installed returns before the global `taskkill`, which
+/// would kill other seats. Console supervision restarts its tray while
+/// `tray_autostart` is on.
 pub fn stop() -> bool {
     let was_running = is_running();
     if !was_running && !crate::seat::role().is_seat_host() {

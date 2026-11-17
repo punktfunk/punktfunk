@@ -83,12 +83,12 @@ struct Monitor {
     /// re-issued on reuse — [`warn_if_pick_moved`] compares the current pick
     /// against this.
     render_pin: Option<LUID>,
-    /// ADD-time v5 hardware-cursor flag. Survives re-arrival so the new
+    /// ADD-time hardware-cursor flag. Survives re-arrival so the new
     /// monitor keeps the cursor channel.
     hw_cursor: bool,
-    /// OS target carries an irrevocable hardware-cursor declare: DWM drops
-    /// the pointer from frames forever (survives REMOVE→ADD via the stable
-    /// target id). A session without the cursor channel must self-composite.
+    /// The adapter carries an irrevocable hardware-cursor declare (any target, this WUDFHost's
+    /// life), so DWM drops the pointer from frames. A session without the cursor channel must
+    /// self-composite.
     cursor_excluded: bool,
     /// WUDFHost pid from the ADD reply. One process hosts every slot's
     /// publisher, so its death is all-slot shared fate.
@@ -518,10 +518,10 @@ fn isolate_txn_outcome(outcome: Option<IsolateOutcome>) -> Outcome {
 
 /// Re-assert rounds before the watchdog CONCEDES the fixed cadence (immunity plan WP10 item 6):
 /// past this, something on the host demonstrably restores the path every cycle, and re-fighting
-/// it every two seconds only multiplies swap-chain bounces for the stream. Counted two ways and
-/// the larger wins: consecutive rounds, and rounds within [`REASSERT_WINDOW`] — a fight that
-/// alternates "lost" and "stable again" every cycle (measured on `.173`: the TV re-activates
-/// ~1 s after each re-assert) never grows a consecutive count, yet is the same fight.
+/// it every [`knobs::exclusive_reassert_ms`] only multiplies swap-chain bounces for the stream.
+/// Counted two ways and the larger wins: consecutive rounds, and rounds within
+/// [`REASSERT_WINDOW`] — a fight that alternates "lost" and "stable again" every cycle never
+/// grows a consecutive count, yet is the same fight.
 const REASSERT_BREAKER_ROUNDS: u32 = 4;
 /// The rolling window the second count uses.
 const REASSERT_WINDOW: Duration = Duration::from_secs(60);
@@ -547,8 +547,7 @@ struct ReassertBreaker {
     fighting: u32,
     /// Every re-assert's stamp, for the rolling count (the alternating fight).
     recent: std::collections::VecDeque<Instant>,
-    /// Tripped: no further write, nor stream rebuild, for the group's life. A doubling
-    /// back-off still cost the client a capture+encoder rebuild per re-assert.
+    /// Tripped: no further write, nor stream rebuild, for the group's life.
     conceded: bool,
 }
 
@@ -860,8 +859,8 @@ impl Pinger {
 #[derive(Default)]
 struct DeviceSlot {
     current: Option<Arc<ControlDevice>>,
-    /// A global orphan reap is eligible only on the first unreserved open.
-    /// Reopens and seats mode can overlap monitors owned elsewhere.
+    /// Only the first open asks the driver to clear this process's orphaned monitors
+    /// (`CLEAR_ALL`); a reopen would take down sessions this process still believes live.
     opened_once: bool,
 }
 
@@ -873,8 +872,8 @@ pub struct VirtualDisplayManager {
     /// (see [`DeviceSlot`]). Shared via the `&'static` singleton.
     device: Mutex<DeviceSlot>,
     watchdog_s: AtomicU32,
-    /// Handshake protocol version (0 until first open). In-place resize
-    /// needs `>= 4`; a v3 driver keeps the advertised fast path plus re-arrival.
+    /// Handshake protocol version (0 until first open). The host drives drivers from
+    /// [`pf_driver_proto::MIN_DRIVER_PROTOCOL_VERSION`].
     driver_proto: AtomicU32,
     /// Latched after UPDATE_MODES failed to make a new mode settable. The OS
     /// pins a monitor's settable set at arrival, so later attempts only waste
@@ -931,17 +930,9 @@ pub fn vdm() -> &'static VirtualDisplayManager {
         .expect("VirtualDisplayManager used before a backend initialised it")
 }
 
-/// Whether this host has a pf-vdisplay driver that can run the hardware-cursor channel. Every
-/// driver a v7 host accepts can, so this is the handshake itself: it opens the control device
-/// once if nothing else has, so Welcome never guesses. `false` when the driver is missing or
-/// speaks another protocol.
-///
-/// The first session's Welcome runs before `vdisplay::open` constructs the
-/// backend, so this must not assume an initialised manager. `init` is
-/// idempotent and constructing the driver facade is free.
 /// The protocol the driver answered at the last handshake, for the status surface; `None`
-/// before any session opened the control device. No probe of its own: a v7 driver under a v8
-/// host should show here, not only in the session that fails.
+/// before any session opened the control device. No probe of its own: an older driver under a
+/// newer host should show here, not only in the session that fails.
 pub fn driver_protocol() -> Option<u32> {
     let m = init(Box::new(crate::driver::PfVdisplayDriver));
     let v = m.driver_proto.load(Ordering::Relaxed);
@@ -955,6 +946,14 @@ pub fn runs_exact_rates() -> bool {
     driver_protocol().is_none_or(|v| v >= pf_driver_proto::EXACT_RATE_SINCE)
 }
 
+/// Whether this host has a pf-vdisplay driver that can run the hardware-cursor channel. Every
+/// driver this host accepts ([`pf_driver_proto::MIN_DRIVER_PROTOCOL_VERSION`] and up) can, so
+/// this is the handshake itself: it opens the control device once if nothing else has, so
+/// Welcome never guesses. `false` when the driver is missing or speaks another protocol.
+///
+/// The first session's Welcome runs before `vdisplay::open` constructs the
+/// backend, so this must not assume an initialised manager. `init` is
+/// idempotent and constructing the driver facade is free.
 pub fn hw_cursor_capable() -> bool {
     let m = init(Box::new(crate::driver::PfVdisplayDriver));
     if m.driver_proto.load(Ordering::Relaxed) != 0 {
@@ -988,7 +987,7 @@ pub(crate) fn invalidate_cached_device(why: &str) {
 /// its rebuild budget — acceptable for a sub-second window.
 fn wudf_alive(pid: u32) -> bool {
     if pid == 0 {
-        return true; // pre-v2 driver reports no pid — never preempt on the probe's account
+        return true; // no pid reported — never preempt on the probe's account
     }
     // SAFETY: plain FFI probe; the opened handle (checked) is closed exactly once below, and the
     // 0 ms wait only reads its signaled state.
@@ -1079,10 +1078,9 @@ impl VirtualDisplayManager {
     }
 
     /// Opens and caches the control device, clearing orphans on the first open
-    /// only. #624 scopes `CLEAR_ALL` to the calling process's own monitors, so
-    /// a seat cannot reap a sibling's and this needs no reservation gate. The
-    /// returned `Arc` keeps each IOCTL's handle alive across concurrent
-    /// retirement.
+    /// only. `CLEAR_ALL` tears down just the calling process's own monitors, so
+    /// a seat cannot reap a sibling's. The returned `Arc` keeps each IOCTL's
+    /// handle alive across concurrent retirement.
     fn ensure_device(&self) -> Result<Arc<ControlDevice>> {
         let mut slot = self.device.lock().unwrap();
         if let Some(d) = &slot.current {
@@ -1276,7 +1274,7 @@ impl VirtualDisplayManager {
             );
         }
         self.teardown_removed(Some(dev), t, vec![mon]);
-        // Verified-state wait; the ceiling is the old fixed 400 ms settle (latency plan P0.3).
+        // Verified-state wait, bounded at 400 ms (latency plan P0.3).
         if !wait_target_departed(old_key, Duration::from_millis(400)) && kept {
             tracing::debug!(
                 old_target = %old_key,
@@ -1917,11 +1915,9 @@ impl VirtualDisplayManager {
     /// topology change: bare `SDC_TOPOLOGY_EXTEND` is ACCESS_DENIED from Session 0 on a headless
     /// box and breaks the auto-activate. force-EXTEND is the integrated-screen FALLBACK: a fresh
     /// IDD there is CLONED onto the panel (shared source, no committed path of its own), and the
-    /// EXTEND de-clones it. LAST RESORT is explicit path activation: a closed lid defeats both
-    /// (the clamshell policy suppresses auto-activation and the EXTEND preset "succeeds"
-    /// committing nothing), and `activate_target_path` commits the path directly, which ignores
-    /// the lid policy. A seat has no panel to clone and no lid, so it polls briefly and commits
-    /// the path.
+    /// EXTEND de-clones it. LAST RESORT is explicit path activation: a closed lid can leave both
+    /// earlier stages without a path, and `activate_target_path` commits it directly. A seat has
+    /// no panel to clone and no lid, so it polls briefly and commits the path.
     ///
     /// CAVEAT (unobserved): textbook CCD also allows a clone with a *shared-source ACTIVE* path
     /// (resolve → `Some`), which the `is_none()` gate would miss; widening needs a
@@ -2091,7 +2087,7 @@ impl VirtualDisplayManager {
         seat_hdr: bool,
     ) {
         // DDC off BEFORE isolate: an HMONITOR (and the DDC channel) exists only while the
-        // display is still active. Evidence: `windows/ddc.rs`.
+        // display is still active. Evidence: `crate::ddc`.
         if crate::policy::prefs().ddc_power_off() {
             inner.group.ddc_panels_off = crate::ddc::panel_off_except(gdi);
         }
@@ -2116,7 +2112,7 @@ impl VirtualDisplayManager {
         );
         inner.group.ccd_saved = saved;
         // After isolate, disable deactivated monitor PnP devnodes so standby wake events do
-        // not cascade. Evidence: `windows/monitor_devnode.rs`.
+        // not cascade. Evidence: `pf_win_display::monitor_devnode`.
         if crate::policy::prefs().pnp_disable_monitors() {
             if let Some(saved) = &inner.group.ccd_saved {
                 inner.group.pnp_disabled = pf_win_display::monitor_devnode::disable_for_deactivated(
@@ -2134,7 +2130,7 @@ impl VirtualDisplayManager {
     }
 
     /// Mid-stream resize on the same monitor: refresh the advertised mode list
-    /// (`IOCTL_UPDATE_MODES`, protocol v4), re-enumerate, CCD/GDI force-set.
+    /// (`IOCTL_UPDATE_MODES`), re-enumerate, CCD/GDI force-set.
     /// Target id, GDI name, DPI, swap-chain worker and frame stash survive.
     /// On failure `mon` is untouched and the ladder re-arrives it.
     /// Call inside a transition: CCD/GDI runs inside.
@@ -2238,8 +2234,9 @@ impl VirtualDisplayManager {
         // As above: one isolate for the group, so the topology it opened with.
         match inner.group.topology {
             Topology::Exclusive => {
-                // Grown-set semantics: isolate to the surviving siblings + the new target. The returned
-                // snapshot is DISCARDED — the group keeps the first member's (design §6.1).
+                // Grown-set semantics: isolate to the surviving siblings + the new target. The
+                // returned snapshot is DISCARDED — the group keeps the first member's
+                // (`design/display-management.md` §6.1).
                 let _ = isolate_txn(
                     &*self.ccd,
                     "swap-isolate",
@@ -2930,7 +2927,6 @@ impl VirtualDisplayManager {
     }
 }
 
-/// Snapshot managed slots. Empty when no backend has initialised yet.
 /// [`VirtualDisplayManager::place_beside`] on the process manager.
 pub fn place_beside(
     fp: [u8; 32],
@@ -2940,6 +2936,7 @@ pub fn place_beside(
     vdm().place_beside(fp, anchor, offset)
 }
 
+/// Snapshot managed slots. Empty when no backend has initialised yet.
 pub(crate) fn snapshot() -> Vec<ManagedInfo> {
     VDM.get()
         .map(VirtualDisplayManager::snapshot)
@@ -3466,7 +3463,7 @@ mod tests {
         assert!(inner.group.pnp_disabled.is_empty());
 
         // `PUNKTFUNK_STANDBY_SINK_KEEP` opts the park out, and a test sets no environment; so
-        // does the operator's `pnp_disable_monitors: false`, which this path used to ignore.
+        // does the operator's `pnp_disable_monitors: false`.
         let prefs = crate::policy::prefs();
         let parks = prefs.standby_sink_neutralise() && prefs.pnp_disable_monitors();
         for _ in 0..2 {

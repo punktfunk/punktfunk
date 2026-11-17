@@ -1,6 +1,5 @@
-// ConfigService semantics (the canonical suite — ported from rom-manager's state.test.ts
-// obligations): raw round-trip, schema defaults at decode only, atomic writes, missing
-// file == defaults, world-writable refusal, changes stream.
+// ConfigService semantics: raw round-trip, schema defaults at decode only, unknown keys kept,
+// missing file == defaults, world-writable refusal, changes stream.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";

@@ -4,10 +4,9 @@
 //! server-side and proxies only to `127.0.0.1`. Registrations are never persisted or health-
 //! checked and expire lazily after [`LEASE_TTL`].
 //!
-//! The shared `plugin-token` authenticates the runner, not an individual plugin. Any holder can
-//! replace an id's registration, and [`crate::library::ask_plugin_launch`] treats that registration
-//! as launch authority. Per-plugin ownership therefore requires runner process isolation rather
-//! than an additional registry check.
+//! The shared `plugin-token` authenticates the runner, not an individual plugin: its holder can
+//! replace any id's registration. A plugin with its own token may write only its own id; the
+//! route's `OwnedId` extractor decides that, not this registry.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -313,7 +312,7 @@ pub(crate) fn holders(stage: &str) -> Vec<Holder> {
     registry().holders(stage)
 }
 
-/// In-process `{port, secret}` for [`crate::library::ask_plugin_launch`]. Same lookup as
+/// In-process `{port, secret}` of live plugin `id`. Same lookup as
 /// `GET /plugins/{id}/ui-credential`, without a management-API round trip to a port this process
 /// already holds.
 pub(crate) fn ui_credential(id: &str) -> Option<UiCredential> {

@@ -234,9 +234,9 @@ pub fn plan_to_dxva_av1_on(
 
     let color = &seq.color_config;
     let mut pic_params = PicParamsAv1::zeroed();
-    // Upscaled width. libavcodec sends coded `FrameWidth` (`avctx->width`).
-    // Equal when superres is off (7.20), which is every stream here; revisit
-    // with a superres vector, not by reading.
+    // Upscaled width, as libavcodec sends it (`avctx->width`). Chromium sends the coded
+    // `FrameWidth`; the two differ only under superres, which no stream here uses.
+    // Revisit with a superres vector.
     pic_params.width = h.upscaled_width;
     pic_params.height = h.frame_height;
     pic_params.max_width = u32::from(seq.max_frame_width_minus_1) + 1;
@@ -322,7 +322,7 @@ fn refs(
 
     // Seven reference NAMES: slot, coded size, global motion (module docs).
     // `plan.refs` is indexed by NAME; a hole keeps `UNUSED_INDEX`. Compacting
-    // first renamed every name after the first loss.
+    // would rename every name after the first hole.
     let mut frame_refs = [PicEntryAv1::zeroed(); REFS_PER_FRAME];
     let inter = !matches!(
         h.frame_type,
@@ -1538,7 +1538,7 @@ mod tests {
                     );
                 }
 
-                // `reference_frame_update` is bit 22 of the coding flags — read back
+                // `reference_frame_update` is bit 26 of the coding flags — read back
                 // through `pack` rather than spelled as a magic mask.
                 let coding = pp.coding;
                 let on = CodingFlagsAv1 {

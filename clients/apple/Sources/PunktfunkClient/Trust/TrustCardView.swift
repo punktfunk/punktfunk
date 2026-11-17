@@ -2,11 +2,10 @@
 // unpinned host. The user compares the fingerprint with the one the host logged at startup,
 // or drops this and runs the PIN pairing ceremony instead.
 //
-// Controller-drivable on iOS/macOS (A trust, B cancel, X pair instead). It had no controller
-// wiring at all, which made it a dead end for a pad-only user at the worst possible moment: the
+// Controller-drivable (A trust, B cancel, X pair instead) through `TrustControllerInput`: the
 // card appears mid-connect with capture disabled (ContentView blurs the stream and stops
-// forwarding), so the pad in their hands genuinely did nothing and the only way past was to reach
-// for the screen. tvOS needs none of this — the focus engine drives the buttons natively.
+// forwarding), so nothing else reads the pad. A Siri Remote reaches the buttons through the
+// focus engine.
 
 import Foundation
 import PunktfunkKit
@@ -73,7 +72,7 @@ struct TrustCardView: View {
                     #endif
                 Button(L10n.trustAccept, action: onTrust)
                     // Opaque prominent, NOT glass: this card is itself a glass panel
-                    // (.glassBackground below), and glass-on-glass loses contrast — a tinted
+                    // (`body`'s .glassBackground), and glass-on-glass loses contrast — a tinted
                     // bordered button reads cleanly over glass (HIG). The sheet primaries stay
                     // glass because the system manages the sheet's own glass layering.
                     .buttonStyle(.borderedProminent)
@@ -84,8 +83,8 @@ struct TrustCardView: View {
             #if os(iOS) || os(visionOS)
             .controlSize(.large)
             #endif
-            // The verified alternative to eyeballing hex: drop this session (the host
-            // serves one connection at a time) and run the SPAKE2 PIN ceremony instead.
+            // The verified alternative to eyeballing hex: drop this session and run the SPAKE2
+            // PIN ceremony instead.
             Button(L10n.pairUsePin, action: onPairInstead)
                 #if os(macOS)
                 .buttonStyle(.link)
@@ -139,10 +138,9 @@ struct TrustCardView: View {
 /// Nothing else is polling the pad here: capture is off for the duration of the prompt, and the
 /// home screens are unmounted behind the session view.
 ///
-/// tvOS was excluded alongside `ConnectOverlay` and for no better reason (#453). It left the trust
-/// card — which stands between a pad-only Apple TV user and every unknown host — with three
-/// buttons and nothing reading the pad. As there, this covers an EXTENDED gamepad; a Siri Remote
-/// reaches these buttons through the focus engine or not at all.
+/// This covers an EXTENDED gamepad on every platform, tvOS included — the trust card stands
+/// between a pad-only Apple TV user and every unknown host. A Siri Remote reaches these buttons
+/// through the focus engine or not at all.
 private struct TrustControllerInput: View {
     let onTrust: () -> Void
     let onCancel: () -> Void

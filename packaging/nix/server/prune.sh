@@ -1,12 +1,10 @@
 #!/bin/sh
 # Bound the published Nix binary cache on unom-1.
 #
-# WHY THIS EXISTS UP FRONT, rather than being added after the box fills: the flatpak repo next
-# door taught this exact lesson the expensive way. It publishes with rsync WITHOUT --delete (so
-# a client mid-download is never broken), nothing ever removed the superseded objects, and it
-# reached 3.84 GB on a box that had already run out of disk once. This cache has the same
-# publish model and the same growth shape — every build whose inputs moved adds a fresh set of
-# store paths and keeps the old ones — so it gets the sweep from day one.
+# This cache publishes like the flatpak repo next door: rsync WITHOUT --delete, so a client
+# mid-download is never broken, and superseded objects stay until something removes them. Every
+# build whose inputs moved adds a fresh set of store paths and keeps the old ones, so the cache
+# needs this sweep.
 #
 # The order below is the whole correctness argument:
 #

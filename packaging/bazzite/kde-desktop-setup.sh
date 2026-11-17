@@ -6,11 +6,11 @@
 #   bash /usr/share/punktfunk/bazzite/kde-desktop-setup.sh
 #
 # The VIRTUAL OUTPUT (video) needs no setup: the host package ships io.unom.punktfunk.host.desktop,
-# whose X-KDE-Wayland-Interfaces grants the host KWin's restricted zkde_screencast protocol on a
-# normal interactive Plasma session — least-privilege (only the host, only that interface), the same
-# mechanism krfb/krdp use. No session-wide KWIN_WAYLAND_NO_PERMISSION_CHECKS hack is needed. KWin
-# caches the grant per-executable on first connect, so after a FRESH host install log out + back into
-# the Desktop session once so KWin re-reads the file.
+# whose X-KDE-Wayland-Interfaces grants the host KWin's restricted zkde_screencast protocol (and two
+# others) on a normal interactive Plasma session — least-privilege (only the host, only the listed
+# interfaces), the same mechanism krfb/krdp use. No session-wide KWIN_WAYLAND_NO_PERMISSION_CHECKS
+# hack is needed. KWin caches the grant per-executable on first connect, so after a FRESH host
+# install log out + back into the Desktop session once so KWin re-reads the file.
 #
 # The one thing a normal KDE login still lacks is the `kde-authorized` RemoteDesktop grant — so the
 # host's libei input setup auto-approves instead of popping an "Allow remote control?" dialog the

@@ -6,7 +6,7 @@
 //! nothing it draws can be tested in-process.
 //!
 //! Keys come from `/dev/tty`, not stdin. Under `curl | sh` stdin is the
-//! script — the same trap the sh installer opens `/dev/tty` to dodge.
+//! script, not the keyboard.
 //!
 //! `ScriptedTerm` answers a queued key list and keeps the on-screen frame
 //! so goldens can assert on it.
@@ -27,7 +27,7 @@ pub enum Key {
     Space,
     /// Text entry only; every other prompt reads it as `Other`.
     Backspace,
-    /// Esc, Ctrl-C, `q`, or a terminal that has stopped answering.
+    /// Esc, Ctrl-C, or a terminal that has stopped answering. The menus also read `q` as cancel.
     Cancel,
     Char(char),
     Other,

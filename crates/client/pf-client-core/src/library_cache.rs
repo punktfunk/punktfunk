@@ -24,7 +24,7 @@ use crate::library::{GameEntry, GameOverrides};
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CachedLibrary {
     pub games: Vec<GameEntry>,
-    /// Unix seconds. `u64` so a clock that stepped backwards yields a silly age, not a decode failure.
+    /// Unix seconds. A stamp ahead of the clock gives no [`CachedLibrary::age`].
     pub fetched_at: u64,
 }
 

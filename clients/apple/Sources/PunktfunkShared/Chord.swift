@@ -9,7 +9,7 @@ public struct Chord: Equatable, Sendable {
     public static let modifiers = ["ctrl", "alt", "shift", "win"]
 
     /// The keys a chord can end on, grouped the way a keyboard groups them: every name `keyVk`
-    /// knows that is neither a modifier nor an alias.
+    /// knows that is neither a modifier nor an alias, bar `f13`..`f24`.
     public static let keyGroups: [(id: String, title: String, keys: [String])] = [
         ("function", String(localized: L10n.ringKeyGroupFunction), ["escape"] + (1...12).map { "f\($0)" }),
         ("letters", String(localized: L10n.ringKeyGroupLetters), "qwertyuiopasdfghjklzxcvbnm".map(String.init)),

@@ -23,7 +23,7 @@ pub enum LinkSource {
     Ports,
     /// The ramp, or the session's own walls.
     Measured,
-    /// Nothing said anything: 800 Mbit/s.
+    /// Nothing said anything: `LINK_FLOOR_KBPS`.
     Floor,
 }
 
@@ -86,14 +86,14 @@ impl LinkRate {
         }
     }
 
-    /// The session found a wall: a mark pair latched or re-latched it.
+    /// The session found a wall: the controller's link wall latched, or came down to `kbps`.
     pub(crate) fn wall(&mut self, kbps: u32) {
         if kbps > 0 {
             self.wall = Some(kbps);
         }
     }
 
-    /// A settled lift carried the wall up to `kbps`.
+    /// A lift carried the wall up to `kbps`.
     pub(crate) fn lifted(&mut self, kbps: u32) {
         self.wall = Some(self.wall.map_or(kbps, |w| w.max(kbps)));
     }
@@ -123,7 +123,7 @@ impl LinkRate {
     }
 
     /// A fixed-rate session's frames keep dying: `L` on the ports or the floor was never the
-    /// link. Nothing measures such a session, so its own rate stands in for a ramp's wall.
+    /// link. No controller runs to mark its walls, so its own rate stands in for a ramp's wall.
     pub(crate) fn frames_refuted(&mut self, stream_kbps: u32) {
         if self.ports.unwrap_or(self.floor) > stream_kbps {
             self.ramp = Some(stream_kbps);
@@ -188,8 +188,8 @@ mod tests {
     }
 
     /// A 2.5 GbE host and a 1 GbE client are a 1 Gbit/s link before anything is measured;
-    /// a stream-bound ramp does not lower it; a measured wall does, a settled lift raises
-    /// it, and dropping it goes back to the ports.
+    /// a stream-bound ramp does not lower it; a measured wall does, a lift raises it, and
+    /// dropping it goes back to the ports.
     #[test]
     fn ports_then_walls_then_ports_again() {
         let mut l = LinkRate::default();

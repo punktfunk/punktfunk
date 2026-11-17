@@ -1,8 +1,7 @@
 //! Resolve a library id or operator command into the per-OS line the host runs.
 //!
-//! Scanners enumerate only. This module owns the `kind` vocabulary, charset
-//! validators, and resolvers so a plugin lift does not take launch with it.
-//! A client sends an entry id; the host holds the [`LaunchSpec`]
+//! Plugins enumerate only. This module owns the `kind` vocabulary, charset
+//! validators, and resolvers. A client sends an entry id; the host holds the [`LaunchSpec`]
 //! (design/library-scanner-plugins.md D1).
 //!
 //! Linux (`posix.rs`): the host runs the resolved shell command (nested gamescope
@@ -34,15 +33,16 @@ use self::posix as plat;
 /// Display identity for a launched title.
 #[derive(Clone, Debug, Default)]
 pub struct GameRef {
-    /// Store-qualified id (`steam:570`). `None` = typed `apps.json` command.
+    /// Store-qualified id (`steam:570`). `None` for a launch that names no title: a typed
+    /// `apps.json` command, or a seat's home launch (`big_picture_launch`).
     pub id: Option<String>,
     pub store: Option<String>,
     /// Display title; never empty in the UI (falls back to id, then command).
     pub title: String,
 }
 
-/// Library enumeration hits every store's on-disk metadata, so handshake
-/// resolves this once and threads it through the data plane.
+/// Resolved once per session at the handshake ([`resolve_launch`]) and threaded
+/// through the data plane.
 pub struct LaunchTarget {
     pub game: GameRef,
     /// Launcher tile (design D4): no game-exit to detect; the lease stays untracked.
@@ -153,7 +153,7 @@ fn exec_recipe(entry: &GameEntry) -> Option<ExecRecipe> {
     exec::recipe(entry).or_else(|| emulator::recipe(entry))
 }
 
-// Per-kind launch values. Scanners supply the VALUE; the host builds the URI.
+// Per-kind launch values. Plugins supply the VALUE; the host builds the URI.
 // Lives here so URI construction stays with launch (design D1). Unparseable
 // or hostile → `None`, never a partial command.
 
@@ -278,21 +278,21 @@ pub(crate) fn on_local_disk(path: &std::path::Path) -> bool {
 /// `launcher_ui` values this OS can open (design D4). One kind; a value names
 /// a UI (`heroic` vs `heroic-console`; Windows `playnite` is Fullscreen).
 ///
-/// Unknown *kind* is an unlaunchable tile; unknown *value* is a 400 that
-/// refuses the whole reconcile. Platform-gated so a plugin gets 400 inbound
-/// instead of a tile that fails at launch. `command` is operator-only, so a
-/// plugin cannot publish a launcher without this kind.
+/// Unknown *kind* is an unlaunchable tile; an unknown *value* drops that entry
+/// from the reconcile, with its reason ([`super::validate_provider_payload`]).
+/// Platform-gated so the entry drops inbound instead of failing at launch.
+/// `command` is operator-only, so a plugin cannot publish a launcher without this kind.
 ///
 /// Vocabulary: is `value` a launcher this OS knows? A miss is a plugin bug;
-/// installing software will not fix it, so reconcile refuses the payload.
+/// installing software will not fix it.
 pub(crate) fn known_launcher_ui(value: &str) -> bool {
     plat::LAUNCHER_UI_STORES.contains(&value)
 }
 
 /// Environment: can this box open `value` *now*? Separate from
-/// [`known_launcher_ui`]: unknown value is a plugin bug (400); known-but-missing
-/// is an ordinary fact. Conflating them 400'd whole libraries over one tile
-/// ([`super::sanitize_launcher_entries`] drops the tile; games still sync).
+/// [`known_launcher_ui`]: unknown value is a plugin bug; known-but-missing
+/// is an ordinary fact, so [`super::sanitize_launcher_entries`] drops only that
+/// tile and the games still sync.
 pub(crate) fn resolvable_launcher_ui(value: &str) -> bool {
     known_launcher_ui(value) && plat::launcher_ui_installed(value)
 }

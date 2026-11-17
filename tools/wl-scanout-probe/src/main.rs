@@ -6,8 +6,11 @@
 //! ```
 //!
 //! Prints the compositor's protocols, its linux-dmabuf feedback (per tranche: device, scanout
-//! flag, the YUV formats and their modifiers), then per layout: frames presented, how many the
-//! compositor called zero-copy, and commit-to-glass p50/p95 from `wp_presentation`.
+//! flag, the modifiers of NV12, P010, XR24, AR30 and XB30), then per layout: frames presented,
+//! how many the compositor called zero-copy, and commit-to-glass p50/p95 from `wp_presentation`.
+//! `--format xr24` is an RGB control. `--modifier linear|<hex>` pins the modifier (default
+//! `auto` tries each); `--planes joint|split` puts both planes in one dma-buf or one per plane
+//! (default `both` tries joint first).
 
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
@@ -1170,7 +1173,8 @@ mod linux {
 
     impl Drop for Gpu {
         fn drop(&mut self) {
-            // SAFETY: every picture was destroyed; the pool and device are idle.
+            // SAFETY: sound only after `run` destroyed every picture and the queue idled; an
+            // early `?` drops `Gpu` with pictures live, which `vkDestroyDevice` forbids.
             unsafe {
                 self.device.destroy_command_pool(self.pool, None);
                 self.device.destroy_device(None);
@@ -1573,7 +1577,7 @@ mod linux {
                         vp.set_destination(win_w, win_h);
                         vp
                     });
-                    // Coefficients belong to YCbCr buffers only; Mutter faults an RGB commit.
+                    // Coefficients belong to YCbCr buffers only; Mutter 50 faults an RGB commit.
                     let repr = app
                         .color_repr
                         .as_ref()

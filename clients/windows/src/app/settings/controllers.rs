@@ -20,8 +20,7 @@ const GAMEPADS: &[(&str, Label)] = &[
     ("dualsense", || "DualSense"),
     ("xboxone", || "Xbox One"),
     ("dualshock4", || "DualShock 4"),
-    // Kept in lockstep with the GTK picker: this row was missing here, so a Windows
-    // user could not ask the host for the Deck-shaped pad (trackpads, back grips).
+    // The Deck-shaped pad (trackpads, back grips); kept in lockstep with the GTK picker.
     ("steamdeck", || "Steam Deck"),
     ("steamcontroller2", || "Steam Controller 2"),
 ];
@@ -103,9 +102,8 @@ pub(super) fn controllers_section(cx: &Cx) -> Vec<View> {
         s.gamepad_forwarding,
         |s, on| s.gamepad_forwarding = on,
     );
-    // The two DualSense pad-audio rows, GTK parity. The session binary this shell spawns has
-    // honoured both all along; only the rows were missing here. Global scope only, like GTK's:
-    // no override marker exists for either, so a preset-scope toggle would be discarded.
+    // The two DualSense pad-audio rows, GTK parity. Global scope only, like GTK's: no
+    // override marker exists for either, so a preset-scope toggle would be discarded.
     let pad_haptics_toggle = setting_toggle(cx, scope, "pad_haptics", s.pad_haptics, |s, on| {
         s.pad_haptics = on
     });

@@ -56,8 +56,8 @@ pub struct DoneWaiter {
 
 impl DoneWaiter {
     /// The thread runs the [`set_waiter_boost`] hook, then `wake` after each armed decode
-    /// completes, or after 50 ms. `None` when the thread cannot start; the consumer then
-    /// polls as before.
+    /// completes, or after `WAIT_NS`. `None` when the thread cannot start; the consumer then
+    /// polls the timeline.
     pub fn spawn(device: ash::Device, wake: Arc<dyn Fn() + Send + Sync>) -> Option<Self> {
         let (jobs, rx) = mpsc::channel::<(vk::Semaphore, u64)>();
         let watch = Arc::new((Mutex::new(Watch::default()), Condvar::new()));

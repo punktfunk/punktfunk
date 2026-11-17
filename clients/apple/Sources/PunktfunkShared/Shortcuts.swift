@@ -285,7 +285,8 @@ public struct Shortcuts: Equatable, Sendable {
         case "off": guide = false
         default: guide = client == .desktop ? gameMode : client == .apple
         }
-        // The clients with their own pad path; the others' dial is their only pad chord.
+        // The stats and Guide chords are for the clients with their own pad path; the others get
+        // the dial and the exit chords.
         let native = [.desktop, .android, .apple, .mac].contains(client)
         // The dial opener is Select + the confirm button: Minus + A (east) on a Switch.
         let open = client == .ps5 ? ["touchpad", "a"] : client == .switch ? ["select", "b"] : ["select", "a"]
@@ -433,7 +434,7 @@ extension Shortcuts {
     }
 
     /// The first trigger on `device` bound to `action`, as one line: "Hold L1 + R1 + Start +
-    /// Select", "⌃⌥⇧D". For the exit hint, the start banner and the settings captions.
+    /// Select", "⌃⌥⇧D". For the settings captions.
     public func hint(_ action: Action, device: Device, client: Client = .apple) -> String? {
         trigger(for: action, device: device)?.label(client: client)
     }

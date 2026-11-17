@@ -11,7 +11,7 @@ use crate::fec::ErasureCoder;
 pub struct PumpPerf {
     /// `recv_owned`: taking the next batch the demux queued.
     pub recv_ns: u64,
-    /// `open_in_place` (AES-128-GCM + replay-window upkeep).
+    /// `open_in_place` under the media suite, with the replay window's plausibility check.
     pub decrypt_ns: u64,
     /// `Reassembler::push` (parse, shard copy, FEC reconstruct, AU assembly).
     pub reasm_ns: u64,
@@ -30,7 +30,7 @@ pub struct PumpPerf {
 pub struct SealPerf {
     /// [`ErasureCoder::encode_into`] (parity).
     pub fec_ns: u64,
-    /// `seal_in_place` (AES-128-GCM) across all wire packets.
+    /// `seal_in_place` under the media suite, across all wire packets.
     pub seal_ns: u64,
     /// `send_sealed` socket syscalls, plus paced chunks via `note_sock_ns`.
     pub sock_ns: u64,

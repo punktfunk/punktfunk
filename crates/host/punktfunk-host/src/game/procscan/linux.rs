@@ -42,8 +42,8 @@ impl Scanner {
     }
 
     /// Processes matching any of `spec`'s signals, started at or after `min_start` (seconds since
-    /// boot; `None` disables that filter). Signals are a union: appid, env marker, exact exe, or
-    /// install dir each independently qualify.
+    /// boot; `None` disables that filter). Signals are a union: appid, env marker, exact exe,
+    /// install dir, or process name each independently qualify.
     pub fn find(&self, spec: &DetectSpec, min_start: Option<f64>) -> Vec<ProcRef> {
         if spec.is_empty() {
             return Vec::new();
@@ -512,8 +512,8 @@ mod tests {
 
     #[test]
     fn steam_install_script_evaluator_is_not_the_game() {
-        // Balatro's real launch on .21: the evaluator reaper carries the appid and outlives the
-        // shim window, so adopting it ended the session 3 s before Steam created the game.
+        // The install-script evaluator's reaper carries the appid and can outlive the shim
+        // window; adopting it would end the session before Steam creates the game.
         let td = fake_proc_root(
             1000.0,
             &[
@@ -705,7 +705,7 @@ mod tests {
     }
 
     /// A killed child nobody has waited on keeps its `/proc` entry as a zombie. It must read
-    /// as gone everywhere: a registry that counted it adopted a corpse on every relaunch (#1065).
+    /// as gone everywhere: a registry that counted it would adopt a corpse on every relaunch.
     #[test]
     fn a_zombie_is_gone() {
         let td = fake_proc_root(

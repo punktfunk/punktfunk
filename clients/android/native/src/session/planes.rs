@@ -1,4 +1,4 @@
-//! Plane start/stop: video (HEVC decode → Surface), host→client audio, mic uplink — plus the
+//! Plane start/stop: video (decode → Surface), host→client audio, mic uplink — plus the
 //! ~1 Hz decode-stats drain for the HUD.
 
 use jni::errors::LogErrorAndDefault;
@@ -24,6 +24,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
     decoder_name: JString,
     low_latency_mode: jboolean,
     ll_feature: jboolean,
+    decoder_pixel_rate: jlong,
     is_tv: jboolean,
     chromeos: jboolean,
     present_priority: jni::sys::jint,
@@ -71,6 +72,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
                 decoder_name: decoder,
                 decoder_mime: crate::decode::codec_mime(client.video_format().codec),
                 ll_feature,
+                pixel_rate: u64::try_from(decoder_pixel_rate).unwrap_or(0),
                 low_latency_mode,
                 is_tv,
                 chromeos,
@@ -137,7 +139,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoSurfac
 /// `NativeBridge.nativeVideoSourceCrop(handle, left, top, right, bottom)` — the visible part of
 /// the frame as fractions, from Kotlin's placement. The SurfaceView is laid out at the picture's
 /// rect; this is the one thing its size cannot say, the edges Crop to fill cuts off. Read live by
-/// both presenters. Out-of-range values reset to the full frame; no-op on a `0` handle.
+/// the ASurfaceControl and PyroWave presenters. Out-of-range values reset to the full frame;
+/// no-op on a `0` handle.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoSourceCrop(
     _env: EnvUnowned,
@@ -326,7 +329,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePyrowaveCap
 }
 
 /// `NativeBridge.nativeStopVideo(handle)` — stop the decode thread without closing the session,
-/// waiting at most 2 s for it. No-op on `0`.
+/// waiting at most `VIDEO_STOP_WAIT` for it. No-op on `0`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopVideo(
     _env: EnvUnowned,
@@ -344,7 +347,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopVideo(
 const DECODER_STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `NativeBridge.nativeVideoDecoderStuck(handle)` — whether a call into the device's video
-/// decoder has gone unanswered for 5 s. `false` on `0`.
+/// decoder has gone unanswered for `DECODER_STUCK_AFTER`. `false` on `0`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoDecoderStuck(
     _env: EnvUnowned,
@@ -362,7 +365,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoDecode
 ///
 /// While the app is backgrounded the decode thread is down: its `Surface` was destroyed with the
 /// window. Nothing else pops the frame queue, so it stands, the jump-to-live detector trips, and
-/// the host is asked for a keyframe every two seconds until the user comes back. `on` starts a
+/// the host is asked for a keyframe every `FLUSH_COOLDOWN` until the user comes back. `on` starts a
 /// thread that pops and discards instead; `off` stops and joins it. Idempotent either way, and a
 /// no-op on `0`.
 #[unsafe(no_mangle)]
@@ -531,12 +534,11 @@ fn panel_warning(rate: f32, mode: f32, stream_hz: u32, received: u32) -> Option<
 }
 
 /// `NativeBridge.nativeVideoSize(handle): IntArray?` — the negotiated video mode as
-/// `[width, height, refreshHz]`. Resolved at the handshake (Welcome), so it is known before a
-/// single frame arrives: the UI sizes the video surface to the STREAM's aspect rather than
-/// stretching it to the panel's, and pins the panel's display mode to the stream refresh. The
-/// trailing `refreshHz` was appended later — old readers index only 0/1 and never see it. `null`
-/// on a `0` handle. Not android-gated — pure `jni` + a connector read, so it links on the host
-/// build too. Cheap; safe on the UI thread.
+/// `[width, height, refreshHz, refreshMilliHz]`. Resolved at the handshake (Welcome), so it is
+/// known before a single frame arrives: the UI sizes the video surface to the STREAM's aspect
+/// rather than stretching it to the panel's, and pins the panel's display mode to the stream
+/// refresh. `null` on a `0` handle. Not android-gated — pure `jni` + a connector read, so it
+/// links on the host build too. Cheap; safe on the UI thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoSize<'local>(
     mut env: EnvUnowned<'local>,
@@ -610,7 +612,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetVideoSta
 
 /// `NativeBridge.nativeStartAudio(handle, lowLatencyMode, isTv)` — start the Opus→AAudio playback
 /// supervisor. `lowLatencyMode` (the experimental toggle) tags the stream usage=Game for the HAL's
-/// game-audio routing; `isTv` steers the AAudio open ladder (see `crate::audio::open_ladder`).
+/// game-audio routing; `isTv` steers the AAudio open ladder (`crate::audio_policy::ladder_for`).
 /// No-op if already started or on a `0` handle. Best-effort: a failure leaves video streaming.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -661,9 +663,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopAudio(
 /// the running capture's id. Caller MUST hold RECORD_AUDIO; a failure (e.g. no permission) leaves
 /// the rest of the session streaming.
 ///
-/// The open blocks for hundreds of ms and runs outside the slot lock, so `nativeStopMic` and
-/// `nativeMicActive` never wait on it. A stop during the open wins: this call drops the late
-/// capture and returns `0`.
+/// The open blocks while it walks up to four AAudio rungs. It runs outside the slot lock, so
+/// `nativeStopMic` and `nativeMicActive` never wait on it. A stop during the open wins: this call
+/// drops the late capture and returns `0`.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartMic(

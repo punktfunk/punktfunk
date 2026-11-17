@@ -97,7 +97,7 @@ struct Slot {
     wire: i64,
     /// HEVC's picture order count, what its reference picture set names it by.
     poc: i32,
-    /// Cleared by [`H264Encoder::distrust`]; an untrusted slot is never predicted
+    /// Cleared by [`Encoder::distrust`]; an untrusted slot is never predicted
     /// from again, and is replaced in its turn.
     trusted: bool,
     /// Part-refreshed picture of an intra refresh wave: resident and predicted from by
@@ -138,7 +138,7 @@ pub struct Encoder {
     entrypoint: c_int,
     /// HDR10 static metadata, written as an SEI with every HEVC IDR.
     hdr: Option<HdrStatic>,
-    /// HEVC picture order count of the next picture; 0 after an IDR.
+    /// HEVC picture order count of the next picture; an IDR's is 0.
     poc: i32,
     config: u32,
     context: VaContextId,
@@ -214,7 +214,7 @@ impl Encoder {
         };
         // Low power where it exists and rate-controls, unless
         // `PUNKTFUNK_VAAPI_LOW_POWER=0`. VDEnc's bitrate control is HuC firmware; a
-        // box without it (the passthrough VM) offers CQP only there.
+        // box without it offers CQP only there.
         let entrypoints = display.entrypoints(profile)?;
         let allow_lp = std::env::var("PUNKTFUNK_VAAPI_LOW_POWER")
             .ok()
@@ -749,7 +749,7 @@ impl Encoder {
         let is_idr = reference.is_none();
         let slot_count = self.slots.len();
         // HEVC names the kept pictures in every slice header, so a distrusted
-        // picture is dropped by both sides now. H.264's long-term indices stay in
+        // picture is dropped by both sides. H.264's long-term indices stay in
         // step by replacement instead. A wave's first frame still predicts from the
         // distrusted picture before it, so that one stays.
         if matches!(self.codec, Codec::Hevc(_)) {
@@ -1006,8 +1006,8 @@ impl Encoder {
             bail!("reference slot {:?} is not held", slice.reference_slot);
         }
         self.render(owned, vah::VA_ENC_SLICE_PARAMETER_BUFFER_TYPE, &va_slice)?;
-        // After the slice: iHD parses buffers in order and its slice parser drops a rolling
-        // refresh it has not yet seen a P slice for; Mesa stores it whenever it arrives.
+        // After the slice: iHD parses buffers in order and its picture parser zeroes the picture
+        // parameters a rolling refresh writes into; Mesa stores it whenever it arrives.
         self.render_stripe(owned, stripe)?;
 
         // Neither driver writes a slice header of its own: radeonsi templates its
@@ -1018,7 +1018,7 @@ impl Encoder {
 
     /// The HEVC picture: sequence, rate control, the packed VPS/SPS/PPS (and HDR SEI)
     /// on an IDR, then picture, slice and the packed slice header whose reference
-    /// picture set is every trusted slot, closest first, the reference marked used.
+    /// picture set is every held slot, closest first, the reference marked used.
     #[allow(clippy::too_many_arguments)]
     fn render_picture_hevc(
         &self,
@@ -1053,8 +1053,8 @@ impl Encoder {
             self.render_packed(owned, vah::VA_ENC_PACKED_HEADER_TYPE_SEQUENCE, &sets, bits)?;
         }
 
-        // The DPB the decoder keeps, closest first; only trusted slots survive to
-        // here (see `encode_with`).
+        // The DPB the decoder keeps, closest first; `encode_with` has dropped every
+        // distrusted slot except a wave's reference.
         let mut kept: Vec<(u8, VaSurfaceId, i32)> = self
             .slots
             .iter()
@@ -1123,8 +1123,8 @@ impl Encoder {
             bail!("reference slot {:?} is not held", slice.reference_slot);
         }
         self.render(owned, vah::VA_ENC_SLICE_PARAMETER_BUFFER_TYPE, &va_slice)?;
-        // After the slice: iHD parses buffers in order and its slice parser drops a rolling
-        // refresh it has not yet seen a P slice for; Mesa stores it whenever it arrives.
+        // After the slice: iHD parses buffers in order and its picture parser zeroes the picture
+        // parameters a rolling refresh writes into; Mesa stores it whenever it arrives.
         self.render_stripe(owned, stripe)?;
 
         let header = hevc.slice_header(HevcSlice {
@@ -1175,7 +1175,8 @@ impl Encoder {
         Ok(())
     }
 
-    /// One `vaCreateBuffer` + `vaRenderPicture` for a plain parameter struct.
+    /// One `vaCreateBuffer` for a plain parameter struct; [`Self::render_ids`] renders
+    /// the batch.
     fn render<T>(&self, owned: &mut Vec<VaBufferId>, kind: u32, value: &T) -> Result<()> {
         let buf = self.create(
             kind,

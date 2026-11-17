@@ -11,7 +11,7 @@
 //    suppresses pad 0's controller-motion forwarding while this runs;
 //  - no stale rotation: `stop` sends a single zero-gyro sample after the last real one, so the
 //    host's virtual pad never keeps integrating an angular velocity this device stopped
-//    producing (the gyro-sweep "stale angular velocity re-sent forever" failure mode).
+//    producing.
 //
 // Samples are CMDeviceMotion (bias-corrected rotation, gravity split from user acceleration)
 // at CoreMotion's ~100 Hz ceiling; the host's motion plane is event-driven, so fewer is fine.
@@ -91,8 +91,8 @@ public final class DeviceGyro {
     private let send: @Sendable (_ gyro: (Int16, Int16, Int16), _ accel: (Int16, Int16, Int16)) -> Void
 
     private let motion = CMMotionManager()
-    /// Dedicated serial delivery queue — deliberately NOT main (the controller path's
-    /// main-queue delivery is a known jitter source; the mirror starts clean).
+    /// Dedicated serial delivery queue, off the main thread; `stop`'s closing zero rides it
+    /// behind the last sample.
     private let queue: OperationQueue = {
         let q = OperationQueue()
         q.name = "punktfunk.device-gyro"
@@ -118,14 +118,16 @@ public final class DeviceGyro {
         guard !isRunning, motion.isDeviceMotionAvailable else { return }
         isRunning = true
         updateRemap()
-        // Interface orientation only changes alongside a device-orientation notification, so
-        // this is the one signal needed; re-reading the scene keeps a rotation lock stable.
+        // Re-read on each device-orientation notification; reading the scene keeps a rotation
+        // lock stable. A `LandscapeLock` turn changes the interface without one, so the remap
+        // holds until the device next turns.
         orientationObserver = NotificationCenter.default.addObserver(
             forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateRemap() }
         }
-        // CoreMotion's practical ceiling; requesting faster just clamps.
+        // CoreMotion caps the interval at what the hardware supports (CMMotionManager.h,
+        // iOS 27.1 SDK).
         motion.deviceMotionUpdateInterval = 1.0 / 100.0
         motion.startDeviceMotionUpdates(to: queue) { [state, send] m, _ in
             guard let m else { return }

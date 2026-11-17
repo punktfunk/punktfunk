@@ -12,12 +12,12 @@
 use super::v2::{io as v2io, msg::V2Message, registry};
 use super::{ClipFetch, ClipFetchHdr};
 
-/// Stream-reset / stop code for a cancelled fetch. Distinct from connection close
-/// codes (`0x51`/`0x52` quit/exit, `0x42` reject, `0x60`–`0x67` pairing) so a
-/// captured code is unambiguous even though QUIC already namespaces them.
+/// Stream-reset / stop code for a cancelled fetch. Distinct from every connection close
+/// code (`crate::reject`, [`super::QUIT_CLOSE_CODE`] and its siblings) so a captured code
+/// is unambiguous even though QUIC already namespaces them.
 pub const CLIP_CANCELLED_CODE: u32 = 0x70;
 
-/// 64 KiB write size; matches the control-frame bound.
+/// 64 KiB write size.
 pub const CLIP_CHUNK: usize = 64 * 1024;
 
 pub fn cancelled_code() -> quinn::VarInt {

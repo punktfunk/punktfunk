@@ -2,7 +2,7 @@ import PunktfunkKit
 import SwiftUI
 
 /// Open-source acknowledgements: Punktfunk's own license (MIT OR Apache-2.0) followed by the
-/// third-party software notices. Used as a pushed view on iOS/tvOS and a preferences tab on macOS.
+/// third-party software notices. Opened from `AboutView`: pushed on tvOS, a sheet elsewhere.
 struct AcknowledgementsView: View {
     private var version: String? {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
@@ -22,10 +22,10 @@ struct AcknowledgementsView: View {
 
     var body: some View {
         ScrollView {
-            // Top-level LazyVStack so the third-party-notices chunks (Licenses.thirdPartyNoticesChunks,
-            // ~885 KB total) load lazily as they scroll into view — a single Text that large overshoots
-            // the text-rendering height limit (blank below the limit + very slow). spacing 0 keeps the
-            // notice chunks visually continuous; the header block carries its own spacing + bottom pad.
+            // Top-level LazyVStack: the notice chunks (Licenses.thirdPartyNoticesChunks) load
+            // lazily as they scroll into view — a single Text that large overshoots the
+            // text-rendering height limit (blank below the limit + very slow). spacing 0 keeps
+            // the chunks visually continuous; the header block carries its own spacing + pad.
             LazyVStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 18) {
                     // The top's own focus stop: moving up from the first license chunk scrolls
@@ -99,7 +99,8 @@ struct AcknowledgementsView: View {
     }
 }
 
-/// `textSelection(.enabled)` is unavailable on tvOS, so apply it only where it exists.
+/// `textSelection(.enabled)` is unavailable on tvOS (tvOS 27.0 SDK), so apply it only where it
+/// exists.
 private struct SelectableText: ViewModifier {
     func body(content: Content) -> some View {
         #if os(tvOS)

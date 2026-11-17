@@ -7,8 +7,8 @@
 #
 # Every step that deletes image-store content waits for "no pull in flight": containerd GC drops
 # an in-flight pull's leases, and the job then dies at "Set up job" with "No such image".
-# Idle base images are never swept wholesale (no `image prune -a`): ci-image-warm keeps them warm
-# so a job's pull is a digest-match no-op, and a cold 4–10 GB pull is what that avoids.
+# Idle base images are never swept wholesale (no `image prune -a`): a job's pull is a digest-match
+# no-op only while they stay, and a cold 4–10 GB pull is what that avoids.
 set -u
 export PATH=/usr/bin:/bin:/usr/local/bin:$PATH
 

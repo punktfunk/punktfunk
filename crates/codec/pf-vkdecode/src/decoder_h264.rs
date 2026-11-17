@@ -7,11 +7,11 @@
 //! and recording are [`VkDecoder`]'s; this file plans and converts.
 //!
 //! Every decode op has a query slot. [`VkDecoder::poll_status`] reads it
-//! without waiting; a non-COMPLETE result is the concealment signal. FFmpeg
+//! without waiting; a non-COMPLETE result is the concealment signal. FFmpeg 8
 //! runs `nb_queries = 0` and cannot see driver-reported corruption.
 //!
-//! Residual: sampling a still-live reference while a decode reads it writes
-//! presenter layout metadata; `VK_KHR_unified_image_layouts` drops that trip.
+//! Residual: sampling a still-live reference round-trips its layout while a decode
+//! reads it; the `unifiedImageLayoutsVideo` feature lets GENERAL replace that trip.
 
 use ash::vk;
 use ash::vk::native as hh;
@@ -149,8 +149,9 @@ impl VkDecoder<H264> {
     ///
     /// Full [`DeviceHandles`] contract (liveness, enabled extensions and
     /// features, truthful queue families) for this decoder's lifetime. The
-    /// device must have `VK_KHR_video_decode_h264` enabled; that part is
-    /// checked below because a miss is UB at session creation, not an error.
+    /// device must have `VK_KHR_video_decode_h264` enabled: a miss is UB at
+    /// session creation, and the codec check below, a physical-device query,
+    /// cannot see it.
     pub unsafe fn new(
         handles: &DeviceHandles,
         lock: Box<dyn QueueLock>,
@@ -161,8 +162,8 @@ impl VkDecoder<H264> {
         // the hardware even if the extension was never enabled (`device.rs`).
         dev.require_codec_op(vk::VideoCodecOperationFlagsKHR::DECODE_H264, "H.264 decode")?;
         // The picture-pool arrangement is a device fact, not the stream's: ask with
-        // the profile every host encodes, so an unusable device refuses the rung
-        // before its first AU. A stream in another profile re-queries at its SPS.
+        // `H264_PROFILE_HIGH`, so an unusable device refuses the rung before its
+        // first AU. A stream in another profile re-queries at its SPS.
         // SAFETY: live device (the `wrap` contract above).
         let caps = unsafe { H264::query_caps(&dev, H264_PROFILE_HIGH)? };
         let codec = H264 {
@@ -270,10 +271,9 @@ impl VkDecoder<H264> {
         // `release_after_decode`; the release runs whether or not this submits.
         self.submit_then_release(&vk_plan.release_after_decode, |dec| {
             let op = dec.prepare_op(&vk_plan.refs, vk_plan.setup_slot, vk_plan.setup_ref)?;
-            // Bitstream is slice NALUs only. A real AU opens with AUD/SEI
-            // (and SPS/PPS at IDRs); feeding those to VCN inside the decode
-            // range hangs it. `pack_slices` rebases offsets and puts each NAL
-            // behind a three-byte start code.
+            // Bitstream is slice NALUs only: the spec's decode range holds a picture's VCL
+            // NAL units. A real AU opens with AUD/SEI (and SPS/PPS at IDRs). `pack_slices`
+            // rebases offsets and puts each NAL behind a three-byte start code.
             let plan_segments: Vec<std::ops::Range<usize>> =
                 plan.slices.iter().map(|s| s.nal.clone()).collect();
             let Some(packed) = pack_slices(&plan_segments) else {
@@ -319,7 +319,7 @@ impl VkDecoder<H264> {
     }
 }
 
-/// `STD_VIDEO_H264_PROFILE_IDC_HIGH`: the profile every punktfunk host encodes.
+/// `STD_VIDEO_H264_PROFILE_IDC_HIGH`: what the VAAPI, QSV and Media Foundation encoders emit.
 const H264_PROFILE_HIGH: hh::StdVideoH264ProfileIdc = 100;
 
 /// Map `profile_idc` to the Std code point. Identity for the four

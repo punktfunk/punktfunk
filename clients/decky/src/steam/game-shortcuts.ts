@@ -15,8 +15,8 @@ declare const SteamClient: SteamClientGlobal;
 /**
  * Ensure the hidden per-game shortcut for a Steam title: named after the game, dressed in its
  * art, pointed at the touch layout. Reused across launches by appid; recreated if the user
- * removed it. A title carrying a quote gets no layout: the name is written into a VDF as a
- * quoted key, and Steam's default layout beats a corrupt file.
+ * removed it. A title carrying a quote gets no layout: its VDF key would need escaping, and
+ * whether Steam matches an escaped key to the title is unknown.
  */
 export function ensureGameShortcut(
   steamAppId: number,

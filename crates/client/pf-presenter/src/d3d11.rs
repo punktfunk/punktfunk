@@ -72,8 +72,8 @@ pub struct ImportSupport {
 }
 
 /// Planar slots on this vendor? A planar D3D11 import loses the Vulkan device on NVIDIA
-/// and on Intel however it is consumed, so both stay on the RGB ring. `knob`, when set,
-/// overrides it both ways.
+/// however it is consumed, and on Intel at the first frame, so both stay on the RGB ring.
+/// `knob`, when set, overrides it both ways.
 pub fn planar_allowed(vendor_id: u32, knob: Option<bool>) -> bool {
     knob.unwrap_or(!matches!(vendor_id, 0x10DE | 0x8086))
 }

@@ -344,7 +344,7 @@ fn fills_output(window: &Window, output: Option<&Output>) -> bool {
     l.width > 0 && l.height > 0 && w >= f64::from(l.width) - 1.0 && h >= f64::from(l.height) - 1.0
 }
 
-/// Windows on head `output`, or on every head with `None`. A window on a workspace no listing
+/// Windows on `head`, or on every head with `None`. A window on a workspace no listing
 /// claims, or on none, is dropped: its head is unproven.
 fn parse_toplevels(
     windows: &[Window],
@@ -413,7 +413,8 @@ static WINDOW_GEN: AtomicU64 = AtomicU64::new(0);
 /// An event-stream reader is feeding [`WINDOW_GEN`]. Without one the counter is frozen.
 static WINDOW_READER: AtomicBool = AtomicBool::new(false);
 
-/// The event-stream thread calls this for every window or workspace event.
+/// The event-stream thread calls this for each event `events::moves_windows` passes, and on
+/// connect.
 #[allow(dead_code, reason = "called by the event-stream reader")]
 pub(crate) fn bump_window_gen() {
     WINDOW_GEN.fetch_add(1, Ordering::Relaxed);

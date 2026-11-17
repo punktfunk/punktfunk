@@ -9,11 +9,11 @@
 //! - `ctl.resync` — after a `dropped` frame, or a reconnect that could not resume. The
 //!   consumer must re-snapshot (`ctl status` / `ctl pending`); further events will not.
 //! - `ctl.disconnected` — the stream dropped; reconnect is automatic.
-//! - `ctl.heartbeat` — host keep-alive, ~15 s. Writing it is how [`emit`] notices the
-//!   consumer is gone (EPIPE on a read-only pipe never fires).
+//! - `ctl.heartbeat` — host keep-alive, every `mgmt::events::KEEP_ALIVE`. Writing it is how
+//!   [`emit`] notices the consumer is gone (EPIPE on a read-only pipe never fires).
 //!
-//! Backoff 1–30 s so a tight loop cannot exhaust `MAX_EVENT_STREAMS` (32, shared with
-//! the console). First connect and a pin mismatch still exit; retry cannot fix those.
+//! Backoff 1–30 s so a tight loop cannot exhaust `MAX_EVENT_STREAMS` (shared with the
+//! console). First connect and a pin mismatch still exit; retry cannot fix those.
 
 use std::io::{BufRead, BufReader, Write};
 use std::time::Duration;
@@ -26,7 +26,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 pub fn run(kinds: Option<&str>, since: Option<u64>) -> Result<()> {
     // No `--since` = the live tail. A cursor past any real seq gets an empty catch-up and no
-    // `dropped`, so a widget restart does not replay 1024 events, nor a knock from an hour
+    // `dropped`, so a widget restart does not replay the ring, nor a knock from an hour
     // ago. The first frame's real id replaces it for reconnects. `--since 0` replays the ring.
     let mut cursor = Some(since.unwrap_or(u64::MAX));
     let mut backoff = BACKOFF_MIN;
@@ -92,7 +92,7 @@ fn pump(
         };
         let value = value.strip_prefix(' ').unwrap_or(value);
         match field {
-            // Empty field: SSE comment (`: keep-alive`, ~15 s). Writing the heartbeat is
+            // Empty field: SSE comment (`: keep-alive`). Writing the heartbeat is
             // the liveness check — a read-only stdout never sees the widget die, so idle
             // watchers would hold a `MAX_EVENT_STREAMS` slot until reboot. [`emit`] exits on EPIPE.
             "" => emit(serde_json::json!({ "v": SCHEMA_VERSION, "kind": "ctl.heartbeat" })),
@@ -137,8 +137,7 @@ fn emit_control(kind: &str, error: Option<&str>) {
     emit(line);
 }
 
-/// One flushed line: an 8 KiB stdio buffer would hide the next event from a widget.
-/// Write/flush failure means the consumer is gone. Exit 0 (normal end) so we
+/// One line, flushed. Write/flush failure means the consumer is gone. Exit 0 (normal end) so we
 /// drop the SSE slot instead of holding `MAX_EVENT_STREAMS` until reboot.
 fn emit(line: serde_json::Value) {
     let mut out = std::io::stdout().lock();
@@ -147,7 +146,8 @@ fn emit(line: serde_json::Value) {
     }
 }
 
-/// Host `kinds` grammar is `[a-z0-9_.*,-]`; encode only what a typo could introduce.
+/// Host `kinds` are comma-separated kinds or `domain.*` prefixes; encode only what a typo
+/// could introduce.
 fn urlencode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {

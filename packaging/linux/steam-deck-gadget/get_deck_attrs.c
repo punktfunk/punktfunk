@@ -20,8 +20,8 @@ int main(int argc, char **argv) {
     unsigned char queries[][4] = {
         {0x83, 0x00, 0x00, 0x00}, // GET_ATTRIBUTES_VALUES
         {0xae, 0x16, 0x01, 0x00}, // GET_STRING_ATTRIBUTE, serial (attr 1)
-        {0xae, 0x16, 0x00, 0x00}, // GET_STRING_ATTRIBUTE, attr 0
-        {0xae, 0x16, 0x02, 0x00}, // attr 2 (board serial?)
+        {0xae, 0x16, 0x00, 0x00}, // GET_STRING_ATTRIBUTE, board serial (attr 0)
+        {0xae, 0x16, 0x02, 0x00}, // attr 2 = ATTRIB_STR_COUNT, past the last string attribute
     };
     for (int q = 0; q < 4; q++) {
         unsigned char set[65] = {0};

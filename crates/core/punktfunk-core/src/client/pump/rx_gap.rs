@@ -144,7 +144,7 @@ mod tests {
         Duration::from_millis(n)
     }
 
-    /// One steady second at 120 datagrams/s so the cadence is known; returns the clock.
+    /// One steady second at 125 datagrams/s so the cadence is known; returns the clock.
     fn warmed(g: &mut RxGap, t0: Instant) -> (Instant, u64) {
         let mut count = 0;
         for i in 1..=125u64 {

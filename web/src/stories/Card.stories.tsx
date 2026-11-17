@@ -22,18 +22,13 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The inset contract — the thing this card got wrong most often.
+ * The inset contract.
  *
  * `CardContent` drops its top padding only when something already sits above it. The pair below is
  * the regression guard: both cards must show the same inset on every side, and the headerless one
  * must not have its first line touching the top edge.
  *
- * It used to be wrong invisibly, and only on desktop. The padding was `p-4 pt-0 sm:p-6 sm:pt-0`, so
- * a headerless card had to restore the top inset itself — and a call-site `pt-6` beat the base
- * `pt-0` while losing to `sm:pt-0`, because tailwind-merge resolves conflicts only within a variant.
- * Right on a phone, zero on a desktop. Seven call sites had grown their own workaround for it.
- *
- * ⚠ Check this at BOTH viewport widths. A single width cannot show that class of bug.
+ * ⚠ Check this at BOTH viewport widths: an inset bug can show at one width and not the other.
  */
 export const InsetWithAndWithoutHeader: Story = {
 	render: () => (

@@ -30,7 +30,7 @@ pub struct DecodePlanVk {
     pub std_pic: hh::StdVideoDecodeH264PictureInfo,
     /// Slice NALU byte offsets in the AU as planned, start code included.
     /// AU-relative, not submission-final: the recording layer packs SLICE
-    /// NALUs only (non-VCL in the decode range hangs VCN) and rebases these
+    /// NALUs only (the spec's decode range holds VCL NAL units) and rebases these
     /// for Vulkan's `pSliceOffsets`.
     pub slice_offsets: Vec<u32>,
     /// The slot the decoded picture activates (`pSetupReferenceSlot`).
@@ -130,7 +130,7 @@ fn ref_info(rp: &RefPic) -> hh::StdVideoDecodeH264ReferenceInfo {
     std.flags
         .set_used_for_long_term_reference(u32::from(rp.is_long_term));
     // FrameNum is the Std pair-key: frame_num short-term, LongTermFrameIdx
-    // long-term. Field flags and is_non_existing stay 0 (module docs).
+    // long-term. Field flags stay 0 (module docs); nothing sets is_non_existing.
     std.FrameNum = rp.frame_num_or_lt_idx;
     std.PicOrderCnt = [rp.top_field_order_cnt, rp.bottom_field_order_cnt];
     std
@@ -336,7 +336,7 @@ mod tests {
             slot_image[setup] = Some(dst);
             pending.insert(vk.setup_id, dst);
 
-            // Deferred releases, as `Decoder::decode` applies them.
+            // Deferred releases, as `VkDecoder::submit_then_release` applies them.
             for id in &vk.release_after_decode {
                 assert!(slots.release(*id), "a deferred id held no slot");
             }

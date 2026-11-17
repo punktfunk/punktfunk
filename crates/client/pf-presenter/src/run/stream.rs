@@ -108,7 +108,7 @@ impl StreamState {
     /// decode work to the shared device. The presenter lets go of the decoder's frame
     /// first, so the decoder's teardown gets it back instead of freeing it under a redraw.
     /// The queued frames go before the join too: the pump's decoder waits for their tokens
-    /// while this thread joins it. The pump notices `stop` within its 20 ms receive timeout.
+    /// while this thread joins it. The pump notices `stop` within one frame-receive timeout.
     pub(super) fn shutdown(mut self, presenter: &mut Presenter) {
         self.screens = Default::default();
         self.handle.stop.store(true, Ordering::SeqCst);
@@ -216,11 +216,10 @@ pub(super) fn hud_mode_tick(
     st.shown_mode = Some(m);
 }
 
-/// Fire the debounced `Reconfigure` once ~400 ms pass with no further resize events.
-/// Physical pixels × the render scale, even-floored, clamped ≥ 320×200, with the view
-/// [`window_mode`] pairs with them; ≥ 1 s between requests (the accept ack round-trips in
-/// milliseconds, so the spacing also keeps ~one request outstanding); each distinct size
-/// requested at most once (rejected sizes and host-side rollbacks).
+/// Fire the debounced `Reconfigure` once [`resize_decision`] settles. Physical pixels × the
+/// render scale, with the view [`window_mode`] pairs with them. [`resize_decision`] owns the
+/// debounce, the spacing between requests (the accept ack round-trips in milliseconds, so the
+/// spacing also keeps ~one request outstanding), the clamp, and the once-per-ask rule.
 pub(super) fn resize_tick(
     st: &mut StreamState,
     window: &mut sdl3::video::Window,
@@ -539,7 +538,7 @@ impl Shell {
     /// Dial the stream's host again as `r` says, on a clone of its params with a fresh
     /// demote flag: the old one would open a software decoder on good hardware. The host,
     /// port and `launch` ride along verbatim: the resume id is keyed on the host and port,
-    /// and pf-vdisplay's reuse key includes the launch command, so the running game stays.
+    /// and pf-vdisplay's reuse keys leave the launch command out, so a kept display is reused.
     fn restart(&mut self, stream: &mut Option<StreamState>, r: Restart<'_>) {
         let Some(st) = stream.as_mut() else {
             return;

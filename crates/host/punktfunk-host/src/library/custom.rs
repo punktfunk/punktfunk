@@ -382,7 +382,7 @@ pub(crate) fn own_entries(view: &View) -> Vec<CustomEntry> {
         .collect()
 }
 
-/// Store ids a plugin has claimed, so library scans skip the matching built-in scanner.
+/// `store id → provider id` for every claimed store ([`Catalog::claims`]).
 pub fn claimed_stores() -> BTreeMap<String, String> {
     catalog().claims.clone()
 }
@@ -997,8 +997,7 @@ pub fn reconcile_provider(
 }
 
 /// Releases the store claim as well (`DELETE /library/provider/{provider}`), on the shelf the
-/// provider writes. No event when nothing changed. This is the only release path, so
-/// uninstalling a library plugin restores the built-in scanner without a restart.
+/// provider writes. No event when nothing changed.
 pub fn delete_provider(provider: &str) -> Result<usize> {
     let shelf = provider_shelf();
     let _serial = catalog_lock();
@@ -1034,9 +1033,9 @@ pub(crate) fn person_prep() -> Vec<crate::hooks::PrepCmd> {
         .collect()
 }
 
-/// Prep/undo for a stored library id. In-host scanners have no per-title config; GameStream
-/// `apps.json` carries its own `prep`. Goes through [`entry_for_library_id`], not a `custom:`
-/// prefix strip, so a claimed `steam:440` still runs operator prep.
+/// Prep/undo for a stored library id; GameStream `apps.json` carries its own `prep`. Goes
+/// through [`entry_for_library_id`], not a `custom:` prefix strip, so a claimed `steam:440`
+/// still runs operator prep.
 pub fn prep_for(library_id: &str) -> Vec<crate::hooks::PrepCmd> {
     entry_for_library_id(library_id)
         .map(|e| e.prep)

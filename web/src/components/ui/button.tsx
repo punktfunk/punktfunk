@@ -14,9 +14,8 @@ export type ButtonProps = ComponentProps<typeof AnimatedButton>;
  *
  * `AnimatedButton` is a motion element, and its mount animation settles as an inline `opacity: 1`.
  * An inline style outranks any class, so the `disabled:opacity-50` the library also ships never
- * applied: measured `opacity: 1` on a `disabled` button, console-wide. Every disabled control in
- * the app therefore looked live and simply ignored the click — `pointer-events: none` landed,
- * because nothing sets that inline.
+ * applies: a disabled button stays at `opacity: 1`, looks live and simply ignores the click —
+ * `pointer-events: none` still lands, because nothing sets that inline.
  *
  * `!important` is the one thing that beats an inline declaration, and it is preferable here to
  * fighting motion for ownership of the animation: the library keeps animating opacity, this only

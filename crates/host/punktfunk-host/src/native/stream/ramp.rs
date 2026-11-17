@@ -11,9 +11,10 @@
 
 use super::*;
 
-/// Longest step the ramp window serves. The client's steps are 25 ms; this
-/// bounds what a hand-over waits for, and what an exemption from the control
-/// task's spacing can cost.
+/// Longest step the ramp window serves. The client's steps are at most its
+/// `RAMP_STEP_MS` (25 ms, `punktfunk_core::abr::probe`); this bounds what a
+/// hand-over waits for, and what an exemption from the control task's spacing
+/// can cost.
 pub(crate) const RAMP_STEP_MAX_MS: u32 = 50;
 
 /// Quiet window after the last served result during which a fit server's

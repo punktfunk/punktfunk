@@ -3,10 +3,10 @@
 //! Pen: each packet merges over last state into one sample (`BUTTON_ONLY` has no
 //! position by spec), then the [`PenSink`](crate::pen_sink::PenSink) both planes share.
 //!
-//! No stroke timeout. Native's 200 ms failsafe exists because datagrams are lossy
-//! and clients heartbeat. Moonlight's ENet control stream is ordered and reliable,
-//! and clients do not heartbeat a stationary pen — a timeout would lift a held
-//! stroke. Lost-client cleanup is the ENet disconnect: the control loop rebuilds
+//! No stroke timeout. Native's failsafe ([`punktfunk_core::quic::PEN_TOUCH_TIMEOUT_MS`])
+//! exists because datagrams are lossy and clients heartbeat. Moonlight's ENet control stream
+//! is ordered and reliable, and clients do not heartbeat a stationary pen — a timeout would
+//! lift a held stroke. Lost-client cleanup is the ENet disconnect: the control loop rebuilds
 //! this translator, and destroying the uinput device releases kernel-side state.
 //!
 //! Touch: `TouchDown` / `Move` / `Up` on a synthetic 65535² surface. Pressure and

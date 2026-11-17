@@ -1,8 +1,7 @@
 // PyroWave decode compute kernels — the Metal port of the vendored Vulkan shaders
-// (crates/codec/pyrowave-sys/vendor/pyrowave/shaders/wavelet_dequant.comp + idwt.comp, upstream pin
-// c0b997f8, MIT © 2025 Hans-Kristian Arntzen). Runtime-compiled Swift strings, as in
-// MetalVideoPresenter (SwiftPM has no metallib build step); these are the client's first
-// compute pipelines.
+// (crates/codec/pyrowave-sys/vendor/pyrowave/shaders/wavelet_dequant.comp + idwt.comp at a32b05e,
+// MIT © 2025 Hans-Kristian Arntzen), minus idwt's RangeScale (1.0 outside CPU 10-bit readback)
+// and the sub-16-lane scan. Runtime-compiled Swift strings, as in MetalVideoPresenter.
 //
 // Port notes (design/pyrowave-codec-plan.md §4.7):
 // • Only the STORAGE_MODE 0 path exists: MSL device pointers replace the 8/16-bit-storage SSBO

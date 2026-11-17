@@ -1,6 +1,7 @@
-//! Compile the shell's embedded assets (`data/` — the host-card OS-mark symbolic icons)
-//! into a gresource bundle, registered at startup via `gio::resources_register_include!`,
-//! and stamp the build version the update check compares against.
+//! Compile the shell's embedded assets (`data/` — the stylesheet and the host-card and
+//! launcher-tile symbolic icons) into a gresource bundle, registered at startup via
+//! `gio::resources_register_include!`, and stamp the build version the update check compares
+//! against.
 
 fn main() {
     // Build provenance, as in crates/host/punktfunk-host/build.rs: packaging sets

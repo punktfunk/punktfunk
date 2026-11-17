@@ -144,15 +144,16 @@ pub struct SessionRef {
 /// ([`punktfunk_core::client::PunktfunkEndReason`]) so both ends name the same end the
 /// same way. The bytes match that ABI where the two overlap.
 ///
-/// [`Self::StoppedByOperator`] and [`Self::Stolen`] are the ones a client cannot see: the
-/// host closes them as code 0, which every client reads as `host_ended`.
+/// [`Self::StoppedByOperator`] from a console stop and [`Self::Stolen`] close as code 0, which
+/// every client reads as `host_ended`. A `stopped_by_operator` after an access expiry, an
+/// unpair, a power action or a closed profile closes with a typed reject code the client names.
 #[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum SessionEndReason {
     /// The client hung up — its Stop, or its process went away.
     Local = 1,
-    /// The launched game exited and the session followed it (`APP_EXITED`).
+    /// The launched game exited and the session followed it (`APP_EXITED_CLOSE_CODE`).
     GameExited = 2,
     /// The stream loop finished cleanly.
     HostEnded = 3,
@@ -275,12 +276,12 @@ pub struct SessionSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bitrate: Option<BitrateSpan>,
     /// Access units the send thread put on the wire. Absent when the video loop
-    /// never reached its tail — the `host_error` case.
+    /// never reached its tail — the `host_error` case — and on GameStream.
     #[schema(value_type = u64, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frames_sent: Option<u64>,
     /// Frames the capturer's encode pool refused. Absent on a capturer that does not
-    /// count them (everything but the Windows IDD push path).
+    /// count them (everything but the Windows IDD-push and WGC paths), and on GameStream.
     #[schema(value_type = u64, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frames_dropped: Option<u64>,
@@ -862,8 +863,7 @@ mod tests {
         assert!(sub.rx.try_recv().is_err());
     }
 
-    /// The reporter's requirement, asserted rather than documented: the host names an end
-    /// with the byte the client already decodes from the QUIC close.
+    /// The host names an end with the byte the client already decodes from the QUIC close.
     #[test]
     fn the_end_reason_bytes_are_the_clients_own() {
         use punktfunk_core::client::PunktfunkEndReason as Client;

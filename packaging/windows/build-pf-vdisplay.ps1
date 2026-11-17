@@ -1,21 +1,17 @@
 <#
 .SYNOPSIS
-  Build + sign the pf-vdisplay UMDF IddCx virtual-display driver FROM SOURCE, in CI, and stage it for the
-  host installer. This REPLACES the old vendored-prebuilt-binary model (packaging/windows/pf-vdisplay/) -
-  the binary went stale (frozen mid-June while the driver source kept moving), which silently shipped two
-  field bugs: (1) the catalog no longer covered the edited INF (pnputil SPAPI_E_FILE_HASH_NOT_IN_CATALOG on
-  every box), and (2) the binary predated IOCTL_SET_RENDER_ADAPTER that the host needs to pin the IDD render
-  GPU on hybrid/Optimus boxes. Building every release from source keeps the .dll/.inf/.cat in lockstep and
-  ships current driver features.
+  Build + sign the pf-vdisplay UMDF IddCx virtual-display driver FROM SOURCE, in CI, and stage it
+  for the host installer. Building every release from source keeps the .dll/.inf/.cat in lockstep
+  with the driver source, so the catalog always covers the INF it was cut from.
 
 .DESCRIPTION
   Mirrors packaging/windows/drivers/deploy-dev.ps1 but for CI (release build, output to -Out, cert from a
   secret OR a fresh self-signed). Steps: cargo build (the wdk-sys/windows-drivers-rs driver workspace) ->
-  CLEAR the FORCE_INTEGRITY PE bit (wdk-build links /INTEGRITYCHECK, which a non-EV cert can't satisfy) ->
-  sign the .dll -> stampinf a strictly-increasing DriverVer into the INF -> Inf2Cat the catalog -> sign the
-  catalog -> export the public .cer. Output (-Out): pf_vdisplay.{dll,inf,cat} + punktfunk-driver.cer,
-  plus pf_vdisplay_seats.{inf,cat} - the same driver claiming the seat display ids, which only a
-  box that runs seats installs (see below).
+  CLEAR the FORCE_INTEGRITY PE bit (wdk-build links /INTEGRITYCHECK, which only a Microsoft-chained
+  signature satisfies) -> sign the .dll -> stampinf a strictly-increasing DriverVer into the INF ->
+  Inf2Cat the catalog -> sign the catalog -> export the public .cer. Output (-Out):
+  pf_vdisplay.{dll,inf,cat} + punktfunk-driver.cer, plus pf_vdisplay_seats.{inf,cat} - the same
+  driver claiming the seat display ids, which only a box that runs seats installs (see below).
 
   Requires the WDK build env: cargo + the x64 MSVC toolset (its ARM64 cross compiler for -Arch arm64), an LLVM compatible with the driver's bindgen
   (>= 0.72 supports current clang), LIBCLANG_PATH, and the Windows 10/11 WDK (the runner has these). Sets
@@ -64,7 +60,8 @@ $drvTarget = Join-Path $DriversDir 'target'
 # ARM64 rides the same crt-static config (drivers/.cargo/config.toml) under an explicit --target.
 $triple = if ($Arch -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
 $stampArch = if ($Arch -eq 'arm64') { 'arm64' } else { 'amd64' }
-$catOs = if ($Arch -eq 'arm64') { '10_NI_ARM64' } else { '10_X64' }   # both floor at 22H2 (22621)
+# Inf2Cat OS: Windows 10 x64, or Windows 11 22H2 Arm64.
+$catOs = if ($Arch -eq 'arm64') { '10_NI_ARM64' } else { '10_X64' }
 $dll = Join-Path $drvTarget "$triple\release\pf_vdisplay.dll"
 
 # --- 1. build (release) -----------------------------------------------------------------------

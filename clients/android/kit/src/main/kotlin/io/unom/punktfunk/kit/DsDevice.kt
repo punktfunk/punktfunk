@@ -12,11 +12,12 @@ import kotlin.math.abs
  * USB output reports itself.
  *
  * Protocol ground truth: the Linux kernel's `hid-playstation` / `hid-sony` structs, SDL's
- * `SDL_hidapi_ps5.c` / `SDL_hidapi_ps4.c`, mirrored host-side in `punktfunk-host`'s
+ * `SDL_hidapi_ps5.c` / `SDL_hidapi_ps4.c`, mirrored host-side in `pf-inject`'s
  * `dualsense_proto.rs` / `dualshock4_proto.rs` — this file is the byte-exact inverse of those
- * serializers (offsets cross-referenced below). USB only: over Bluetooth the reports shift
- * (`0x31` + CRC32) AND Android exposes no raw path to a Classic pad anyway, so the BT case never
- * reaches this code — an uncaptured pad stays on the ordinary InputDevice path.
+ * serializers (offsets cross-referenced below). USB only: over Bluetooth the reports change
+ * (DualSense `0x31`, DS4 `0x11`, each with a CRC32) AND Android's public SDK (API 37) exposes no
+ * raw path to a Classic pad anyway, so the BT case never reaches this code — an uncaptured pad
+ * stays on the ordinary InputDevice path.
  */
 object DsDevice {
     const val VID_SONY = 0x054C
@@ -53,13 +54,11 @@ object DsDevice {
      * into the wire's fixed units (`punktfunk_core::input::gamepad` — 20 LSB per °/s, 10000 LSB
      * per g), read out of the calibration feature report the pad serves on EP0.
      *
-     * **Why the pad's blob and not a constant.** Measured on glass 2026-08-07: a DualSense flat
-     * and face up arrived as 0.811 g where 1.000 was owed, because this path forwarded the raw
-     * i16s verbatim. The nominal ×10000/8192 rescale that first closed that gap ([NOMINAL]) still
-     * leaves that unit's factory bias — about 1 % — on acceleration, and provably cannot fix gyro
-     * at all: the same still-average showed this pad's gyro calibration is nowhere near identity,
-     * and a near-identity one would mean 1024 LSB per °/s, i.e. ±32 °/s full scale, which no
-     * controller has. The scale is per unit; only the pad knows it.
+     * **Why the pad's blob and not a constant.** Forwarding the raw i16s verbatim reads 1 g as
+     * about 0.82 g (the pads' nominal 8192 counts per g against the wire's 10000). The nominal
+     * ×10000/8192 rescale ([NOMINAL]) closes that gap but still leaves a unit's factory bias on
+     * acceleration, and does nothing for gyro, which it passes through unscaled. The scale is
+     * per unit; only the pad knows it.
      *
      * The arithmetic is `hid-playstation`'s, and the host's contract test
      * (`crates/host/pf-inject/tests/motion_contract.rs`, `SonyImuCalibration`) is the same math read
@@ -115,14 +114,11 @@ object DsDevice {
             /** The pads' nominal acceleration resolution — `hid-playstation`'s `DS_ACC_RES_PER_G`. */
             private const val RAW_ACCEL_LSB_PER_G = 8192L
             /**
-             * The wire's gyro scale, taken from [Gamepad] rather than restated. These were literal
-             * `20L` / `10000L` until the sensor path hoisted the same numbers into one place; a
-             * second copy of a unit constant is precisely the defect this whole program opened
-             * with, and two of them in one module would be worse than the original.
+             * The wire's gyro scale, taken from [Gamepad] rather than restated: a second copy of
+             * a unit constant in this module can drift from the wire's.
              *
-             * `val`, not `const val`, only because the widening to Long is not a compile-time
-             * constant expression. Long here on purpose: the arithmetic below multiplies raw counts
-             * by the calibration's speed term before dividing, which overflows an Int.
+             * Long on purpose: the arithmetic below multiplies raw counts by the calibration's
+             * speed term before dividing, which overflows an Int.
              */
             private val WIRE_GYRO_LSB_PER_DEG_S = Gamepad.MOTION_GYRO_LSB_PER_DEG_S.toLong()
             /** `MOTION_ACCEL_LSB_PER_G`, doubled — the declared accel range spans 2 g, not 1. */
@@ -340,7 +336,7 @@ object DsDevice {
         return true
     }
 
-    /** hat nibble (0=N … 7=NW, 8+=neutral) → wire dpad bits — inverse of the host's `hat()`. */
+    /** Hat nibble (0=N … 7=NW, 8+=neutral) → wire dpad bits; inverse of host `dpad_octant`. */
     private fun hatBits(h: Int): Int = when (h) {
         0 -> Gamepad.BTN_DPAD_UP
         1 -> Gamepad.BTN_DPAD_UP or Gamepad.BTN_DPAD_RIGHT
@@ -369,8 +365,8 @@ object DsDevice {
     private fun i16(r: ByteArray, o: Int): Int =
         ((r[o + 1].toInt() shl 8) or (r[o].toInt() and 0xFF)).toShort().toInt()
 
-    // Device stick byte (0..255, centre 0x80, +y down) → wire i16 (+y up) — the exact inverse of
-    // the host's `to_u8` mapping (`lx = to_u8(x)`, `ly = 255 - to_u8(y)`).
+    // Device stick byte (0..255, centre 0x80, +y down) → wire i16 (+y up). The host's
+    // `DsState::from_gamepad` runs the other way: it inverts Y in i16, then quantises to a byte.
     private fun stickX(raw: Int): Int = raw * 257 - 32768
 
     private fun stickY(raw: Int): Int = (255 - raw) * 257 - 32768
@@ -415,18 +411,10 @@ object DsDevice {
     }
 
     /**
-     * DS5/Edge rumble at the wire's u16 amplitudes ([low] = heavy/left motor, [high] =
-     * light/right — the host parses `[3]` as high and `[4]` as low, mirrored here). Flags both
-     * the classic compat-vibration path AND `VIBRATION2` (firmware ≥ 2.24's full-range replot;
-     * older firmware ignores the unknown flag2 bit) — the host parser accepts either.
-     */
-    /**
-     * B6: hand the voice coils back to the audio-haptics path.
+     * Hand the voice coils back to the audio-haptics path.
      *
      * Every [ds5RumbleReport] asserts `HAPTICS_SELECT` (flag0 bit1), which is SDL's
      * "disable audio haptics" bit — the firmware mutes the coils the 0xD1 haptics stream drives.
-     * Until now NOTHING ever cleared it again, so a single rumble anywhere in a session left tier-A
-     * haptics silent for the rest of that pad's life, with no error and nothing in a log.
      *
      * The undo is a report whose flag0 has BOTH bits clear (SDL's own comment: "Leaving emulated
      * rumble bits off will restore audio haptics"). No other valid flag is set, so nothing else
@@ -448,6 +436,12 @@ object DsDevice {
         it[38] = 0x02 // speaker preamp gain
     }
 
+    /**
+     * DS5/Edge rumble at the wire's u16 amplitudes ([low] = heavy/left motor, [high] =
+     * light/right — the host parses `[3]` as high and `[4]` as low, mirrored here). Flags both
+     * the classic compat-vibration path AND `VIBRATION2` (firmware ≥ 2.24's full-range replot;
+     * older firmware ignores the unknown flag2 bit) — the host parser accepts either.
+     */
     fun ds5RumbleReport(model: Model, low: Int, high: Int): ByteArray = newDs5(model).also {
         it[1] = (DS5_FLAG0_COMPAT_VIBRATION or DS5_FLAG0_HAPTICS_SELECT).toByte()
         it[39] = DS5_FLAG2_VIBRATION2.toByte()

@@ -10,9 +10,10 @@
 //! [`step`] is pure. [`crate::ZeroCopyHealth`] holds one [`Ladder`] per identity; the capture's
 //! negotiation plan turns a snapshot into the rung it builds. Pinned by the table test below.
 
-/// Below the encoder's five resets, so the raw lane goes off before that session ends.
+/// Below the host's `MAX_ENCODER_RESETS`, so the raw lane goes off before that session ends.
 pub(super) const RAW_IMPORT_BUDGET: u8 = 3;
-/// One retry. Each failed offer costs a 10 s stall, and a compositor mid-restart fails once.
+/// One retry. Each failed offer costs pf-capture's `FIRST_FRAME_BUDGET` stall, and a
+/// compositor mid-restart fails once.
 pub(super) const RAW_OFFER_BUDGET: u8 = 2;
 /// One compositor crash costs one rebuild, not the lane.
 pub(super) const GPU_IMPORT_BUDGET: u8 = 3;

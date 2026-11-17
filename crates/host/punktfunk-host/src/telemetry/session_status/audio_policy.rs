@@ -30,7 +30,7 @@ pub enum AudioSessions {
 }
 
 /// Whether `policy` silences a session. `launcher` is the launching session's
-/// client label, matched the way [`super::stop_by_fingerprint`] matches.
+/// client label; a session is the launcher when its own label equals it.
 fn policy_mutes(policy: AudioSessions, launcher: &str, client: &str, join: bool) -> bool {
     match policy {
         AudioSessions::All => false,

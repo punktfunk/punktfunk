@@ -131,7 +131,7 @@ impl Hello {
 }
 
 /// An identity blob, read through `pf_driver_proto`'s checked view. Its serial becomes a USB
-/// string, so only 1–16 ASCII letters and digits pass.
+/// string, so only up to 16 ASCII letters and digits pass; an empty one means no serial.
 pub fn checked_identity(blob: &[u8], slot: u8) -> Result<Option<Sc2Identity>> {
     if blob.is_empty() {
         return Ok(None);

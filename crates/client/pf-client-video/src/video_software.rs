@@ -5,11 +5,11 @@
 //! turns that into a reconnect that advertises codecs this build can decode.
 //!
 //! Output is owned packed I420 [`CpuPlanarFrame`]; the presenter does CSC.
-//! H.264 colour, crop, IDR, and recovery-point SEI come from [`H264Planner`]
-//! and [`RecoveryWatch`], not from openh264. Decoder contexts are `Send` not
-//! `Sync` and used serially. [`Av1Data`] owns each copied AU until rav1d
-//! takes or drops it. Ordinary decode errors ask for a keyframe;
-//! [`NoSoftwareRung`] ends the rung.
+//! H.264 colour, IDR, and recovery-point SEI come from [`H264Planner`]
+//! and [`RecoveryWatch`], not from openh264. Decoders are used serially; the rav1d
+//! context is `Send` by an `unsafe impl` and not `Sync`. [`Av1Data`] owns each
+//! copied AU until rav1d takes or drops it. Ordinary decode errors ask for a
+//! keyframe; [`NoSoftwareRung`] ends the rung.
 //!
 //! [`Av1Software::new`] refuses `n_fc < 2`: rav1d aborts the process on a
 //! decode error with one frame context. Evidence: tests in this file.
@@ -56,8 +56,8 @@ pub struct NoSoftwareRung {
 }
 
 impl NoSoftwareRung {
-    /// [`last_rung_verdict`](crate::video::last_rung_verdict) input: `Codec` means
-    /// hardware already failed; `Shape` means hardware was never asked.
+    /// [`last_rung_verdict`](crate::video::last_rung_verdict) input: `Codec` is a codec
+    /// with no CPU rung; `Shape` is a codec that has one and a stream outside it.
     pub fn loss(&self) -> RungLoss {
         match self.shape {
             None => RungLoss::Codec,
@@ -141,7 +141,7 @@ impl SoftwareDecoder {
 
 struct H264Software {
     decoder: openh264::decoder::Decoder,
-    /// Colour, IDR, crop from the shared planner. Does not drive openh264 —
+    /// Colour and IDR from the shared planner. Does not drive openh264 —
     /// a refused plan drops metadata for that AU, never the picture.
     /// Boxed: the planner DPB dwarfs the AV1 variant beside it.
     planner: Box<H264Planner>,
@@ -579,8 +579,8 @@ impl Av1Software {
             // copy below then refuses.
             planes[i] = unsafe { std::slice::from_raw_parts(p.as_ptr().cast::<u8>(), sizes[i]) };
         }
-        // AV1 has no recovery-point SEI; hosts do not emit S-frames. Re-anchor
-        // is the wire's, as on every lane except H.264/H.265.
+        // AV1 has no recovery-point SEI; hosts do not emit S-frames. Re-anchor is the
+        // wire's here, as on every path with no SEI parser (`DecodedImage::local_recovery`).
         CpuPlanarFrame::from_i420(
             w,
             h,
@@ -637,8 +637,8 @@ mod tests {
     ///
     /// `(192, 128, 64)` is the only bar that can fail a limited↔full mismatch.
     /// Saturated bars clamp at [0, 1], so the 709-FULL fixture with the wrong
-    /// range has max error 0. 50% grey is 3 (inside ±4). Off-neutral mid-tone
-    /// is 11, and it exercises chroma scale too.
+    /// range has max error 0. 50% grey is 2 (inside ±4). Off-neutral mid-tone
+    /// is 10, and it exercises chroma scale too.
     const BARS: [(u8, u8, u8); 9] = [
         (255, 255, 255),
         (255, 255, 0),

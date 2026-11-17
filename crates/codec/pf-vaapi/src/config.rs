@@ -14,7 +14,7 @@ pub const VA_PROFILE_H264_HIGH: i32 = 7;
 pub const VA_PROFILE_H264_CONSTRAINED_BASELINE: i32 = 13;
 pub const VA_PROFILE_HEVC_MAIN: i32 = 17;
 pub const VA_PROFILE_HEVC_MAIN10: i32 = 18;
-/// Not a count from the top of the enum: ten VP9/HEVC values sit between HEVC and AV1.
+/// Not a count from the top of the enum: other VP9 and HEVC profiles sit between HEVC and AV1.
 pub const VA_PROFILE_AV1_PROFILE0: i32 = 32;
 pub const VA_PROFILE_AV1_PROFILE1: i32 = 33;
 
@@ -69,13 +69,12 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// H.264 8-bit 4:2:0 is always High, not the SPS `profile_idc`. Main would
-/// fail mid-stream on 8×8 transforms; High is a superset. Narrower values
-/// exist for the capability probe (what the device offers).
+/// fail mid-stream on 8×8 transforms; High is a superset.
 ///
-/// 4:4:4 is refused: the header has High444, drivers here do not, Vulkan does.
+/// 4:4:4 is refused: libva 2.23 has no H.264 4:4:4 profile.
 /// AV1 Profile 0 is 8 and 10 bit under one enumerator — `rt_format` must differ
 /// or the surface pool is wrong. Profile 1/2 and monochrome (`chroma_format_idc` 0)
-/// are refused: `va_dec_av1.h` is 8/10-bit 4:2:0 only.
+/// are refused: this rung decodes 8/10-bit 4:2:0 AV1 only.
 pub fn profile_for(
     codec: Codec,
     chroma_format_idc: u8,
@@ -123,8 +122,8 @@ pub fn rt_format(chroma_format_idc: u8, depth: u8) -> Result<u32, ConfigError> {
 
 /// Zero-copy: a presented surface cannot be decoded into. Size the pool to DPB
 /// and the decoder stalls behind display. The Vulkan rung's measured headroom.
-/// Do not copy FFmpeg's `extra_hw_frames = 4`: `av_hwframe_get_buffer` blocks;
-/// this pool does not.
+/// libavcodec needs no such margin: its VAAPI pool grows on demand
+/// (`initial_pool_size = 0`); this pool is fixed.
 pub const PRESENTER_HEADROOM: usize = pf_bitstream::slots::HOLD_HEADROOM as usize;
 
 /// VAAPI has no driver minimum. AV1 passes [`AV1_MAX_DPB_FRAMES`] (codec constant, not a sequence header).
@@ -133,7 +132,7 @@ pub fn surface_count(max_dpb_frames: usize) -> usize {
 }
 
 /// AV1 DPB depth (`NUM_REF_FRAMES`). Codec constant, not a sequence-header field.
-/// Ledger is this plus the picture being decoded (libavcodec `num_surfaces = 1 + 8`).
+/// Ledger is this plus the picture being decoded (libavcodec DXVA's `num_surfaces = 1 + 8`).
 pub const AV1_MAX_DPB_FRAMES: usize = 8;
 
 #[cfg(test)]
@@ -180,12 +179,12 @@ mod tests {
 
     #[test]
     fn shapes_outside_the_envelope_are_refused_not_guessed() {
-        // High10 and 4:4:4 exist in the header; mapping them to 8-bit High decodes garbage.
+        // High10 is in the header; mapping it or 4:4:4 to 8-bit High decodes garbage.
         assert!(profile_for(Codec::H264, 1, 10).is_err());
         assert!(profile_for(Codec::H264, 3, 8).is_err());
         assert!(profile_for(Codec::H265, 3, 10).is_err());
         assert!(rt_format(1, 12).is_err());
-        // AV1 API is 8/10-bit 4:2:0 only. chroma_format_idc 0 is monochrome, not 4:2:0.
+        // This rung is 8/10-bit 4:2:0 AV1 only. chroma_format_idc 0 is monochrome, not 4:2:0.
         assert!(profile_for(Codec::Av1, 3, 8).is_err());
         assert!(profile_for(Codec::Av1, 3, 10).is_err());
         assert!(profile_for(Codec::Av1, 1, 12).is_err());

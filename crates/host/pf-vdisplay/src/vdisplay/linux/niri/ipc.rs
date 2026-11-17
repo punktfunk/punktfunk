@@ -288,7 +288,7 @@ mod tests {
         ));
     }
 
-    /// Stock 26.04 lacks fields biri adds (`is_hidden`, `max_bpc`); both must decode.
+    /// Stock 26.04 lacks `is_hidden` and `max_bpc`, which biri sends; both must decode.
     #[test]
     fn replies_from_either_build_decode() {
         let ws: Vec<Workspace> = serde_json::from_value(json!([

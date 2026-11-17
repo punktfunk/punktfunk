@@ -102,10 +102,10 @@ const DECK: ClientLogMeta = {
 };
 
 /**
- * A bundle exactly as `clients/session`'s ring layer writes it: a header line that does NOT parse,
- * then `<ISO8601-Z> <LEVEL> <target> <msg>`. The unparsed header is in the fixture on purpose — it
- * is the cheapest standing proof that the fail-soft path renders rather than swallows, which is
- * what the Apple/Android/webOS legs will depend on when they land with formats of their own.
+ * A bundle as `pf_client_core::logring` renders it: a header line that does NOT parse, then
+ * `<ISO8601-Z> <LEVEL> <target> <msg>`. The unparsed header is in the fixture on purpose — it is
+ * the cheapest standing proof that `bundleRows` fails soft: a line it can't parse renders
+ * rather than being swallowed.
  *
  * Its timestamps interleave with the host's rather than sitting after them, because interleaving is
  * the entire reason the two are in one pane.

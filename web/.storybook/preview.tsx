@@ -1,5 +1,5 @@
-// Import the console's REAL stylesheet directly (rememed-style) — the @theme
-// blocks process because this is the literal entry Storybook's Vite pipeline sees.
+// Import the console's REAL stylesheet directly — the @theme blocks process
+// because this is the literal entry Storybook's Vite pipeline sees.
 import "../src/styles.css";
 // The console loads its brand typeface separately (in __root.tsx); do the same
 // here or every story falls back to system-ui and looks off.
@@ -20,8 +20,8 @@ const queryClient = new QueryClient({
 
 export default definePreview({
 	addons: [],
-	// The live console pins dark; default the canvas to dark too, with a toolbar
-	// switch to preview the light theme while designing.
+	// The console is dark unless the operator or the desktop's theme says light; default
+	// the canvas to dark too, with a toolbar switch to preview the light theme.
 	initialGlobals: { theme: "dark" },
 	globalTypes: {
 		theme: {

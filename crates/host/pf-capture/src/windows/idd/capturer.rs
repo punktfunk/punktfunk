@@ -38,7 +38,7 @@ pub(super) fn restart_presentation(
     }
     // The eviction's topology commit leaves DWM not presenting to this display, so the
     // driver's drain worker acquires nothing. CDS_RESET forces a real mode-set at the
-    // CURRENT mode — the same lever bring-up's ADD path relies on.
+    // CURRENT mode, as the ADD path's mode write does at the requested one.
     match pf_win_display::win_display::resolve_gdi_name(ccd) {
         Some(gdi) => {
             if !pf_win_display::win_display::force_mode_reset(&gdi) {
@@ -171,8 +171,8 @@ impl IddPushCapturer {
     }
 }
 
-/// A sustained ~2 fps stretch closed: per-hole lines gate on prior active flow, so this is the
-/// stretch's one line past its first hole.
+/// A degraded stretch closed ([`Recovery`]): per-hole lines gate on prior active flow, so this
+/// is the stretch's one line past its first hole.
 fn log_degraded(r: &Recovery) {
     let arrival = r.arrival_ms();
     tracing::info!(
@@ -269,9 +269,10 @@ impl crate::DisplayControl for IddPushCapturer {
         );
         self.width = width;
         self.height = height;
-        // A mode outside the driver's frozen advertised list re-arrives the monitor, and a fresh
-        // monitor composes SDR whatever the session negotiated. Re-assert before the encoder
-        // re-opens, or it opens for FP16 against a BGRA surface the pool can only refuse.
+        // A mode outside the monitor's arrival list re-arrives it when the in-place mode-list
+        // update fails, and a fresh monitor composes SDR whatever the session negotiated.
+        // Re-assert before the encoder re-opens, or it opens for FP16 against a BGRA surface
+        // the pool can only refuse.
         self.pin_negotiated_depth();
         self.cursor_event(Event::Rearrived);
         true

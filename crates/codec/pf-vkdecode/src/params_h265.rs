@@ -4,9 +4,10 @@
 //! wrappers with the aliasing/lifetime contract of [`crate::OwnedStdSps`].
 //!
 //! A DECODE session consumes neither VUI nor HRD/timing.
-//! `vui_parameters_present_flag` stays 0 and `pSequenceParameterSetVui` stays
-//! null; colour rides [`pf_bitstream::h265::PicturePlan::colour`].
-//! `vps_timing_info_present_flag` stays 0 and `pHrdParameters` stays null.
+//! `vui_parameters_present_flag` stays 0 and `pSequenceParameterSetVui` targets
+//! a zeroed block; colour rides [`pf_bitstream::h265::PicturePlan::colour`].
+//! `vps_timing_info_present_flag` stays 0 and `pHrdParameters` targets a zeroed
+//! HRD block ([`OwnedStdH265Sps`] says why).
 //!
 //! Short-term RPS candidates are re-encoded in resolved form: the parser has
 //! already run 7.4.8 inter-RPS prediction, so each set is declared non-predicted
@@ -28,9 +29,9 @@ use pf_bitstream::h265::Level;
 /// never submit a half-truth to a driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum H265ParamsError {
-    /// `general_profile_idc` has no `StdVideoH265ProfileIdc` code point.
-    /// Vulkan names 1-4 (Main, Main 10, Main Still Picture, Format Range
-    /// Extensions); High Throughput/SCC/scalable land here.
+    /// `general_profile_idc` that `profile_to_std` does not map. It maps 1-4
+    /// (Main, Main 10, Main Still Picture, Format Range Extensions); High
+    /// Throughput, scalable and SCC (Std code point 9, unmapped) land here.
     UnmappableProfileIdc(u8),
     /// `chroma_format_idc` past 3 — not legal H.265.
     InvalidChromaFormatIdc(u8),
@@ -43,8 +44,8 @@ pub enum H265ParamsError {
     /// Bit depth beyond 8/10, or luma and chroma depths that disagree. No
     /// output format (NV12/P010 and 4:4:4 counterparts) can carry it.
     UnsupportedBitDepth { luma_minus8: u8, chroma_minus8: u8 },
-    /// SCC palette predictor initializers: this conversion does not populate
-    /// `pPredictorPaletteEntries`. A present-flag over a null pointer is a
+    /// SCC palette predictor initializers: this conversion leaves the
+    /// `pPredictorPaletteEntries` block zeroed. A present-flag over it is a
     /// half-truth.
     PalettePredictorInitializers,
     /// `num_short_term_ref_pic_sets` past the spec's 64 (7.4.3.2.1).
@@ -477,15 +478,15 @@ pub fn vps_to_std_h265(vps: &Vps) -> Result<OwnedStdH265Vps, H265ParamsError> {
         .set_vps_sub_layer_ordering_info_present_flag(u32::from(
             vps.sub_layer_ordering_info_present_flag,
         ));
-    // Timing flags stay 0 with their fields: a present-flag over a null
-    // `pHrdParameters` would be a half-truth.
+    // Timing flags stay 0 with their fields: a present-flag over the zeroed
+    // `pHrdParameters` block below would be a half-truth.
     std.vps_video_parameter_set_id = vps.video_parameter_set_id;
     std.vps_max_sub_layers_minus1 = vps.max_sub_layers_minus1;
     std.pDecPicBufMgr = &*dpb_backing;
     std.pProfileTierLevel = &*ptl_backing;
-    // Zeroed HRD with its sub-layer arrays: the flags say absent, but a driver
-    // that reads through these pointers regardless (Intel, Windows) must find a
-    // struct, not null. Same shape the FFmpeg decoder hands every driver.
+    // Zeroed HRD with its sub-layer arrays: the flags say absent, but a driver that reads
+    // through these pointers regardless (Intel, Windows) must find a struct, not null. FFmpeg
+    // likewise never hands a null `pHrdParameters`.
     let (hrd_backing, hrd_sub_backing) = zeroed_hrd();
     std.pHrdParameters = &*hrd_backing;
 
@@ -625,7 +626,7 @@ pub fn sps_to_std_h265(sps: &Sps) -> Result<OwnedStdH265Sps, H265ParamsError> {
     std.flags
         .set_scaling_list_enabled_flag(u32::from(sps.scaling_list_enabled_flag));
     // Enabled-but-absent: the driver applies Table 7-5/7-6 itself (7.4.5).
-    // Declaring data we did not convert would pair a flag with a null pointer.
+    // Declaring data we did not convert would pair a flag with a zeroed block.
     std.flags
         .set_sps_scaling_list_data_present_flag(u32::from(sps.scaling_list_data_present_flag));
     std.flags
@@ -685,7 +686,7 @@ pub fn sps_to_std_h265(sps: &Sps) -> Result<OwnedStdH265Sps, H265ParamsError> {
     std.flags
         .set_palette_mode_enabled_flag(u32::from(scc.palette_mode_enabled_flag));
     // Flag stays 0: `check_envelope` rejected any SPS that set it, so the flag
-    // and the null `pPredictorPaletteEntries` cannot disagree.
+    // and the zeroed `pPredictorPaletteEntries` block cannot disagree.
     std.flags
         .set_intra_boundary_filtering_disabled_flag(u32::from(
             scc.intra_boundary_filtering_disabled_flag,
@@ -1216,7 +1217,7 @@ mod tests {
         ] {
             assert_eq!(profile_to_std(idc).unwrap(), expect);
         }
-        // 5 (High Throughput) and 9 (SCC) exist on the wire but not in Vulkan.
+        // 5 (High Throughput) has no Std code point; 9 (SCC) has one, unmapped here.
         for idc in [0u8, 5, 9, 11] {
             assert_eq!(
                 profile_to_std(idc).unwrap_err(),

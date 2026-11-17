@@ -1,7 +1,7 @@
 // The handoff verifier decides whether a URL may become a logged-in session, so every way of
-// getting it wrong is a way of handing the admin surface to a stranger. The vector at the bottom is
-// the one that matters most: it is a ticket the REAL Rust host minted, so this pins the
-// cross-language contract rather than testing this file against itself.
+// getting it wrong is a way of handing the admin surface to a stranger. The vector at the bottom
+// pins the message the host's `handoff_ticket` (crates/host/punktfunk-host/src/ctl.rs) signs; that
+// file's own test pins the MAC.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,8 +54,8 @@ describe("verifyHandoff", () => {
 	});
 
 	test("is single use even under CONCURRENT redemption", async () => {
-		// security-review 2026-08-31 M-1: check-then-record with an await between let two
-		// simultaneous redemptions both pass. The reservation must land before the first await.
+		// Check-then-record with an await between lets two simultaneous redemptions both pass.
+		// The reservation must land before the first await.
 		const now = 1_700_000_000_000;
 		const seen = new Map<string, number>();
 		const t = await mint(KEY, now / 1000, "aabbcc");
@@ -121,19 +121,16 @@ describe("verifyHandoff", () => {
 	});
 
 	/**
-	 * ⭐ The cross-language vector. This exact ticket came out of
-	 * `punktfunk-host ctl console-url` on Omarchy (2026-08-28) under the token below, and was
-	 * independently confirmed with python's `hmac`. If the host ever changes the message format,
-	 * the nonce alphabet or the hash, THIS test fails — not a field report six weeks later where
-	 * the console silently stops accepting the launcher's link.
+	 * The cross-language vector: the message string is the one the host's `handoff_ticket` signs.
+	 * The literal below fails when `handoffMessage` drifts; the host's own test pins the MAC
+	 * (`the_ticket_signs_what_the_console_verifies`).
 	 */
 	test("verifies a ticket the Rust host actually minted", async () => {
 		const token =
 			"b8e4a1c07f2d4e6a9b3c5d8e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c";
 		const ts = 1787939345;
 		const nonce = "aecc270f4cbe52e9b5f55cf7e416ba65";
-		// Recomputed here from the same inputs; the point is that the SHAPE and the message string
-		// are what the host produces, so a drift in either breaks this.
+		// Minted here from the same inputs. The message string below is the one the host signs.
 		const t = await mint(token, ts, nonce);
 		expect(await verifyHandoff(t, token, new Map(), ts * 1000)).toEqual({
 			ok: true,

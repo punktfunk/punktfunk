@@ -41,8 +41,8 @@ pub fn encode_through_a_loss(enc: &mut Encoder, width: usize, height: usize) -> 
     for i in 0..10 {
         aus.push(encode(enc, i, None));
     }
-    // `plan_slot_recovery` on the session's slots: taint everything from 8 on, anchor on
-    // the newest before it.
+    // Stands in for `plan_slot_recovery` on the session's slots: taint everything from 8
+    // on, anchor on the newest before it.
     let refs = enc.slots();
     let tainted = refs
         .iter()

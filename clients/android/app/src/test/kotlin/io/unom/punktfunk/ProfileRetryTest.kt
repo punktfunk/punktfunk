@@ -16,7 +16,7 @@ import org.robolectric.annotation.Config
 
 /** The touch home and the library grant the same one redial, and clear a stale pick alike. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36]) // Robolectric 4.16 has no SDK 37 image yet; the app targets 37
+@Config(sdk = [36]) // Robolectric has no SDK 37 image yet; the app targets 37
 class ProfileRetryTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val kid = ProfilePick("kid", "Kid")

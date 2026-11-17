@@ -218,7 +218,7 @@ impl LockStore {
         self.lock().locks.unreadable
     }
 
-    /// Wrong PINs for profile `id` in the last 15 minutes, over all devices.
+    /// Wrong PINs for profile `id` in the last [`pf_seats::locks::PIN_WINDOW`], over all devices.
     pub(crate) fn failures(&self, id: &str) -> usize {
         self.get(id).recent_wrong_pins(crate::clock::unix_secs())
     }

@@ -1,6 +1,7 @@
 // A fetch over `node:http` for a socket path: a Windows named pipe, which bun's `fetch({ unix })`
-// does not dial, or a unix socket. The host answers plain HTTP there, so there is nothing to pin,
-// and one connection carries one request, so a held event stream never queues the next call.
+// does not dial, or a unix socket. The host answers plain HTTP there, so there is nothing to pin.
+// The default agent opens a new connection whenever none is free, so a held event stream never
+// queues the next call.
 import * as http from "node:http";
 import { Readable } from "node:stream";
 

@@ -4,7 +4,7 @@
 // SAFETY comment that only restates the signature. Exit: delete unmarked
 // calls; do not wrap them.
 #![allow(unsafe_op_in_unsafe_fn)]
-// Compiled for every Linux build: `sampled_capture_modifiers` feeds the VAAPI
+// Compiled for every Linux build: `node_capture_modifiers` feeds the VAAPI
 // modifier offer even without `vulkan-encode`/`pyrowave`, which own the rest.
 #![cfg_attr(
     not(any(feature = "vulkan-encode", feature = "pyrowave")),
@@ -346,8 +346,8 @@ pub(crate) fn find_mem_preferring(
 }
 
 /// Memory type for a buffer the CPU reads back every frame (the encode bitstream), and whether
-/// it is coherent. Cached first: RADV lists write-combined GTT before cached GTT, and plain
-/// loads from write-combined memory run at a few hundred MB/s. A cached type without
+/// it is coherent. Cached first: RADV lists write-combined GTT before cached GTT, and CPU loads
+/// from write-combined memory bypass the cache and run slowly. A cached type without
 /// coherence needs `vkInvalidateMappedMemoryRanges` before each read.
 #[cfg_attr(not(feature = "vulkan-encode"), allow(dead_code))]
 pub(crate) fn find_readback_mem(
@@ -814,7 +814,7 @@ mod tests {
         mp.memory_types[4].property_flags = F::DEVICE_LOCAL | F::HOST_VISIBLE | F::HOST_COHERENT;
         mp.memory_types[5].property_flags = F::HOST_VISIBLE | F::HOST_COHERENT | F::HOST_CACHED;
         assert_eq!(find_readback_mem(&mp, 0b111111).unwrap(), (5, true));
-        // Without the cached type, today's write-combined pick.
+        // Without the cached type, the write-combined GTT type.
         assert_eq!(find_readback_mem(&mp, 0b011111).unwrap(), (2, true));
         // A cached type that is not coherent still wins, and says so.
         mp.memory_types[5].property_flags = F::HOST_VISIBLE | F::HOST_CACHED;

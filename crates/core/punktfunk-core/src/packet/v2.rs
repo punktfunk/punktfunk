@@ -1,16 +1,18 @@
-//! The `punktfunk/2` media packet header: 30 bytes in place of `punktfunk/1`'s 40 plus its
-//! 8-byte sequence prefix, with a stream id and a config epoch.
+//! The `punktfunk/2` media packet header: 30 bytes, with a stream id and a config epoch.
 //!
 //! `tag u8 ‖ seq u32` stay in the clear and are the AEAD's associated data; `epoch u8 ‖
 //! flags u16 ‖ frame u32 ‖ pts_us u32 ‖ block u16 ‖ base u32 ‖ shard u16 ‖ k u16 ‖ m u16 ‖
-//! pad u16` are sealed with the shard. All little-endian. The tag is `00rr ssss`: the two top
-//! bits are zero so the byte never reads as QUIC (RFC 9443), `rr` is reserved, `ssss` the stream.
+//! pad u16` are sealed with the shard, unless both ends run
+//! [`FEATURE_CLEAR_PLACEMENT`](crate::quic::v2::registry::FEATURE_CLEAR_PLACEMENT), which leaves
+//! the whole header clear as associated data. All little-endian. The tag is `00rr ssss`: the two
+//! top bits are zero so the byte never reads as QUIC (RFC 9443), `rr` is reserved, `ssss` the
+//! stream.
 //!
 //! The shard is the rest of the datagram, so every packet of a frame has one length and no
 //! field repeats it. No packet states the frame's size or block count: `base` places each
 //! block, and the block flagged [`V2_LAST_BLOCK`] closes the frame at `base + k` shards less
-//! `pad` bytes. The receiver reads every packet as `punktfunk/1`'s slice-stream form, so the
-//! firewall, pinning and tiling checks are the reviewed ones.
+//! `pad` bytes. The receiver reads every packet in the [`USER_FLAG_SLICE_STREAM`] form of
+//! [`PacketHeader`], so one set of firewall, pinning and tiling checks covers every shape.
 
 use super::*;
 
@@ -113,7 +115,7 @@ pub fn encode_v2(hdr: &PacketHeader, s: &V2Stamp) -> [u8; V2_HEADER_LEN] {
     b
 }
 
-/// One received v2 packet: its header in `punktfunk/1`'s slice-stream form, its epoch, its
+/// One received v2 packet: its header in the [`USER_FLAG_SLICE_STREAM`] form, its epoch, its
 /// stream and its shard. `None` on a tag or size this build does not accept; the receiver
 /// decides which streams it takes. `pts_ref_us` is the newest capture time seen, which unwraps
 /// the 32-bit field; the first packet seeds it.

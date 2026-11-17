@@ -259,15 +259,14 @@ pub fn disable_for_deactivated(
 /// yet its standby wake events (auto input scan, Instant-On HPD cycling) drive the same Windows
 /// reaction cascade. Selection stays allowlist-precise via
 /// [`crate::win_display::TargetInventory::external_physical`] — internal panels and
-/// indirect/virtual targets (ours or third-party) can never be picked, and `keep_target_ids`
+/// indirect/virtual targets (ours or third-party) can never be picked, and `keep`
 /// (the managed virtual set) is excluded belt-and-braces. Runs AFTER the topology action so the
 /// active flags it reads are the settled ones. Journals like [`disable_for_deactivated`]; the
 /// caller merges the returned ids into the same teardown list.
 /// `baseline_active` is the caller's PRE-MUTATION snapshot — the targets that were part of the
 /// desktop BEFORE this acquire touched the topology. It is what tells a genuine standby sink
 /// (inactive before us too) from an operator display the isolate itself just switched off: the
-/// post-isolate inventory alone cannot (immunity plan WP3a — the selector used to run after the
-/// Exclusive isolate and disable the operator's freshly-deactivated panel as a "sink").
+/// post-isolate inventory alone cannot (immunity plan WP3a).
 pub fn disable_connected_inactive(
     keep: &[crate::win_display::CcdTargetKey],
     baseline_active: &[crate::win_display::CcdTargetKey],

@@ -1,6 +1,5 @@
-# pf-vdisplay — the all-Rust UMDF IddCx virtual-display driver (M1 step-2 rewrite onto wdk-sys + the
-# owned pf-driver-proto ABI). Replaces the vendored-binding oracle at packaging/windows/vdisplay-driver/
-# (deleted once on-glass parity is reached, per design/windows-host-rewrite.md §14 STEP 8).
+# pf-vdisplay — the all-Rust UMDF IddCx virtual-display driver, on wdk-sys + the owned
+# pf-driver-proto ABI (design/windows-host-rewrite.md).
 [package]
 name = "pf-vdisplay"
 edition.workspace = true
@@ -21,8 +20,8 @@ wdk-build.workspace = true
 
 [features]
 default = []
-# Spike S5: the probe IOCTLs (`encode_probe.rs`) on top of the shipping backends. CI builds it so
-# the probe keeps compiling under the WDK toolchain.
+# The probe IOCTLs (`encode_probe.rs`) on top of the shipping backends. CI builds it so the
+# probe keeps compiling under the WDK toolchain.
 encode-probe = []
 
 [dependencies]

@@ -852,7 +852,8 @@ impl StreamState {
     }
 }
 
-/// The eight rebuild sites: each drains its ask and hands it to [`StreamState::rebuild`].
+/// Every rebuild site but the rate's ([`StreamState::on_bitrate_request`]): each drains its ask
+/// and hands it to [`StreamState::rebuild`].
 impl StreamState {
     /// Follow the latest session switch, the watcher's or the seat's: rebuild the backend in
     /// place, with the session's display request, the switch's launch and the cursor plan of the
@@ -2634,7 +2635,7 @@ pub(crate) mod tests {
         Some((n(0), n(1)))
     }
 
-    /// `row` run through today's functions: the control task's answer to the ask, then the
+    /// `row` run through the host's functions: the control task's answer to the ask, then the
     /// rebuild it plans and performs on the fake. Its `build`, `kept` and `told`, as the
     /// vector file spells them.
     fn vector_run(row: &serde_json::Value) -> serde_json::Value {

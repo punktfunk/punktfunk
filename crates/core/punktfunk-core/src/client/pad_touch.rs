@@ -22,7 +22,8 @@ const GAIN: [(f64, f64); 3] = [(1.5, 1080.0 / 1920.0), (0.8, 1.0), (0.8, 1.0)];
 /// Scroll distance ignores the stream mode, as the stick's does.
 const SCROLL_HEIGHT: f64 = 1080.0;
 
-/// Steam Controller 2 state reports (SDL `ETritonReportIDTypes`); `0x47` differs only past the pads.
+/// Steam Controller 2 state reports (SDL `ETritonReportIDTypes`). `0x47` (`TritonMTUNoQuat32TS_t`)
+/// puts a u16 trackpad timestamp at byte 18, so its pads sit 2 bytes later.
 const TRITON_STATES: [u8; 3] = [0x42, 0x45, 0x47];
 /// SDL `TritonButtons`: (touch, click) per pad.
 const TRITON_LPAD: (u32, u32) = (0x0200_0000, 0x0400_0000);

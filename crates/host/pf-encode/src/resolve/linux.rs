@@ -361,7 +361,7 @@ impl Resolved {
     /// encodes it as imported. AV1 is Vulkan Video's alone there, and neither has a pass to
     /// blend a pointer into, so a `cursor_blend` session captures RGB. NVENC's raw lane copies
     /// the two planes into its own slot. It blends a pointer into NV12 but not P010, so a P010
-    /// session (HDR, or gamescope's 10-bit SDR) needs no blend.
+    /// session (HDR, or gamescope's 10-bit SDR) that needs the blend captures RGB.
     pub fn native_nv12_ok(
         &self,
         codec: Codec,
@@ -486,8 +486,8 @@ impl Resolved {
         match self.backend() {
             LinuxBackend::Nvenc => false,
             LinuxBackend::AmdIntel => true,
-            // Preserved `_` fallthrough, not endorsed. Vulkan-on-NVIDIA is a known
-            // mismatch (EGL→CUDA for a dmabuf importer); software is latent (H.264).
+            // Follows `auto`, not endorsed. Vulkan-on-NVIDIA is a known mismatch
+            // (EGL→CUDA for a dmabuf importer); software is latent (H.264).
             LinuxBackend::Vulkan | LinuxBackend::Software => self.auto_is_vaapi(),
         }
     }
@@ -1228,7 +1228,7 @@ mod tests {
     }
 
     /// A pin advertises only what this build can open: no H.26x for a `vulkan` pin without
-    /// Vulkan Video, nothing for an `nvenc` pin without the direct SDK (sweep R5-04).
+    /// Vulkan Video, nothing for an `nvenc` pin without the direct SDK.
     #[test]
     fn a_pin_advertises_only_what_the_build_opens() {
         let codecs = punktfunk_core::quic::CODEC_H264
@@ -1275,7 +1275,7 @@ mod tests {
     }
 
     /// The Encoder row keys the resolution: a 4:4:4 verdict probed under `nvenc` never answers
-    /// for `vaapi` on the same GPU (sweep R5-01).
+    /// for `vaapi` on the same GPU.
     #[test]
     fn an_encoder_row_flip_resolves_afresh() {
         let cache = Mutex::new(HashMap::new());
@@ -1289,7 +1289,7 @@ mod tests {
     }
 
     /// The Vulkan row decides what AMD/Intel opens: with it HEVC 10-bit and AV1 native NV12
-    /// come from Vulkan Video, without it libva answers alone (10-02).
+    /// come from Vulkan Video, without it libva answers alone.
     #[test]
     fn the_vulkan_row_decides_the_amd_answers() {
         let cache = Mutex::new(HashMap::new());

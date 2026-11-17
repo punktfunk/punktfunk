@@ -308,7 +308,7 @@ export const HostSettingsView: FC<{
 							onValueChange={pick}
 							className="flex min-w-0 flex-col gap-card"
 						>
-							{/* Eight groups outgrow a phone: the strip scrolls, the page does not. */}
+							{/* The groups outgrow a phone: the strip scrolls, the page does not. */}
 							<div
 								ref={strip}
 								className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0"

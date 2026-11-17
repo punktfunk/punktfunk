@@ -489,9 +489,9 @@ fn local_origin(origin: &str) -> bool {
 /// Is this page allowed to open a session?
 ///
 /// WebTransport is **not** subject to CORS, so without this any page the user happens to have
-/// open can reach the plane — the browser will not stop it. An empty allowlist means "anything",
-/// which is what a host with no configured origins has to mean until the console can offer the
-/// choice; the log line below is what tells an operator which value to set.
+/// open can reach the plane — the browser will not stop it. An empty allowlist (no
+/// `webtransport_origins` set) means "anything"; the log line below is what tells an operator
+/// which value to set.
 ///
 /// A session with no `Origin` passes whatever the list says. A browser stamps the header on
 /// every page's dial and no page can strip it, so the list still stops every hostile page; what
@@ -707,9 +707,6 @@ async fn echo(connection: wtransport::Connection) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// The two-week ceiling is a hard refusal in the browser, and a certificate that misses it
-    /// fails at connect time with nothing useful to read. Check what we publish, and that the hash
-    /// is the 64 lowercase hex characters `serverCertificateHashes` parses.
     /// The box's Seat defaults decide a seat's plane over its own switch; a seat host the box
     /// wrote none for keeps its own.
     #[test]
@@ -738,6 +735,9 @@ mod tests {
         assert_eq!(wanted_origins(None, &own(false)), None);
     }
 
+    /// The two-week ceiling is a hard refusal in the browser, and a certificate that misses it
+    /// fails at connect time with nothing useful to read. Check what we publish, and that the hash
+    /// is the 64 lowercase hex characters `serverCertificateHashes` parses.
     #[test]
     fn minted_identity_is_short_lived_and_publishes_a_usable_hash() {
         let before = SystemTime::now()

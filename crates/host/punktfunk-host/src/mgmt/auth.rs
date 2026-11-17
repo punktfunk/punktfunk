@@ -1,13 +1,13 @@
 //! Auth gate for `/api/v1`: a paired device (from anywhere) or a bearer token (loopback peers
 //! only).
 //!
-//! Three lanes:
+//! Four lanes:
 //! - **paired device** — [`cert_may_access`] (status reads, a few writes about its own play, and
 //!   a locked profile's own view as its person, `mgmt::person`). Proven either by a client
 //!   certificate over mTLS, or — for a browser, which has none — by a device token from
 //!   [`super::device_auth`]. Same authority either way, because it is the same pairing.
-//! - **plugin token** (bearer, loopback) — [`plugin_may_access`]: admin minus hooks, pairing
-//!   admin, host logs, store, and update.
+//! - **plugin token** (bearer, loopback) — [`plugin_may_access`]: an allowlist that never holds
+//!   hooks, pairing admin, host logs, store, or update.
 //! - **admin token** (bearer, loopback) — everything.
 //! - **person** — a session its seat host opened from a ticket only the account could sign
 //!   (`mgmt::person_session`): profile scope on that seat host, and that profile's own view on
@@ -27,13 +27,6 @@ use punktfunk_core::mgmt_routes::path_matches;
 use sha2::{Digest, Sha256};
 use std::marker::PhantomData;
 
-/// Which credential authorized this request. [`require_auth`] stamps it on every forwarded
-/// request; handlers extract `Extension<AuthLane>`. A missing extension is a 500, not a
-/// default — a router that forgot the middleware must fail closed.
-///
-/// [`plugin_may_access`] answers route reachability; this answers field authority. Some
-/// payloads carry operator-privileged fields (`prep`, `launch.kind == "command"`) on routes
-/// a plugin may otherwise call. See [`crate::library::reject_privileged_fields`].
 /// The paired device behind this request, stamped by [`require_auth`] on the `Cert` lane.
 ///
 /// One extension for both proofs, because everything downstream — grant masks, expiry, the
@@ -48,7 +41,7 @@ pub(crate) struct PairedDevice(pub String);
 /// ask "whose is this", not "how did it prove it".
 ///
 /// Absent on the shared runner token — a loose script has no plugin identity — and the id-scoped
-/// routes then fall back to the older, unowned behaviour.
+/// routes then let it write any id ([`OwnedId`]).
 #[derive(Clone, Debug)]
 pub(crate) struct PluginIdentity(pub String);
 
@@ -116,6 +109,13 @@ impl<S: Send + Sync, R: IdRule> FromRequestParts<S> for OwnedId<R> {
     }
 }
 
+/// Which credential authorized this request. [`require_auth`] stamps it on every forwarded
+/// request; handlers extract `Extension<AuthLane>`. A missing extension is a 500, not a
+/// default — a router that forgot the middleware must fail closed.
+///
+/// [`plugin_may_access`] answers route reachability; this answers field authority. Some
+/// payloads carry operator-privileged fields (`prep`, `launch.kind == "command"`) on routes
+/// a plugin may otherwise call. See [`crate::library::privileged_field`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthLane {
     /// Operator admin bearer (loopback): everything, including privileged fields.
@@ -145,9 +145,9 @@ impl AuthLane {
 
     /// Operator's own lane (the console), as opposed to a paired client or a plugin.
     ///
-    /// Same arm as [`Self::may_set_privileged_fields`] today, deliberately a separate
-    /// question: command execution vs. "is this the person curating the library". A
-    /// read-only operator-only view (hidden titles) is not a privilege escalation;
+    /// Narrower than [`Self::may_set_privileged_fields`], which also admits a seat host's own
+    /// person, and a separate question: command execution vs. "is this the person curating the
+    /// library". A read-only operator-only view (hidden titles) is not a privilege escalation;
     /// collapsing the two would leave whichever changes first answering for the other.
     pub(crate) fn is_operator(self) -> bool {
         matches!(self, AuthLane::Admin)
@@ -525,10 +525,10 @@ pub(crate) fn bearer_of(headers: &axum::http::HeaderMap) -> Option<&str> {
 /// Library writes are in because a provider reconciles its own entries; `prep` and
 /// `launch.kind == "command"` are refused in the handlers via [`AuthLane`].
 ///
-/// Route reachability is not plugin identity: the runner is one process on one token, so this
-/// gate cannot tell which plugin is calling and any holder may write another's registration.
-/// What that no longer buys is a command — an `exec` entry resolves against the manifest of the
-/// package that declared the provider id (`plugins::manifest`), not against the caller.
+/// Route reachability is not plugin identity: this gate cannot tell which plugin is calling, and
+/// the shared runner token may write another's registration ([`OwnedId`]). That buys no command
+/// — an `exec` entry resolves against the manifest of the package that declared the provider id
+/// (`plugins::manifest`), not against the caller.
 pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
     // (method, path); `{}` is exactly one segment. Grouped as the route table is.
     const ALLOWED: &[(&Method, &str)] = &[

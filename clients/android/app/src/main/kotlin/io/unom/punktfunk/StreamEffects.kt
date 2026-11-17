@@ -39,8 +39,8 @@ import kotlinx.coroutines.withContext
  * The start-of-stream banner's two moments: [up] composes the pill at all, [alpha] runs it down
  * over the last 600 ms. A stream takes the whole screen and answers to none of the device's usual
  * gestures, so the banner says once how to get back out. The desktop console draws the same pill
- * for the same reason (`pf-console-ui/src/skia_overlay.rs`, BANNER_S = 6 s with a
- * BANNER_FADE_S = 0.6 s tail).
+ * for the same reason (`pf-console-ui/src/skia_overlay.rs`, `BANNER_S` with a `BANNER_FADE_S`
+ * tail).
  */
 internal class StartBanner(up: State<Boolean>, alpha: State<Float>) {
     val up by up
@@ -86,10 +86,11 @@ internal fun rememberDecodedSize(handle: Long): State<IntArray?> {
 }
 
 /**
- * The virtual controller's wire pad (design §4). While [shown] it holds one pad on the router, so
- * the host sees one controller arrive and, on hide, one leave (§9). Never toggled by the ring's own
- * open and close (§8 trap 4). Its kind follows the Controller type setting: Automatic is an Xbox
- * 360 pad, or a DualSense when this phone's gyro is to speak for it — a 360 has no motion plane.
+ * The virtual controller's wire pad (design/touch-client-overlay.md §4). While [shown] it holds
+ * one pad on the router, so the host sees one controller arrive and, on hide, one leave (§9).
+ * Never toggled by the ring's own open and close (§8 trap 4). Its kind follows the Controller type
+ * setting: Automatic is an Xbox 360 pad, or a DualSense when this phone's gyro is to speak for it
+ * — a 360 has no motion plane.
  */
 @Composable
 internal fun rememberVirtualPad(
@@ -172,8 +173,9 @@ internal fun rememberStatsLines(
  * preset's [hostScreen] was not applied ([DisplayTargets.startLine]); a device decoder that stops
  * answering is said once too. A host that
  * sleeps, crashes or drops off the network stops answering the QUIC keep-alive, and the
- * connection idle-times out (~8 s). The moment the session is dead this drops
- * back to the menu, so the user can wake the host instead of being stranded on a frozen picture.
+ * connection idle-times out (core's `DEFAULT_IDLE_TIMEOUT`). The moment the session is dead this
+ * drops back to the menu, so the user can wake the host instead of being stranded on a frozen
+ * picture.
  * The keep-alive holds a merely quiet connection open, so this fires only on a dead peer. Keyed on
  * [handle], so it stops the moment the screen goes (the handle is freed later, in onDispose).
  */
@@ -362,9 +364,9 @@ internal fun KeepAliveEffects(
         if (!away) StreamKeepAliveService.update(context, note(null))
     }
 
-    // The notification goes up when the session starts: an app already in the background may
-    // not start a foreground service, and without it the OS freezes the process, audio and QUIC
-    // traffic with it. Its End action is the ring's, a deliberate quit.
+    // The notification goes up when the session starts: from Android 12 an app already in the
+    // background may not start a foreground service, and without it the OS freezes the process,
+    // audio and QUIC traffic with it. Its End action is the ring's, a deliberate quit.
     DisposableEffect(handle, keepAlive) {
         if (keepAlive) {
             StreamKeepAliveService.onEnd = { endAway(true) }

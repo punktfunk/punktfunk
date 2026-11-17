@@ -76,8 +76,8 @@ impl VideoStats {
         out
     }
 
-    /// Whether a codec call has run for at least `after`. A vendor codec service that hangs
-    /// never returns the call, and the decoder is gone until the device restarts.
+    /// Whether a codec call has run for at least `after`. A hung vendor codec service can hold the
+    /// call, and every later create, until the device restarts.
     pub fn codec_stuck(&self, after: Duration) -> bool {
         crate::session::lock_recover(&self.codec_call).is_some_and(|t| t.elapsed() >= after)
     }

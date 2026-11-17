@@ -1,5 +1,5 @@
 //! Who this process is, and the two relaunches a SYSTEM parent can make on `winsta0\default`.
-//! `as-user` is the launch the host will give its capture worker (`WTSQueryUserToken` → primary
+//! `as-user` is the launch the host gives its capture worker (`WTSQueryUserToken` → primary
 //! token → `CreateProcessAsUserW`). `as-system` is the launch the service gives the host itself
 //! (its own token, moved into the console session): the control that says whether WGC still
 //! refuses SYSTEM. The child's output goes to a file; such a process has no console.

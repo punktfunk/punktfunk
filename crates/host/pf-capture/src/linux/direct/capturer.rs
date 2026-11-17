@@ -15,10 +15,10 @@ use std::time::Duration;
 /// Direct `ext-image-copy-capture-v1` capturer: the compositor fills buffers we
 /// allocate, and we re-arm the instant one is ready.
 ///
-/// Shares the portal's one-deep mailbox and wakeup edge, so the encode loop's
-/// arrival wait is unchanged. What it does not share is any pacing: there is no
-/// portal round trip and no PipeWire graph, so the rate is the compositor's
-/// repaint rate (`design/linux-consumer-driven-capture.md` §8).
+/// Hands frames over through a one-deep mailbox ([`FrameSlot`]) and a wakeup
+/// edge. It has no pacing: there is no portal round trip and no PipeWire graph,
+/// so the rate is the compositor's repaint rate
+/// (`design/linux-consumer-driven-capture.md` §8).
 pub struct WlCapturer {
     slot: FrameSlot,
     wake: Receiver<()>,

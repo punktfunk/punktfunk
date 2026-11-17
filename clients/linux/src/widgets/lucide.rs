@@ -3,11 +3,12 @@
 //! `assets/lucide/*.svg` by `scripts/gen-lucide-assets.sh`.
 //!
 //! GTK parses the path with `gsk::Path` and cairo strokes it at Lucide's native width 2 with
-//! round caps and joins, which is exactly what Skia does on the console, so one mark cannot
-//! come out differently on the two shells. The colour is the widget's own CSS `color`, which
-//! GTK inherits down the tree: an icon in an ordinary row follows the theme's foreground and
-//! an icon on a ring disc comes out white, because `.pf-ring-disc` says so — no per-site
-//! colour and no light/dark variants to keep in step.
+//! round caps and joins. The console's `draw_icon` strokes the same table at the thinner of
+//! that and its `GLYPH_STROKE`, so a small mark comes out the same on the two shells. The
+//! colour is the widget's own CSS `color`, which GTK inherits down the tree: an icon in an
+//! ordinary row follows the theme's foreground and an icon on a ring disc comes out white,
+//! because `.pf-ring-disc` says so — no per-site colour and no light/dark variants to keep in
+//! step.
 //!
 //! Nothing is baked and nothing is registered: no gresource entry, no icon-theme lookup, no
 //! new dependency. Adding a mark is dropping one SVG in `assets/lucide` and re-running the
@@ -76,9 +77,9 @@ pub fn button(name: &str) -> gtk::Button {
 
 #[cfg(test)]
 mod tests {
-    /// Every mark this shell asks for by name really ships. A typo would otherwise be an
-    /// invisible icon on exactly one row, which is the kind of thing nobody notices for a
-    /// release; the shared table's own test proves the path data itself draws.
+    /// Each mark in this list ships. A typo would otherwise be an invisible icon on exactly
+    /// one row, which is the kind of thing nobody notices for a release; the shared table's
+    /// own test proves the path data itself draws.
     #[test]
     fn every_mark_the_shell_names_ships() {
         for name in [

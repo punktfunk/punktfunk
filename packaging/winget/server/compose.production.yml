@@ -12,7 +12,7 @@
 # Stock bun image + bind-mounted sources, mirroring the flatpak server's stock-caddy approach: no
 # image to build, publish or pull, so a code change deploys by scp + `docker compose up -d`.
 #
-# ./data/data.json is NOT shipped by deploy-services.yml — windows-host.yml rsyncs it on each stable
+# ./data/data.json is NOT shipped by deploy-services.yml — windows-host.yml copies it on each stable
 # tag (the same split the flatpak repo uses: config deploys separately from content). server.mjs
 # reloads it on mtime change, so publishing a release needs no restart here.
 name: punktfunk-winget-prod
@@ -32,8 +32,7 @@ services:
       - ./handler.mjs:/app/handler.mjs:ro
       - ./data:/app/data:ro
     healthcheck:
-      # Fails while the catalogue is missing or unparseable, which is otherwise invisible — a broken
-      # source answers requests fine and just reports "no package found" to the client.
+      # Fails while the catalogue is missing or unparseable: server.mjs answers /healthz with 503.
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3240/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 60s
       timeout: 5s

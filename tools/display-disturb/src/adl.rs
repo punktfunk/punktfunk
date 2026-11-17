@@ -1,5 +1,5 @@
-//! `adl-emul` — the AMD ADL EDID-emulation probe (immunity design doc §3's "probe once, log rc",
-//! promoted to a field A/B after the third RX 9070 XT standby-sink case).
+//! `adl-emul` — the AMD ADL EDID-emulation probe (design: punktfunk-planning
+//! `design/vdisplay-disturbance-immunity.md` §9 T1).
 //!
 //! The implementation lives in `pf_win_display::adl_emul` — one FFI surface shared with the
 //! host's `edid_lock` display-policy axis, so the probe a reporter runs and the toggle the

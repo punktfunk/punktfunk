@@ -2,15 +2,15 @@
 //! (`ashpd`) and for a virtual output's node, plus its first-frame timeout verdicts.
 //!
 //! Two dedicated threads because both stacks are thread-tied:
-//! - **portal** — async ashpd handshake on a multi-thread tokio runtime
-//!   (control plane, never per-frame), then parks on a oneshot so the
-//!   `proxy` and its zbus connection stay alive. Ashpd's `Session` has
-//!   no `Drop`; the compositor tears the cast down when that connection
-//!   drops.
+//! - **portal** — async ashpd handshake on the shared multi-thread tokio runtime
+//!   (control plane, never per-frame), then parks on a oneshot. Ashpd's `Session`
+//!   has no `Drop`, so once the oneshot fires the thread ends the cast with
+//!   `Session.Close`.
 //! - **pipewire** — owns the `!Send` MainLoop/Stream and pumps frames.
 //!
-//! [`PortalCapturer`]'s `Drop` quits and joins the pipewire thread; [`PortalSession`]'s
-//! `Drop` fires the portal oneshot and waits bounded so the zbus drop ends the ScreenCast.
+//! [`PortalCapturer`]'s `Drop` lets go of the stream; the last capturer to let go quits and
+//! joins the pipewire thread ([`StreamCore`]'s drop). [`PortalSession`]'s `Drop` fires the
+//! portal oneshot and waits bounded for that Close.
 
 use super::config::StreamConfig;
 use super::consume::FenceWaitStats;
@@ -632,7 +632,7 @@ impl crate::Feed for PortalCapturer {
             if let Ok(mut queue) = self.queue.lock() {
                 queue.clear();
             }
-            // Else a leftover `Instant` expires the 1500 ms grace on the first
+            // Else a leftover `Instant` expires `STALL_GRACE` on the first
             // `try_latest` of a stream that has been running for microseconds.
             self.stall_since = None;
         }
@@ -914,8 +914,8 @@ impl PortalCapturer {
                         self.node_id
                     )),
                     TimeoutOffer::Hdr => {
-                        // Latch SDR for this `HdrSource` only — a process-wide
-                        // flag let either Linux HDR source disable the other.
+                        // Latch SDR for this `HdrSource` only, so one Linux HDR
+                        // source's failure never disables the other.
                         if convicted {
                             crate::note_hdr_capture_failed(self.hdr_source);
                         }

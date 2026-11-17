@@ -16,9 +16,9 @@
 #
 # The host tile is the console's coverless poster baked for Moonlight, which decodes raster only.
 #
-# The web console, the Android client and the in-session console UI transcribe the master's
-# path data inline instead — those are hand-kept, and this script prints them at the end so a
-# new token can be pasted straight in.
+# The web console, the Android client and the in-session console UI inline the master's path
+# data instead; scripts/gen_launcher_icon_tables.py generates those three registries, and this
+# script runs it at the end.
 #
 # Idempotent. Usage: bash scripts/gen-launcher-icons.sh [token ...]   (default: every master)
 set -euo pipefail
@@ -30,9 +30,9 @@ GTK=clients/linux/data/icons/scalable/actions
 WIN=clients/windows/assets/launchers
 APPLE=clients/apple/Sources/PunktfunkKit/Resources/LauncherIcons.xcassets
 
-# Same mid-grey as the OS marks, for the same reason: the Windows shell has no vector element
-# and no theme-aware tint, so one colour has to stay legible on both the light and dark WinUI
-# theme. Taller than the OS marks (32) because this one fills a poster tile, not a status row.
+# Mid-grey: the Windows shell shows these in an `Image`, which takes no theme tint, so one colour
+# has to stay legible on both the light and dark WinUI theme. The OS marks bake white instead
+# (see gen-os-icons.sh). Taller than they are: this one fills a poster tile, not an avatar.
 WIN_GREY='#8A8F98'
 WIN_HEIGHT=128
 
@@ -115,9 +115,9 @@ host_tile assets/lucide/monitor.svg "$HOST_DESKTOP_FACE" 34 "$HOST/monitor.png"
 
 echo
 log "Inline registries (web console, Android, in-session console UI)"
-# Generated outright rather than printed for pasting, unlike gen-os-icons.sh: three clients x
-# seven paths of up to 3 kB is a transcription error waiting to happen, and a mangled character
-# is a silently wrong logo rather than a build failure.
+# Generated outright rather than printed for pasting: three clients x every master's path
+# (up to 3 kB each) is a transcription error waiting to happen, and a mangled character is a
+# silently wrong logo rather than a build failure.
 python3 scripts/gen_launcher_icon_tables.py
 
 # The Rust registry goes through rustfmt: `cargo fmt --all --check` is a CI gate, and a

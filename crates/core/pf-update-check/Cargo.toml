@@ -39,7 +39,8 @@ aws-lc-rs = { workspace = true, optional = true }
 # `simd-unsafe` engine stays off, so a currency bump doesn't quietly add unsafe SIMD to the tree.
 base64 = { version = "0.23", default-features = false, features = ["std"], optional = true }
 # Small, sync, bundles webpki roots — no system cert store dependency, which matters on the
-# Deck (Decky's embedded Python has no usable roots either; see clients/decky/main.py).
+# Deck (Decky's embedded Python has no usable roots either; see
+# clients/decky/py_modules/pf_decky/update.py).
 ureq = { workspace = true, optional = true, features = ["gzip"] }
 
 [dev-dependencies]

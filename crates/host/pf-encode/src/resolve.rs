@@ -455,7 +455,7 @@ pub enum WindowsBackend {
     Software,
 }
 
-/// PCI vendor a Windows hardware backend can open on (`None` for software).
+/// PCI vendor a Windows hardware backend can open on (`None` for software and Media Foundation).
 /// Capture, virtual display, and encoder share one adapter.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn windows_backend_vendor_id(backend: WindowsBackend) -> Option<u32> {

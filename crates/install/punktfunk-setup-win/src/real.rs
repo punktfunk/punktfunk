@@ -1,4 +1,4 @@
-//! The real box behind the executor (WP3.1): the extracted tree as `PayloadSource`, and the
+//! The real box behind the executor: the extracted tree as `PayloadSource`, and the
 //! seams a run is built on. `Seams::Demo` is the sandboxed fake set every preset walks;
 //! `Seams::Real` probes and mutates this machine — its `root` is the extracted payload
 //! (`None` only for the silent `--dry-run`, which deploys nothing).

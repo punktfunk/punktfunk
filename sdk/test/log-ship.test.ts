@@ -86,7 +86,7 @@ describe("parsing a formatted line", () => {
 	});
 
 	test("an explicit level in the line beats the console method", () => {
-		// plugin-kit renders Effect's level verbatim — "WARNING", not "WARN". The host coerces it.
+		// The shipper keeps the line's spelling ("WARNING"); the host maps it to WARN.
 		const [line] = toLines("log", [
 			"2026-08-03T10:11:12.345Z [virtualhere] WARNING: vhclient failed (ETIMEDOUT)",
 		]);
@@ -186,8 +186,7 @@ describe("shipping", () => {
 
 	test("a line logged WHILE a POST is in flight is not lost", async () => {
 		// A plugin logging during the few ms of a POST is the normal case under load, not an edge
-		// one. An earlier version held a `shipping` flag across the whole `await fetch` and dropped
-		// everything enqueued in that window — silently, which is the worst way to lose a log line.
+		// one. `shipping` guards flush re-entry only; it must never gate `enqueue`.
 		let release: (() => void) | undefined;
 		const held = new Promise<void>((r) => {
 			release = r;
@@ -216,7 +215,7 @@ describe("shipping", () => {
 			console.log("2026-08-03T10:11:12.345Z [x] before");
 			const inFlight = shipper.flush();
 			await received;
-			// The POST is open right now; this is the line that used to vanish.
+			// The POST is open right now; this line must still ship.
 			console.log("2026-08-03T10:11:12.345Z [x] during");
 			release?.();
 			await inFlight;
@@ -301,7 +300,7 @@ describe("shipping", () => {
 		const host = mockHost();
 		stopHost = host.stop;
 		await withShipper(host.url, async (shipper) => {
-			// Overrun the 1000-line cap while the shipper has had no chance to drain.
+			// Overrun QUEUE_LIMIT while the shipper has had no chance to drain.
 			for (let i = 0; i < 1_200; i++) {
 				console.log(`2026-08-03T10:11:12.345Z [x] line ${i}`);
 			}

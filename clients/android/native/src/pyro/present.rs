@@ -1,5 +1,6 @@
-//! Swapchain + planar CSC present for the PyroWave lane: the decoder's three Y′CbCr plane
-//! views sampled into the `SurfaceView`'s own Vulkan swapchain image.
+//! Planar CSC present for the PyroWave lane: the decoder's three Y′CbCr plane views sampled
+//! into the `SurfaceView`'s own Vulkan swapchain image, or into an `ASurfaceControl` buffer
+//! ([`super::asc`]).
 //!
 //! The shader pair is the desktop presenter's, byte for byte
 //! (`pf_client_video::video_csc_spv`) — a second copy of the colour maths is a second place

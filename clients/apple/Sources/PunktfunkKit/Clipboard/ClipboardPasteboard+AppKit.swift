@@ -13,8 +13,8 @@ typealias SystemPasteboard = AppKitPasteboard
 final class AppKitPasteboard: ClipboardPasteboard {
     private let pb = NSPasteboard.general
     private var activationObserver: NSObjectProtocol?
-    /// The provider backing the offer currently on the pasteboard. AppKit's own reference to it is
-    /// not something to rely on: nothing crosses if it is collected before the user pastes.
+    /// The provider backing the offer currently on the pasteboard. AppKit also holds it until the
+    /// promise is fulfilled or the pasteboard changes owner (macOS 27).
     private var provider: BlockingOfferProvider?
 
     var changeCount: Int { pb.changeCount }

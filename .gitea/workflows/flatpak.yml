@@ -22,7 +22,7 @@ name: flatpak
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -60,8 +60,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'scripts/ci/pf-version.sh'
-      # Both halves of this job's correctness, not of the bundle's content: a change to either
-      # can only be proven by a real run, and there is no other trigger that would give it one.
+      # This job's own correctness, not the bundle's content: a change to any of these can only
+      # be proven by a real run, and there is no other trigger that would give it one.
       - '.gitea/workflows/flatpak.yml'
       - 'scripts/ci/flatpak-deps-present.sh'
       - 'scripts/ci/flatpak-legacy-refs.sh'
@@ -103,74 +103,44 @@ jobs:
     continue-on-error: ${{ matrix.arch == 'aarch64' }}
     timeout-minutes: 120
     container:
-      # ci/flatpak-ci.Dockerfile — Fedora 43 with flatpak + flatpak-builder + ostree + node,
+      # ci/flatpak-ci.Dockerfile — a Fedora image with flatpak + flatpak-builder + ostree + node,
       # and the manifest's Flathub runtime set already installed into /root/.local/share/flatpak.
-      # MEASURED on run 18855: the two dnf steps this replaces cost 303 s and the actions/cache
-      # restore of those runtimes another 168 s, on a job whose actual compile is ~6 min.
       #
       # ⚠ BOOTSTRAP (same rule as every other LAN builder — see docker.yml's header): the
-      # registry must already hold :latest. The commit that introduced this image also touches
-      # this file, so both workflows fire together on that one merge and this job can lose the
-      # race to docker.yml's push. That first run fails on the image pull; re-run it once
-      # docker.yml is green. Nothing self-heals it here — a `dnf install` fallback would only
-      # paper over a stale image, and the container never starts to run one anyway.
+      # registry must already hold :latest. A run that starts before docker.yml has pushed it
+      # fails on the image pull; re-run it once docker.yml is green. Nothing self-heals it
+      # here — a `dnf install` fallback would only paper over a stale image, and the container
+      # never starts to run one anyway.
       #
       # --privileged is required for bubblewrap inside the Docker executor (see header).
       #
-      # --network host is what finally fixed the years-long "Could not resolve
-      # hostname" on every flathub fetch. MEASURED 2026-07-30 on home-runner-2, all
-      # in ONE container: `getent hosts dl.flathub.org` resolved, `curl` got HTTP
-      # 200 (both auto and -4), and flatpak still failed error [6] — so it was never
-      # DNS config, the resolver, the docker version, or the per-job network. It is
-      # ostree's own resolver refusing to work through Docker's embedded 127.0.0.11
-      # (proven: rewriting resolv.conf to a real nameserver did NOT help, and the
-      # default bridge failed too, while the host netns — no embedded resolver in the
-      # path at all — works every time). Host networking also means this job no
-      # longer needs the nsswitch surgery below to be lucky.
+      # --network host: in a bridge network flatpak reports "Could not resolve hostname" while
+      # getent and curl resolve in the same container. In the host netns flatpak resolves.
       image: ${{ matrix.image }}
       options: --privileged --network host
     steps:
-      # DNS fix — MUST run before any network step. fedora:43's nsswitch.conf is
-      # `hosts: files myhostname resolve [!UNAVAIL=return] dns`: the `resolve`
-      # module is nss-resolve (systemd-resolved), which isn't running in a CI
-      # container. glibc getaddrinfo (git, curl, dnf) mostly falls through to the
-      # `dns` module -> Docker's embedded 127.0.0.11 -> works. flatpak/ostree's
-      # resolver does NOT fall through: the absent-daemon socket connect trips
-      # `[!UNAVAIL=return]` and it reports "[6] Could not resolve hostname". This
-      # was masked as an intermittent "busy runner drops DNS" and papered over
-      # with retry.sh — but it's deterministic on a runner where the resolve
-      # module tips that way (surfaced when jobs began landing on home-runner-2).
-      # Drop the `resolve` entry so host lookups use plain `dns`. The image already
-      # ships it fixed (and, unlike this job, applies the sed AFTER its last dnf — the
-      # whack-a-mole that needed a second copy in the old Tooling step, because a systemd
-      # upgrade's authselect trigger regenerates the file). Kept as a cheap idempotent
-      # guard for a :latest that lags a ci/ change.
+      # DNS guard. fedora:43's nsswitch.conf lists nss-resolve (`resolve [!UNAVAIL=return]`)
+      # ahead of `dns`, and no systemd-resolved runs in a CI container, so drop it. The image
+      # bakes the same edit after its last dnf (a systemd upgrade's authselect trigger regenerates
+      # the file); this guards a :latest that lags a ci/ change.
       - name: Fix container DNS (drop nss-resolve — baked, this is a guard)
         run: |
           sed -i 's/resolve \[!UNAVAIL=return\] //' /etc/nsswitch.conf
-          # History: this step used to ALSO force glibc onto TCP DNS (`options use-vc`) because
-          # the runner fleet's Docker embedded resolver dropped UDP lookups under parallel-job
-          # load (investigated 2026-07-11; v0.15.0/v0.16.0 each burned retry.sh's whole budget).
-          # That root cause is now fixed at the infra level (2026-07-22): the runner host runs a
-          # local dnsmasq cache on the docker bridge and daemon.json points every job container
-          # at it, so lookups terminate on-box instead of crossing the saturated uplink — the
-          # UDP path is reliable again. The TCP path through the same chain proved FLAKY under
-          # fleet concurrency (flatpak remote-add failed 10/10 with instant NXDOMAIN while dnf
-          # in the same container resolved fine), so `use-vc` flipped from mitigation to sole
-          # cause of this leg's failures — removed. retry.sh (10×) stays as the backstop for
-          # genuine upstream blips.
+          # Do not force TCP DNS (`options use-vc`): the TCP path through the runner's resolver
+          # chain is flaky under fleet concurrency. retry.sh (10x) is the backstop for upstream
+          # blips.
           cat /etc/resolv.conf || true
 
-      # node comes from the image now (act_runner execs a JS action with the CONTAINER's
+      # node comes from the image (act_runner execs a JS action with the CONTAINER's
       # node and injects none of its own), so checkout needs no install step ahead of it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Tooling (baked — assert, don't install)
         run: |
-          # A GUARD, not an install. Everything below used to be dnf'd here (303 s/run with the
-          # node step); it now lives in ci/flatpak-ci.Dockerfile. If :latest ever lags a change to
-          # that file the fix is to let docker.yml republish it — dnf-ing on top of a stale image
-          # would hide the drift and cost the time this image exists to save. Fail loudly instead.
+          # A GUARD, not an install. The tools live in ci/flatpak-ci.Dockerfile. If :latest ever
+          # lags a change to that file the fix is to let docker.yml republish it — dnf-ing on top
+          # of a stale image would hide the drift and cost the time this image exists to save.
+          # Fail loudly instead.
           for t in flatpak flatpak-builder ostree git python3 gpg rsync ssh curl jq node; do
             command -v "$t" >/dev/null \
               || { echo "::error::$t is missing from punktfunk-flatpak-ci — docker.yml must republish :latest"; exit 1; }
@@ -186,29 +156,17 @@ jobs:
           # The remote is baked as well; this stays because it is a no-op when present and the
           # one network call cheap enough to keep as a guard.
           #
-          # ROOT CAUSE (confirmed 2026-07-11 by watching a live run on home-runner-1): this is
-          # NOT a deterministic nsswitch/DNS-config bug. gitea-runner-fleet on home-runner-1 is
-          # a SHARED, resource-capped fleet (3 replicas, --cpus 5 --memory 7g each, on a 16c/24G
-          # box) serving punktfunk AND several other orgs' repos (chatwoot, website, cms, data,
-          # infra, tempblade, played...). A push to punktfunk's main fans out ~8 workflows at
-          # once, and this runner box's Docker embedded DNS resolver (127.0.0.11) genuinely
-          # drops UDP lookups under that concurrent load — exactly what retry.sh's own header
-          # comment already documented. Reproduced: manually dispatching this job when the box
-          # was idle (1 container running) succeeded immediately, with or without the sed above.
-          # 5 attempts (~100s total) isn't always enough to outlast a synchronized multi-org
-          # burst, so bump the bootstrap fetch's budget — never fail the job on a single-shot
+          # 10 attempts, not 5: this runner fleet is shared and load-sensitive, and 5 (~100s) is
+          # not always enough to outlast a synchronized burst. Never fail the job on a single-shot
           # fetch. Same treatment for every network command below.
           bash scripts/ci/retry.sh 10 flatpak remote-add --user --if-not-exists flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
           git config --global --add safe.directory "$PWD"
 
-      # This job was the fleet's single heaviest network consumer: every run re-downloaded
-      # the GNOME runtime + SDK + llvm/rust extensions (multi-GB from Flathub) and every
-      # crate source. The runtimes were cached here from ~/.local/share/flatpak until
-      # 2026-08-17 and are now IMAGE LAYERS instead (ci/flatpak-ci.Dockerfile). That cache
-      # is not merely redundant now, it is harmful: restoring it would spend 168 s
-      # overwriting the baked installation with an older copy of itself. The crate sources
-      # stay cached — they are keyed on Cargo.lock, which no image can pin.
+      # Only flatpak-builder state is cached. The GNOME runtime + SDK + llvm/rust extensions are
+      # IMAGE LAYERS (ci/flatpak-ci.Dockerfile): restoring a cache of them would overwrite the
+      # baked installation with an older copy of itself. Crate sources are cached because they
+      # are keyed on Cargo.lock, which no image can pin.
       - name: Cache flatpak-builder state (crate sources, ccache)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -311,39 +269,31 @@ jobs:
           set -euo pipefail
           # All of the job's heavy network I/O happens HERE, retried, so a dropped DNS lookup
           # or TCP dial costs a backoff-retry instead of the whole (long) compile:
-          #   1) the Flathub deps the manifest declares — the GNOME 50 runtime/SDK + the
-          #      rust-stable (//25.08, rustc 1.96) and llvm20 SDK extensions — but ONLY the ones
-          #      genuinely MISSING; see the block below. (No codec extension: the client links no
-          #      FFmpeg — see the manifest header.)
+          #   1) the Flathub deps the manifest declares — the GNOME runtime/SDK + the
+          #      rust-stable and llvm20 SDK extensions (versions: the ARGs in
+          #      ci/flatpak-ci.Dockerfile) — but ONLY the ones genuinely MISSING; see the block
+          #      below. (No codec extension: the client links no FFmpeg — see the manifest header.)
           #   2) --download-only fetches every source (all crates in cargo-sources.json) into
           #      the .flatpak-builder state dir. Both are resumable/idempotent, so re-running
           #      after a partial failure is safe and cheap.
           # --disable-rofiles-fuse is the container-safe path (no FUSE).
           # --disable-updates ("only download missing sources, never update to latest vcs
           # version") is what makes a restored .flatpak-builder cache actually save network:
-          # every `type: git` source in the manifest is pinned to a COMMIT SHA (gamescope, glm,
-          # stb — plus gamescope's submodules, pinned by their gitlinks), so there is nothing to
+          # every `type: git` source in the manifest is pinned to a COMMIT SHA (gamescope,
+          # vkroots, glm, stb; gamescope's submodules are disabled), so there is nothing to
           # update to and re-fetching them only buys upstream flakiness. See the build step below
           # for the mechanism.
           # 10 attempts (~9min budget), matching the remote-add bootstrap above — same shared,
           # load-sensitive runner, same flathub.org resolution path.
           #
-          # WHY THIS IS NOT AN UNCONDITIONAL `--install-deps-only` ANY MORE (2026-08-22):
+          # WHY THIS IS NOT AN UNCONDITIONAL `--install-deps-only`:
           # that flag does not install what is missing, it UPDATES what is present.
           # builder_manifest_install_dep() branches on `flatpak info --show-commit <ref>` succeeding
           # and runs `flatpak update` for every dep already installed — with no fallback to a
           # plain install when that update fails — and ci/flatpak-ci.Dockerfile bakes
-          # the entire runtime set, so on a healthy run it was a pure no-op that nonetheless made
-          # every build depend on Flathub being healthy at that minute. It bit on 2026-08-22:
-          #     Updating runtime/org.freedesktop.Sdk.Extension.rust-stable/x86_64/25.08
-          #     Error: Failed to update org.freedesktop.Sdk.Extension.rust-stable: While pulling …
-          #       .filez: Server returned HTTP 404
-          # dl.flathub.org served a 404 for one object of the then-current rust-stable//25.08
-          # commit, deterministically — all 10 retry.sh attempts died on the SAME object over
-          # ~9 min — and flatpak-builder SEGFAULTED on its own error path (rc=139), so retry.sh
-          # saw a crash rather than a clean "this will never work" either. The build never wanted
-          # that newer commit: the manifest pins a runtime VERSION, not a commit, and the baked
-          # one satisfies it. Updating bought nothing and imported an upstream outage.
+          # the entire runtime set, so on a healthy run it would be a pure no-op that nonetheless
+          # makes every build depend on Flathub being healthy at that minute. The manifest pins a
+          # runtime VERSION, not a commit, and the baked one satisfies it.
           #
           # So: assert what the image already has, and reach for Flathub only on a real miss —
           # the same "guard, don't install on top of a stale image" doctrine as the Tooling step.
@@ -370,35 +320,24 @@ jobs:
           # Everything is already local (state dir warmed by the prefetch step), so this long
           # step needs no network.
           #
-          # --install-deps-from=flathub USED to sit here, commented as "a no-op safety net". It
-          # was neither. builder-main.c calls builder_manifest_install_deps() whenever that flag
-          # is set — --install-deps-only only decides whether it EXITS afterwards — so this step
-          # re-ran the same `flatpak update` of the runtimes that killed the prefetch step on
-          # 2026-08-22 (Flathub HTTP 404 on a rust-stable//25.08 object; see there). A live pull
-          # of multi-GB runtimes is a strange thing to call a safety net in the step whose whole
-          # design is to be offline, and it could only ever fire if the prefetch step above had
-          # already failed the job. Dropped: the prefetch step is the one place that talks to
-          # Flathub, and it is the one place with retries.
+          # No --install-deps-from=flathub here: builder-main.c calls
+          # builder_manifest_install_deps() whenever that flag is set (--install-deps-only only
+          # decides whether it EXITS afterwards), which would re-run the `flatpak update` of the
+          # runtimes that the prefetch step avoids. The prefetch step is the one place that talks
+          # to Flathub, and the one place with retries.
           #
-          # --disable-updates is LOAD-BEARING, not tidiness: without it this step was never
-          # actually offline. flatpak-builder runs the DOWNLOAD PHASE again as part of every
-          # build (builder-main.c calls builder_manifest_download() unconditionally — only
-          # --disable-download skips it), and it passes `update_vcs = !--disable-updates`. With
-          # updates on (the default) builder_git_mirror_repo() ALWAYS does a live `git ls-remote`
-          # + `git fetch` for every git source and every submodule, even ones pinned to an
-          # immutable commit sha. So this step re-fetched five repos on each run — gamescope plus
-          # its wlroots / libliftoff / vkroots / libdisplay-info submodules — outside retry.sh,
-          # and one HTTP 503 from gitlab.freedesktop.org killed the job minutes in:
-          #     Fetching git repo https://gitlab.freedesktop.org/emersion/libdisplay-info, ref refs/tags/0.3.0
-          #     error: RPC failed; HTTP 503 … fatal: expected 'acknowledgments'
-          #     Failed to download sources: module gamescope-wsi-layer: … exited with code 128
-          # (Those three submodules are not even built — the module sets enable_gamescope=false;
-          # they get mirrored only because flatpak-builder clones submodules by default.)
-          # With the flag, builder_git_mirror_repo() short-circuits on `git cat-file -e <commit>`
-          # against the warm mirror and returns BEFORE any network call, so an upstream blip can
-          # no longer reach this step. It can never change what is built either: every git source
-          # here is commit-pinned (see the manifest), so "don't update" is a semantic no-op.
-          # Anything genuinely missing still downloads, so a cold state dir self-heals.
+          # --disable-updates is LOAD-BEARING, not tidiness: without it this step is not
+          # offline. flatpak-builder runs the DOWNLOAD PHASE again as part of every build
+          # (builder-main.c in flatpak-builder 1.4.12 runs builder_manifest_download() unless
+          # --disable-download, --finish-only or --export-only is set), and it passes
+          # `update_vcs = !--disable-updates`. With updates on (the default)
+          # builder_git_mirror_repo() ALWAYS does a live `git ls-remote`
+          # + `git fetch` for every git source, even ones pinned to an immutable commit sha,
+          # outside retry.sh. With the flag, builder_git_mirror_repo() short-circuits on
+          # `git cat-file -e <commit>` against the warm mirror and returns BEFORE any network
+          # call. It can never change what is built either: every git source here is
+          # commit-pinned (see the manifest), so "don't update" is a semantic no-op. Anything
+          # genuinely missing still downloads, so a cold state dir self-heals.
           #
           # --default-branch=$FLATPAK_BRANCH pins the ref to app/io.unom.punktfunk/<arch>/<branch>
           # (canary or stable) so the matching hosted .flatpakref resolves deterministically
@@ -440,8 +379,8 @@ jobs:
 
       # Sign the OSTree repo flatpak-builder already produced and publish it to flatpak.unom.io on
       # unom-1, so users get `flatpak update` (the single-file bundle above has no remote). Mirrors
-      # docker.yml's deploy-docs (DEPLOY_* = the unom-ci-deploy key). No-ops cleanly until the GPG
-      # secret + DEPLOY_* exist, so the bundle build stays green during setup.
+      # docker.yml's deploy-docs (DEPLOY_* = the unom-ci-deploy key). No-ops cleanly when the GPG
+      # secret, DEPLOY_HOST or DEPLOY_KNOWN_HOSTS is unset, so the bundle build stays green.
       - name: Sign + deploy the OSTree repo to unom-1 (flatpak.unom.io)
         env:
           FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
@@ -470,7 +409,8 @@ jobs:
             --gpg-sign="$KEYID" --gpg-homedir="$GNUPGHOME"
           # Re-pull every other ref: the other arch's leg, or a tag run, may have published since
           # the seed, and a summary built from the seed would roll that commit back.
-          # ponytail: two publishes inside the same minute can still drop one; a remote flock fixes it.
+          # Two publishes inside the same minute can still drop one: the remote lock below
+          # orders only the upload.
           if [ -n "${SEEDED:-}" ]; then
             # Assigned first so a failed listing aborts the publish; a bare `for … in $(…)` would not.
             REFS=$(bash scripts/ci/retry.sh 5 ostree --repo="$PWD/repo" remote refs unom)
@@ -505,12 +445,12 @@ jobs:
           Comment=unom Flatpak applications
           GPGKey=$GPGKEY
           EOF
-          # Two refs, one per channel. Both descriptor files are regenerated every run and rsync'd
-          # without --delete; the repo SUMMARY carries both branches because the build was seeded
-          # from the live repo above (so build-update-repo below re-signs a summary listing every
-          # published channel, not just this run's). The stable ref resolves for good once any
-          # release has built the `stable` branch. A box installs ONE; `flatpak update` then tracks
-          # that channel's branch.
+          # Two refs, one per channel; the legacy file names below carry the same two. Every
+          # descriptor file is regenerated every run and rsync'd without --delete; the repo
+          # SUMMARY carries both branches because the build was seeded from the live repo above
+          # (so build-update-repo below re-signs a summary listing every published channel, not
+          # just this run's). The stable ref resolves for good once any release has built the
+          # `stable` branch. A box installs ONE; `flatpak update` then tracks that channel's branch.
           # A channel installs the new id once it has published one, and its legacy refs until then.
           channel_id() {  # <branch>
             if ls -d "$PWD/repo/refs/heads/app/$APP_ID"/*/"$1" >/dev/null 2>&1; then

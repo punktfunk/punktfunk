@@ -1,6 +1,6 @@
 # pf-xusb - punktfunk virtual Xbox 360 XUSB companion (UMDF2, classic XInput).
 # A member of the in-tree drivers workspace (shares the vendored wdk-sys/wdk-build with the bindgen pin
-# + the crt-static .cargo/config), built from source per release like pf-vdisplay.
+# + the crt-static .cargo/config.toml), built from source per release like pf-vdisplay.
 [package]
 name = "pf-xusb"
 edition.workspace = true

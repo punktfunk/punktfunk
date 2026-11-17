@@ -8,9 +8,10 @@
   READ THIS BEFORE ACTING ON THE NUMBER. S6 measures cadence, but cadence is not the whole
   decision. §2.5 row 1 promises that a blocked encoder leaves the drain worker unaffected, and G3
   requires a hard-blocked encoder to cost one IDR and never a compose hitch. The bypass holds the
-  next acquire on the encoder, bounded at 100 ms, so a blocked encoder does hitch this head. AMF
-  takes the bypass by default because its pass costs the game more than that; for any other
-  backend a cadence PASS here is one input, next to that fault model.
+  next acquire on the encoder, bounded at 100 ms, so a blocked encoder does hitch this head.
+  AMF, QSV and NVENC take the bypass by default (zero_copy in pf-driver-proto) because the copy
+  runs on the 3D engine a game renders on; where it is not the default, a cadence PASS here is
+  one input, next to that fault model.
 
   ONE driver binary, deployed before this runs. The legs differ only by the machine knob
   PFVD_POOL_BYPASS, which the driver reads at every encoder open - each leg still cycles the
@@ -22,19 +23,20 @@
     leg B  knob 1  -> the encoder reads the acquired surface, the next acquire on its completion
 
   The instrument is the driver's own "[pf-vd] cadence:" line - PresentDisplayQPCTime deltas in
-  eighth frame periods, stamped after FinishedProcessingFrame in BOTH modes, and present in a
-  plain release driver (it needs PFVD_DEBUG_LOG, which this script sets). §5-4's bar is "never
-  exceed 2 frame periods"; that is the >=2.00 column. Encode latency and fps come from the
-  client's own "stats:" lines.
+  eighth frame periods, stamped after FinishedProcessingFrame in BOTH modes. The driver emits
+  it in every build; this script reads it from the file log, which needs PFVD_DEBUG_LOG (the
+  script sets it). §5-4's bar is "never exceed 2 frame periods"; that is the >=2.00 column.
+  Encode latency and fps come from the client's own "stats:" lines.
 
   FurMark is the load AND the damage source: its window is parked on the VIRTUAL display and
   re-parked every 15 s. Without that the streamed desktop composes nothing, DWM presents nothing,
   and both legs measure an idle desktop. -NoLoad skips it and says so.
 
-  Bypass only engages on a BGRA input kind (NVENC or AMF, SDR, 8-bit). An HDR or 10-bit session
-  opens P010 and the pass is mandatory - the leg B header then says mode=pool and the run is
-  VOID. The report says so rather than comparing two identical legs. A frame the host draws a
-  visible pointer on takes the pass, whatever the header says.
+  Bypass only engages on a composed input kind (EncodeInput::composed: BGRA, or FP16 for AMF
+  under HDR) at the surface's own size. A session that opens a converter kind (NV12, P010,
+  packed 10-bit RGB) takes the pass - the leg B header then says mode=pool and the run is
+  VOID. The report says so rather than comparing two identical legs. A frame with a blended
+  pointer takes the pass, whatever the header says.
 
   Run ELEVATED, on the box, from a detached console-user task (kick-task.ps1): FurMark and the
   client both need the console session. Arguments carry no commas and no colons.

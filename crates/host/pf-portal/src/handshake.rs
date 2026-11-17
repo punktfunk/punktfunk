@@ -2,9 +2,9 @@
 //! shared by capture, the virtual displays and the libei injector. They run on
 //! [`crate::portal_runtime`], where each session's bus connection reads.
 //!
-//! Every ScreenCast handshake shares [`HANDSHAKE_BUDGET`] with its bounded
-//! steps ([`within`], [`finish_or_close`], [`close_session`]) and the
-//! cursor-mode negotiation ([`negotiate_cursor_mode`]).
+//! Every ScreenCast handshake runs its steps under one [`HANDSHAKE_BUDGET`] deadline
+//! ([`within`], [`finish_or_close`]) and negotiates the cursor mode
+//! ([`negotiate_cursor_mode`]). [`close_session`] has its own [`CAST_CLOSE_BUDGET`].
 
 use crate::cursor_mode::{parse_pin, pick, Mode, Pin};
 use ashpd::desktop::screencast::{CursorMode, Screencast};
@@ -17,8 +17,7 @@ use std::time::Duration;
 /// reports it and exits. A hung request poisons every later one from this process.
 pub const HANDSHAKE_BUDGET: Duration = Duration::from_secs(15);
 
-/// Ceiling on `Session.Close`. The D-Bus connection outlives every session, so
-/// Close is the only teardown; bounded so a wedged portal cannot hang one.
+/// Ceiling on `Session.Close`, so a wedged portal cannot hang a teardown.
 pub const CAST_CLOSE_BUDGET: Duration = Duration::from_secs(3);
 
 /// Close a portal session within [`CAST_CLOSE_BUDGET`]. A failure is logged, not
@@ -38,8 +37,7 @@ pub async fn close_session(close: impl Future<Output = ashpd::Result<()>>) {
 }
 
 /// One handshake step under the shared deadline ([`HANDSHAKE_BUDGET`]). An
-/// await the portal never answers would park its thread on the process-global
-/// connection for good.
+/// await the portal never answers would park its thread for good.
 pub async fn within<T, E>(
     deadline: tokio::time::Instant,
     step: impl Future<Output = Result<T, E>>,

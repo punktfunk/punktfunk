@@ -1,6 +1,6 @@
 //! Host audio capture, virtual microphone, and (Windows) wiring-plan facade.
 //!
-//! Linux default: a host-owned PipeWire stream sink claimed as the session default
+//! Linux default: a host-owned PipeWire null sink claimed as the session default
 //! (`PUNKTFUNK_STREAM_SINK=0` records the default sink's monitor). Windows: WASAPI
 //! loopback of the wiring-plan endpoint. Capture is interleaved `f32` PCM; channel
 //! count is the open request (GameStream order FL FR FC LFE RL RR [SL SR]).
@@ -93,8 +93,8 @@ pub trait AudioCapturer: Send {
     /// Drop buffered chunks on reuse so a new stream does not hear idle capture. Default: no-op.
     fn drain(&mut self) {}
 
-    /// Session over: drop routing side effects, keep the backend. Linux stream-sink
-    /// restores the user's default sink. Default: no-op.
+    /// Session over: drop routing side effects, keep the backend. Linux releases its
+    /// default-sink claim. Default: no-op.
     fn idle(&mut self) {}
 }
 
@@ -107,11 +107,11 @@ pub trait AudioCapturer: Send {
 /// device-level query with no stream. Three-valued on purpose: "host declares the
 /// rate" and "device runs at 48 kHz" have different consequences, and folding either
 /// into unknown would decline hi-res on the one configuration that is honest by
-/// construction (Linux stream-sink).
+/// construction (Linux with a host-owned sink).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureRate {
     /// Host declares the rate; apps render into it natively — no upstream resampler.
-    /// Linux stream-sink (the default).
+    /// Linux in either sink mode (the default).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Declared,
     /// Device mix rate. A request at another rate still succeeds by resampling, so only
@@ -145,9 +145,10 @@ pub fn probe_capture_rate() -> CaptureRate {
     plat::probe_capture_rate()
 }
 
-/// Open a live capturer for system output. Linux: a host-owned stream sink (or the default
-/// sink's monitor under `PUNKTFUNK_STREAM_SINK=0`). Windows: WASAPI loopback of the wiring
-/// plan's sink. `rate_hz` is a request; the grant is [`AudioCapturer::sample_rate`].
+/// Open a live capturer for system output. Linux: a host-owned null sink's monitor, or the
+/// default sink's monitor when `capture_mode` follows the host's output. Windows: WASAPI
+/// loopback of the wiring plan's sink. `rate_hz` is a request; the grant is
+/// [`AudioCapturer::sample_rate`].
 pub fn open_audio_capture(channels: u32, rate_hz: u32) -> Result<Box<dyn AudioCapturer>> {
     plat::open_audio_capture(channels, rate_hz)
 }
@@ -193,7 +194,7 @@ pub fn park_audio_capture(
 
 /// The parked capturer, drained, while it still fits `channels`, `rate_hz` and the audio
 /// settings. A misfit is dropped: another rate garbles the encoder and drifts the sample clock
-/// against the wire. Parking it back stays with each plane.
+/// against the wire. Parking it back is [`CaptureLease::park`].
 pub fn take_parked_capture(
     slot: &std::sync::Mutex<Option<Box<dyn AudioCapturer>>>,
     channels: u32,

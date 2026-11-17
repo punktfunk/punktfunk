@@ -25,7 +25,7 @@ use std::os::unix::net::UnixDatagram;
 
 pub const UHID_PATH: &str = "/dev/uhid";
 
-// `enum uhid_event_type`; only the ones backends write.
+// `enum uhid_event_type`; only the ones backends read or write.
 pub const UHID_DESTROY: u32 = 1;
 pub const UHID_OUTPUT: u32 = 6;
 pub const UHID_GET_REPORT: u32 = 9;

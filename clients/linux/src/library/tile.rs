@@ -9,7 +9,7 @@ use adw::prelude::*;
 use pf_l10n::client;
 use std::rc::Rc;
 
-/// The space between posters, across and down.
+/// The space between posters across a row.
 pub const GAP: i32 = 16;
 
 /// Show `row` in `holder`, keeping what the holder shows when it is the same kind of row.
@@ -41,8 +41,8 @@ pub fn bind(holder: &gtk::Box, view: &Rc<View>, row: &Row) {
 }
 
 /// The holder's widget named `name`, shown and the others hidden; made by `make` the first
-/// time. A holder keeps one widget per kind of row, so a list item bound to a heading and then
-/// to a grid row builds each once.
+/// time. A holder keeps one widget per kind of row, so a holder bound to a heading and then to
+/// a grid row builds each once.
 fn reuse<W: IsA<gtk::Widget>>(holder: &gtk::Box, name: &str, make: impl FnOnce() -> W) -> W {
     let mut kept = None;
     let mut child = holder.first_child();

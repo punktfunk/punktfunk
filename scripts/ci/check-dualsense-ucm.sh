@@ -9,10 +9,10 @@
 # has chosen `ProfileName` and before it includes that profile, and our drop-in redefines the
 # variable in between. Rename the profile, drop the include, reorder the two, and our files stop
 # doing anything at all — with no error anywhere. What comes back is not a silent downgrade but
-# the crash: with no `SpeakerHaptic` the card's only playback route is the 1-channel `Speaker`
-# split, PipeWire offers exactly one sink, GE-Proton mints its synthetic "Sony controller
-# speaker" endpoint from it, and a game that opens that endpoint overruns it
-# (EXCEPTION_ACCESS_VIOLATION, reliably ~74 s into Marvel's Spider-Man Remastered).
+# the crash: with no `SpeakerHaptic`, the Default verb's only speaker route is the 1-channel
+# `Speaker` split, PipeWire offers that one mono sink, GE-Proton builds its "Sony controller
+# speaker" endpoint from it, and Spider-Man Remastered overruns that endpoint
+# (EXCEPTION_ACCESS_VIOLATION).
 #
 # How it runs without hardware
 # ----------------------------

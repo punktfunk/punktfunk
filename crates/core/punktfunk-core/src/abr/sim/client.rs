@@ -21,8 +21,9 @@ use std::time::{Duration, Instant};
 const KEYFRAME_ASK_MS: u64 = 100;
 /// Android's no-output backstop: a starved decoder asks for a re-anchor this often.
 const STARVED_ASK_MS: u64 = 500;
-/// Header plus shard, the plaintext the reassembler counts per probe packet —
-/// not the sealed datagram. The field's `delivered_kbps` is in these bytes.
+/// The 40-byte v1 header plus a shard, not the sealed datagram. The reassembler counts the
+/// 30-byte v2 header (`V2_HEADER_LEN`) plus the shard per probe packet, the unit of the
+/// field's `delivered_kbps`, so this reads 10 bytes a packet high.
 const PROBE_PACKET_BYTES: u64 = 40 + 1408;
 /// The probe's own id in the link queue. Filler never reaches the decoder and
 /// never counts toward `actual_kbps` (`wire_bytes` nets it out).
@@ -30,7 +31,8 @@ pub(super) const PROBE_FRAME: u32 = u32::MAX;
 /// Stall the client reports with a host pipeline rebuild. ABR only logs it;
 /// what the rebuild costs is the discarded window and the lost reference.
 const REBUILD_GAP_MS: u32 = 400;
-/// The acked chain stays engaged this long after the last loss (D5).
+/// The acked chain stays engaged this long after the last loss, as the host's
+/// `LOSS_MODE_HOLD` does.
 const ACK_HOLD_MS: u64 = 10_000;
 /// Frames back an acked reference can reach: Vulkan Video's DPB. Past it the
 /// encoder falls back to the plain chain.
@@ -39,7 +41,7 @@ const ACK_REACH_FRAMES: u64 = 8;
 /// What the client does with a frame its parity could not close.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Repair {
-    /// Today: the frame is lost and the client asks until a recovery frame lands.
+    /// The default: the frame is lost and the client asks until a recovery frame lands.
     #[default]
     Rfi,
     /// A frame at most [`NACK_SHORT`] short, on a round trip inside one
@@ -123,6 +125,11 @@ pub(super) struct ClientCfg {
     /// The decoder returns a picture when the next one is fed and holds no queue: its
     /// latency is that wait plus the decode time, at any rate it keeps up with.
     pub decode_holds: bool,
+    /// The decoder works several pictures at once: its latency is the decode time at any
+    /// rate, and it holds no queue.
+    pub decode_stages: bool,
+    /// The decoder declares room for half again the stream's pixel rate.
+    pub decoder_spare: bool,
 }
 
 impl Default for ClientCfg {
@@ -155,6 +162,8 @@ impl Default for ClientCfg {
             decode_swing_ms: 0,
             decode_warmup: (0, 0),
             decode_holds: false,
+            decode_stages: false,
+            decoder_spare: false,
         }
     }
 }
@@ -238,8 +247,8 @@ pub(super) struct Client {
     rng: Rng,
     /// The scenario's zero, so a millisecond can become an `Instant`. Not the
     /// instant this session joined: a session that joins at 60 s still reads
-    /// the run's clock, and dating its probe results from its own start put
-    /// every report window a minute into the future.
+    /// the run's clock, and dating its probe results from its own start would
+    /// put every report window a minute into the future.
     base: Instant,
     pub(super) abr: Driver,
     flight: VecDeque<InFlight>,
@@ -637,6 +646,7 @@ impl Client {
         // A starved or rebuilding decoder takes the frame and shows nothing: no time, no queue.
         if !self.starved(now_ms) && !self.in_rebuild(now_ms) {
             let decode_us = self.decode_us(now_ms);
+            self.abr.on_decoder_spare(self.cfg.decoder_spare);
             if self.cfg.decode_holds {
                 // This AU pushes the picture before it out.
                 if let Some((fed_ms, us)) = self.held.replace((now_ms, decode_us)) {
@@ -645,8 +655,10 @@ impl Client {
                 }
             } else {
                 self.abr.on_decode_latency(u64::from(decode_us), 1);
-                self.decode_free_at_ms =
-                    self.decode_free_at_ms.max(now_ms) + u64::from(decode_us).div_ceil(1_000);
+                if !self.cfg.decode_stages {
+                    self.decode_free_at_ms =
+                        self.decode_free_at_ms.max(now_ms) + u64::from(decode_us).div_ceil(1_000);
+                }
             }
         }
         self.note_latency(owd_ms, now_ms);
@@ -918,7 +930,7 @@ impl Client {
                 // As the pump does: a burst nobody answered is let go, or the
                 // report tick stays suppressed for the rest of the session.
                 crate::abr::Action::AbandonProbe => self.probing = false,
-                // The simulated host has no pacer: the run only records what it was told.
+                // The simulated host's pacer reads neither: the run only records them.
                 crate::abr::Action::LinkRate(kbps) => self.links.push((now_ms, kbps)),
                 crate::abr::Action::Shape(s) => self.shapes.push((now_ms, s)),
             }

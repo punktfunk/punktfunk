@@ -556,8 +556,9 @@ const policyFields = (
 });
 
 /**
- * The built-in presets as `GET /display/settings` returns them. Summaries are the host's own prose
- * (it composes them from the fields), so they are literal strings here rather than i18n messages.
+ * The built-in presets as `GET /display/settings` returns them. The host sends each summary as
+ * fixed English prose (`preset_summary` in mgmt/display.rs), so here it is a literal string rather
+ * than an i18n message; the wording is a stand-in for the host's.
  */
 export const displayPresets: {
 	id: string;
@@ -922,7 +923,8 @@ export const seatingRefused: Seating = {
 	],
 };
 
-/** **Doctor** on a box whose second seat lost its display driver and has no Steam yet. */
+/** **Doctor** on a box without the seat display driver, whose second seat has no Steam yet and
+ * did not start. */
 export const seatsDoctor: SeatsDoctor = {
 	healthy: false,
 	diagnostics: [

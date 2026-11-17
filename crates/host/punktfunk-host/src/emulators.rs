@@ -728,7 +728,8 @@ pub fn registry() -> hermir::Result<hermir::Registry> {
     Ok(open()?.registry())
 }
 
-/// The libretro cores each copy of `id` has, by exe; empty for every emulator but RetroArch.
+/// The libretro cores `install` has, by the name a launch asks for; empty for every emulator
+/// but RetroArch.
 pub fn cores(h: &Hermir, install: &hermir::Install) -> Vec<String> {
     h.emulator(&install.emulator)
         .map(|e| e.cores(install))

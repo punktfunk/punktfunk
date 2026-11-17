@@ -34,7 +34,7 @@ pub struct KnownHost {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub os: String,
     /// Management-API port (mDNS `mgmt` TXT), distinct from `port` (native QUIC). Persisted
-    /// so a host that moved off 47990 stays reachable once the advert is gone. `None` =
+    /// so a host that moved off the default stays reachable once the advert is gone. `None` =
     /// never learned; resolve via [`KnownHost::effective_mgmt_port`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mgmt_port: Option<u16>,
@@ -57,7 +57,8 @@ pub struct KnownHost {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub game_presets: BTreeMap<String, String>,
     /// Stable record id, minted lazily, never rewritten. Survives rename and DHCP.
-    /// No lookup here is keyed by it — `fp_hex` / `addr:port` stay the keys.
+    /// A UI card finds its record by it ([`KnownHosts::index_of_card`]); trust lookups stay
+    /// keyed by `fp_hex` / `addr:port`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// Addresses this host left or was advertised at, newest first, at most
@@ -156,7 +157,7 @@ impl KnownHost {
         }
     }
 
-    /// Learned mgmt port, else compiled-in 47990. Library/art calls must use this, not
+    /// Learned mgmt port, else the compiled-in default. Library/art calls must use this, not
     /// [`crate::library::DEFAULT_MGMT_PORT`] — that constant is the fallback, not the answer.
     pub fn effective_mgmt_port(&self) -> u16 {
         self.mgmt_port.unwrap_or(crate::library::DEFAULT_MGMT_PORT)
@@ -318,7 +319,7 @@ pub struct FieldError {
 
 impl HostEdit {
     /// The connection fields' text as an edit. A pasted `host:port` address wins over the port
-    /// field, and a blank port is the default 9777. `name` and `fp` stay `None`.
+    /// field, and a blank port is [`crate::deeplink::DEFAULT_PORT`]. `name` and `fp` stay `None`.
     pub fn parse(addr: &str, port: &str, macs: &str) -> Result<HostEdit, FieldError> {
         let at = |field| move |message| FieldError { field, message };
         let (addr, spelled) = Self::parse_address(addr).map_err(at(HostField::Addr))?;
@@ -342,7 +343,7 @@ impl HostEdit {
             .ok_or_else(|| pf_l10n::client::hosts_error_address_invalid(addr))
     }
 
-    /// The port field; blank is the default 9777.
+    /// The port field; blank is [`crate::deeplink::DEFAULT_PORT`].
     pub fn parse_port(text: &str) -> Result<u16, String> {
         let text = text.trim();
         if text.is_empty() {
@@ -378,11 +379,11 @@ thread_local! {
     static LOCK_HELD: Cell<bool> = const { Cell::new(false) };
 }
 
-/// A store's lock across processes, held for one read, apply, save: the saved hosts and the
-/// settings file each have one. It sits on a sidecar file: a save renames a new file over the
-/// store, so a lock on the store would stay with the file that was replaced. Best effort:
-/// where it can't be taken, the edit still runs. The wait has no deadline; the OS frees the
-/// lock of a holder that dies.
+/// A store's lock across processes, held for one read, apply, save: the saved hosts, the
+/// settings file and the identity key each have one. It sits on a sidecar file: a save
+/// renames a new file over the store, so a lock on the store would stay with the file that
+/// was replaced. Best effort: where it can't be taken, the edit still runs. The wait has no
+/// deadline; the OS frees the lock of a holder that dies.
 pub(crate) struct StoreLock {
     file: Option<File>,
     nested: bool,
@@ -625,8 +626,8 @@ impl KnownHosts {
     }
 
     /// Drop the record pinned to `fp_hex`. An empty fingerprint removes NOTHING: `retain`
-    /// on `!= ""` would delete every not-yet-paired host at once, which is how one Forget
-    /// used to take the whole set. Placeholders go through [`KnownHosts::remove_card`].
+    /// on `!= ""` would delete every not-yet-paired host at once. Placeholders go through
+    /// [`KnownHosts::remove_card`].
     pub fn remove_by_fp(&mut self, fp_hex: &str) -> bool {
         if fp_hex.is_empty() {
             return false;
@@ -666,7 +667,7 @@ impl KnownHosts {
         let same = |h: &&mut KnownHost| same_pin(&h.fp_hex, &entry.fp_hex) == Some(true);
         if let Some(h) = self.hosts.iter_mut().find(same) {
             // A label the user chose is theirs. A name that is empty, or is just the address,
-            // is one the caller synthesised for want of anything better — re-pairing used to
+            // is one the caller synthesised for want of anything better: a re-pair must not
             // replace "Desk" with "192.168.1.50".
             if !entry.name.is_empty() && (entry.name != entry.addr || h.name.is_empty()) {
                 h.name = entry.name;
@@ -686,7 +687,7 @@ impl KnownHosts {
             if !entry.os.is_empty() {
                 h.os = entry.os;
             }
-            // Same for mgmt port: `None` on reconnect must not clear a learned 47991.
+            // Same for mgmt port: `None` on reconnect must not clear a learned one.
             if entry.mgmt_port.is_some() {
                 h.mgmt_port = entry.mgmt_port;
             }
@@ -1110,7 +1111,7 @@ mod tests {
     fn an_edit_keeps_an_unparsable_store_beside_the_new_one() {
         let _guard = crate::trust::store_health_lock();
         let path = scratch_store("hosts-unparsable");
-        // UTF-16 with a BOM: how Notepad re-saves a UTF-8 file.
+        // UTF-16 with a BOM: a store an editor re-saved in another encoding.
         let utf16: Vec<u8> = "\u{feff}{\"hosts\":[]}"
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
@@ -1315,7 +1316,7 @@ mod tests {
                 last_used: Some(1000),
                 mac: vec!["aa:bb:cc:dd:ee:ff".into()],
                 os: "linux/fedora/bazzite".into(),
-                // Not 47990: the default would make the keep-on-upsert assertions pass vacuously.
+                // Not the default port: that would make the keep-on-upsert assertions vacuous.
                 mgmt_port: Some(47991),
                 clipboard_sync: true,
                 preset_id: Some("aaaaaaaaaaaa".into()),
@@ -1348,7 +1349,7 @@ mod tests {
         assert_eq!(h.last_used, Some(1000));
         assert_eq!(h.mac, vec!["aa:bb:cc:dd:ee:ff".to_string()]);
         assert_eq!(h.os, "linux/fedora/bazzite");
-        // Reconnect must not reset mgmt port to None — the library would 404 on 47990.
+        // Reconnect must not reset mgmt port to None — the library would 404 on the default.
         assert_eq!(h.mgmt_port, Some(47991));
         assert_eq!(
             h.profile.as_ref().map(|p| p.id.as_str()),
@@ -1418,7 +1419,7 @@ mod tests {
         );
     }
 
-    /// A store written before `mgmt_port` loads, resolves to 47990, then takes and
+    /// A store written before `mgmt_port` loads, resolves to the default, then takes and
     /// keeps a learned value — the port must outlive the advert.
     #[test]
     fn mgmt_port_survives_a_store_that_predates_it_and_then_persists() {
@@ -1445,7 +1446,7 @@ mod tests {
         assert_eq!(round.hosts[0].mgmt_port, Some(47991));
 
         // A placeholder's learned port rides onto the pin that retires it, else it
-        // drops back to 47990.
+        // drops back to the default.
         let fresh = fp('a');
         let mut k2 = KnownHosts {
             hosts: vec![KnownHost {
@@ -1473,7 +1474,7 @@ mod tests {
 
     /// Two identities at one address are two records. A dual-boot box answers on one
     /// lease with one MAC and a certificate per OS, so pairing the second OS must not
-    /// retire the first: it took the user's name, presets and pins with it.
+    /// retire the first, which would take the user's name, presets and pins with it.
     #[test]
     fn upsert_trusted_keeps_a_second_identity_at_one_address() {
         let (first, second) = (fp('c'), fp('a'));
@@ -1698,13 +1699,11 @@ mod tests {
         assert_eq!(k.find_by_addr("127.0.0.1", 9777).unwrap().fp_hex, live);
     }
 
-    /// An advert lands on the fingerprint match, not a stale namesake earlier in the file.
     /// Forgetting one host that has never been paired takes that host and no other.
     ///
-    /// `remove_by_fp` is `retain(|h| h.fp_hex != key)`, so an empty key kept only the hosts
-    /// WITH a fingerprint — one Forget on an address-added card wiped every address-added
-    /// card in the file. Records saved by address really do carry an empty fingerprint
-    /// (`KnownHost { addr, port, ..Default::default() }`), which is what made it reachable.
+    /// Records saved by address carry an empty fingerprint (`KnownHost { addr, port,
+    /// ..Default::default() }`), and `retain(|h| h.fp_hex != key)` on an empty key would drop
+    /// every one of them.
     #[test]
     fn forgetting_one_unpaired_host_keeps_the_others() {
         let mut k = KnownHosts {
@@ -1752,6 +1751,7 @@ mod tests {
         assert_eq!(k.hosts.len(), 1);
     }
 
+    /// An advert lands on the fingerprint match, not a stale namesake earlier in the file.
     #[test]
     fn learn_target_prefers_the_fingerprint_match() {
         let (dead, live) = (fp('c'), fp('a'));

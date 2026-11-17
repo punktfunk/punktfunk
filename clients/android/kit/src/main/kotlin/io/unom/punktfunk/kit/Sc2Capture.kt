@@ -29,8 +29,8 @@ import java.util.concurrent.ConcurrentHashMap
  * **UI mode** (`router == null`, owned by MainActivity while NOT streaming): the lizard-mode
  * kb/mouse never produces gamepad events, so an uncaptured SC2 can't drive the console UI at
  * all. Here the first pad's parsed state is edge-detected into [onUiKey] navigation transitions
- * instead (D-pad + face buttons + Start/Select; the left stick synthesizes one D-pad step per
- * push, mirroring MainActivity's stick-to-focus behavior for ordinary pads).
+ * instead (D-pad, face buttons, shoulders, Start/Select; the left stick synthesizes one D-pad
+ * step per push, mirroring MainActivity's stick-to-focus behavior for ordinary pads).
  *
  * Each pad's wire slot is claimed lazily on its FIRST state report — a Puck slot with no
  * controller powered on stays invisible to the host — and released (with a wireless-disconnect
@@ -60,7 +60,7 @@ class Sc2Capture(
 
     /** True when the USB link is a dongle — the only transport whose wireless-status
      *  reports are authoritative. A WIRED pad also emits them, truthfully reporting "no radio
-     *  link" — acting on that tore the slot down 255 ms after creation (first on-glass run). */
+     *  link", and acting on that would tear its slot down. */
     @Volatile private var dongleLink = false
 
     /** One pad the link carries, by the interface its reports come in on. */
@@ -114,8 +114,8 @@ class Sc2Capture(
     fun findUsbDevice(): UsbDevice? = usb.findDevice()
 
     /**
-     * The first already-bonded BLE Steam Controller's address, or null. The caller checks
-     * BLUETOOTH_CONNECT first (without it the bonded list reads as empty anyway).
+     * The first already-bonded BLE Steam Controller's address, or null — also null, with a log
+     * line, when [Sc2BleLink.CONNECT_PERMISSION] is not granted.
      */
     fun pairedBleAddress(): String? = ble.pairedControllers().firstOrNull()?.address
 

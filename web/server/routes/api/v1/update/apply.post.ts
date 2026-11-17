@@ -4,9 +4,9 @@
 // (only the BFF knows it), stripped, and never forwarded. Wrong attempts share the login throttle's
 // per-peer budget, so apply can't be used as a password oracle.
 //
-// This specific file wins over the `[...]` catch-all (h3 route specificity) — verified in the
-// U1 gate; everything else about proxying (bearer injection, loopback TLS scoping, 401→502)
-// lives in util/forward.ts and mirrors ../../[...].ts.
+// This specific file wins over the `[...]` catch-all (h3 route specificity); everything else
+// about proxying (bearer injection, loopback TLS scoping, 401→502) lives in util/forward.ts and
+// mirrors ../../[...].ts.
 import { defineEventHandler, readBody } from "h3";
 import type { ApplyRequest } from "../../../../../src/api/gen/model";
 import { confirmPassword } from "../../../../util/confirm";

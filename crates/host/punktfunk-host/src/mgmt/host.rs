@@ -1,5 +1,5 @@
 //! Host-tagged `/api/v1` routes: identity, liveness, compositor list, live status,
-//! and the loopback tray summary. Split out of the `mgmt` facade.
+//! and the loopback tray summary.
 
 use super::auth::{AuthLane, PairedDevice};
 use super::shared::*;
@@ -24,7 +24,7 @@ pub(crate) struct Health {
     abi_version: u32,
 }
 
-/// Host identity and capabilities. Static for the process except `local_ip`.
+/// Host identity and capabilities.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct HostInfo {
     hostname: String,
@@ -48,15 +48,16 @@ pub(crate) struct HostInfo {
     /// Human-readable OS name (os-release `PRETTY_NAME`; `"Windows"`/`"macOS"` elsewhere).
     #[schema(example = "Bazzite 42 (Kinoite)")]
     os_name: String,
-    /// Codecs this host can encode (`host_wire_caps`, not the compile-time list).
+    /// Codecs this host can encode (`Resolved::wire_caps`, not the compile-time list). Empty
+    /// on a door.
     codecs: Vec<ApiCodec>,
     /// GameStream/Moonlight-compat planes are running (`--gamestream`). `false` is the default (native only).
     gamestream: bool,
     /// This host is the door (Linux, **Reachable without logging in**): a system service that
     /// places every connect on a seat and streams nothing itself.
     door: bool,
-    /// Why turning the door on would be refused here, as the operator's next move: the files a
-    /// channel installs it with are missing, or the account isn't in `punktfunk-update`. `null`
+    /// Why turning the door on would be refused here, as the operator's next move, such as the
+    /// files a channel installs it with missing, or the account not in `punktfunk-update`. `null`
     /// when it would start, on the door itself and on a seat host, and for every lane but the
     /// admin one. The answer is up to 30 s old; a switch request drops it.
     door_unavailable: Option<String>,
@@ -171,13 +172,14 @@ pub(crate) struct RuntimeStatus {
     session: Option<SessionInfo>,
     /// Active stream parameters of that same session. `null` when idle.
     stream: Option<StreamInfo>,
-    /// Which `sessions` row `session`/`stream` describe. `null` when idle, or when the
-    /// representative is the GameStream stream (the compat plane has no id).
+    /// Which `sessions` row `session`/`stream` describe. `null` when idle, and while a
+    /// GameStream launch has not reached PLAY.
     // `value_type`: an `Option<u64>` alone generates as `never` in the SDK.
     #[schema(value_type = u64, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<u64>,
-    /// Launched titles: live sessions plus `state: "grace"` reconnect-window rows. Empty for a desktop-only stream.
+    /// Launched titles: live sessions' games, `grace` and `detached` rows, and launches still
+    /// waiting for their session. Empty for a desktop-only stream.
     games: Vec<ActiveGame>,
     /// Titles downloading, queued, paused, or finished in the last ten minutes. A launch hold
     /// joins its title's row by `app_id`. Absent when there are none.
@@ -250,7 +252,7 @@ pub(crate) struct CaptureHealth {
     /// Absent until the session's first `SET_ENCODE`.
     #[serde(skip_serializing_if = "Option::is_none")]
     encoder_state: Option<String>,
-    /// The backend the driver opened: `nvenc` / `amf` / `qsv` / `pyrowave`. Absent as above.
+    /// The backend the driver opened: `nvenc` / `amf` / `qsv` / `pyrowave` / `mf`. Absent as above.
     #[serde(skip_serializing_if = "Option::is_none")]
     backend_opened: Option<String>,
     /// Encode threads the driver abandoned after a wedge; two opens the driver cycle.
@@ -397,8 +399,8 @@ fn audio_wiring() -> Option<AudioWiring> {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct ActiveGame {
-    /// Streaming session; `null` while waiting out the reconnect window. Pass it to
-    /// `DELETE /session/{id}` to stop that one session.
+    /// Streaming session; `null` on the compat plane's game and on a `grace`, `detached` or
+    /// waiting-launch row. Pass it to `DELETE /session/{id}` to stop that one session.
     // `value_type`: an `Option<u64>` alone generates as `never` in the SDK.
     #[schema(value_type = u64, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -441,8 +443,7 @@ pub(crate) struct ActiveGame {
 /// the per-session routes change.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct SessionRow {
-    /// Pass to `DELETE /session/{id}` and friends. `null` on the compat plane, which
-    /// has no per-session handle — stop it with the host-wide `DELETE /session`.
+    /// Pass to `DELETE /session/{id}` and friends.
     // `value_type`: an `Option<u64>` alone generates as `never` in the SDK.
     #[schema(value_type = u64, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -535,7 +536,7 @@ pub(crate) struct StreamInfo {
     last_resize_ms: Option<u32>,
 }
 
-/// Tray snapshot for loopback: counts, booleans, and `client_name`.
+/// Tray snapshot for loopback.
 /// `require_auth` admits the tray token from loopback; nothing here is a secret.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct LocalSummary {
@@ -547,7 +548,8 @@ pub(crate) struct LocalSummary {
     audio_streaming: bool,
     /// GameStream launch if present, else the first live native session. `null` when idle.
     session: Option<SessionInfo>,
-    /// First native session's display name (trust-store, else connect-time). `null` when idle, nameless, or GameStream.
+    /// First live session's display name (trust-store, else connect-time). `null` when idle or
+    /// nameless.
     #[serde(skip_serializing_if = "Option::is_none")]
     client_name: Option<String>,
     /// GameStream paired-cert count.
@@ -840,10 +842,12 @@ fn merged_status(
 /// A compositor backend and whether it is usable now.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct AvailableCompositor {
-    /// Stable id (`kwin` | `wlroots` | `mutter` | `gamescope`); pass to `--compositor`.
+    /// Stable id (`kwin` | `gamescope` | `mutter` | `wlroots` | `hyprland` | `niri` | `umbriel`);
+    /// pass to `--compositor`.
     id: String,
     label: String,
-    /// Usable now: the live session's compositor, or gamescope if its binary is installed.
+    /// Usable now: the live session's compositor, the `PUNKTFUNK_COMPOSITOR` pin, or a backend
+    /// whose own probe passes.
     available: bool,
     /// True for the backend an `Auto` (unspecified) request resolves to right now.
     default: bool,
@@ -869,7 +873,6 @@ pub(crate) async fn list_compositors() -> Json<Vec<AvailableCompositor>> {
     #[cfg(not(target_os = "linux"))]
     let list = Vec::new();
     #[cfg(target_os = "linux")]
-    // One `/proc` scan for both columns (`vdisplay::available`); default cannot be unavailable.
     let list = {
         let available = crate::vdisplay::available();
         let default = crate::vdisplay::detect().ok();
@@ -915,7 +918,7 @@ pub(crate) async fn get_status(
         .clone();
     let gs_video = st.app.streaming.load(Ordering::SeqCst);
     let gs_audio = st.app.audio_streaming.load(Ordering::SeqCst);
-    // Native plane, published by the video loop; lives outside `AppState` (see `session_status`).
+    // Both planes' video loops publish here; it lives outside `AppState` (see `session_status`).
     let native = crate::session_status::snapshot();
 
     // A paired device reads every row but only its own identity: the others' names and
@@ -1019,9 +1022,9 @@ pub(crate) async fn get_status(
         native_paired_clients: st.native.as_ref().map_or(0, |n| n.status().paired_clients),
         // Both planes register, so the rows are the count.
         active_sessions: sessions.len() as u32,
-        // The singular slot is the compat session while one streams — it has an id now. A
-        // launch that has not reached PLAY has no session yet, and naming a native id there
-        // would disagree with the card above.
+        // The singular slot is the compat session while one streams. A launch that has not
+        // reached PLAY has no session yet, and naming a native id there would disagree with
+        // the card above.
         session_id: native
             .iter()
             .find(|s| s.plane == crate::events::Plane::Gamestream)
@@ -1118,7 +1121,7 @@ pub(crate) async fn get_local_summary(State(st): State<Arc<MgmtState>>) -> Json<
         video_streaming: st.app.streaming.load(Ordering::SeqCst) || !native.is_empty(),
         audio_streaming: st.app.audio_streaming.load(Ordering::SeqCst) || !native.is_empty(),
         session,
-        // First native session's name. GameStream launches have no device name, so this stays absent there.
+        // First live session's name, on either plane: a compat session registers its label.
         client_name: native.first().and_then(|s| s.client_name.clone()),
         paired_clients: st
             .app

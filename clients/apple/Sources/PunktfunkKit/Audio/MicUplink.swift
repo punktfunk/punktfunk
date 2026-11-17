@@ -1,9 +1,10 @@
 // The mic uplink's capture half.
 //
-// A sink node on the input runs on the IO thread once per quantum: 512 frames, 10.7 ms, on a
-// Mac at 48 kHz. It folds the quantum to mono and copies it into a ring, and a worker thread
-// drains the ring into the resample and Opus chain. An engine tap batches 100 ms whatever
-// size it is asked for, and the uplink pays that as voice delay.
+// A sink node on the input runs on the IO thread once per IO cycle: the device buffer, by
+// default 512 frames (10.7 ms at 48 kHz) on a Mac (macOS 27). It folds that buffer to mono and
+// copies it into a ring, and a worker thread drains the ring into the resample and Opus chain.
+// An engine tap delivers at least 100 ms per buffer (AVAudioNode.h), and the uplink would pay
+// that as voice delay.
 //
 // The IO thread allocates nothing and logs nothing. It takes one lock, held for a copy.
 

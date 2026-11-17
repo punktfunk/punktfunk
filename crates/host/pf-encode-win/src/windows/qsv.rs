@@ -898,8 +898,8 @@ struct Inner {
 
 impl Drop for Inner {
     /// Join, then Close, then the fields. Every `pending` entry owns a bitstream the runtime
-    /// may still be writing, and Close is what aborts those writes; field order alone freed
-    /// the boxes under the runtime whenever a session ended with a frame in flight.
+    /// may still be writing, and Close is what aborts those writes; field order alone would
+    /// free the boxes under the runtime whenever a session ends with a frame in flight.
     fn drop(&mut self) {
         self.retrieve.thread.stop_and_join();
         // SAFETY: the session is live and its sync thread joined; Close on an encoder in any
@@ -2565,9 +2565,9 @@ mod tests {
 
     /// The driver answers SET_ENCODE — where the host latches these caps for the session —
     /// before any frame is submitted, so what `caps()` says then must be what the encoder
-    /// negotiated. LTR and intra-refresh are decided in `ensure_inner`, which used to run only
-    /// at the first submit: the host latched `supports_rfi: false` and never sent a
-    /// reference-frame invalidation, costing a full IDR per lost frame.
+    /// negotiated. LTR and intra-refresh are decided in `ensure_inner`; read before it runs,
+    /// caps say `supports_rfi: false`, and the host then never sends a reference-frame
+    /// invalidation, costing a full IDR per lost frame.
     ///
     /// Compares the two reads rather than demanding LTR, so a GPU that genuinely declines still
     /// passes; the printed values say which happened.

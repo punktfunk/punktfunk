@@ -1,5 +1,5 @@
 #![cfg(windows)]
-//! WP2.1's acceptance, headless: the wizard drives a fake executor end-to-end. Reactor's
+//! The wizard's flow, headless: it drives a fake executor end-to-end. Reactor's
 //! `ComponentHost` over its `RecordingAdapter` renders the real component and dispatches
 //! events into the real callbacks, so these run on the Windows CI lane with no window.
 //!
@@ -202,7 +202,7 @@ impl Wiz {
         self.fire(id, EventId::Checked, EventPayload::OptionalBool(Some(true)));
     }
 
-    /// The stepper's dots (WP2.1b): every step of this run's path is one 10 px ellipse —
+    /// The stepper's dots: every step of this run's path is one 10 px ellipse —
     /// the lockup's two circles are ellipses too, so the size is the tell.
     fn dots(&self) -> usize {
         self.live(ObjectType::Ellipse)

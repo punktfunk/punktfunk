@@ -18,7 +18,8 @@ use std::sync::Mutex;
 pub struct Gf8Coder {
     /// Last Cauchy codec, keyed by `(k, m)`. `ReedSolomon::new` rebuilds the
     /// generator; video holds one shape across frames. `Mutex` is the `&self`
-    /// trait surface — uncontended on the one send thread.
+    /// trait surface — uncontended: one frame at a time uses the coder, on the
+    /// send thread or its parity lane.
     rs: Mutex<Option<(usize, usize, ReedSolomon)>>,
 }
 

@@ -197,7 +197,7 @@ async fn with_no_profile_in_view_the_box_reads_as_today() {
     assert!(crate::library::resolve_launch(&crate::library::View::here(), "steam:70").is_some());
 }
 
-/// A box with no seats writes its custom entries where it always did, under its 12-hex ids, and
+/// A box with no seats writes its custom entries to `library.json`, under 12-hex ids, and
 /// a profile's published titles never reach its own view or the owner's.
 #[tokio::test]
 async fn the_box_s_own_library_reads_and_writes_as_today() {
@@ -360,7 +360,7 @@ async fn a_profile_s_layer_adds_and_narrows_never_widens() {
 
 /// On every read that takes `as` and the cert lane reaches, a device that may not open a locked
 /// profile hears what an unknown id gets, and a device on its list reads it. The operator reads
-/// every profile, as before.
+/// every profile.
 #[tokio::test]
 async fn a_device_reads_only_a_profile_it_may_open() {
     use axum::http::Method;

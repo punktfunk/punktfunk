@@ -589,7 +589,8 @@ impl PresetsFile {
     }
 }
 
-/// 12 lowercase hex chars — the `library::new_id` shape, from the OS RNG.
+/// 12 lowercase hex chars, the shape of the host's library and profile ids, from
+/// `rand::random`.
 pub fn new_preset_id() -> String {
     let b: [u8; 6] = rand::random();
     hex_lower(&b)

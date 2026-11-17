@@ -1,4 +1,4 @@
-//! Control (`DeviceIoControl`) plane: add/remove, adapter pin, keepalive, frame-channel delivery.
+//! Control (`DeviceIoControl`) plane: add/remove, adapter pin, keepalive, cursor-channel delivery.
 
 use super::ctl_code;
 use bytemuck::{Pod, Zeroable};
@@ -14,24 +14,25 @@ pub const IOCTL_SET_RENDER_ADAPTER: u32 = ctl_code(0x902);
 pub const IOCTL_PING: u32 = ctl_code(0x903);
 /// Version + watchdog handshake → [`InfoReply`]. No input.
 pub const IOCTL_GET_INFO: u32 = ctl_code(0x904);
-/// Tear down every virtual monitor (host-startup orphan reap). First-class op — not the
-/// SudoVDA "send-and-hope-it's-ignored" hack.
+/// Tear down every virtual monitor the calling process owns. A dead process's monitors are not
+/// the caller's: the driver's watchdog departs those.
 pub const IOCTL_CLEAR_ALL: u32 = ctl_code(0x905);
 // 0x906 was `IOCTL_SET_FRAME_CHANNEL` (the pixel ring, retired at v7); never reuse it —
 // a v6 driver still answers it.
 /// Refresh a LIVE monitor's target-mode list via `IddCxMonitorUpdateModes2`. Input
 /// [`UpdateModesRequest`]. CCD then forces the new mode on the same monitor — no REMOVE→ADD,
-/// so OS identity and the driver's swap-chain survive. A v3 driver fails the unknown IOCTL;
-/// the host falls back to re-arrival.
+/// so OS identity and the driver's swap-chain survive. On failure the host falls back to
+/// re-arrival.
 pub const IOCTL_UPDATE_MODES: u32 = ctl_code(0x907);
 /// Deliver the unnamed [`cursor::CursorShm`](crate::cursor) mapping (handle VALUE duplicated
-/// into WUDFHost). No event — the host polls the seqlock. Sent once after ADD when
-/// [`AddRequest::hw_cursor`] was set. Input [`SetCursorChannelRequest`].
+/// into WUDFHost). No event — the host polls the seqlock. Sent at capture open when the client
+/// draws the pointer or the adapter already excludes it, and again after a re-arrival. Input
+/// [`SetCursorChannelRequest`].
 pub const IOCTL_SET_CURSOR_CHANNEL: u32 = ctl_code(0x908);
 /// Flip a LIVE monitor's hardware-cursor declaration. `enable = 1` re-declares
-/// (`IddCxMonitorSetupHardwareCursor`); `enable = 0` un-declares so DWM composites the
-/// pointer into the frame. Only meaningful after [`IOCTL_SET_CURSOR_CHANNEL`]. Input
-/// [`SetCursorForwardRequest`].
+/// (`IddCxMonitorSetupHardwareCursor`); `enable = 0` cannot un-declare (there is no such DDI):
+/// it stops the re-declares, and where the pointer is excluded the driver blends it. Only
+/// meaningful after [`IOCTL_SET_CURSOR_CHANNEL`]. Input [`SetCursorForwardRequest`].
 pub const IOCTL_SET_CURSOR_FORWARD: u32 = ctl_code(0x909);
 /// Spike S5, `encode-probe` driver builds only: run the encoder backends inside WUDFHost on
 /// one monitor's frames. Input [`EncodeProbeRequest`]. `STATUS_DEVICE_BUSY` while a run is
@@ -45,8 +46,8 @@ pub const IOCTL_ENCODE_PROBE_STATUS: u32 = ctl_code(0x90B);
 /// not fit for the next call. The encoder runs inside WUDFHost, so this is the only way its
 /// backend rejections, retargets and wedges reach `host.log`.
 ///
-/// Additive at v8: a driver built before it answers `STATUS_NOT_FOUND`, which reads as
-/// "no lines" — the host never depends on the reply.
+/// Added without a protocol bump: a driver built before it answers `STATUS_NOT_FOUND`, which
+/// reads as "no lines" — the host never depends on the reply.
 pub const IOCTL_DRAIN_LOG: u32 = ctl_code(0x90E);
 
 /// Severity byte a [`log_lines`] record opens with. Unknown bytes read as [`LOG_INFO`].
@@ -94,7 +95,7 @@ pub struct AddRequest {
     pub refresh_hz: u32,
     /// Host-preferred per-client monitor id (`1..=15`) — EDID serial / IddCx `ConnectorIndex` /
     /// `ContainerId`. Stable across reconnects so Windows reapplies per-monitor DPI. `0` = AUTO
-    /// (lowest-free id). Occupies the old `_reserved` at offset 20: an old driver ignores it.
+    /// (lowest-free id).
     pub preferred_monitor_id: u32,
     /// Client display peak luminance in nits → EDID CTA-861.3 Desired Content Max Luminance.
     /// `0` = unknown → the driver keeps its built-in ~1000-nit block.
@@ -104,8 +105,8 @@ pub struct AddRequest {
     /// Client min luminance in milli-nits (0.001 cd/m² — CTA min lives well below 1 nit).
     /// `0` = unknown.
     pub min_luminance_millinits: u32,
-    /// Non-zero = declare an IddCx hardware cursor: DWM excludes the pointer from the frame.
-    /// Occupies the old tail `_reserved` at offset 36: an old driver ignores it (stays composited).
+    /// Non-zero = declare an IddCx hardware cursor when [`IOCTL_SET_CURSOR_CHANNEL`] delivers
+    /// the section; DWM then excludes the pointer from the frame.
     pub hw_cursor: u32,
     /// More sizes to offer, `[width, height]`, each at `refresh_hz`. A zero entry is unused, so
     /// an old host's missing tail offers none.
@@ -139,15 +140,15 @@ pub struct AddReply {
     pub adapter_luid_low: u32,
     pub adapter_luid_high: i32,
     pub target_id: u32,
-    /// Monitor id the driver actually used. Occupies the old `_reserved` at offset 12: an old
-    /// driver leaves it `0`, so the host can tell the preference was ignored.
+    /// Monitor id the driver actually used; the host compares it with the preferred id.
     pub resolved_monitor_id: u32,
     /// WUDFHost pid — duplication target for unnamed frame-object handles. Reported per-ADD,
     /// not per-open, so a WUDFHost restart cannot leave the host duplicating into a dead process.
     pub wudf_pid: u32,
     /// Non-zero = this adapter already carries an irrevocable hardware-cursor declare.
-    /// Exclusion is adapter-wide until the adapter resets; sessions without the cursor channel
-    /// must self-composite. Prefix-compatible after [`ADD_REPLY_LEGACY_SIZE`]: zeros = unknown.
+    /// Exclusion is adapter-wide until the adapter resets, so the host delivers the cursor
+    /// channel even when no client draws the pointer: it is the shape the driver blends.
+    /// Prefix-compatible after [`ADD_REPLY_LEGACY_SIZE`]: zeros = unknown.
     pub cursor_excluded: u32,
 }
 
@@ -161,8 +162,9 @@ pub struct RemoveRequest {
 }
 
 /// `IOCTL_UPDATE_MODES` input: live monitor (ADD `session_id`) and the new preferred mode.
-/// The driver replaces the stored list (new mode first, then built-in fallbacks) and pushes
-/// it via `IddCxMonitorUpdateModes2`.
+/// The driver leads the monitor's list with the new mode, keeps the modes it already offered
+/// (a seat keeps none; [`crate::vdisplay::advertised_modes`]) and pushes it via
+/// `IddCxMonitorUpdateModes2`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq, Eq)]
 pub struct UpdateModesRequest {
@@ -182,7 +184,8 @@ pub struct SetRenderAdapterRequest {
     pub luid_high: i32,
 }
 
-/// `IOCTL_GET_INFO` reply. `protocol_version` is asserted against [`super::PROTOCOL_VERSION`].
+/// `IOCTL_GET_INFO` reply. The host refuses a `protocol_version` outside
+/// [`super::MIN_DRIVER_PROTOCOL_VERSION`]`..=`[`super::PROTOCOL_VERSION`].
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq, Eq)]
 pub struct InfoReply {
@@ -203,12 +206,13 @@ pub struct SetCursorChannelRequest {
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq, Eq)]
 pub struct SetCursorForwardRequest {
     pub target_id: u32,
-    /// `1` = declare (exclude + forward), `0` = un-declare (DWM composites).
+    /// `1` = declare (exclude + forward), `0` = no re-declare; the driver blends an excluded
+    /// pointer.
     pub enable: u32,
 }
 
-/// [`IOCTL_ENCODE_PROBE_ARM`] input. Zero `frames` / `bitrate_kbps` / `fps` take the
-/// driver's defaults (300 / 20000 / 60).
+/// [`IOCTL_ENCODE_PROBE_ARM`] input. Zero `frames` / `bitrate_kbps` / `fps` take the defaults
+/// the driver's `encode_probe` module sets.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq, Eq)]
 pub struct EncodeProbeRequest {
@@ -232,7 +236,7 @@ pub struct EncodeProbeRequest {
 /// the desktop must already be in advanced colour or the run fails at `fmt`.
 pub const PROBE_FLAG_HDR: u32 = 1 << 0;
 /// [`EncodeProbeRequest::flags`]: full chroma. With [`PROBE_FLAG_HDR`] this is the packed
-/// 10-bit RGB input NVENC CSCs under FREXT — the pairing `SET_ENCODE` silently lost once.
+/// 10-bit RGB input NVENC CSCs under FREXT.
 pub const PROBE_FLAG_444: u32 = 1 << 1;
 
 /// [`IOCTL_ENCODE_PROBE_STATUS`] reply. `mean_*` / `max_*` cover every AU after the first;
@@ -272,7 +276,6 @@ const _: () = {
     assert!(offset_of!(AddRequest, max_luminance_nits) == ADD_REQUEST_LEGACY_SIZE);
     assert!(offset_of!(AddRequest, max_frame_avg_nits) == 28);
     assert!(offset_of!(AddRequest, min_luminance_millinits) == 32);
-    // Former tail `_reserved` — same offset, same total size (rename-only).
     assert!(offset_of!(AddRequest, hw_cursor) == 36);
     assert!(offset_of!(AddRequest, extra_modes) == 40);
     assert!(offset_of!(AddRequest, refresh_mhz) == 40 + 8 * MAX_EXTRA_MODES);
@@ -352,7 +355,7 @@ mod tests {
         let bytes = bytemuck::bytes_of(&req);
         assert_eq!(bytes.len(), size_of::<AddRequest>());
         assert_eq!(*bytemuck::from_bytes::<AddRequest>(bytes), req);
-        // preferred_monitor_id occupies the old `_reserved` slot at offset 20.
+        // preferred_monitor_id sits at offset 20.
         assert_eq!(bytes[20..24], 7u32.to_le_bytes());
         // Luminance tail rides after the legacy boundary; a zero-filled tail decodes as unknown.
         assert_eq!(bytes[24..28], 800u32.to_le_bytes());
@@ -384,7 +387,7 @@ mod tests {
         let rbytes = bytemuck::bytes_of(&reply);
         assert_eq!(rbytes.len(), 24);
         assert_eq!(*bytemuck::from_bytes::<AddReply>(rbytes), reply);
-        // resolved_monitor_id occupies the old `_reserved` slot at offset 12.
+        // resolved_monitor_id sits at offset 12.
         assert_eq!(rbytes[12..16], 7u32.to_le_bytes());
         // Duplication-target pid trails at offset 16.
         assert_eq!(rbytes[16..20], 4242u32.to_le_bytes());

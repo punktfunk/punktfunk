@@ -92,19 +92,17 @@ export function AppShell({ children }: { children: ReactNode }) {
 	// each event affects, so pages update on the transition instead of on their own timer. The
 	// polling intervals stay as a floor in case the stream is unavailable.
 	useHostEvents();
-	// Plugin UIs no longer inject themselves into the sidebar, so a fresh install has to say
-	// where it went (design §4.1).
+	// Plugin UIs do not add themselves to the sidebar, so a fresh install says where it went
+	// (design/web-console-overhaul.md §4.1).
 	useNewPluginToast();
 	return (
 		<div className="flex min-h-screen">
 			{/* Desktop sidebar (≥ sm). Sticky at viewport height: the page (body) scrolls with
 			    long content, but the sidebar stays pinned — the explicit h-dvh stops the flex
-			    stretch that would otherwise grow it (and push the language switcher) below the
-			    fold. overflow-y-auto lets the nav itself scroll on very short viewports.
+			    stretch that would otherwise grow it below the fold. overflow-y-auto lets the nav
+			    itself scroll on very short viewports.
 
-			    Tablet widths (sm–lg) collapse it to icons: the console used to drop straight from
-			    a 240 px sidebar to the phone layout, so a tablet either lost a third of its width
-			    to labels or lost the sidebar entirely. Labels ride `title` there. */}
+			    Tablet widths (sm–lg) collapse it to icons; labels ride `title` there. */}
 			<aside className="sticky top-0 hidden h-dvh w-16 shrink-0 flex-col overflow-y-auto border-r bg-card/40 p-2 sm:flex lg:w-60 lg:p-4">
 				<Link
 					to="/"
@@ -256,9 +254,8 @@ function PluginLink({
 /**
  * Mobile bottom navigation (< sm): four primary pages, plus "More".
  *
- * "More" opens a LIST — icon, label, one line of what the page is for — grouped Manage /
- * Pinned / Plugins. It was a 4-column icon grid with 10 px labels, which is unreadable and
- * says nothing about what a page does.
+ * "More" opens a LIST — icon, label, one line of what the page is for — of the primary pages the
+ * bar has no room for, then Manage / Pinned / Plugins.
  *
  * The bar slides up on load with its tabs rising in turn. The sheet rises over it with its rows
  * following, and every tab and row answers a press. A pill behind the icon marks the page.
@@ -434,8 +431,8 @@ function MoreGroup({
 }
 
 /**
- * A 44 px-tall row: icon, label, and the one line that says what the page is for. The router's
- * `data-status` marks the page you are on; an appended active class lost to the muted colour.
+ * A row: icon, label, and the one line that says what the page is for. The router's
+ * `data-status` marks the page you are on; an appended active class loses to the muted colour.
  */
 const MORE_ROW =
 	"flex items-center gap-3 px-4 py-2.5 text-sm text-muted-foreground transition-colors data-[status=active]:bg-primary/15 data-[status=active]:text-foreground";

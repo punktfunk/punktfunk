@@ -113,8 +113,7 @@ pub enum CcdError {
 /// (`Ok` with empty vecs), never a failure: `QueryDisplayConfig` REJECTS a zero-count call rather
 /// than returning an empty set, so asking anyway would turn "nothing is active" (every panel
 /// off/standby, a KVM switched away, headless between adapter arrival and first monitor) into
-/// "the query failed". (Measured on .173: sizing succeeds with numPaths=0, the query then
-/// returns 0x57 ERROR_INVALID_PARAMETER — 0x5 from session 0.)
+/// "the query failed".
 pub fn query_display_config(flags: QUERY_DISPLAY_CONFIG_FLAGS) -> Result<SavedConfig, CcdError> {
     // 4 attempts: churn that grows the buffer between sizing and query several times in a row is
     // already pathological; the budget keeps a lying driver from looping us forever.
@@ -163,11 +162,11 @@ pub fn query_display_config(flags: QUERY_DISPLAY_CONFIG_FLAGS) -> Result<SavedCo
 /// "Extend" shortcut. Windows defaults a FRESHLY-ADDED monitor into CLONE/duplicate mode when a
 /// physical display is already active (e.g. a laptop panel): a cloned IddCx output shares the panel's
 /// source, so the OS never commits a distinct path for it, never calls ASSIGN_SWAPCHAIN, and capture
-/// sees no frames (`resolve_gdi_name` stays `None` and the session fails "not an active display path").
+/// sees no frames (`resolve_gdi_name` stays `None`).
 /// Applying the EXTEND preset across the live set of connected displays makes the new IddCx monitor its
 /// OWN active path, so the rest of bring-up (`resolve_gdi_name` -> `set_active_mode` ->
 /// `isolate_displays_ccd`) proceeds. Best-effort + idempotent: a no-op on a single-display (already
-/// sole/extended) box, so it is safe to call unconditionally. `rc == 0` is success.
+/// sole/extended) box, so it is safe to call unconditionally.
 pub fn force_extend_topology() {
     let rc = crate::input_desktop::retry_set_display_config(|| {
         // SAFETY: both arrays are None — the OS recomputes the preset; no
@@ -303,9 +302,9 @@ fn active_path(key: CcdTargetKey) -> Option<DISPLAYCONFIG_PATH_INFO> {
 }
 
 /// The virtual display's CURRENT active resolution `(width, height)` via the GDI/CCD API, or `None` if the
-/// target isn't an active display yet / the query fails. The IDD-push capturer sizes its ring to this
-/// ACTUAL mode and polls it to recreate the ring when it changes — a fullscreen game can change the
-/// virtual display's mode out from under the session-negotiated one (game-capture bug GB1).
+/// target isn't an active display yet / the query fails. The IDD-push capturer opens at this ACTUAL
+/// mode: a fullscreen game can change the virtual display's mode out from under the
+/// session-negotiated one.
 ///
 /// Safe to call from any thread.
 pub fn active_resolution(key: CcdTargetKey) -> Option<(u32, u32)> {
@@ -354,21 +353,19 @@ fn gdi_hz(mode: Mode) -> u32 {
 
 /// Verified-state topology-settle wait (latency plan P0.2): poll the CCD state until the target is
 /// actually COMMITTED — an active path exists (the GDI name resolves) and the active resolution
-/// equals the requested one — instead of sleeping a fixed interval. The conditions are exactly what
-/// `resolve_gdi_name`/`set_active_mode` already established once; this waits until the OS reports
-/// them stable. `ceiling` (the old fixed sleep) is the worst-case bound: a mode the driver rejected
-/// (`set_active_mode` left the OS default) or a slow third-party CCD-lock holder (SteelSeries
-/// class) burns the ceiling and proceeds — behavior identical to the fixed sleep it replaces.
+/// equals the requested one. The conditions are exactly what `resolve_gdi_name`/`set_active_mode`
+/// already established once; this waits until the OS reports them stable. `ceiling` is the
+/// worst-case bound: a mode the driver rejected (`set_active_mode` left the OS default) or a slow
+/// third-party CCD-lock holder (SteelSeries class) burns the ceiling and proceeds.
 /// Returns `true` when the state verified (typical: one or two 25 ms polls), `false` on ceiling.
 ///
-/// Call under the manager `state` lock like the callers it serve — a *serialization* requirement,
+/// Call under the manager `state` lock like the callers it serves — a *serialization* requirement,
 /// not a soundness one: reading topology unlocked races the mutator and yields a stale answer.
 pub fn wait_mode_settled(key: CcdTargetKey, mode: Mode, ceiling: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + ceiling;
     loop {
-        // `&&` short-circuits, so the second CCD query still does not run while the target has no
-        // active path at all — this polls every 25 ms. (It was nested only so each call could carry
-        // its own `unsafe` proof; both are safe fns now.)
+        // `&&` short-circuits: the resolution query is skipped while the target has no active
+        // path at all. This polls every 25 ms.
         if resolve_gdi_name(key).is_some()
             && active_resolution(key) == Some((mode.width, mode.height))
         {
@@ -477,11 +474,10 @@ pub fn wait_mode_advertised(gdi_name: &str, mode: Mode, ceiling: std::time::Dura
 
 /// Monitor-departure wait (latency plan P0.3): after a REMOVE, poll until the target has left the
 /// ACTIVE CCD set — two consecutive absent samples, so one transient query failure mid-teardown
-/// can't read as "gone" — instead of sleeping the fixed departure settle. `ceiling` (the old fixed
-/// sleep) bounds the worst case. The OS-side departure may still be finishing driver-side when the
-/// CCD stops listing the target; the ADD path's ghost-reap retry (pf_vdisplay) remains the backstop
-/// for that rare race, exactly as it was for a settle that expired. Returns `true` when departure
-/// was observed, `false` on ceiling.
+/// can't read as "gone". `ceiling` bounds the worst case. The OS-side departure may still be
+/// finishing driver-side when the CCD stops listing the target; the ADD path's ghost-reap retry
+/// (pf_vdisplay) is the backstop for that rare race. Returns `true` when departure was observed,
+/// `false` on ceiling.
 ///
 /// Call under the manager `state` lock like the callers it serves (serialization, not soundness).
 pub fn wait_target_departed(key: CcdTargetKey, ceiling: std::time::Duration) -> bool {
@@ -508,10 +504,9 @@ pub fn wait_target_departed(key: CcdTargetKey, ceiling: std::time::Duration) -> 
     }
 }
 
-/// Toggle the virtual-display target's advanced-color (HDR) state via the CCD API. Disabling HDR while on the
-/// secure (Winlogon) desktop makes it render SDR/composed so DXGI Desktop Duplication can capture it
-/// (the HDR fullscreen independent-flip otherwise storms `ACCESS_LOST` → black); re-enable on return so
-/// WGC keeps HDR on the normal desktop. Returns true on a successful `DisplayConfigSetDeviceInfo`.
+/// Toggle the virtual-display target's advanced-color (HDR) state via the CCD API. Returns true
+/// on a successful `DisplayConfigSetDeviceInfo`; false otherwise, including a target that is
+/// not in the active paths.
 pub fn set_advanced_color(key: CcdTargetKey, enable: bool) -> bool {
     set_target_state(
         key,
@@ -571,12 +566,8 @@ pub fn set_wcg(key: CcdTargetKey, enable: bool) -> bool {
 
 /// Read the virtual-display target's CURRENT advanced-color (HDR) state via the CCD API — i.e. whether HDR is
 /// actually ON for the virtual display right now (e.g. because the user toggled it in Windows display
-/// settings). The capture/encode pipeline follows the monitor's real colorspace (WGC → FP16 → NVENC
-/// Main10 BT.2020 PQ), so this is the authoritative "is this an HDR session" signal — NOT the
-/// handshake-negotiated bit depth. `None` when the query fails or the target isn't in the active-path
-/// list (both happen transiently during a display-topology re-probe): the caller decides the fallback —
-/// the capture loop's poller keeps the last known value, since reading a blip as "HDR off" used to cost
-/// an HDR session TWO spurious ring recreates (false, then true again a poll later).
+/// settings). `None` when the query fails or the target isn't in the active-path list (both happen
+/// transiently during a display-topology re-probe): the caller decides the fallback.
 pub fn advanced_color_enabled(key: CcdTargetKey) -> Option<bool> {
     color_mode(key).map(|m| m == ColorMode::Hdr)
 }
@@ -624,8 +615,8 @@ pub fn force_mode_reset(gdi_name: &str) -> bool {
 ///
 /// [`set_active_mode`] goes through GDI, which can only pick a mode `EnumDisplaySettings`
 /// already lists — and the OS pins that list when a monitor arrives. A driver that has just
-/// published a new list (`IOCTL_UPDATE_MODES`) is therefore unreachable that way, which is why a
-/// resize used to need a hotplug. CCD takes the source size as data instead of choosing from a
+/// published a new list (`IOCTL_UPDATE_MODES`) is therefore unreachable that way short of a
+/// hotplug. CCD takes the source size as data instead of choosing from a
 /// list, so the mode lands on the live path: same target, same swap chain, no re-arrival.
 ///
 /// Both halves are supplied — source size and target timing — because the OS answers
@@ -711,8 +702,9 @@ pub fn set_active_mode_ccd(key: CcdTargetKey, mode: Mode) -> bool {
 /// Force `gdi_name` to `mode`. ADD only advertises; Windows otherwise lights
 /// an IDD at 1280×720. `CDS_TEST` first so an unadvertised mode leaves the
 /// default instead of failing the session. A refresh the OS does not list
-/// clamps to the nearest lower one, and warns: the client asked for a rate
-/// this display will not run. `false` if nothing was written — callers using
+/// clamps to the highest one listed at or below it (else the highest listed
+/// at that size), and warns: the client asked for a rate this display will
+/// not run. `false` if nothing was written — callers using
 /// this as [`set_active_mode_ccd`]'s fallback owe that a log, or a display
 /// left on the wrong mode looks like it was never asked.
 pub fn set_active_mode(gdi_name: &str, mode: Mode) -> bool {
@@ -899,7 +891,7 @@ const DISPLAYCONFIG_PATH_MODE_IDX_INVALID: u32 = 0xffff_ffff;
 /// Current active paths + modes. `None` on API failure.
 fn query_active_config() -> Option<SavedConfig> {
     // The zero-path answer (empty-but-`Some`) and the insufficient-buffer retry both live in
-    // `query_display_config`; this wrapper keeps the legacy `Option` shape for the callers whose
+    // `query_display_config`; this wrapper keeps the `Option` shape for the callers whose
     // `None` genuinely means "the query failed" — and is the ONE place that failure is logged.
     match query_display_config(QDC_ONLY_ACTIVE_PATHS) {
         Ok(c) => Some(c),
@@ -910,7 +902,7 @@ fn query_active_config() -> Option<SavedConfig> {
     }
 }
 
-/// Count currently-ACTIVE display paths whose target id is not in `keep_target_ids` — i.e. displays
+/// Count currently-ACTIVE display paths whose target is not in `keep` — i.e. displays
 /// that would still be lit besides the managed virtual set. `None` on query failure. Used to VERIFY
 /// isolation actually took, and (in the `primary` topology) to detect a physical that is ALREADY
 /// active so we can skip a force-EXTEND that would reset its refresh.
@@ -1086,9 +1078,8 @@ pub mod isolate_journal {
     /// Record that `deactivated` physicals are off for a live exclusive isolate.
     /// Best-effort: a journal we cannot write costs crash recovery, not the session.
     ///
-    /// The on-disk schema is the KEYED one — `[[adapter_luid, target_id], …]`. The pre-key
-    /// `[target_id, …]` shape is still READ (one compatibility release, see [`pending`]) but
-    /// never written.
+    /// The on-disk schema is the KEYED one — `[[adapter_luid, target_id], …]`. The older
+    /// `[target_id, …]` shape is still READ (see [`pending`]) but never written.
     pub fn mark(deactivated: &[CcdTargetKey]) {
         if deactivated.is_empty() {
             return; // nothing deactivated — nothing for a later host to put back
@@ -1143,9 +1134,9 @@ pub mod isolate_journal {
     /// half of [`startup_recover`], split out so the recovery rule is testable without driving a
     /// real `SetDisplayConfig` against the machine running the test.
     ///
-    /// Reads the keyed schema first, then the pre-key `Vec<u32>` one (a marker written by the
-    /// previous release; its keys carry `adapter_luid = 0`, which is fine — the ids only feed a
-    /// log line before the EXTEND recovery). The old decode goes away after one release.
+    /// Reads the keyed schema first, then the older `Vec<u32>` one (its keys carry
+    /// `adapter_luid = 0`, which is fine — the ids only feed a log line before the EXTEND
+    /// recovery).
     pub fn pending() -> Option<Vec<CcdTargetKey>> {
         let bytes = std::fs::read(path()).ok()?;
         if let Ok(rows) = serde_json::from_slice::<Vec<(i64, u32)>>(&bytes) {
@@ -1182,12 +1173,12 @@ pub mod isolate_journal {
             let _ = std::fs::remove_dir_all(&dir);
         }
 
-        /// The crash path: a host marks what it switched off and dies. The next start must see the
-        /// marker (and which targets), which is what makes it force the desk back on.
         fn k(luid: i64, id: u32) -> CcdTargetKey {
             CcdTargetKey::new(luid, id)
         }
 
+        /// The crash path: a host marks what it switched off and dies. The next start must see the
+        /// marker (and which targets), which is what makes it force the desk back on.
         #[test]
         fn a_mark_survives_for_the_next_host_and_clear_retracts_it() {
             with_temp_dir("roundtrip", |_| {
@@ -1203,9 +1194,8 @@ pub mod isolate_journal {
             });
         }
 
-        /// A marker written by the PREVIOUS release (`[target_id, …]`) must still trigger
-        /// recovery — read for one compatibility release, mapped to zero-LUID keys (the ids
-        /// only feed a log line).
+        /// A marker in the older `[target_id, …]` shape must still trigger recovery: it maps to
+        /// zero-LUID keys (the ids only feed a log line).
         #[test]
         fn an_old_bare_id_marker_still_asks_for_recovery() {
             with_temp_dir("oldschema", |dir| {
@@ -1278,12 +1268,11 @@ pub mod isolate_journal {
 /// sees every active path; we deactivate all of them EXCEPT the managed virtual target **set**
 /// (`design/display-management.md` §6.1: "exclusive" means the managed set stays active — with
 /// parallel displays a sibling slot is never deactivated), leaving the virtual display(s) as the sole
-/// desktop so ALL content (incl. Winlogon) renders to them. Apollo isolates the same way (CCD).
+/// desktop so ALL content (incl. Winlogon) renders to them. Apollo's `ensure_only_display`
+/// deactivates the other paths the same way (CCD, via libdisplaydevice).
 /// Re-issued with the grown/shrunk set on each slot add/remove while the group lives; the FIRST call's
 /// returned config is what teardown restores (the caller keeps it on the group record and discards
 /// later returns). Returns the original active config to restore on teardown.
-// pub so vdisplay::pf_vdisplay can reuse this backend-neutral CCD isolation helper
-// (it operates on real OS target ids — a pf-vdisplay monitor's target_id qualifies).
 pub fn isolate_displays_ccd(keep: &[CcdTargetKey]) -> Option<SavedConfig> {
     isolate_displays_ccd_checked(keep, false).map(|(saved, _)| saved)
 }
@@ -1429,10 +1418,9 @@ pub fn isolate_displays_ccd_checked(
             );
         }
 
-        // VERIFY the OUTCOME (rc alone lies — a "successful" apply can leave a panel active): re-query
-        // and confirm no non-keep display survived. Only then is the virtual set truly the sole
-        // desktop. A FAILED verification query is UNKNOWN, never success: the old `unwrap_or(0)`
-        // here reported "SOLE active desktop" on the strength of a query that answered nothing.
+        // VERIFY the OUTCOME (a "successful" apply can leave a panel active): re-query and
+        // confirm no non-keep display survived. Only then is the virtual set the sole desktop.
+        // A FAILED verification query is UNKNOWN, never success.
         match count_other_active(keep) {
             Some(0) => {
                 tracing::info!(
@@ -1609,7 +1597,7 @@ pub fn active_scanline_target() -> Option<(u32, i32, u32, bool)> {
 
 /// Union of every active source rect, `(x, y, w, h)`. CCD, not
 /// `GetSystemMetrics(SM_*VIRTUALSCREEN)`: GDI is per-session, CCD is the
-/// console layout. Maps HID `0..=32767` onto the virtual screen.
+/// console layout.
 pub fn desktop_bounds() -> Option<(i32, i32, i32, i32)> {
     let (paths, modes) = query_active_config()?;
     let mut acc: Option<(i32, i32, i32, i32)> = None; // (x0, y0, x1, y1) exclusive end
@@ -1696,10 +1684,7 @@ pub fn apply_source_positions(positions: &[(CcdTargetKey, i32, i32)]) {
 /// `DXGI_ERROR_MODE_CHANGE_IN_PROGRESS` when another display is live — see [`set_active_mode`]).
 /// Returns the original config to restore on teardown.
 pub fn set_virtual_primary_ccd(keep: CcdTargetKey) -> Option<SavedConfig> {
-    // Through the shared query, not a private copy of it. This was a verbatim duplicate of
-    // `query_active_config` — same flags, same shape — and so the one CCD entry point that did not
-    // inherit its zero-path fix (the seam asymmetry this crate keeps producing: N-1 of N sibling
-    // paths share a helper and the Nth open-codes it).
+    // The shared query, so the zero-path answer and the insufficient-buffer retry apply here too.
     let (paths, mut modes) = query_active_config()?;
     let saved = (paths.clone(), modes.clone());
 
@@ -1762,7 +1747,7 @@ pub fn set_virtual_primary_ccd(keep: CcdTargetKey) -> Option<SavedConfig> {
 /// displays that stayed dark THROUGH a force-EXTEND. A sink the EXTEND preset demonstrably
 /// cannot light (an off/standby TV, a KVM switched away) will not light on the next teardown
 /// either — without the latch [`restore_displays_ccd`]'s backstop re-warns and re-forces on
-/// EVERY teardown, forever (field: the off-TV box). Process-lifetime on purpose: a host restart
+/// EVERY teardown, forever. Process-lifetime on purpose: a host restart
 /// re-probes once, in case the sink meanwhile became lightable.
 static DARK_SINKS_FUTILE: std::sync::Mutex<Vec<(CcdTargetKey, String)>> =
     std::sync::Mutex::new(Vec::new());

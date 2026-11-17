@@ -310,8 +310,8 @@ pub struct ConnectPlan {
     /// Magic packet first; wake-and-wait if the dial fails. Off with no MAC, and when
     /// auto-wake is off — VPN hosts look offline when they aren't.
     pub wake: bool,
-    /// Handshake budget override. Request-access passes ~185 s: the host PARKS until
-    /// an operator approves.
+    /// Handshake budget override. Request-access passes one that outlasts the host's approval
+    /// wait (`trust::REQUEST_ACCESS_TIMEOUT`): the host PARKS until an operator approves.
     pub connect_timeout_secs: Option<u64>,
     /// Pin came from an advert, not the store. Persist only after `ready` — that proves
     /// the host holds this identity.
@@ -399,7 +399,8 @@ impl ConnectPlan {
     /// Same plan from stores the caller already holds — no disk, no clock, no
     /// environment, so no game overrides: the callers that read disk add those. Precedence
     /// is `trust::resolve_preset`'s, called rather than restated: this path and
-    /// [`effective_settings`] must not be able to disagree about which preset a launch gets.
+    /// [`crate::settings::effective_settings`] must not be able to disagree about which preset a
+    /// launch gets.
     pub fn resolve(
         host: &KnownHost,
         launch: Option<&str>,
@@ -662,7 +663,7 @@ pub const WAKE_RESEND_SECS: u64 = 6;
 
 /// Wake-and-wait as a one-second step so every front-end drives its own loop
 /// and still agrees on the timings — and so the behavior is testable without
-/// waiting 90 s.
+/// waiting out [`WAKE_TIMEOUT_SECS`].
 #[derive(Clone, Debug)]
 pub struct WakeWait {
     elapsed_secs: u64,
@@ -682,7 +683,7 @@ pub struct WakeTick {
 pub enum WakeOutcome {
     Online,
     /// Budget ran out. The UI PARKS (Try again / Cancel); it does not error out —
-    /// "didn't wake in 90 s" is often "give it 10 more".
+    /// "didn't wake in time" is often "give it 10 more".
     TimedOut,
 }
 
@@ -1002,7 +1003,7 @@ pub enum SessionEvent {
     Error(SessionError),
     Ended(String),
     /// Session window logical size under match-window. The SPAWNER persists it:
-    /// a renderer that load-modify-saves settings was a concurrent writer for a
+    /// a renderer that load-modify-saves settings would be a concurrent writer for a
     /// value only the parent needs.
     Window {
         w: u32,
@@ -1168,7 +1169,7 @@ impl SessionLine<'_> {
                 line.to_string()
             }
             SessionLine::Ended(msg) => json!({ "ended": msg }).to_string(),
-            // Not `json!`: its map sorts keys, and this line has always been `w` first.
+            // Not `json!`: its map sorts keys, and this line is written `w` first.
             SessionLine::Window { w, h } => format!(r#"{{"window":{{"w":{w},"h":{h}}}}}"#),
             SessionLine::Stats { text, snap } => format!(
                 "stats: {text}\nstats-json: {}",

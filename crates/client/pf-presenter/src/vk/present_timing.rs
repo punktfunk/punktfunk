@@ -63,7 +63,7 @@ pub(crate) struct PresentedSample {
 pub(crate) struct Job {
     pub(crate) swapchain: vk::SwapchainKHR,
     pub(crate) present_id: u64,
-    /// The submit's timeline signal, waited before the present.
+    /// The submit's timeline signal, waited before the present wait.
     pub(crate) done: Option<(vk::Semaphore, u64)>,
     /// The present asked the engine for a stamp.
     pub(crate) stamped: bool,

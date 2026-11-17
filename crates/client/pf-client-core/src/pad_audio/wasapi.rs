@@ -26,7 +26,7 @@ fn first_tier_a_hid_path() -> Option<String> {
 }
 
 /// HID interface path → instance id → Enum `ContainerID` → 4-ch eRender endpoint with matching
-/// `PKEY_Device_ContainerId`. Registry for property reads (MMDevices ACL denies writes, not reads).
+/// `PKEY_Device_ContainerId`. Registry for property reads: any user can read the MMDevices keys.
 pub(crate) fn correlate_pad_endpoint(hid_path: &str) -> anyhow::Result<String> {
     use anyhow::Context;
     let instance = hid_instance_from_interface_path(hid_path)
@@ -193,7 +193,7 @@ fn pad_render_thread(
     let res = (|| -> anyhow::Result<()> {
         const BLOCK_ALIGN: usize = PAD_CHANNELS * 4; // f32 interleaved
         let enumerator = wasapi::DeviceEnumerator::new().context("DeviceEnumerator")?;
-        // Not `get_device`: wasapi 0.23 resolved through a freed string. Active-only filter:
+        // Resolved from the active-endpoint collection, not `get_device`:
         // [`crate::audio::device_by_id`] (`audio_wasapi.rs` via lib.rs `#[path]`).
         let device = crate::audio::device_by_id(&enumerator, &Direction::Render, endpoint_id)
             .map_err(|e| anyhow!("correlated endpoint not found: {e:#}"))?;

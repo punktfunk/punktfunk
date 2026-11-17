@@ -2,9 +2,8 @@
 //!
 //! Streaming (decode + present) runs in the spawned `punktfunk-session` binary; the shell only
 //! needs the list of real (hardware) adapters to offer on a multi-GPU box (a hybrid laptop or an
-//! eGPU). The picked adapter description is persisted (`crate::trust::Settings::adapter`) and read
-//! by the session child at connect (`PUNKTFUNK_VK_ADAPTER` remains the session binary's env
-//! override).
+//! eGPU). The picked adapter description is persisted (`crate::trust::Settings::adapter`); the
+//! session binary exports it as `PUNKTFUNK_VK_ADAPTER` at startup unless that is already set.
 
 use windows::core::Interface;
 use windows::Win32::dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1};
@@ -51,10 +50,9 @@ fn all_adapters() -> Vec<IDXGIAdapter> {
 /// downstream: the pick is persisted as that string (`Settings::adapter`) and matched by
 /// name in the session binary (`PUNKTFUNK_VK_ADAPTER`). So two entries with the same name
 /// are one selectable choice however many times DXGI enumerates them — listing it twice
-/// only offers the user a meaningless coin flip. Seen live on an Intel Arc laptop
-/// (2026-07-19), whose Vulkan ICD likewise enumerates the one physical iGPU twice.
+/// only offers the user a meaningless coin flip.
 pub fn adapter_names() -> Vec<String> {
-    const DXGI_ADAPTER_FLAG_SOFTWARE: u32 = 2; // dxgi.h; not in this windows-rs feature set
+    const DXGI_ADAPTER_FLAG_SOFTWARE: u32 = 2; // dxgi.h; windows-rs types it i32, Flags is u32
     let mut names: Vec<String> = Vec::new();
     for a in all_adapters() {
         let desc1 = a
@@ -67,9 +65,8 @@ pub fn adapter_names() -> Vec<String> {
                 unsafe { a1.GetDesc1(&mut d) }.is_ok().then_some(d)
             });
         let name = adapter_name(&a);
-        // Forensics for the next duplicate/oddity report — which adapters DXGI actually
-        // returned, and whether the repeats share a LUID (one adapter enumerated twice)
-        // or are distinct devices that merely present the same description.
+        // Which adapters DXGI actually returned, and whether repeats share a LUID (one
+        // adapter enumerated twice) or are distinct devices with the same description.
         if let Some(d) = &desc1 {
             tracing::debug!(
                 name = %name,

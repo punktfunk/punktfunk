@@ -4,15 +4,14 @@
 //! table as a test. Flags and env twins pin a row before any UI shows it, so
 //! `--yes` and the TUI resolve identically.
 //!
-//! Two defaults changed from the sh installer on purpose. The punktfunk group is **yes
-//! everywhere**, not couch-boxes-only: it grants usbip attach, so the row label names the
-//! grant in plain mode too and `--no-punktfunk-group` stays the opt-out. The clipboard is
+//! The punktfunk group is **yes everywhere**: it grants usbip attach, so the row label names
+//! the grant in plain mode too and `--no-punktfunk-group` stays the opt-out. The clipboard is
 //! **yes** as well, since each client opts in per host anyway.
 //!
-//! The Omarchy rows live here rather than in `punktfunk-omarchy`, which used to ask for
-//! them itself. `omarchy_setup` stays the umbrella every row defaults to, so the frozen
-//! `--no-omarchy-setup` still clears all three. The console certificate is not one of them:
-//! every host install trusts it, Omarchy through the hand-off, everyone else in `exec`.
+//! The Omarchy rows live here, not in `punktfunk-omarchy`, whose `setup` prompts for nothing.
+//! `omarchy_setup` is the umbrella every row defaults to, so the frozen `--no-omarchy-setup`
+//! clears all three. The console certificate is not one of them: a host install on a box with
+//! a desktop trusts it, Omarchy through the hand-off, everyone else in `exec`.
 
 use serde::{Deserialize, Serialize};
 
@@ -139,8 +138,9 @@ pub struct Choices {
     pub omarchy_toasts: bool,
     pub omarchy_idle: bool,
     pub omarchy_theme: bool,
-    /// Trust the console's certificate in the user's browser store. On by default on every
-    /// host install and never a row on the screen: it is one certificate, this machine's own.
+    /// Trust the console's certificate in the user's browser store. On by default where the box
+    /// has a desktop session, and never a row on the screen: it is one certificate, this
+    /// machine's own.
     pub console_cert: bool,
     /// Where the web console listens (`PUNKTFUNK_UI_BIND`). The local network unless the user or
     /// `--web-bind` says otherwise; the plugin-UI origin on 47993 follows it.

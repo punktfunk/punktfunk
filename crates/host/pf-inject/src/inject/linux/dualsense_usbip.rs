@@ -836,7 +836,8 @@ mod tests {
 
     /// `hid-playstation` publishes no input device until feature `0x05`/`0x09`/`0x20`
     /// answer; `0x09` MAC must differ per pad or SDL/Steam merge them, and per seat or
-    /// `hid-playstation` refuses the second. The box's own pad 0 keeps today's MAC.
+    /// `hid-playstation` refuses the second. The box's own pad 0 answers
+    /// `DS_FEATURE_PAIRING` unmarked.
     #[test]
     fn hid_feature_reports_answer_and_the_mac_is_per_pad() {
         let feature = |h: &mut HidHandler, id: u8| {

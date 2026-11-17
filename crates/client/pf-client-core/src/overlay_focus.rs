@@ -15,8 +15,8 @@
 //! local connections.
 //!
 //! A flatpak's `/tmp/.X11-unix` is a private tmpfs that no `--filesystem` grant
-//! fills, so there the abstract socket, open through `--share=network`, is the
-//! only way to the root ctx.
+//! fills (flatpak 1.18), so there the abstract socket, open through
+//! `--share=network`, is the only way to the root ctx.
 //!
 //! Best-effort: no gamescope or no X means "no signal" and fails open (forward
 //! as before). A session that has gamescope but no reachable root says so once.
@@ -48,9 +48,9 @@ pub struct OverlayFocus {
 }
 
 impl OverlayFocus {
-    /// `None` when this is not a gamescope Steam session, or when
-    /// `PUNKTFUNK_OVERLAY_MASK=0`. The caller then keeps its window-focus path,
-    /// which is the right signal everywhere the compositor actually moves focus.
+    /// `None` when not under gamescope, or when `PUNKTFUNK_OVERLAY_MASK=0`. The caller
+    /// then keeps its window-focus path, which is the right signal everywhere the
+    /// compositor actually moves focus.
     pub fn start() -> Option<OverlayFocus> {
         if crate::env_on("PUNKTFUNK_OVERLAY_MASK") == Some(false) {
             tracing::info!("overlay input mask disabled by PUNKTFUNK_OVERLAY_MASK");

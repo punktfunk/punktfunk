@@ -1,15 +1,14 @@
-//! Live native-session status for management `GET /status`.
+//! Live session status for management `GET /status`.
 //!
-//! GameStream records its session in `AppState.{launch, stream, streaming}`.
-//! The native plane never writes those fields — it is handed only the shared
-//! stats recorder ([`crate::native::serve`]). This registry is the surface
-//! the native video loop ([`crate::native::virtual_stream`]) publishes to,
-//! keyed per session so concurrent sessions (up to `max_sessions`) each get
-//! an entry.
+//! The native plane never writes GameStream's `AppState.{launch, streaming}`: it is handed
+//! only the shared stats recorder ([`crate::native::serve`]). This registry is the surface
+//! both planes' video loops publish to, the native one ([`crate::native::virtual_stream`])
+//! and GameStream's, keyed per session so concurrent sessions (up to `max_sessions`) each
+//! get an entry.
 //!
 //! [`register`] on stream start; [`LiveSessionGuard`] removes the entry on
 //! any scope exit. `/status` reads [`snapshot`]/[`count`]. The id-less Dashboard
-//! stop and IDR reach every native session through [`stop_all_quit`] and
+//! stop and IDR reach every session through [`stop_all_quit`] and
 //! [`force_idr_all`]; the per-session routes take one id through [`stop_quit`],
 //! [`force_idr`] and [`controls`].
 //!
@@ -57,7 +56,7 @@ pub(crate) fn unpack_mode(packed: u64) -> (u32, u32, u32) {
     )
 }
 
-/// One live native session. The Arcs are the video loop's own handles, so a
+/// One live session. The Arcs are the video loop's own handles, so a
 /// mid-stream mode/bitrate change shows on `/status` with no second write.
 struct LiveSession {
     id: u64,
@@ -273,7 +272,7 @@ pub struct SessionCounters {
     pub input_dropped: AtomicU64,
     /// Pointer motion among `input_events`. The seat-pointer park reads it: the player steers.
     pub pointer_moves: AtomicU64,
-    /// `RichInput::Motion` arrivals, and the gaps ≥ 500 ms among them.
+    /// `RichInput::Motion` arrivals, and the stalls among them (`native::motion_cadence`).
     motion_samples: AtomicU64,
     motion_stalls: AtomicU64,
     /// Set when the audio thread starts. Distinguishes a silent plane from no plane.
@@ -299,8 +298,6 @@ pub struct SessionCounters {
 }
 
 impl SessionCounters {
-    /// One motion arrival. `stalled` is [`crate::native::motion_cadence`]'s own verdict, so
-    /// what counts as a break in the feed is defined in exactly one place.
     /// Zero the per-session tallies. For a plane that keeps one counter block across
     /// sessions (the compat plane's, which its control loop bumps without a session handle).
     #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
@@ -315,6 +312,8 @@ impl SessionCounters {
         }
     }
 
+    /// One motion arrival. `stalled` is [`crate::native::motion_cadence`]'s own verdict, so
+    /// what counts as a break in the feed is defined in exactly one place.
     pub fn note_motion(&self, stalled: bool) {
         self.motion_samples.fetch_add(1, Ordering::Relaxed);
         if stalled {
@@ -598,7 +597,8 @@ pub struct Registration {
     pub join: bool,
     /// Handles the per-session management routes act on.
     pub controls: SessionControls,
-    /// 8 or 10, and the encoder's chroma. Both fixed for the session.
+    /// 8 or 10, and the encoder's chroma, at registration; a codec change moves them
+    /// ([`set_format`]).
     pub bit_depth: u8,
     pub chroma: ChromaFormat,
     /// The session's shared counter block, already being bumped by its side threads.
@@ -607,7 +607,7 @@ pub struct Registration {
     pub peer: Option<std::net::IpAddr>,
 }
 
-/// Publish a live native session. The guard removes it on drop and pairs
+/// Publish a live session, either plane's. The guard removes it on drop and pairs
 /// `session.started` with `session.ended` on every exit path, including panic.
 pub fn register(reg: Registration) -> LiveSessionGuard {
     let Registration {
@@ -796,7 +796,7 @@ pub fn count() -> usize {
     registry().len()
 }
 
-/// Snapshot of every live native session; mode/bitrate read live. Newest last.
+/// Snapshot of every live session; mode/bitrate read live. Newest last.
 pub fn snapshot() -> Vec<SessionSnapshot> {
     let reg = registry();
     reg.iter()
@@ -836,7 +836,7 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
         .collect()
 }
 
-/// Tear down live native sessions for `fp_hex` (lowercase hex cert SHA-256)
+/// Tear down live sessions for `fp_hex` (lowercase hex cert SHA-256)
 /// deliberately — unpair must not leave a mid-stream client streaming.
 ///
 /// Match is the registry client label: the fingerprint's 12-hex prefix.
@@ -859,7 +859,7 @@ pub fn is_client(label: &str, fp_hex: &str) -> bool {
     label.len() == 12 && fp_hex.starts_with(label)
 }
 
-/// Whether any live native session belongs to a client other than `fp_hex`.
+/// Whether any live session belongs to a client other than `fp_hex`.
 ///
 /// Busy check for host-power: a granted guest must not power off the host
 /// while someone else is streaming. An anonymous session always counts.
@@ -897,7 +897,7 @@ pub fn stolen_on(plane: crate::events::Plane) {
     }
 }
 
-/// Tear down every live native session deliberately (mgmt `DELETE /session`).
+/// Tear down every live session deliberately (mgmt `DELETE /session`).
 ///
 /// A deliberate end, like a client's own Stop: the display skips keep-alive linger and
 /// end-game-on-session-end sees intent. The summary says `stopped_by_operator`; the
@@ -908,13 +908,13 @@ pub fn stop_all_quit() {
     }
 }
 
-/// Tear down ONE live native session deliberately (`DELETE /session/{id}`).
+/// Tear down ONE live session deliberately (`DELETE /session/{id}`).
 /// `false` = no such session. The same end as [`stop_all_quit`].
 pub fn stop_quit(id: u64) -> bool {
     with_session(id, |s| s.life.end(SessionEndReason::StoppedByOperator)).is_some()
 }
 
-/// Force a keyframe on ONE live native session (`POST /session/{id}/idr`).
+/// Force a keyframe on ONE live session (`POST /session/{id}/idr`).
 /// `false` = no such session.
 pub fn force_idr(id: u64) -> bool {
     with_session(id, |s| s.force_idr.store(true, Ordering::Relaxed)).is_some()
@@ -933,7 +933,7 @@ pub fn controls(id: u64) -> Option<SessionControls> {
     with_session(id, |s| s.controls.clone())
 }
 
-/// Force a keyframe on every live native session (`POST /session/idr`).
+/// Force a keyframe on every live session (`POST /session/idr`).
 /// The encode loop drains the flag like a client decode-recovery request.
 pub fn force_idr_all() {
     for s in registry().iter() {
@@ -983,7 +983,7 @@ pub(crate) mod tests {
     }
 
     /// A compat-plane session is a registry entry like any other, which is what gives the
-    /// console an id to stop — before, a Moonlight session could only be ended host-wide.
+    /// console an id to stop.
     #[test]
     fn a_compat_session_is_stoppable_by_its_own_id() {
         let _registry = registry_lock();

@@ -14,7 +14,7 @@
 //! * [`pair`] — the SPAKE2 PIN pairing ceremony
 //! * [`speed`] — the per-host network speed test (probe burst over the real data plane)
 //! * [`settings`] — persisted preferences · [`licenses`] — the license notices screen ·
-//!   [`help`] — the in-stream keyboard-shortcuts reference (reached from the host list)
+//!   [`help`] — the in-stream keyboard-shortcuts reference (reached from the pane's footer)
 //! * [`stream`] — the stream status card (the stream itself runs in the spawned session window)
 //! * [`style`] — the shared look (cards, pills, monograms), following the WinUI gallery: Mica
 //!   backdrop, a centred max-width column, theme brushes
@@ -83,8 +83,8 @@ pub(crate) enum Screen {
     Settings,
     /// Open-source / third-party license notices (reached from Settings).
     Licenses,
-    /// In-stream keyboard-shortcuts reference + capture help (reached from the host list's
-    /// Shortcuts button).
+    /// In-stream keyboard-shortcuts reference + capture help (reached from the navigation
+    /// pane's Keyboard shortcuts item).
     Help,
     Pair,
     /// First connect to a host that takes new devices: its fingerprint, to trust or decline.
@@ -112,7 +112,7 @@ pub(crate) struct Target {
     /// A ONE-OFF settings preset for this connect ("Connect with"): `Some(id)` overrides the
     /// host's binding for this launch, `Some("")` forces the global defaults on a bound host,
     /// `None` honors the binding. It never rebinds anything — the default changes only through
-    /// the picker in the host editor (design/client-settings-profiles.md §5.2).
+    /// the picker on the host's page (design/client-settings-profiles.md §5.2).
     pub(crate) preset: Option<String>,
     /// A library title id (`steam:570`, …) to launch on connect — carried on the target so it
     /// survives a detour through the PIN ceremony (a deep link's `launch=` toward an unpaired
@@ -145,9 +145,9 @@ pub(crate) fn saved<R, E: std::fmt::Display>(
 #[derive(Default)]
 pub(crate) struct Shared {
     pub(crate) target: Mutex<Target>,
-    /// Forces the app's single LAN browse to re-query — the hosts page's Refresh. Installed by
-    /// the discovery effect below; `None` until then (and if the browse never started, in which
-    /// case Refresh is simply inert rather than a second, competing browse).
+    /// Forces the app's single LAN browse to re-query — the hosts page's Scan again. Installed by
+    /// `browse_hosts`; `None` until then (and if the browse never started, in which case Scan
+    /// again is simply inert rather than a second, competing browse).
     pub(crate) rescan: Mutex<Option<discovery::Rescan>>,
     /// The live session child (spawn mode) — the status page's Disconnect and the
     /// request-access Cancel kill it. A FRESH handle is installed per spawn, so a stale
@@ -191,7 +191,7 @@ pub struct AppCtx {
     /// The settings snapshot the UI renders from. Loaded once at startup, and RE-BASED on
     /// the file when the settings page is (re)entered (`settings::refresh_snapshot`) and
     /// inside every `commit` — this process is not the file's only writer (session resize,
-    /// console UI, Decky), so a plain process-lifetime snapshot goes stale on screen.
+    /// console UI, CLI), so a plain process-lifetime snapshot goes stale on screen.
     pub(crate) settings: Mutex<Settings>,
     pub(crate) gamepad: GamepadService,
     pub(crate) shared: Arc<Shared>,
@@ -360,12 +360,12 @@ pub(crate) enum Anim {
     AddHost,
 }
 
-/// 14 × 16 ms ≈ 220 ms for a navigation, 12 for the Add-host sheet.
+/// Tween length in frames of `pf_fluent::motion::FRAME`: a navigation, the Add-host sheet.
 const ENTER_FRAMES: u32 = 14;
 const ADD_FRAMES: u32 = 12;
 
-/// Outlasts the 5 s connect budget behind an in-flight note, so a dead host's failure replaces
-/// the note rather than following a blank line.
+/// Outlasts the connect timeout of `pf_client_core::library::agent` behind an in-flight note,
+/// so a dead host's failure replaces the note rather than following a blank line.
 const NOTE_LIFE: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// The shell's state. `settings_*` and `custom_*` are the settings page's, held here because
@@ -813,8 +813,8 @@ impl Component for Shell {
         let searching = self.screen == Screen::Home
             && self.dest == Dest::Library
             && !self.library.shelf.is_empty();
-        // Always a content: the bar stands 48 px with one and 32 px without, and everything
-        // under it would jump 16 px between the Library and the other pages.
+        // Always a content: the WinUI TitleBar (WinAppSDK 2.6) stands 48 px with one and 32 px
+        // without, and everything under it would jump 16 px between the Library and other pages.
         let caption = caption.content(match searching {
             true => library::search_box(self),
             false => Border::new().into(),
@@ -1301,8 +1301,7 @@ fn dial_link(
     };
     // With a MAC it takes the dial first wake path, so a sleeping host wakes instead of
     // erroring — exactly what clicking its tile would do. The link's `launch=` id must reach
-    // the session (`--launch`) — this used to drop it, so a game link opened a plain desktop
-    // session.
+    // the session (`--launch`), or a game link opens a plain desktop session.
     match (
         plan.launch.clone(),
         plan.wake && !target.host.mac.is_empty(),

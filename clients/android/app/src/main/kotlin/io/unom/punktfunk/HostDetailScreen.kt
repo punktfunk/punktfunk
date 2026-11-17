@@ -75,9 +75,9 @@ internal class HostPageActs(
 )
 
 /**
- * The host page: everything about one saved host that is not a plain connect, with the acts its
- * card's menu once held. Opened by the card's info button. It draws the live record, so an edit
- * shows at once.
+ * The host page: everything about one saved host that is not a plain connect, including the
+ * setup, diagnostics, power and removal the card's menu leaves out (see [ConnectGrid]). Opened by
+ * the card's info button. It draws the live record, so an edit shows at once.
  */
 @Composable
 internal fun HostDetailScreen(

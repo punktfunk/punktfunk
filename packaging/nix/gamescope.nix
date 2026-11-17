@@ -2,8 +2,9 @@
 # under its own name so it sits BESIDE the system gamescope instead of replacing it.
 #
 # An override rather than a from-scratch derivation on purpose: gamescope vendors wlroots,
-# vkroots, libliftoff, libdisplay-info, SPIRV-Headers and reshade as git submodules plus two meson
-# wraps, and nixpkgs already solves all of that. What we add is the patch set and a rename.
+# vkroots, libliftoff, libdisplay-info, openvr, SPIRV-Headers and reshade as git submodules plus
+# two meson wraps, and nixpkgs already solves all of that. What we add is the patch set and a
+# rename.
 #
 # This is also why the override needs none of the `force_fallback_for` armour
 # `build-punktfunk-gamescope.sh` carries: that exists because meson silently prefers a SYSTEM
@@ -11,21 +12,17 @@
 # machines with that dev library. A nix closure names every library it links, so the outcome is
 # whatever nixpkgs' own gamescope already does — reproducibly.
 #
-# `gamescope` in nixpkgs is a wrapper (it wires the WSI layer + capabilities); the buildable
-# derivation is `gamescope.unwrapped` — patching the wrapper would be a no-op, so this asserts on
-# it rather than silently shipping an unpatched binary.
+# Where nixpkgs' `gamescope` is a wrapper (it wires the WSI layer + capabilities), the buildable
+# derivation is `gamescope.unwrapped` — patching the wrapper would be a no-op, so `unwrapped`
+# below insists on a `src` rather than silently shipping an unpatched binary.
 #
 # `gamescope` is the recipe from the flake's pinned nixpkgs, called with the system's libraries
 # (flake.nix). Its NixOS patches and postPatch match the source pinned below; another release's
-# recipe patches files our source does not have, and nixos-26.05's fails at patchPhase.
+# recipe patches code our source does not have, and nixos-26.05's fails at patchPhase.
 #
-# ⚠️ Kept deliberately free of any dependency on the pinned rev. The pin moved past upstream's
-# `vulkan_get_rgb10_capture_format()` (`ff6b924`, after 3.16.25) to fix red/blue on NVIDIA, and it
-# would have been natural to have patch `0001` call it — that is what the host-side note in
-# `crates/host/pf-capture/src/linux/pw_pods.rs` proposes. It does NOT, precisely so this derivation
-# keeps building against a nixpkgs that still pins 3.16.25, where that symbol does not exist and
-# the failure would be an opaque C++ error rather than a patch conflict. Patch `0001` gets the
-# same outcome version-independently by offering `xBGR_210LE` ahead of `xRGB_210LE`.
+# Patch `0001` does not call upstream's `vulkan_get_rgb10_capture_format()`: it offers
+# `xBGR_210LE` ahead of `xRGB_210LE`, which gives the same result on a device that cannot store
+# linear A2R10G10B10 (packaging/gamescope/README.md, "Building").
 {
   lib,
   gamescope,
@@ -36,20 +33,13 @@
 }:
 let
   # PIN THE COMPOSITOR SOURCE, rather than patching whatever gamescope nixpkgs happens to carry.
-  # Every other channel already ships this exact commit — packaging/gamescope/README.md,
-  # punktfunk-gamescope.spec, the PKGBUILD and build-punktfunk-gamescope.sh — and nix was the
-  # only one tracking nixpkgs' version and hoping ten patches still applied.
+  # Every other channel ships this exact commit — packaging/gamescope/README.md,
+  # punktfunk-gamescope.spec, the PKGBUILD and build-punktfunk-gamescope.sh — so the nix package
+  # agrees with them byte for byte and the whole patch set applies to the tree it targets.
   #
-  # They did not, and the failures were not academic (MEASURED 2026-08-19/20):
-  #   * nixpkgs shipped 3.16.24 and patch 0009's context did not exist there at all, so the
-  #     build died at patchPhase — every `services.punktfunk.host.enable = true` with it.
-  #   * bumping the lock to 3.16.25 fixed that, then `--version` printed NOTHING: upstream's
-  #     `gamescope::PrintVersion()` landed AFTER the 3.16.25 tag. The host reads that banner to
-  #     decide a session's bit depth and cursor compositing BEFORE the virtual display exists,
-  #     so a silent banner means a silent fall back to SDR — the exact failure every guard in
-  #     this file is written to prevent.
-  # Both are the same bug: nixpkgs' gamescope is older than the tree these patches target.
-  # Pinning makes the nix package agree with every other channel byte for byte.
+  # The host reads the `--version` banner these patches stamp to decide a session's bit depth
+  # and cursor compositing BEFORE the virtual display exists, so a gamescope without it means a
+  # silent fall back to SDR — the failure every guard in this file is written to prevent.
   #
   # Bumping this: move the rev, then `nix-prefetch-git --url https://github.com/ValveSoftware/gamescope
   # --rev <new> --fetch-submodules` for the hash, and keep packaging/gamescope/README.md in step.
@@ -62,10 +52,10 @@ let
     fetchSubmodules = true;
     hash = "sha256-XirUMU+i9LpCxkvVHC0ewaNAMRt7p7EdzFGNSrgPAic=";
   };
-  # As of nixos-unstable (checked 2026-07-28) `gamescope` IS the buildable derivation — pname
-  # "gamescope", version 3.16.25, carrying `src`/`patches`/`mesonFlags`. Revisions that wrap it
-  # (to wire the WSI layer + capabilities) expose the build as `.unwrapped`, so prefer that where
-  # it exists and take `gamescope` itself otherwise.
+  # On some nixpkgs revisions `gamescope` IS the buildable derivation, carrying
+  # `src`/`patches`/`mesonFlags`. Revisions that wrap it (to wire the WSI layer + capabilities)
+  # expose the build as `.unwrapped`, so prefer that where it exists and take `gamescope` itself
+  # otherwise.
   #
   # The check is on the RESULT, not on which attribute we found: `overrideAttrs` on a symlinkJoin
   # wrapper succeeds and does nothing, which would hand us an UNPATCHED gamescope installed under
@@ -77,8 +67,7 @@ let
   # `mesonBool "enable_gamescope_wsi_layer"`, so the plain derivation installs the compositor and
   # no layer at all; nixpkgs gets its layer by instantiating a SECOND copy inside the wrapper.
   # Without the override the build gets all the way through compile, link and install before
-  # postInstall's find turns up nothing and fails with "built no WSI layer" (MEASURED 2026-08-19,
-  # run 19323) — an expensive way to discover a default.
+  # postInstall's find turns up nothing and fails with "built no WSI layer".
   #
   # `.override` before `.overrideAttrs`: the former re-invokes the package function with the new
   # argument, so the latter must come after or it would be applied to the derivation being
@@ -107,9 +96,7 @@ unwrapped.overrideAttrs (old: {
 
   # Read the patch DIRECTORY rather than naming files: `builtins.attrNames` sorts
   # lexicographically, which for `000N-` prefixes is exactly the apply order, and a patch added or
-  # renamed upstream of this file can no longer leave nix silently building a subset. (That already
-  # happened once — this list still named the level-1 banner patch after level 2 landed, so a nix
-  # build would have shipped a binary with no cursor patch and a marker claiming otherwise.)
+  # renamed upstream of this file can no longer leave nix silently building a subset.
   patches =
     (old.patches or [ ])
     ++ map (f: "${patchDir}/${f}") (
@@ -140,10 +127,10 @@ unwrapped.overrideAttrs (old: {
   '';
 
   # Ship the compositor, renamed, its reaper, AND the WSI layer built beside it. gamescope starts
-  # its primary child through `gamescopereaper`, which it resolves next to /proc/self/exe — the
-  # real gamescope package on PATH cannot answer that, so without the reaper here a spawned
-  # session comes up empty and logs "Primary child shut down!". The rest (gamescopectl,
-  # gamescopestream, .desktop files) is the real package's to install.
+  # its primary child through `gamescopereaper`, which nixpkgs' recipe execs as
+  # `$out/bin/gamescopereaper`; without the reaper here the child never starts and gamescope logs
+  # "Primary child shut down!". The rest (gamescopectl, gamescopestream, .desktop files) is the
+  # real package's to install.
   #
   # The layer is not dressing: a game nested under this compositor gets its HDR10 swapchain from it
   # or from nowhere, and a layer built for a DIFFERENT gamescope makes the compositor reject the
@@ -169,20 +156,16 @@ unwrapped.overrideAttrs (old: {
     # gamescope's own default_extras_install.sh lays the reshade shaders and textures down under
     # read-only DIRECTORIES (mode 555). `rm` needs write permission on the CONTAINING directory,
     # not on the file, so the prune below otherwise dies with "Permission denied" on every one of
-    # them — after a full compositor build, with the compositor itself already installed and the
-    # log looking finished. MEASURED 2026-08-19 (run 19341), reachable only once the enableWsi
-    # override got the build past the layer assertion above. Nix seals $out read-only after the
-    # builder exits, so widening it here costs nothing and changes nothing in the output.
+    # them. Nix seals $out read-only after the builder exits, so widening it here costs nothing
+    # and changes nothing in the output.
     chmod -R u+w $out
 
     find $out -mindepth 1 -maxdepth 1 ! -name bin -exec rm -rf {} +
     # KEEP `.gamescope-wrapped`. nixpkgs wraps this package: makeWrapper leaves the real
     # compositor ELF at bin/.gamescope-wrapped and installs a small launcher at bin/gamescope
     # that sets PATH (xwininfo) before exec'ing it. A prune that keeps only `gamescope` deletes
-    # the compositor and ships the launcher alone — MEASURED 2026-08-20 (run 19622): $out/bin
-    # held a single 16 KB file, `--version` printed nothing because the launcher exec'd a path
-    # that no longer existed, and no +pfhdr marker was present because a wrapper carries no
-    # version string. Every symptom chased for three builds came from this one line.
+    # the compositor and ships the launcher alone: `--version` prints nothing because the launcher
+    # execs a path that no longer exists, and the launcher carries no +pfhdr marker.
     #
     # The launcher references its target by ABSOLUTE path, so renaming the launcher is safe
     # while the target keeps its name.
@@ -196,18 +179,15 @@ unwrapped.overrideAttrs (old: {
       "$out/lib/punktfunk/vulkan/implicit_layer.d/punktfunk_gamescope_wsi.json"
   '';
 
-  # `gamescope --version` exits non-zero on some builds; the grep is the real assertion.
   doInstallCheck = true;
   installCheckPhase = ''
     runHook preInstallCheck
     # Assert the marker is compiled INTO the shipped binary, rather than running it.
     #
-    # Running it does not work here and never did: `--version` produced EMPTY output under the
-    # build sandbox on BOTH nixpkgs' 3.16.25 and the pinned 5fb8dce4 (MEASURED 2026-08-19/20,
-    # runs 19551 / 19573 / 19594). That is a property of the sandbox, not a defect in the binary:
-    # gamescope calls PrintVersion() before the getopt loop (src/main.cpp:721 at the pinned rev),
-    # so `gamescope --version` DOES print the banner on a real system — which is what the host's
-    # capability probe reads.
+    # Running it does not work here: `--version` prints nothing under the build sandbox. That is
+    # a property of the sandbox, not a defect in the binary: on a real system `gamescope
+    # --version` prints the banner, which is what the host's capability probe reads
+    # (`gamescope_patch_level` in pf-vdisplay's gamescope/discovery.rs).
     #
     # packaging/gamescope/build-punktfunk-gamescope.sh makes the same call, asserting on
     # src/meson.build. Grepping the installed ELF is strictly stronger: the version string reaches
@@ -232,7 +212,7 @@ unwrapped.overrideAttrs (old: {
         | sort -u | head -5 | sed 's/^/    | /' >&2 || true
       exit 1
     }
-    # The compositor spawns its child through this, by a path next to /proc/self/exe. Missing, it
+    # The compositor spawns its child through this, by its absolute $out path. Missing, it
     # still starts, still paints, and never runs the game.
     [ -x $out/bin/gamescopereaper ] \
       || { echo "punktfunk-gamescope: no gamescopereaper, so a spawned session would run nothing"; exit 1; }

@@ -56,10 +56,10 @@ impl Drop for SelectionFile {
 /// Ends one cast: signals the portal thread, then waits for `Session.Close` so
 /// the caller may remove the output afterwards.
 ///
-/// xdph and xdpw destroy a session only on explicit `Session.Close`; neither
-/// watches for a vanished peer. Removing the output while the portal still
-/// captures it wedges the portal's frame loop (an unbounded `pw_loop_iterate`
-/// spin). Waiting for Close means the output removed next is one nobody captures.
+/// xdph ends a session only on `Session.Close`, which xdg-desktop-portal sends for a vanished
+/// client only after its bus name goes. Removing the output under a live xdph cast leaves the
+/// next `Start` spinning in `pw_loop_iterate` (unbounded through xdph 1.4.1, 5 s from 1.5.0).
+/// Waiting for Close means the output removed next is one nobody captures.
 struct Closer {
     stop: Arc<AtomicBool>,
     /// Signalled once the portal thread has closed the session. `None` when no
@@ -229,7 +229,7 @@ fn portal_thread(
                 .context("create_session")?;
             let steps = async {
                 // Negotiated against what the portal advertises: an unadvertised
-                // mode fails the call. Neither xdph nor xdpw advertises Metadata.
+                // mode fails the call. Neither xdph 1.5.0 nor xdpw 0.9.0 advertises Metadata.
                 let cursor_mode = crate::portal_cursor::negotiate(&proxy, hw_cursor, portal).await;
                 proxy
                     .select_sources(

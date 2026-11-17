@@ -20,8 +20,7 @@
 //!
 //! [`PlanError::RaslSkipped`] is the spec skip (8.1.3 NOTE: decode nothing,
 //! show nothing, stream healthy). The H.265 backend must treat it as an
-//! Ok-skip of the AU, never as a recovery trigger: the H.264 session maps
-//! every planner `Err` to release-unshown plus reanchor, which is wrong here.
+//! Ok-skip of the AU, never as a recovery trigger.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -46,7 +45,7 @@ pub use cros_codecs::codec::h265::parser::Level;
 pub use cros_codecs::codec::h265::parser::NaluType;
 pub use cros_codecs::codec::h265::parser::SliceHeader;
 
-// Owned by `h264`: pf-vkdecode already imports these from there. Re-export
+// Owned by `h264`: the decode backends import these from there. Re-export
 // rather than lift to a third module.
 pub use crate::h264::ColourDescription;
 pub use crate::h264::DisplayCrop;
@@ -79,10 +78,10 @@ pub struct AuPlan {
     /// A SUPERSET of [`Self::rps`]: 8.3.2's *Foll* sets stay marked for later
     /// pictures while this AU names none of them.
     ///
-    /// Both rungs bind them: DXVA as `RefPicList`, Vulkan in `pReferenceSlots`
-    /// after the current sets. A driver may treat absence as "no longer a
-    /// reference": AMD's Vulkan driver then decodes an RFI anchor on a *Foll*
-    /// picture wrong.
+    /// DXVA binds them as `RefPicList`, VA-API as `ReferenceFrames`, Vulkan in
+    /// `pReferenceSlots` after the current sets. A driver may treat absence as
+    /// "no longer a reference": AMD's Windows Vulkan driver then decodes an RFI anchor on
+    /// a *Foll* picture wrong.
     ///
     /// Captured after 8.3.2 marking and C.5.2.2's pre-decode update, before the
     /// current picture is stored — never contains it, never a picture the RPS
@@ -312,12 +311,12 @@ impl From<&Sps> for NegotiationInfo {
 /// number.
 ///
 /// Reading A-2 as a requirement over-allocates: A-2 branches on picture size
-/// vs the LEVEL's `MaxLumaPs`, so a six-picture L5.1 stream reported 16 at
-/// 1080p (branch 1) and 6 at 4K. Backends added the current picture and asked
-/// for 17 slots; Vulkan Video caps `maxDpbSlots` at 16.
+/// vs the LEVEL's `MaxLumaPs`, so a six-picture L5.1 stream reads 16 at 1080p
+/// (branch 1) and 6 at 4K. A backend adds the current picture and would ask
+/// for 17 slots; ANV offers 16 `maxDpbSlots` for H.265.
 ///
 /// `Dpb::needs_bumping` already keys on signalled buffering, not `max_num_pics`,
-/// so widening the limit only over-allocated hardware surfaces.
+/// so a wider limit only over-allocates hardware surfaces.
 ///
 /// Cap stays: `check_envelope` rejects `buffering > 16`, but this also runs
 /// from `NegotiationInfo::from` on SPSes that have not reached the gate yet.
@@ -327,10 +326,6 @@ fn dpb_limit(sps: &Sps) -> usize {
     buffering.min(16)
 }
 
-/// 8.3.2 RefPicSet, derived once per picture.
-///
-/// Upstream uses `[_; 16]` plus counts. `Vec`s here avoid the OOB panic a
-/// hostile header can reach (a slice may name more RPS entries than the DPB).
 /// Stand in for every `None` of a current RPS set: the nearest present entry of
 /// the set, else the DPB reference closest in POC to the named picture.
 fn fill_missing(dpb: &Dpb<PicId>, set: &mut [Option<DpbEntry<PicId>>], pocs: &[i32]) {
@@ -353,6 +348,10 @@ fn fill_missing(dpb: &Dpb<PicId>, set: &mut [Option<DpbEntry<PicId>>], pocs: &[i
     }
 }
 
+/// 8.3.2 RefPicSet, derived once per picture.
+///
+/// Upstream uses `[_; 16]` plus counts. `Vec`s here avoid the OOB panic a
+/// hostile header can reach (a slice may name more RPS entries than the DPB).
 #[derive(Default)]
 struct RefPicSet {
     /// `PocStCurrBefore` / `PocStCurrAfter` / `PocStFoll` (equation 8-5).
@@ -494,10 +493,10 @@ impl H265Planner {
             let nalu = match Nalu::next(&mut cursor) {
                 Ok(nalu) => nalu,
                 Err(_) => {
-                    // End of the AU, or a NALU shorter than its two header bytes
-                    // (every 6-bit HEVC type is a valid header, unlike H.264).
-                    // Non-zero bytes after the last consumed NALU are cut-off
-                    // data, not B.2.2 trailing_zero_8bits padding.
+                    // End of the AU, or a NALU whose two header bytes do not parse
+                    // (too short, or an unspecified type 48..=63). Non-zero bytes
+                    // after the last consumed NALU are cut-off data, not B.2.2
+                    // trailing_zero_8bits padding.
                     let tail = &au[consumed_end.min(au.len())..];
                     if tail.iter().any(|&b| b != 0) {
                         warnings.push(PlanWarning::TruncatedAu {
@@ -590,9 +589,7 @@ impl H265Planner {
                         Ok(slice) => slice,
                         Err(err) => {
                             // Continuation that fails to parse is a mid-AU cut:
-                            // keep already-planned slices. HEVC's 2-byte header
-                            // accepts every type, so the failure surfaces here
-                            // (H.264's equivalent fires at the NALU header).
+                            // keep already-planned slices.
                             if current.is_some() {
                                 warnings.push(PlanWarning::TruncatedAu {
                                     offset: range.start,
@@ -1695,7 +1692,7 @@ mod tests {
     }
 
     /// Minimal bit writer for the syntax the planner reads. Vendored crate has
-    /// no H.265 builder (encoder is H.264-only). Headers only; no slice data
+    /// no H.265 synthesizer (H.264 and AV1 only). Headers only; no slice data
     /// after the alignment bit.
     struct BitSink {
         bytes: Vec<u8>,
@@ -3077,7 +3074,7 @@ mod tests {
         ));
     }
 
-    /// Parser indexed 16-deep long-term arrays with a count it read up to 32.
+    /// The parser's long-term arrays are 16 deep while the count reads up to 32.
     /// A hostile header must be a parse error, not a panic.
     #[test]
     fn a_hostile_long_term_count_is_a_parse_error_not_a_panic() {
@@ -3208,8 +3205,8 @@ mod tests {
 
     /// Reported DPB is the stream's declared depth, not A-2's level ceiling.
     /// A-2 branches on picture size vs `MaxLumaPs`, so a six-picture L5.1 stream
-    /// reported 16 at 1080p and 6 at 4K; backends then asked for 17 slots.
-    /// Host side: `pf-encode::rfi_dpb_fits_a_mainstream_vulkan_decoder`.
+    /// reads 16 at 1080p and 6 at 4K; a backend would then ask for 17 slots.
+    /// Host side: `pf-encode-core::rfi_dpb_fits_a_mainstream_vulkan_decoder`.
     #[test]
     fn the_reported_dpb_is_the_streams_own_depth_and_fits_a_16_slot_decoder() {
         /// Lowest `VkVideoCapabilitiesKHR::maxDpbSlots` among target devices.
@@ -3271,8 +3268,8 @@ mod tests {
             assert!(slots_for(&plan) <= VULKAN_MAX_DPB_SLOTS);
         }
 
-        // A.4 allows a 16-picture DPB; 16 + in-flight is 17 slots. Refuse it:
-        // decoding with fewer slots would silently corrupt references.
+        // A.4 allows a 16-picture DPB: it plans, and needs 17 slots with the picture
+        // in flight. A 17-picture DPB is past the cap and the planner refuses it.
         let mut planner = H265Planner::new();
         let deepest = planner
             .plan_au(&opening_idr_au(&SpsOpts {
@@ -3598,8 +3595,8 @@ mod tests {
         ));
     }
 
-    /// Tile counts bounded by CTB size only ran past the width/height arrays on
-    /// a wide SPS. Table A.8 caps them at 20 columns and 22 rows for every level.
+    /// Tile counts bounded only by the picture's CTB count run past the width/height
+    /// arrays on a wide SPS. Table A.8 peaks at 20 columns and 22 rows.
     #[test]
     fn a_pps_with_more_tiles_than_any_level_allows_is_a_parse_error_not_a_panic() {
         // 2048×2048 luma, 64×64 CTBs: 32 CTBs each way. Picture bound admits 31.
@@ -3653,7 +3650,7 @@ mod tests {
         }
     }
 
-    /// Entry-point maximum multiplied tile counts in u8 (20 × 22 overflows);
+    /// The entry-point maximum must not multiply tile counts in u8 (20 × 22 overflows);
     /// `entry_point_offset_minus1` is 32 deep however large that maximum is.
     #[test]
     fn a_slice_claiming_more_entry_points_than_the_header_holds_is_a_parse_error_not_a_panic() {
@@ -3793,7 +3790,7 @@ mod tests {
     }
 
     /// 7.4.8: a short-term RPS holds at most `sps_max_dec_pic_buffering_minus1` pictures.
-    /// Each chained inter-predicted set adds one, so unbounded the 50th ran off the 64
+    /// Each chained inter-predicted set adds one, so unbounded the 50th runs off the 64
     /// `used_by_curr_pic_flag` entries.
     #[test]
     fn chained_inter_rps_sets_stop_at_the_dpb_size_not_at_the_arrays() {

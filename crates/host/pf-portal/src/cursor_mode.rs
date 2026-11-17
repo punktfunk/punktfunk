@@ -1,8 +1,8 @@
 //! ScreenCast cursor mode against `AvailableCursorModes`.
 //!
 //! `SelectSources` with a bit the portal did not advertise is
-//! `INVALID_ARGUMENT` from xdg-desktop-portal, not the backend. [`pick`]
-//! always returns a subset of the advertised bits.
+//! `INVALID_ARGUMENT` from xdg-desktop-portal, not the backend. [`pick`] returns an
+//! advertised bit whenever the portal advertised a mode this build knows.
 //!
 //! One ladder for every portal cast: `negotiate_cursor_mode` (Linux) reads the
 //! advertised bits and `PUNKTFUNK_PORTAL_CURSOR_MODE`, then calls [`pick`].

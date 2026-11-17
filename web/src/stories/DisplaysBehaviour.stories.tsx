@@ -15,14 +15,8 @@ import {
 /**
  * How this host treats a device that connects (design/web-console-overhaul.md D4, §5.3).
  *
- * This story is back on purpose. The last one was deleted when the presets moved behind a
- * [ Change ] button — "the grid, its stagger and the tab shell it hung from all went with the
- * draft machinery" — and both defects it existed to catch came straight back: the five answers
- * to the page's central question were invisible until you found a small button, and once found
- * they all landed on a single frame.
- *
- * So the grid is a motion container again (`components/stagger.tsx`), and this is where a
- * reviewer sees the cadence. `Card` and `Button` carry their own `from`/`enter` values; the
+ * The preset grid is a motion container (`components/stagger.tsx`), and this is where a reviewer
+ * sees its cadence. Each `PresetCard` is a `motion.div` that carries its own `ROW` values; the
  * container carries only the variant NAME and the gap between siblings. Nesting one motion
  * element inside another without re-declaring the gap is what silently flattens it, and nothing
  * in the types catches that.
@@ -76,9 +70,9 @@ export const NoCustomPresets: Story = {
 };
 
 /**
- * The questions, which arrive on the same cadence. A `fieldset` is not a motion element and
- * brings no values of its own, so this group only animates because each question declares them —
- * the failure mode is silent and looks exactly like a container that was never wrapped.
+ * The questions, which arrive on the same cadence. Each `Question` is a `motion.fieldset` that
+ * declares its own `QUESTION` values; a plain `fieldset` brings none, and the group would not
+ * animate — the failure is silent and looks exactly like a container that was never wrapped.
  */
 export const Customise: Story = {
 	render: function CustomiseStory() {

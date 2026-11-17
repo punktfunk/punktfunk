@@ -84,8 +84,9 @@ impl std::error::Error for Av1TileError {}
 /// uploaded bytes, so packed offsets are the concatenation with no rebase.
 ///
 /// [`Self::groups`] is the `tile_data` region per tile-group OBU (size fields
-/// included). Vulkan and VA-API submit [`Self::tiles`]; DXVA uploads the
-/// groups and must not re-walk the same spec arithmetic.
+/// included). Vulkan submits [`Self::tiles`]; VA-API rebases each tile onto its
+/// group's region; DXVA uploads the groups and must not re-walk the same spec
+/// arithmetic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Av1Bitstream {
     pub tiles: Vec<Range<usize>>,
@@ -259,8 +260,8 @@ fn split_tiles(
     obu: usize,
     tiles: &mut Vec<Range<usize>>,
 ) -> Result<(), Av1TileError> {
-    // `TileSizeBytes` is 1..=4 when NumTiles > 1; 5.9.15 does not code it
-    // for a single-tile frame (parser leaves 0).
+    // `TileSizeBytes` is 1..=4 when NumTiles > 1; 5.9.15 does not code it for a
+    // single-tile frame (the parser then keeps its last value, 0 before any).
     if count > 1 && !(1..=4).contains(&size_bytes) {
         return Err(Av1TileError::Overflow);
     }

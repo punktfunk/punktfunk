@@ -214,7 +214,8 @@ mod tests {
 
     /// Tight bounds, not `bounds()`: an arc's conic control points sit outside
     /// the curve they draw, so the loose box flags a correct circle. Walk the
-    /// whole shared table — GTK strokes the same strings and has no parser.
+    /// whole shared table — GTK parses the same strings with `gsk::Path` and draws nothing
+    /// for one that fails.
     #[test]
     fn every_icon_parses_and_fits_its_box() {
         for (name, data, _glyph) in pf_client_core::lucide::ALL {

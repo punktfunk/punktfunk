@@ -1,5 +1,4 @@
-# This workspace has been edition 2024 (and formatted under the 2024 style edition) since
-# before the main workspace migrated. The repo-root rustfmt.toml pins style_edition = "2021"
-# to keep that migration's diff reviewable; without this file, config discovery would walk up
-# to the root pin and demand a 2021-style reformat of this already-2024 tree.
+# This tree is formatted under the 2024 style edition. The repo-root rustfmt.toml pins
+# style_edition = "2021"; without this file, config discovery would walk up to that pin and
+# demand a 2021-style reformat of this tree.
 style_edition = "2024"

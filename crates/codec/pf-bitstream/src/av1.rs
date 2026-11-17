@@ -26,7 +26,7 @@ pub mod conceal;
 pub mod tiles;
 
 /// Parsed types a backend conversion names. Re-exported so backends do not reach
-/// into the vendored crate — the same courtesy [`crate::h264`] does for `Sps`/`Pps`.
+/// into the vendored crate — the same courtesy [`crate::h264`] does for `Level`/`SliceHeader`.
 pub use cros_codecs::codec::av1::parser::FrameHeaderObu as ParsedFrameHeader;
 pub use cros_codecs::codec::av1::parser::FrameType;
 pub use cros_codecs::codec::av1::parser::SequenceHeaderObu as ParsedSequenceHeader;
@@ -1047,7 +1047,7 @@ mod tests {
     ///
     /// With a `Vec` of survivors, dropping the picture behind name 2 slides
     /// names 3..6 down one, and a backend that reads position-as-name then
-    /// predicts LAST from the picture GOLDEN should have supplied.
+    /// predicts LAST3 from the picture GOLDEN should have supplied.
     #[test]
     fn a_lost_reference_leaves_its_name_empty_and_does_not_renumber_the_others() {
         // First unit is a key frame: gives the parser its sequence header
@@ -1386,7 +1386,7 @@ mod tests {
         );
     }
 
-    /// The two OBU header bits a host controls and this parser used to assert on.
+    /// The two OBU header bits a host controls: a bad value is a plan error, not an assert.
     /// `parse_obu_header` runs before any type dispatch, so both are reachable on the
     /// first byte of any unit; an abort there takes the decoding thread with it.
     /// Bit 0 is `obu_reserved_1bit`, bit 1 `obu_has_size_field`.

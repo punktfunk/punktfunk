@@ -12,8 +12,10 @@
 //! a plug and is re-applied on every arrival. It hides a device from another session's
 //! listings. It doesn't stop an open of a known path, the console's Raw Input or WGI's Xbox
 //! listing, and it leaves `xinput1_4`'s box-wide index alone. A change of holder restarts the
-//! USB device, which ends every open handle. Devices a Remote Desktop session redirected in
-//! and the host's own `SWD` devices carry their session from creation and are never touched.
+//! USB device, which ends every open handle; the tags change in place only for a parked pad
+//! going live or when the restart is refused ([`hand`]). Devices a Remote Desktop session
+//! redirected in and the host's own `SWD` devices carry their session from creation and are
+//! never touched.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;

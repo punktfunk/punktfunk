@@ -72,8 +72,6 @@ async fn hide_route_matches_ids_containing_colons() {
     }
 }
 
-/// Stats ride on the entry: absent until the first launch, then the four numbers as recorded.
-/// The env override must cover the whole body (`paired_clients_list_and_unpair`).
 #[allow(clippy::await_holding_lock)]
 /// Seeds one custom title on a platform.
 fn seed_title(title: &str, platform: &str) {
@@ -527,6 +525,7 @@ async fn a_seat_reads_the_boxs_game_overrides_and_changes_none() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), doc.to_string());
 }
 
+/// Stats ride on the entry: absent until the first launch, then the four numbers as recorded.
 #[tokio::test]
 async fn library_stats_ride_on_the_entry() {
     let tmp = ConfigDirOverride::new();
@@ -801,8 +800,7 @@ async fn metadata_sources_fill_pick_replace_and_forget() {
 }
 
 /// The stored row's `detect` and `prep` come back on the operator lane, and an update that
-/// omits them keeps them — the console form never showed them and used to clear them on
-/// every save (#1064). Sending the field, even empty, still replaces it.
+/// omits them keeps them. Sending the field, even empty, still replaces it.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn custom_entry_hints_round_trip_and_survive_an_update() {

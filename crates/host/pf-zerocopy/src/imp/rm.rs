@@ -3,8 +3,8 @@
 //!
 //! nvidia-drm hands a same-GPU dmabuf import back its exporter's own GEM object, and that
 //! object's resource-manager memory exports again as the fd `cuImportExternalMemory` takes on
-//! Linux. The CUDA mapping then carries the allocation's own page kind, which on a pre-Turing
-//! GPU decides the physical byte layout; an EGL import picks a kind of its own.
+//! Linux. The CUDA mapping then keeps the allocation's own page kind; on a pre-Turing GPU an
+//! EGL import's mapping reorders the bytes.
 //!
 //! Needs nvidia-drm with modeset; without it the export refuses and the caller falls back.
 

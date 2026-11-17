@@ -1,6 +1,7 @@
 // IOKit HID transport for a Steam Controller 2 over USB: wired (`28DE:1302`) or through the
 // Puck dongle (`1304`/`1305`). Same surface as `Sc2BleLink` (`start` / `stop` / `writeRaw`), so
-// `Sc2Capture` holds either. macOS only: iOS and tvOS apps get no IOKit HID device access.
+// `Sc2Capture` holds either. macOS only: the iOS 27.1, tvOS 27.0 and visionOS 27.0 SDKs ship no
+// IOKit HID headers.
 //
 // The match is the DEVICE usage pair FF00:01 (`Sc2Device.usagePageVendor`/`usageController`).
 // Each controller interface is one `IOHIDDevice` with all its collections (the lizard mouse and
@@ -31,8 +32,8 @@ final class Sc2UsbLink {
     /// USER_INTERACTIVE for the same reason the BLE link's is (a stalled consumer drops reports).
     private let queue: DispatchQueue
     /// One incoming report from one source (the collection's registry entry id), id-first — on
-    /// `queue`. USB reports carry their id out of band, so this link prepends it; the wire
-    /// contract is id-first on every transport.
+    /// `queue`. IOKit passes the id out of band; `handle` prepends it when the buffer lacks it.
+    /// The wire contract is id-first on every transport.
     private let onReport: (UInt64, [UInt8]) -> Void
     /// One opened collection went away (pad unplugged; fires once per collection when the
     /// dongle is pulled) — on `queue`.
@@ -374,9 +375,9 @@ final class Sc2UsbLink {
         log.info("SC2 USB: last collection removed — link idle")
     }
 
-    /// One input report from IOKit. USB delivers the id out of band (`reportID`) and the payload
-    /// without it, so the id is prepended here: the punktfunk wire — and `Sc2Device.parseState`,
-    /// and core's gate — are id-first on every transport.
+    /// One input report from IOKit. The id arrives out of band (`reportID`); a buffer that does
+    /// not already start with it gets it prepended, because the punktfunk wire — and
+    /// `Sc2Device.parseState`, and core's gate — are id-first on every transport.
     private func handle(
         device: IOHIDDevice, reportID: UInt32, report: UnsafeMutablePointer<UInt8>, len: CFIndex
     ) {

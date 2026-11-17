@@ -181,14 +181,13 @@ pub fn at<T>(table: &[T], i: u32) -> &T {
     &table[(i as usize).min(table.len() - 1)]
 }
 
-/// A compact label for a render-scale multiplier: "Native" / "1.5×" / "2× (supersample)".
+/// A compact label for a render-scale multiplier: "Native" / "1.5×" / "2×".
 pub fn render_scale_label(scale: f64) -> String {
     if scale == 1.0 {
         client::player_render_scale_native().to_string()
     } else {
         // Just the multiplier: the row's caption already says what above and below 1× mean,
-        // and "2× (supersample)" is long enough that the value ellipsizes to "2× (su…" the
-        // moment the row grows another suffix.
+        // and a longer label ellipsizes in the row.
         format!("{scale}×")
     }
 }
@@ -231,10 +230,9 @@ pub const CODEC_LABELS: &[Text] = &[
     || "AV1",
     client::player_codec_pyrowave,
 ];
-// Stored decoder-preference values. `native-*` since M10 — the bare "vulkan"/"vaapi"
-// named libavcodec's rungs, which are deleted; a store still holding them is migrated on
-// read (`pf_client_core::video::migrate_decoder_pref`) and simply matches no entry here
-// until the user re-picks. The labels below are unchanged and still true.
+// Stored decoder-preference values. `pf_client_core::video::migrate_decoder_pref` maps an
+// older bare "vulkan"/"vaapi" onto its `native-*` entry; `pages::display` applies it before
+// it looks a stored value up here.
 pub const DECODERS: &[&str] = &["auto", "native-vulkan", "native-vaapi", "software"];
 /// Touch-input model values (persisted) paired with their display labels below — the
 /// cross-client set (Android/Apple). Only meaningful on a touchscreen (Deck/tablet).
@@ -245,10 +243,10 @@ pub fn touch_mode_labels() -> Vec<&'static str> {
         .map(|name| TouchMode::from_name(name).label())
         .collect()
 }
-/// The SELECTED touch mode explained — the caption swaps with the choice (the Apple
-/// revamp's dynamic-caption idiom) instead of narrating every mode at once.
-/// Combo-row captions must stay ONE line (~66 chars at the default dialog width): a
-/// wrapped subtitle's natural width crushes the selected-value label into an ellipsis.
+/// The SELECTED touch mode explained — the caption swaps with the choice instead of
+/// narrating every mode at once.
+/// `cap_subtitle` wraps each caption at `CAPTION_CHARS`, so the selected-value label keeps
+/// its width.
 pub const TOUCH_MODE_CAPTIONS: &[Text] = &[
     client::player_touch_mode_trackpad_hint,
     client::player_touch_mode_pointer_hint,
@@ -287,8 +285,9 @@ pub const PRESENT_PRIORITY_CAPTIONS: &[Text] = &[
     client::player_present_priority_smooth_hint,
 ];
 /// Smoothness buffer depth, in frames — the index IS the stored `smooth_buffer` value
-/// (0 = Automatic, which resolves to 2). No millisecond hints: the cost is one refresh
-/// per frame, and the session's refresh isn't known here when the mode is Native.
+/// (0 = Automatic, resolved by `PresentPriority::resolve`). No millisecond hints: the cost
+/// is one refresh per frame, and the session's refresh isn't known here when the mode is
+/// Native.
 pub const SMOOTH_BUFFER_STEPS: u32 = 4;
 
 /// The Smoothness buffer row's entries: Automatic, then 1 to 3 frames.
@@ -302,7 +301,7 @@ pub fn smooth_buffer_labels() -> Vec<String> {
 }
 
 /// Physical-mouse model values (persisted) + labels + dynamic captions — same idiom as
-/// the touch rows. Ctrl+Alt+Shift+M flips the model live in-stream.
+/// the touch rows. The `SlotId::MouseMode` shortcut flips the model live in-stream.
 pub const MOUSE_MODES: &[&str] = &["capture", "desktop"];
 pub fn mouse_mode_labels() -> Vec<&'static str> {
     MOUSE_MODES
@@ -326,7 +325,7 @@ pub fn resolution_caption(i: u32) -> &'static str {
     }
 }
 
-/// The Resolution row's entries for one family: the D1 tri-state's Native and Match window,
+/// The Resolution row's entries for one family: Native and Match window,
 /// that family's sizes, then Custom, which shows the Width and Height rows.
 pub fn resolution_names(family: usize) -> Vec<String> {
     [
@@ -414,7 +413,7 @@ mod tests {
         };
         assert_eq!((index::aspect(&deck), index::resolution(&deck)), (1, 2));
 
-        // A refresh rung the console's table lacks round-trips here, so it must be written.
+        // A refresh rung in the table round-trips, so it must be written.
         let fast = Settings {
             refresh_hz: 240,
             ..Default::default()

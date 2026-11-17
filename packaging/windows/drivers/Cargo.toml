@@ -1,10 +1,10 @@
 # Unified in-tree workspace for punktfunk's all-Rust UMDF drivers, on microsoft/windows-drivers-rs
-# (crates.io wdk/wdk-sys/wdk-build — NOT the dev-box ../../crates/wdk* path-deps). Part of the
-# Windows-host rewrite (design/windows-host-rewrite.md, M1). pf-vdisplay + the gamepad drivers move here.
+# (wdk-sys/wdk-build 0.5.1, vendored under vendor/ and patched in below). Design:
+# design/windows-host-rewrite.md.
 #
 # Separate from the main cargo workspace (own [workspace] root) because driver crates are cdylibs built
 # with the WDK toolchain (cargo-wdk / wdk-build) on Windows only. Path-deps the shared ABI crate
-# crates/host/pf-driver-proto from the main tree.
+# crates/host/pf-driver-proto and the encoder crates below from the main tree.
 [workspace]
 resolver = "2"
 members = ["wdk-iddcx", "pf-umdf-util", "pf-vdisplay", "pf-gamepad", "pf-xusb", "pf-mouse", "pf-touchpad"]
@@ -31,12 +31,10 @@ unnecessary_safety_comment = "deny"
 cast_ptr_alignment = "warn"
 
 [workspace.dependencies]
-# NOTE: the high-level `wdk` crate (0.4.1) used to be declared here and taken by five driver
-# crates. None of them ever referenced `wdk::` — every driver goes through `wdk_sys`, including
-# the WDF call macro, which wdk-sys re-exports (see pf-umdf-util, a full WDF crate that never
-# declared `wdk` either). Removing it drops a normal (linked) dependency from all five.
-# `tracing`/`tracing-subscriber` are still in the lock afterwards, but only as wdk-sys BUILD
-# dependencies — build-script machinery, not code in the shipped DLLs.
+# NOTE: no driver depends on the high-level `wdk` crate. Every driver goes through `wdk_sys`,
+# including the WDF call macro, which wdk-sys re-exports (see pf-umdf-util, a full WDF crate).
+# `tracing-subscriber` is in the lock only as a wdk-sys BUILD dependency — build-script
+# machinery, not code in the shipped DLLs.
 wdk-sys = "0.5.1"
 wdk-build = "0.5.1"
 wdk-iddcx = { path = "wdk-iddcx" }

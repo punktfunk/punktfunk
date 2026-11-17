@@ -1,11 +1,11 @@
 //! V4L2 decode: the hardware rung on SoCs whose decoder is a memory-to-memory
-//! video node. No ARM Mesa driver has Vulkan Video or VA-API, so this is
-//! their only rung.
+//! video node. No ARM Mesa driver has Vulkan Video or VA-API (Mesa 27.0-devel), so
+//! this is their only rung.
 //!
-//! Two kinds of node. A stateful one (Qualcomm `iris`/`venus`, MediaTek,
+//! Two kinds of node. A stateful one (Qualcomm `iris`/`venus`, MediaTek MT8173,
 //! Amlogic) parses the stream itself: [`StatefulRung`] here feeds it access
-//! units. A stateless one (Raspberry Pi 5, Rockchip) takes parsed slices:
-//! `video_v4l2_hevc`. Either way the pump's facts — keyframe, colour, clean
+//! units. A stateless one (Raspberry Pi 5, Rockchip, MediaTek from MT8183) takes
+//! parsed slices: `video_v4l2_hevc`. Either way the pump's facts — keyframe, colour, clean
 //! references, damage — come from the shared `pf-bitstream` planners, and the
 //! queue flows and ioctls live in `pf-v4l2dec` and `pf-v4l2`.
 //!

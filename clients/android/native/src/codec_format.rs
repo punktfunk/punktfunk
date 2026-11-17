@@ -67,10 +67,10 @@ pub(crate) fn low_latency_profile<'a>(
 /// `refresh_hz` is the stream rate (`mtk-tv`'s `operating-rate`), `sdk` the Android release
 /// (`qti-fence`'s gate).
 ///
-/// `aggressive` is the "Low-latency mode" master toggle. Off, the set is the plain profile every
-/// device once streamed with: the Qualcomm vendor twin set blind (other vendors ignore an unknown
-/// key), `priority = 0` and `operating-rate = MAX` together. That is the per-device escape hatch.
-/// On (the default), the set is Moonlight-Android's: MediaTek's `vdec-lowlatency`, the vendor keys
+/// `aggressive` is the "Low-latency mode" master toggle. Off, the set is the plain profile: the
+/// Qualcomm vendor twin set blind (other vendors ignore an unknown key), `priority = 0` and
+/// `operating-rate = MAX` together. That is the per-device escape hatch.
+/// On, the set is Moonlight-Android's: MediaTek's `vdec-lowlatency`, the vendor keys
 /// of the decoder's name prefix (a key one vendor honours means nothing to another) and one clock
 /// hint. NVIDIA Tegra and Rockchip have no such key, and Realtek's is set in `decode/` once
 /// the framework is read for it; the standard key, the clock hint and a first rank in
@@ -173,9 +173,42 @@ pub(crate) fn is_realtek(codec_name: &str) -> bool {
     name.starts_with("omx.realtek") || name.starts_with("c2.realtek")
 }
 
+/// Whether a decoder works several pictures at once with room to spare, for automatic
+/// bitrate: a Realtek one, which keeps up from over its frame period, that declares half
+/// again the pixel rate of the `width` x `height` stream at `hz`. `pixel_rate` is the most
+/// it declares, 0 for none.
+pub(crate) fn has_spare_capacity(
+    codec_name: &str,
+    pixel_rate: u64,
+    (width, height): (u32, u32),
+    hz: u32,
+) -> bool {
+    let stream = u64::from(width) * u64::from(height) * u64::from(hz);
+    is_realtek(codec_name) && stream > 0 && pixel_rate.saturating_mul(2) >= stream * 3
+}
+
 /// Whether `hay` holds `needle`. An empty needle is in nothing.
 pub(crate) fn contains(hay: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// The printable strings of 6 to 80 bytes in `bytes` that hold one of `marks`, each once, at
+/// most `cap`: what a library names, read from its file.
+pub(crate) fn marked_strings(bytes: &[u8], marks: &[&str], cap: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for run in bytes.split(|b| !(0x20..0x7F).contains(b)) {
+        let Ok(s) = std::str::from_utf8(run) else {
+            continue;
+        };
+        if out.len() < cap
+            && (6..=80).contains(&s.len())
+            && marks.iter().any(|m| s.contains(m))
+            && !out.iter().any(|o| o == s)
+        {
+            out.push(s.to_owned());
+        }
+    }
+    out
 }
 
 /// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
@@ -188,8 +221,8 @@ pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> b
 
 /// Whether each fed AU goes through the concealer first. HEVC on a Realtek decoder, which keeps
 /// showing garbage past the host's anchor after a picture naming a lost reference. AV1 on a
-/// `strict` decoder (Tensor G5, Realtek), which refuses a stale wave start: the concealer makes
-/// an error-resilient one conformant, so the wave heals it. `forced` is the debug override.
+/// `strict` decoder (Google's Tensor, Realtek), which refuses a stale wave start: the concealer
+/// makes an error-resilient one conformant, so the wave heals it. `forced` is the debug override.
 pub(crate) fn conceals(codec: u8, codec_name: &str, strict: bool, forced: Option<bool>) -> bool {
     use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
     let pick = match codec {
@@ -227,8 +260,8 @@ pub(crate) fn take_by_pts<V: Copy>(q: &mut VecDeque<(u64, V)>, pts_us: u64) -> O
 /// The AU `user_flags` for a decoded output, keyed by the echoed `presentationTimeUs`. Recovery
 /// signalling (the IDR marker, RECOVERY_ANCHOR, RECOVERY_POINT) rides the AU's flags, which are
 /// only in scope at feed time: the feed side parks `(pts_us, flags)` and the present side reads
-/// them back for core's freeze (`NativeClient::recovery_on_decoded`). A miss (probe filler, or an
-/// entry aged past the cap) reads `0`: no recovery flags, decoded normally.
+/// them back for core's freeze (`NativeClient::recovery_on_decoded`). A miss (an abandoned partial
+/// AU's empty close, or an entry aged past the cap) reads `0`: no recovery flags.
 pub(crate) fn take_flags(map: &mut VecDeque<(u64, u32)>, pts_us: u64) -> u32 {
     take_by_pts(map, pts_us).unwrap_or(0)
 }
@@ -275,6 +308,43 @@ mod tests {
         ));
         assert!(!super::contains(b"video-lowdelay", b"video-lowdelay-mode"));
         assert!(!super::contains(b"abc", b""));
+    }
+
+    /// A Realtek decoder that declares 4K at 60 has room for an ultrawide 1440p stream, none
+    /// for 4K at 60 itself. No other decoder is taken at its word, and no word is no room.
+    #[test]
+    fn spare_capacity_is_a_realtek_decoder_with_half_again_the_streams_pixels() {
+        const UHD_60: u64 = 3840 * 2160 * 60;
+        // (decoder, declared pixels a second, stream, spare)
+        for (name, declared, size, spare) in [
+            ("OMX.realtek.video.dec.hevc", UHD_60, (3440, 1440), true),
+            ("OMX.realtek.video.dec.hevc", UHD_60, (3840, 2160), false),
+            ("OMX.realtek.video.dec.hevc", 0, (3440, 1440), false),
+            ("c2.qti.hevc.decoder", UHD_60, (3440, 1440), false),
+            ("OMX.realtek.video.dec.hevc", UHD_60, (0, 0), false),
+        ] {
+            assert_eq!(
+                super::has_spare_capacity(name, declared, size, 60),
+                spare,
+                "{name} {declared} {size:?}"
+            );
+        }
+    }
+
+    /// A library's marked strings are whole printable runs, each once: not the unmarked, the
+    /// too short, or one past the cap.
+    #[test]
+    fn marked_strings_are_whole_runs_listed_once() {
+        let lib = b"\x7fELF\0video-lowdelay-mode\0low-latency\x01OMX.realtek.index.x\0rtk\0video-lowdelay-mode\0";
+        let marks = ["rtk", "ealtek", "owdelay"];
+        assert_eq!(
+            super::marked_strings(lib, &marks, 8),
+            ["video-lowdelay-mode", "OMX.realtek.index.x"]
+        );
+        assert_eq!(
+            super::marked_strings(lib, &marks, 1),
+            ["video-lowdelay-mode"]
+        );
     }
 
     #[test]
@@ -939,7 +1009,7 @@ mod tests {
         };
         assert_eq!(rate(120), Some(("operating-rate", 120)));
         assert_eq!(rate(24), Some(("operating-rate", 24)));
-        // A mode without a rate writes 0, though `frame-rate` is left out for it.
+        // A mode without a rate sets no `operating-rate` at all.
         assert_eq!(
             rate(0),
             Some(("vendor.mtk-codec2.low-latency-mode", 1)),

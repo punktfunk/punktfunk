@@ -1,9 +1,8 @@
 // What a `punktfunk://` link should DO, decided once for both routes.
 //
-// Connect and browse each ran the same three checks side by side — resolve a `preset=` reference,
-// refuse a fingerprint that disagrees with the saved record, refuse to preempt a live session —
-// and had already drifted: the same unsaved host produced two different sentences depending on
-// which route the user came in on.
+// Connect and browse share three checks — resolve a `preset=` reference, refuse a fingerprint that
+// disagrees with the saved record, refuse to preempt a live session — so the two routes cannot
+// disagree on them. Only the wording for an unsaved host differs, by `browse`.
 //
 // A value, so the rules are testable without a window. The caller supplies what it knows and
 // performs the outcome; nothing here touches the store, the session or the view.

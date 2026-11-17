@@ -35,12 +35,14 @@ use crate::{Capturer, EncodeCtlSender, EncoderSite, PixelFormat};
 
 /// How long the worker has to say hello. A process's first lines of `main`.
 const HELLO_BOUND: Duration = Duration::from_secs(5);
-/// How long a capture open may take. Its stages are calls that have hung on some box; a warm
-/// open is 55 ms and a slow one 2.5 s.
+/// How long a capture open may take. Its stages are calls that can hang; a warm open is
+/// 55 ms and a slow one 2.5 s.
 const SOURCE_BOUND: Duration = Duration::from_secs(5);
-/// An encoder open or reset: the worker's own 5 s bound on the backend, plus a thread stop.
+/// An encoder open or reset: the capture worker's own `OPEN_BOUND` on the backend, plus a
+/// thread stop.
 const OPEN_BOUND: Duration = Duration::from_secs(8);
-/// Every other op is queued in the worker and answered at once.
+/// Every other op: a close waits out at most the worker's `EncodeThread::STOP_BOUND`, the
+/// rest are queued and answered at once.
 const CTL_BOUND: Duration = Duration::from_secs(2);
 /// How long a worker gets to exit once its pipe closed, before it is ended.
 const EXIT_BOUND: Duration = Duration::from_millis(500);
@@ -211,8 +213,8 @@ impl Transport for WorkerTransport {
         self.link.request(kind::SET_ENCODE, req, OPEN_BOUND)
     }
 
-    /// The control calls as pipe requests: a reset gets the open's bound, every other op is
-    /// answered at once.
+    /// The control calls as pipe requests: a reset gets [`OPEN_BOUND`], every other op
+    /// [`CTL_BOUND`].
     fn encode_ctl(&self) -> EncodeCtlSender {
         let link = self.link.clone();
         Arc::new(move |req: &wire::EncodeCtlRequest| {

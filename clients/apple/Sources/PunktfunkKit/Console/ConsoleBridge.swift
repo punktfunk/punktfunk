@@ -1,6 +1,7 @@
 // The shared console's C ABI as Swift sees it (`clients/apple/native/src/console.rs`). One class
-// owns the handle; every call but the model pushes belongs to the thread that built it, which is
-// the main thread — `ConsoleView` drives frames from the display link there.
+// owns the handle; the calls that reach the shell belong to the thread that built it (the module
+// doc there lists them), which is the main thread — `ConsoleView` drives frames from the display
+// link there.
 //
 // The JSON on this boundary is the console's own model (`pf_console_ui::bridge`), the same the
 // Android client speaks, so there is no Swift mirror type to drift.

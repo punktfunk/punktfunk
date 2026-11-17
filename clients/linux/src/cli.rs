@@ -1,5 +1,5 @@
-//! Command-line entry paths: argv helpers, the headless flows (pair/wake/library), the
-//! exec handoff to `punktfunk-session` for `--connect`/`--browse`.
+//! Command-line entry paths: argv helpers, the headless flows (library, host store, version
+//! and updates), the exec handoff to `punktfunk-session` for `--connect`/`--browse`.
 
 use crate::trust::{KnownHost, KnownHosts};
 use gtk::glib;
@@ -39,8 +39,8 @@ pub fn couch_launch() -> bool {
         && crate::shots::shot_scene().is_none()
 }
 
-/// Split `host[:port]`: no colon defaults the port to 9777; a colon with an unparsable
-/// port yields `None` for it (callers decide whether to default or bail).
+/// Split `host[:port]`: no colon defaults the port to `deeplink::DEFAULT_PORT`; a colon with
+/// an unparsable port yields `None` for it (callers decide whether to default or bail).
 ///
 /// IPv6 goes through the shared parser — a plain `rsplit_once(':')` reads `::1` as host
 /// `:` port `1`.
@@ -61,8 +61,7 @@ fn parse_host_port(target: &str) -> (String, Option<u16>) {
 /// `--connect` / `--browse`: streams and the console library live in the
 /// `punktfunk-session` Vulkan binary — replace this process with it, forwarding the
 /// relevant argv verbatim. With neither flag (a [`couch_launch`]) it opens the console home.
-/// This keeps the Decky wrapper (which launches the SHELL with these flags) working unchanged
-/// until it's repointed at the session binary.
+/// The Decky wrapper launches the SHELL with `--browse` (`clients/decky/bin/punktfunkrun.sh`).
 pub fn exec_session() -> glib::ExitCode {
     use std::os::unix::process::CommandExt as _;
     let forward = [
@@ -170,9 +169,9 @@ pub fn headless_library(target: &str) -> glib::ExitCode {
         profile,
     ) {
         Ok((games, _)) => {
-            // A fourth column, appended: `game` or `launcher` (design D4). Appended rather than
-            // folded into an existing field so anything reading the first three columns is
-            // untouched.
+            // A fourth column, appended: `game` or `launcher` (library-scanner-plugins.md D4).
+            // Appended rather than folded into an existing field, so anything reading the
+            // first three columns is untouched.
             for g in &games {
                 let role = if g.is_launcher() { "launcher" } else { "game" };
                 println!("{}\t{}\t{}\t{}", g.id, g.store, g.title, role);
@@ -372,8 +371,8 @@ pub fn version_string() -> &'static str {
     env!("PUNKTFUNK_VERSION")
 }
 
-/// `--version` — one line, so a packaging script's run-the-binary gate and the Decky plugin
-/// can both ask "what is installed here?" without a display or a config dir.
+/// `--version` — one line, so a script can ask "what is installed here?" without a display
+/// or a config dir.
 fn headless_version() -> glib::ExitCode {
     println!("punktfunk-client {}", version_string());
     glib::ExitCode::SUCCESS
@@ -483,7 +482,7 @@ fn headless_apply_update() -> glib::ExitCode {
 
 /// Dispatch the headless host-store modes (returns `None` when argv names none of them, so the
 /// caller proceeds to launch the GTK app). Kept in one place so `arg_flag` stays private and the
-/// dispatch in `app.rs` is a single line.
+/// dispatch in `app::run` is a single line.
 pub fn headless_host_command() -> Option<glib::ExitCode> {
     if let Some(v) = arg_value("--omarchy-menu") {
         return Some(headless_omarchy_menu(&v));

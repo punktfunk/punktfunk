@@ -22,8 +22,8 @@ pub(super) fn composite_plan(
 /// rebuild so the two cannot drift.
 ///
 /// Returns whether "no cursor overlay" still means the pointer is off the streamed output, and
-/// clears `metadata_composite` when the negotiated mode makes it a fiction. wlr portals
-/// (`Hidden|Embedded`) paint the pointer into the frames and never send `SPA_META_Cursor`, so a
+/// clears `metadata_composite` when the negotiated mode makes it a fiction. A negotiated
+/// `Hidden` or `Embedded` (pointer burnt into the frames) never sends `SPA_META_Cursor`, so a
 /// metadata composite can never be fed and "no overlay" is not a park signal. `None` (KWin,
 /// Mutter, gamescope, Windows) leaves both answers alone.
 ///
@@ -55,9 +55,10 @@ pub(super) fn settle_portal_cursor(
 /// client input takes.
 ///
 /// A fresh virtual output leaves the seat wherever it last was. A relative-only client never
-/// moves it onto the streamed output, so input lands on the wrong monitor and Mutter suppresses
-/// `SPA_META_Cursor` while the pointer is off the recorded view. Retry only for relative-only
-/// clients: a desktop-model client's own `MouseMoveAbs` is the retry, and a synthetic one fights it.
+/// moves it onto the streamed output, so input lands on the wrong monitor and Mutter 50
+/// suppresses `SPA_META_Cursor` while the pointer is off the recorded view. Retry only for
+/// relative-only clients: a desktop-model client's own `MouseMoveAbs` is the retry, and a
+/// synthetic one fights it.
 #[cfg(target_os = "linux")]
 fn park_pointer(
     input_tx: &std::sync::mpsc::SyncSender<super::super::input::ClientInput>,

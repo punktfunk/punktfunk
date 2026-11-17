@@ -1,44 +1,23 @@
-//! Pad audio on Android (the 0xD1 plane) — tier A, WP9.
+//! Pad audio on Android (the 0xD1 plane) — tier A.
 //!
 //! The Android twin of [`pf_client_core::pad_audio`]: drain the host's per-pad DualSense streams,
 //! Opus-decode haptics (kind 0) and speaker (kind 1), interleave them into the pad's own
 //! 4-channel layout, and render them on the physical pad.
 //!
 //! # Why this needs a USB driver instead of an audio API
+//! AOSP's `UsbAlsaManager` (Android 14+) denylists the DualSense by VID/PID (`054c:0ce6`), so
+//! the framework discards the pad's playback node (`hasOutput: false`) and no `AudioDeviceInfo`
+//! exists to target; `/dev/snd` is closed to apps by SELinux, and `UsbRequest` rejects any
+//! endpoint that is not bulk or interrupt. So this path drives the pad's isochronous endpoint
+//! directly, through `uac-host` on the file descriptor Java already owns. Claiming the interface
+//! needs no privilege and leaves the gamepad and the pad's microphone working.
 //!
-//! Every other client hands the 4-channel stream to the platform's audio graph — WASAPI on
-//! Windows, PipeWire on Linux, CoreAudio on Apple. **Android has no such option for this device.**
-//! AOSP's `UsbAlsaManager` carries a hardcoded VID/PID denylist that includes the DualSense
-//! (`054c:0ce6`), so the kernel enumerates the pad's playback node and the framework then discards
-//! it: `hasOutput: false`. There is no `AudioDeviceInfo` for `setPreferredDevice` to target, and
-//! `/dev/snd` is closed to apps by SELinux. Android's own `UsbRequest` API cannot help either — it
-//! rejects any endpoint that is not bulk or interrupt.
-//!
-//! So this path drives the pad's isochronous endpoint directly, through `uac-host` on the file
-//! descriptor Java already owns. That is measured, not hoped: on a Nothing Phone (3) the claim
-//! succeeds unprivileged, the gamepad and the pad's microphone both keep working, and the
-//! underrun-free floor is **4 ms in flight** — including under eight-core load with the SoC in
-//! severe thermal throttling.
-//!
-//! # The exclusivity that shapes everything here, and what is actually known about it
-//!
-//! `valid_flag0` bit 1 (`HAPTICS_SELECT`) disables the audio-haptics path, and every rumble write
-//! that exists — `hid-playstation`, SDL, and our own [`crate::feedback`] path via `DsDevice` —
-//! asserts it. So haptics and classic rumble cannot both drive the coils **as coded**, and the
-//! arbitration selects rather than blends.
-//!
-//! What is NOT established is the stronger claim this module used to make: that the coils and the
-//! rumble motors are the same physical actuators, exclusive *in the firmware*. No teardown, vendor
-//! document or measurement supports it here; it traces to one reverse-engineered comment in SDL,
-//! and SDL's own modern path sets `HAPTICS_SELECT` **alone** (amplitude rides `ucEnableBits3`),
-//! which reads more like an independent mute for the audio path than a shared-actuator interlock.
-//! The combination that would settle it — rumble asserted with `HAPTICS_SELECT` CLEARED — is
-//! emitted by no code anywhere, so nothing here writes it either.
-//!
-//! The arbitration is therefore built on **evidence, not prediction**: haptics owns the coils only
-//! while haptics frames are actually arriving (see [`haptics_owns_coils`]). That is correct under
-//! either hypothesis, and it is what keeps a rumble-only title rumbling — it renders no haptics
-//! audio, the host's silence gate emits nothing, and the pad simply keeps its motors.
+//! # Who owns the coils
+//! Every rumble write this tree emits (`DsDevice`, via [`crate::feedback`]) sets `valid_flag0`
+//! bit 1 (`HAPTICS_SELECT`), which disables the audio-haptics path, so haptics and classic rumble
+//! cannot both drive the coils **as coded**. Whether the firmware makes them exclusive is not
+//! established. Haptics therefore own the coils only while haptics frames are actually arriving
+//! ([`haptics_owns_coils`]): a rumble-only title sends no 0xD1 frames and keeps its rumble.
 
 use punktfunk_core::audio::pad_mix::HapticsLiveness;
 #[cfg(target_os = "android")]
@@ -68,11 +47,10 @@ const MAX_BUFFER_FRAMES: usize = (SAMPLE_RATE as usize / 1000) * 60;
 
 /// How much audio to keep in flight on the USB endpoint.
 ///
-/// WP7 measured the underrun-free floor on real hardware at **4 ms** (clean across three sweeps,
-/// including one under eight-core load with the CPU thermally throttled); 3 ms was marginal and
-/// 2 ms never survived. 6 ms takes one step of headroom above that floor, because the same
-/// measurement found isolated transient events roughly once per three seconds that are *not*
-/// depth-dependent — so the floor is a floor, not a target.
+/// The underrun-free floor measured on real hardware is **4 ms**, including under eight-core load
+/// with the CPU thermally throttled; 3 ms was marginal and 2 ms never survived. 6 ms takes one
+/// step of headroom above it, because isolated transient events, roughly one per three seconds,
+/// are *not* depth-dependent — so the floor is a floor, not a target.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 const IN_FLIGHT_MS: u32 = 6;
 
@@ -81,8 +59,8 @@ const IN_FLIGHT_MS: u32 = 6;
 /// Which wire pad indices are currently rendering tier-A audio, as a bitmask over the 16 wire
 /// slots.
 ///
-/// Read on the rumble poll thread and written on the JNI thread, so it is an atomic rather than a
-/// lock: the reader is on a latency path and must never block behind a start/stop.
+/// Read on the rumble poll thread and written on the renderer and JNI threads, so it is an atomic
+/// rather than a lock: the reader is on a latency path and must never block behind a start/stop.
 static TIER_A_PADS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Mark (or clear) a pad as rendering tier-A audio.
@@ -131,9 +109,8 @@ pub(crate) fn haptics_owns_coils(pad: u8) -> bool {
 
 // ---- the USB sink ------------------------------------------------------------------------------
 
-/// Everything that talks to the pad. Linux and Android only: `usbfs` is a Linux kernel ABI, and
-/// this crate also builds as a host cdylib on macOS dev boxes, where the registry above still
-/// compiles and runs its tests.
+/// Everything that talks to the pad. Android only: `usbfs` is a Linux kernel ABI, and this crate
+/// also builds as a host cdylib, where the registry above still compiles and runs its tests.
 #[cfg(target_os = "android")]
 mod sink {
     use super::{IN_FLIGHT_MS, PAD_CHANNELS, SAMPLE_RATE};
@@ -169,8 +146,8 @@ mod sink {
 
         let opts = uac_host::OpenOptions {
             depth: usbfs_iso::Depth::Millis(IN_FLIGHT_MS),
-            // One packet per URB: the finest granularity the bus offers, and what WP7 measured
-            // the 4 ms floor with. Packing more multiplies one completion's latency.
+            // One packet per URB: the finest granularity the bus offers, and what the 4 ms floor
+            // was measured with. Packing more multiplies one completion's latency.
             packets_per_urb: Some(1),
             // Keep the endpoint fed rather than gapping when the decoder is momentarily late.
             // A hole in an isochronous stream is silence forever; silence we chose is better.
@@ -185,12 +162,10 @@ mod sink {
 
 /// Drive the pad directly with a synthetic tone, through **the real client path**.
 ///
-/// This exists because the two things most likely to be wrong here cannot be unit-tested and are
-/// invisible without a host: whether the descriptor Kotlin handed over is one this renderer may
-/// drive exclusively, and whether the interface claim succeeds on this kernel. A standalone
-/// harness proves neither — it owns its descriptor by construction, which is exactly the condition
-/// that was violated when this renderer was handed the HID link's fd and the two engines began
-/// stealing each other's URB completions.
+/// Two things cannot be unit-tested and are invisible without a host: whether the descriptor
+/// Kotlin handed over is one this renderer may drive exclusively, and whether the interface
+/// claim succeeds on this kernel. A standalone harness proves neither — it owns its descriptor
+/// by construction, so it cannot show that another engine is already driving the one handed over.
 ///
 /// Opens the sink the same way [`render`] does and writes a sine into the voice-coil pair, which
 /// is felt rather than heard. Returns sample frames written, or a negative [`SelfTest`] code.
@@ -374,8 +349,8 @@ unsafe fn run(
     speaker: bool,
 ) {
     // Ask the scheduler for audio priority. Android does not hand SCHED_FIFO to ordinary app
-    // threads, so -16 (ANDROID_PRIORITY_AUDIO) is the realistic knob — and WP7 measured that it
-    // both applies and is enough to hold the 4 ms floor against eight busy cores.
+    // threads, so -16 (ANDROID_PRIORITY_AUDIO) is the realistic knob; it was measured to hold
+    // the 4 ms floor against eight busy cores.
     let _ = crate::sys::set_thread_nice(None, -16);
 
     // SAFETY: forwarded from this function's contract.
@@ -395,11 +370,9 @@ fn render(
     haptics: bool,
     speaker: bool,
 ) {
-    // A host that cannot send 0xD1 will never render anything here, so opening the stream would
-    // claim the interface and (before the arbitration below) take the pad off wire rumble in
-    // exchange for nothing. Against every released host this is the DEFAULT path — `pad_haptics`
-    // is on with no UI to turn it off — so without this gate a wired DualSense simply stops
-    // rumbling. Checked before `sink::open` so the iso interface is never claimed pointlessly.
+    // A host that cannot send 0xD1 renders nothing here, so opening the stream would claim the
+    // interface for no gain. Checked before `sink::open` so the iso interface is never claimed
+    // pointlessly.
     if client.host_caps() & punktfunk_core::quic::HOST_CAP_PAD_AUDIO == 0 {
         log::warn!("pad audio: host cannot send it (no HOST_CAP_PAD_AUDIO) — pad {pad} stays on wire rumble");
         drain_until_stop(client, stop);
@@ -480,11 +453,9 @@ fn pump(
 
         let mut next = client.next_pad_audio(Duration::from_millis(10));
         if next.is_none() {
-            // R12: `next_pad_audio` collapses a DISCONNECTED channel into the same `None` as an
-            // ordinary timeout, so this arm cannot tell "nothing arrived in 10 ms" from "the
-            // session is gone and nothing will ever arrive again". Left to `continue`, a closed
-            // session span this loop at nice -16 until the owner's stop flag caught up. Ask the
-            // connection directly.
+            // `next_pad_audio` returns the same `None` for a timeout and for a closed session, so
+            // ask the connection: left to `continue`, a closed session would spin this loop at
+            // nice -16 until the owner's stop flag lands.
             if client.is_session_ended() {
                 log::debug!("pad audio: session ended, leaving the render loop");
                 break;
@@ -496,11 +467,10 @@ fn pump(
         while let Some(frame) = next.take() {
             next = client.next_pad_audio(Duration::ZERO);
 
-            // R14: `PadAudioFrame` carries the wire pad it was addressed to, and this renderer serves
-            // exactly one. A frame for another pad — a queue still holding the previous occupant's
-            // when a slot is re-used, or a host bug — would otherwise be decoded here AND seed the
-            // gap tracker from a foreign sequence space, which shows up as a burst of phantom
-            // concealment rather than as anything obviously wrong.
+            // `PadAudioFrame` carries the wire pad it was addressed to, and this renderer serves
+            // exactly one. A frame for another pad (a queue holding the previous occupant's after
+            // a slot is re-used, or a host bug) would be decoded here and seed the gap tracker
+            // from a foreign sequence space, which shows up as phantom concealment.
             if frame.pad != pad {
                 log::debug!(
                     "pad audio: dropping frame for pad {} on pad {pad}",
@@ -582,7 +552,7 @@ struct Tally {
     samples_in: u64,
     peak: i32,
     last_report: std::time::Instant,
-    /// R13: caller-side short-write accounting (distinct from `st.short_bytes`, a URB-level
+    /// Caller-side short-write accounting (distinct from `st.short_bytes`, a URB-level
     /// statistic from inside the transport).
     st_short: u64,
     st_short_logged: std::time::Instant,

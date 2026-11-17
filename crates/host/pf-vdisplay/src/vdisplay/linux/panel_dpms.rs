@@ -7,16 +7,19 @@
 //! EIS socket).
 //!
 //! Each arm self-gates: KDE in-process `org_kde_kwin_dpms` then `kscreen-doctor`; sway /
-//! Hyprland / niri via native IPC; DRM CRTCs when no compositor holds master. GNOME cannot be
-//! served (Mutter exposes no client DPMS and holds DRM master); [`darken`] logs that at
-//! `warn!`.
+//! Hyprland / Umbriel / niri via native IPC; DRM CRTCs when no compositor holds master.
+//! GNOME cannot be served (Mutter exposes no client DPMS and holds DRM master); [`darken`]
+//! logs that at `warn!`.
 //!
 //! The hold is refcounted here, not floated through the registry's per-group restore —
 //! every gamescope spawn is its own display group, so group restore would re-light under
 //! a second still-streaming session. [`acquire_stream_darken`] on 0→1,
 //! [`release_stream_darken`] as per-display topology restore on 1→0. KWin and niri wake a
-//! blanked panel on input; sway and Hyprland do not, so their heads are journaled as
-//! `EnableHeads` before they go dark, and the next host wakes them when this one dies.
+//! blanked panel on input; sway, Hyprland and Umbriel do not, so their heads are journaled
+//! as `EnableHeads` before they go dark, and the next host wakes them when this one dies.
+//!
+//! [`wake_head`] is the reverse for a mirror stream: it lights the one head the stream
+//! captures, which a dark panel never paints.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -695,8 +698,66 @@ fn relight(d: Darkened) {
     }
 }
 
-/// `kscreen-doctor --dpms <on|off>`. Shared `kwin.rs` budget: `Some(true)`
-/// succeeded, `Some(false)` refused, `None` killed at budget (applies first,
+/// Light `connector` for a mirror stream when its compositor reports it powered off: a dark
+/// head paints nothing to capture, and a pad wakes no panel. `Ok(true)` when this call lit
+/// it; `Err` when it stays dark.
+///
+/// Never darkened again here. The desktop's idle daemon takes the panel back after its own
+/// timeout; a darken at session end would leave a user back at the desk on a sway or
+/// Hyprland panel their input cannot wake. niri powers only every head at once, Mutter has
+/// no client DPMS, and gamescope drives its own head, so those are left as they are.
+pub(crate) fn wake_head(compositor: crate::Compositor, connector: &str) -> anyhow::Result<bool> {
+    use crate::Compositor;
+    match compositor {
+        Compositor::Hyprland => wake_if_dark(crate::hyprland::monitor_dpms(connector), || {
+            crate::hyprland::dpms_one(connector, true)
+        }),
+        Compositor::Wlroots => wake_if_dark(crate::wlroots::head_powered(connector), || {
+            crate::wlroots::set_dpms(connector, true)
+        }),
+        Compositor::Umbriel => {
+            wake_if_dark(crate::umbriel::desktop::head_powered(connector), || {
+                crate::umbriel::desktop::set_dpms(connector, true)
+            })
+        }
+        Compositor::Kwin => Ok(wake_kwin_head(connector)),
+        Compositor::Niri | Compositor::Mutter | Compositor::Gamescope | Compositor::Windows => {
+            Ok(false)
+        }
+    }
+}
+
+/// Run `wake` only for a head that reads powered off. An unread state is left alone: Hyprland's
+/// dispatcher toggles, so a blind "on" could darken a lit head.
+fn wake_if_dark(
+    powered: Option<bool>,
+    wake: impl FnOnce() -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    if powered == Some(false) {
+        wake()
+    } else {
+        Ok(false)
+    }
+}
+
+/// KWin's in-process DPMS on for the output named `connector`. `false` when it was on, or KWin
+/// is not there to ask.
+fn wake_kwin_head(connector: &str) -> bool {
+    let Ok(mut s) = Session::connect() else {
+        return false;
+    };
+    let named: Vec<u32> = s
+        .state
+        .outputs
+        .iter()
+        .filter(|(_, o)| o.connector.as_deref() == Some(connector))
+        .map(|(g, _)| *g)
+        .collect();
+    !s.set_mode(DPMS_MODE_ON, Some(&named)).is_empty()
+}
+
+/// `kscreen-doctor --dpms <on|off>` through `kscreen_verdict`, which owns the budget:
+/// `Some(true)` succeeded, `Some(false)` refused, `None` killed at budget (applies first,
 /// then waits — a kill usually means it landed).
 fn kscreen_dpms(mode: &'static str) -> Option<bool> {
     crate::kwin::kscreen_verdict(&["--dpms".to_string(), mode.to_string()])
@@ -704,7 +765,7 @@ fn kscreen_dpms(mode: &'static str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{journaled, relit, Darkened, Holds};
+    use super::{journaled, relit, wake_if_dark, Darkened, Holds};
     use crate::fake::{Call, FakeDisplay};
     use crate::topology_journal::{Head, Undo};
 
@@ -818,6 +879,17 @@ mod tests {
             assert_eq!(sway.take_calls(), [Call::Undo(woken)]);
             assert_eq!(journal_text(), "");
         });
+    }
+
+    /// Only a head read as off is woken; a lit or unread one is never sent the dispatch.
+    #[test]
+    fn only_a_head_read_as_off_is_woken() {
+        let wake = || Ok(true);
+        assert!(wake_if_dark(Some(false), wake).unwrap());
+        let refused = || -> anyhow::Result<bool> { panic!("the dispatch must not run") };
+        assert!(!wake_if_dark(Some(true), refused).unwrap());
+        assert!(!wake_if_dark(None, refused).unwrap());
+        assert!(wake_if_dark(Some(false), || anyhow::bail!("refused")).is_err());
     }
 
     #[test]

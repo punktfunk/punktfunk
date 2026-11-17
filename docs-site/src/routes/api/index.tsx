@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { ApiReferenceReact } from '@scalar/api-reference-react'
-// @scalar/api-reference-react@0.9.47's entry does NOT import its own stylesheet
+// @scalar/api-reference-react@0.9.78's entry does NOT import its own stylesheet
 // (and doesn't inject it at runtime), so we must ship it ourselves or the
 // reference renders unstyled. Load it as a route-scoped <link> (same pattern as
 // the root app.css), so it's present for SSR + the client-side Vue mount.
@@ -153,9 +153,9 @@ function ApiReference() {
   // <html> — we read THAT class directly rather than next-themes' useTheme().
   // The class is the authoritative, already-resolved signal (system → light/dark
   // included) and, unlike the React context, can't be desynced when bridging into
-  // Scalar's separate Vue app. Default to dark (the docs default) so SSR and the
-  // first client render agree — no hydration flash; the observer then syncs to the
-  // live class, tracking the docs toggle AND OS changes while in system mode.
+  // Scalar's separate Vue app. Start dark so SSR and the first client render agree
+  // (no hydration mismatch); the docs default to the system theme, and the observer
+  // then syncs to the live class, tracking the docs toggle AND OS changes.
   const [isDark, setIsDark] = useState(true)
   useEffect(() => {
     const root = document.documentElement

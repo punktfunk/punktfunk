@@ -8,9 +8,9 @@ import org.junit.Test
 /**
  * The ring's keyboard/remote vocabulary ([ringNavForKey]), the twin of the pad's
  * `ringNavFor`. A TV remote is the device this exists for: it is not a gamepad and not a finger,
- * so before this it could open the ring and then drive nothing while its D-pad walked the game
- * underneath. That failure is invisible — the menu is on screen and the host is still moving — so
- * the mapping is pinned rather than left to a couch to discover.
+ * so without this mapping it could open the ring and then drive nothing while its D-pad walked
+ * the game underneath. That failure is invisible — the menu is on screen and the host is still
+ * moving — so the mapping is pinned rather than left to a couch to discover.
  */
 class RingKeyNavTest {
 

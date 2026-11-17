@@ -173,7 +173,8 @@ impl MirrorDisplay {
         Ok(out)
     }
 
-    /// A compositor cast of the head: every backend but Windows.
+    /// A compositor cast of the head: every backend but Windows. A powered-off head is lit
+    /// first (`panel_dpms::wake_head`): it paints nothing to capture.
     #[cfg(not(target_os = "windows"))]
     fn create_cast(&mut self) -> Result<VirtualOutput> {
         // Resolve first: geometry for the input anchor, and "that monitor is gone"
@@ -182,6 +183,15 @@ impl MirrorDisplay {
             .with_context(|| format!("enumerate monitors to mirror {:?}", self.connector))?;
         let target = monitors::resolve(&monitors, &self.connector)?;
         check_mirrorable(target, self.compositor)?;
+        #[cfg(target_os = "linux")]
+        if crate::panel_dpms::wake_head(self.compositor, &target.connector)
+            .with_context(|| format!("wake the powered-off monitor {:?}", target.connector))?
+        {
+            tracing::info!(
+                connector = %target.connector,
+                "powered-off monitor woken for the mirror stream"
+            );
+        }
         let origin = (target.x, target.y);
         let dims = (target.width, target.height, refresh_hz(target.refresh_mhz));
 
@@ -262,7 +272,7 @@ fn check_mirrorable(target: &monitors::PhysicalMonitor, compositor: Compositor) 
         );
     }
     if target.managed {
-        // Only KWin `Virtual-punktfunk` and Hyprland `PF-N` names are ours by construction.
+        // Which names are ours by construction is per compositor: `names_ours_conclusively`.
         // Sway names every headless output `HEADLESS-N`, so a refuse would block a real pin.
         if names_ours_conclusively(compositor) {
             bail!(

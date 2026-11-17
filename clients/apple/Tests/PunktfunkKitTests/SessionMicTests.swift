@@ -28,7 +28,8 @@ final class SessionMicTests: XCTestCase {
         XCTAssertFalse(available(.restricted))
     }
 
-    /// tvOS has no app microphone, and nothing asks the OS where another fact says no.
+    /// The tvOS client opens no microphone (`SessionMic.platformHasMic`), and nothing asks the
+    /// OS where another fact says no.
     func testTheOSIsNotAskedWithoutAMicToAskFor() {
         for (hasMic, enabled, granted) in [(false, true, true), (true, false, true), (true, true, false)] {
             XCTAssertFalse(SessionMic.available(

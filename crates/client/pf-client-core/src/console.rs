@@ -31,7 +31,7 @@ pub enum OverlayAction {
     /// For a host that draws this console OVER its stream (the Vulkan session) the reveal is
     /// internal and this says nothing new. It exists for a host that must SWAP to a stream
     /// view of its own: Android leaves the console for its stream screen, and doing that at
-    /// the handshake is what put a second launch screen in front of the first. The session is
+    /// the handshake would put a second launch screen in front of the first. The session is
     /// held from the dial landing until this arrives.
     ShowStream,
     Quit,

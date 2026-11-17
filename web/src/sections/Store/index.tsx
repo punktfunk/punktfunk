@@ -116,8 +116,7 @@ const Store: FC = () => {
 		[installed.data, offered],
 	);
 	// Re-attach to a job that was already running when this page loaded — an install survives a
-	// reload on the host side, and losing sight of it left the Install buttons armed against a host
-	// that answers 409.
+	// reload on the host side, so show its progress and refresh the store when it ends.
 	const jobs = useStoreJobs();
 	const orphan = runningJob(jobs.data);
 	useEffect(() => {

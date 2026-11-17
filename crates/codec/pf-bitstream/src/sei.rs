@@ -10,8 +10,8 @@
 
 /// Recovery point SEI (D.2.8).
 ///
-/// `recovery_frame_cnt` is in `frame_num` increments, not POC. `broken_link` means
-/// pictures before the recovery point must not be shown.
+/// `recovery_frame_cnt` is in `frame_num` increments, not POC. `broken_link` set:
+/// pictures before the recovery point in output order may show artifacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecoveryPoint {
     pub recovery_frame_cnt: u32,

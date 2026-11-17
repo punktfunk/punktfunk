@@ -3,21 +3,23 @@
 //! `tests/gpu_smoke.rs` and `tests/gpu_parity.rs` each drive three codecs
 //! through one path: loader → instance → physical device whose queue families
 //! carry the codec's decode ops → logical device with the decode extensions,
-//! `timelineSemaphore`, and `synchronization2`.
+//! `samplerYcbcrConversion`, `timelineSemaphore`, and `synchronization2`.
 //!
-//! [`Graphics`] is the only caller difference: parity requires a graphics
+//! [`Graphics`] is the caller difference in device choice: parity requires a graphics
 //! queue for readback; smoke accepts decode-only and falls back, which also
 //! picks EXCLUSIVE vs CONCURRENT pool images. Pin a PCI vendor with
-//! `PF_VKD_SMOKE_VENDOR` (`0x1002`/`0x10de`). RADV needs
-//! `RADV_PERFTEST=video_decode` or no device advertises the extensions.
-//! [`Request::report_families`] is a physical-device property query, never a
-//! recorded RESULT_STATUS query, so it cannot hang RADV's VCN.
+//! `PF_VKD_SMOKE_VENDOR` (`0x1002`/`0x10de`). From Mesa 24.3, RADV advertises decode by
+//! default on VCN firmware new enough to pass CTS; otherwise set
+//! `RADV_EXPERIMENTAL=video_decode` (`RADV_PERFTEST` before Mesa 26.1).
+//! [`Request::report_families`] is a physical-device property query, never a recorded
+//! RESULT_STATUS query, which RADV's decode families lack.
 //!
 //! Compiled as `mod common;` of each test binary (Cargo does not auto-discover
-//! this file), so `#![deny(clippy::undocumented_unsafe_blocks)]` applies here.
+//! this file), so the workspace's `clippy::undocumented_unsafe_blocks` deny applies here.
 
-// Smoke never reads `Setup::pd`; parity never passes `DecodeFamilyIsFine` or splits IVF.
-// A test binary has no `pub` exemption for dead code or unused re-exports.
+// Smoke never passes `Graphics::Required` or calls the four-byte rewrites; parity never passes
+// `DecodeFamilyIsFine` or splits IVF. A test binary has no `pub` exemption for dead code
+// or unused re-exports.
 #![allow(dead_code, unused_imports)]
 
 use std::io::Cursor;
@@ -111,8 +113,8 @@ pub const AV1: Codec = Codec {
     extension: ash::khr::video_decode_av1::NAME,
 };
 
-/// Graphics-queue requirement: the one smoke vs parity difference, explicit
-/// so it cannot drift into two copied loops.
+/// Graphics-queue requirement: the smoke vs parity difference in device choice,
+/// explicit so it cannot drift into two copied loops.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Graphics {
     /// Fall back to the decode family. `decode_qf == graphics_qf` makes pool
@@ -176,10 +178,8 @@ impl Setup {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         }
-        // Leak the loader. Dropping `ash::Entry` `dlclose`s it; the next
-        // `gpu_lock` leg would re-`dlopen` a torn-down loader and fault in
-        // `Entry::load` or at exit after both legs reported ok. The process
-        // is ending, so the leak is free.
+        // Leak the loader. Dropping `ash::Entry` `dlclose`s it, and the next `gpu_lock`
+        // leg would load it again. The leak is one dlopen reference per leg.
         std::mem::forget(self.entry);
     }
 }

@@ -1,6 +1,6 @@
 //! Whether a GPU's own RGB→YUV conversion, the one AMF runs on a BGRA input, writes the range
 //! the encoder asks for. RDNA4 writes studio samples whatever it is told, under the full-range
-//! flag the encoder sets (RX 9060 XT and RX 9070 XT, every codec); RDNA2 and RDNA3 write what
+//! flag the encoder sets (RX 9070 XT measured, RX 9060 XT reported); RDNA2 and RDNA3 write what
 //! they are told. A session on such a GPU advertises and encodes studio, so every client shows
 //! what arrives, and the encoder keeps reading the desktop's own surface.
 //!

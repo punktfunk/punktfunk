@@ -35,8 +35,9 @@ pub const OUTPUT_FORMATS: [vk::Format; 4] = [NV12, P010, YUV444_8, YUV444_10];
 
 /// Per-plane `R*`/`R*G*` view formats the presenter samples, or `None` if this
 /// crate has no mapping. Views exist only under `MUTABLE_FORMAT` and must match
-/// spec table 49.1: 8-bit two-plane → `R8`/`R8G8`, 10-bit `3PACK16` → `R10X6`/
-/// `R10X6G10X6`. An `R8` view on a 10-bit plane silently reads half of each sample.
+/// the spec's Plane Format Compatibility table: 8-bit two-plane → `R8`/`R8G8`,
+/// 10-bit `3PACK16` → `R10X6`/`R10X6G10X6`. An `R8` view on a 10-bit plane
+/// silently reads half of each sample.
 ///
 /// Comparisons, not `match`: `vk::Format` is an ash newtype over `i32` whose
 /// field is private, so the constants are not structural patterns.
@@ -210,7 +211,7 @@ pub struct RawCaps {
 ///
 /// `StdVideoH264LevelIdc`, `StdVideoH265LevelIdc` and `StdVideoAV1Level` are all
 /// `c_uint` aliases. Assigning one where another belongs compiles, and the
-/// numbers look plausible (H.264 4.1 ≠ H.265 4.1; AV1 5.1 is 13, H.265 5.1 is 12).
+/// numbers look plausible (H.264 4.1 ≠ H.265 4.1; AV1 5.1 is 13, H.265 5.1 is 8).
 /// The gate is a numeric compare against [`Self::code_point`] and is only sound
 /// within one codec, which is why the value carries its tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1311,7 +1312,7 @@ mod tests {
         let caps = derive_caps(&radv_like(), NV12).unwrap();
         assert_eq!(caps.plane_view_formats, plane_formats(NV12));
 
-        // Coincide lacks the flag and distinct has it: distinct, as before the conversion.
+        // Coincide lacks the flag and distinct has it: distinct keeps its plane views.
         let mut raw = pascal_like();
         raw.decode_flags |= vk::VideoDecodeCapabilityFlagsKHR::DPB_AND_OUTPUT_DISTINCT;
         raw.dpb_formats = vec![entry(NV12, DPB_USAGE)];

@@ -1,5 +1,5 @@
 # Static file server for the punktfunk Flatpak OSTree repo, on unom-1 (the DMZ services VM).
-# Caddy on home-reverse-proxy-1 terminates TLS for flatpak.punktfunk.unom.io and reverse_proxies
+# Caddy on home-reverse-proxy-1 terminates TLS for flatpak.unom.io and reverse_proxies
 # to 192.168.50.50:3230 (port must be in unom/infra caddy_target_ports). This inner Caddy just
 # serves the bind-mounted ./site tree (repo/ + the .flatpakrepo/.flatpakref + index.html) over
 # plain HTTP. CI rsyncs into ./site and runs `docker compose up -d` (idempotent).

@@ -1243,7 +1243,7 @@ fn amf_av1_sdr10_signals_bt709_live() {
 /// Live: the D3D11 video processor converts 8-bit BGRA to a P010 target under BT.709 full range on
 /// AMD. This is the SDR-10 converter half (`EncodeInput::P010Sdr`) — the "renders green" caveat
 /// on RGB→P010 is NVIDIA-only, so prove AMD writes plausible luma. Mid-grey in → full-range Y near
-/// 504 (10-bit); a failed render is black (0) or clipped.
+/// 514 (10-bit); a failed render is black (0) or clipped.
 #[test]
 #[ignore = "needs an AMD GPU with AMF"]
 fn videoconverter_bgra_to_p010_bt709_live() {
@@ -1368,8 +1368,9 @@ fn amf_intra_refresh_property_live() {
     }
 }
 
-/// Burst faster than the encoder drains (no poll between submits). `submit` must drain into
-/// `ready` instead of erroring. Asserts IDR-first FIFO across the ready→pending boundary.
+/// Burst faster than the encoder drains (no poll between submits). `submit` must wait while the
+/// retrieve thread drains into `ready`, never error. Asserts IDR-first FIFO across the
+/// ready→pending boundary.
 #[test]
 #[ignore = "needs an AMD GPU with AMF"]
 fn amf_backpressure_burst_live() {

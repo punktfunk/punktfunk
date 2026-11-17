@@ -224,8 +224,8 @@ pub struct Capture {
     pub meta: CaptureMeta,
     pub samples: Vec<StatsSample>,
     /// One row per minute of link health per native session, so a freeze report carries the
-    /// loss, recovery and ABR history instead of a log ring that holds 45 minutes. Empty on a
-    /// GameStream capture and on recordings older than this field.
+    /// loss, recovery and ABR history the bounded log ring may already have evicted. Empty on
+    /// a GameStream capture and on recordings older than this field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub link: Vec<crate::link_health::LinkMinute>,
 }
@@ -283,7 +283,7 @@ pub struct StatsRecorder {
     generation: AtomicU64,
 }
 
-/// `~/.config/punktfunk/captures/`, via the same config-dir helper as `cert.pem`.
+/// `captures/` under [`pf_paths::config_dir`], the same dir as `cert.pem`.
 pub fn default_dir() -> PathBuf {
     pf_paths::config_dir().join("captures")
 }

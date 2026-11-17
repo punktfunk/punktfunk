@@ -1,11 +1,12 @@
 //! Keep Intel's media engine clocked while it decodes for us.
 //!
-//! i915 raises a GT's clock for a waiter only on its own `I915_GEM_WAIT` ioctl; a
-//! syncobj or sync_file wait takes the plain dma-fence path and never boosts. A Meteor
-//! Lake Arc decodes a 4K HEVC picture in 2.7 ms boosted and 6.8 ms at the media GT's
-//! 100 MHz floor. So: import a dma-buf the decode writes as a GEM handle on an i915
-//! render node, and wait it there once per picture. `xe` has no such ioctl;
-//! [`I915Boost::open`] finds no node there and the caller does nothing.
+//! i915 raises a GT's clock for a waiter in its own GEM waits (`I915_GEM_WAIT`,
+//! `SET_DOMAIN`), and only before the request starts; a syncobj or sync_file wait takes a
+//! dma-fence callback and never boosts. A Meteor Lake Arc decodes a 4K HEVC picture in
+//! 2.7 ms boosted and 6.8 ms at the media GT's 100 MHz floor. So: import a dma-buf the
+//! decode writes as a GEM handle on an i915 render node, and wait it there once per
+//! picture. `xe` has no such ioctl; [`I915Boost::open`] finds no node there and the
+//! caller does nothing.
 //!
 //! Pin: `ioctl_numbers_match_drm_h`.
 

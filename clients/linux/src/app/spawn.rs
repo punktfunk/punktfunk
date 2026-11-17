@@ -1,14 +1,12 @@
 //! The shell↔session handoff: every stream runs in the spawned `punktfunk-session`
-//! Vulkan binary (the legacy in-process presenter is gone — phase 5 of
-//! punktfunk-planning `linux-client-rearchitecture.md`). What is left here is the
-//! TRANSLATION: a [`ConnectRequest`] becomes a `ConnectPlan`, and the session's typed
-//! lifecycle events become the [`AppMsg`]s the relm4 app consumes — spinner until
-//! `{"ready":true}`, banner from the `{"error"|"ended": …}` line, exit code 3 +
-//! `trust_rejected` routed to the re-pair PIN ceremony.
+//! Vulkan binary. This module is the TRANSLATION: a [`ConnectRequest`] becomes a
+//! `ConnectPlan`, and the session's typed lifecycle events become the [`AppMsg`]s the relm4
+//! app consumes — spinner until `{"ready":true}`, banner from the `{"error"|"ended": …}`
+//! line, exit code 3 + `trust_rejected` routed to the re-pair PIN ceremony.
 //!
 //! Spawning, the argv, the stdout contract and the child handle live in
 //! `pf_client_core::orchestrate` (design/client-architecture-split.md §3) — the WinUI shell
-//! and the coming CLI spawn through the same code, so "what flags does a stream get" and
+//! and the CLI spawn through the same code, so "what flags does a stream get" and
 //! "what does ready mean" have exactly one answer.
 
 use crate::app::AppMsg;
@@ -35,7 +33,7 @@ pub use orchestrate::{session_process, CancelHandle};
 /// and the per-host clipboard decision — through the same helpers the session's own compat path
 /// uses, so the two cannot disagree.
 ///
-/// Resolving is not optional: `orchestrate::spawn_session` writes `plan.settings` into the
+/// Resolving is not optional: `orchestrate::session_command` writes `plan.settings` into the
 /// child's `--resolved-spec`, and a session running from a spec reads NO stores.
 fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) -> ConnectPlan {
     let mut plan = ConnectPlan::for_target(
@@ -49,9 +47,8 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
         // `preset=`) sets one, and it applies to this session alone.
         req.preset.clone(),
     );
-    // This shell still runs its own dial-first wake fallback in `app.rs`, so the plan's own
-    // wake stays off (it becomes real when the GTK connect path moves onto
-    // `ConnectOrchestrator`, arch-split C0).
+    // This shell runs its own dial-first wake (`AppMsg::WakeConnect`) and wake-and-wait
+    // (`gate::wake_and_connect`), so the plan's own wake stays off.
     plan.wake = false;
     plan.tofu = tofu;
     // This shell prompts for a locked profile's password and spawns again with it.
@@ -156,11 +153,11 @@ mod tests {
     /// The plan a card click builds carries THIS DEVICE'S settings, with the host's bound
     /// preset overlaid — not `Settings::default()`.
     ///
-    /// This is the 0.22.x regression, and it was invisible because the defaults are all
-    /// plausible: the spec's `bitrate_kbps: 0` means "host default", which the host reads as
-    /// its 20 Mbps fallback. A stream that ignores every setting looks exactly like a stream
-    /// that is merely capped. One test, one directory — the stores are read from it, so this
-    /// deliberately does not split into several that would race over the same variable.
+    /// The defaults are all plausible: the spec's `bitrate_kbps: 0` means "host default",
+    /// which the host reads as `DEFAULT_BITRATE_KBPS`. A stream that ignores every setting
+    /// looks exactly like a stream that is merely capped. One test, one directory — the
+    /// stores are read from it, so this deliberately does not split into several that would
+    /// race over the same variable.
     #[test]
     // The crate's one test env mutation (the config-dir write below) — see main.rs's deny note.
     #[allow(unsafe_code)]

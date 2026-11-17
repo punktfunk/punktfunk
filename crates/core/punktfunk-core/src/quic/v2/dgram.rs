@@ -159,8 +159,8 @@ pub struct Feedback {
     pub dead_ppm: u32,
     /// Media packets received this session.
     pub packets_received: u64,
-    /// The window's lost shards by their place in the frame: the first twelve data shards,
-    /// the middle, the last twelve with all parity.
+    /// The window's lost shards by their place in the frame: data shards as
+    /// `packet::reassemble::loss_position` places them, all parity in the tail.
     pub head: u32,
     pub mid: u32,
     pub tail: u32,

@@ -46,7 +46,7 @@ int main(void){
     dbg = 0; build_config();
 
     // GET_DESCRIPTOR. The device and HID descriptors go out whole, whatever wLength asks
-    // (pins today's reply: the config, string and report descriptors are clamped to it).
+    // (the config, string and report descriptors are clamped to it).
     ctrl_req(0x80, USB_REQ_GET_DESCRIPTOR, USB_DT_DEVICE<<8, 0, 8);
     assert(WROTE(18) && ep0.data[8] == 0xde && ep0.data[9] == 0x28);
     ctrl_req(0x80, USB_REQ_GET_DESCRIPTOR, USB_DT_CONFIG<<8, 0, 9);

@@ -1,10 +1,9 @@
 //! JNI seam for the reachability probe: a bounded QUIC handshake to a saved host
 //! (`punktfunk_core::client::NativeClient::probe_identity`), reporting WHICH certificate
 //! answered. Like [`crate::wol`] it takes no session handle and links into the host workspace
-//! build (pure `jni` + `punktfunk_core`). Kotlin calls it periodically, on a background
-//! dispatcher, to light the "online" pip for saved hosts that never advertise on mDNS (reached
-//! over Tailscale / VPN / another subnet) — the display-side companion to the dial-first
-//! connect fix.
+//! build (pure `jni` + `punktfunk_core`). Kotlin calls it periodically, off the main thread, to
+//! light the "online" pip for saved hosts, including ones that never advertise on mDNS (reached
+//! over Tailscale / VPN / another subnet).
 
 use jni::errors::LogErrorAndDefault;
 use jni::objects::{JObject, JString};
@@ -17,7 +16,7 @@ use std::time::Duration;
 /// the certificate `host:port` presented within `timeoutMs`, or null if nothing answered.
 /// mDNS-independent; the handshake is unpinned, so the answer names whoever holds the address
 /// and the caller compares it against the record's pin.
-/// Blocking (builds its own runtime) — Kotlin runs it on `Dispatchers.IO`, never the main thread.
+/// Blocking (builds its own runtime) — Kotlin runs it off the main thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProbe<'local>(
     mut env: EnvUnowned<'local>,

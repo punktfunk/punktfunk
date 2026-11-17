@@ -7,8 +7,8 @@
   web/src/components/brand-mark.tsx (the canonical flattened geometry, shared with the Apple icon,
   the marketing site and the docs) into:
 
-    punktfunk.ico        multi-size icon (16..256, PNG-compressed entries - Vista+ format, we
-                         require Windows 10). Shipped in {app} and used for the Apps & Features
+    punktfunk.ico        multi-size icon (16..256; only the 128 and 256 entries are PNG-compressed,
+                         the rest classic DIB). Shipped in {app} and used for the Apps & Features
                          entry; the tray's state icons are drawn separately, not by this script.
 
   Outputs are COMMITTED next to this script (like include/punktfunk_core.h, generated-but-checked-in);
@@ -39,7 +39,7 @@ $bbMinX = $c1x - $R; $bbMaxX = $c2x + $R
 $bbMinY = $c2y - $R; $bbMaxY = $c1y + $R
 $markCx = ($bbMinX + $bbMaxX) / 2.0
 $markCy = ($bbMinY + $bbMaxY) / 2.0
-$markSpan = $bbMaxX - $bbMinX   # == $bbMaxY - $bbMinY (the bbox is square)
+$markSpan = $bbMaxX - $bbMinX   # ~= $bbMaxY - $bbMinY (square to within 0.4 units)
 
 # Draw the mark onto $g centered at ($cx,$cy) with bounding-box size $size (device pixels).
 function Draw-Mark([System.Drawing.Graphics]$g, [double]$cx, [double]$cy, [double]$size) {

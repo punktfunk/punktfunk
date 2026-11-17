@@ -4,8 +4,9 @@
 //!
 //! [`MAP`] holds one file per seat's port: `<account> <sockfd>`, the socket number `attach`
 //! took, as vhci's `status` shows it. A row whose port is free or holds another socket is
-//! stale. While the supervisor runs, a new vhci interface starts unauthorized: the fence
-//! authorizes a seat's only when [`interface_allowed`] takes what the kernel parsed.
+//! stale. While the supervisor runs with the udev fence rule installed, a new vhci interface
+//! starts unauthorized: the fence authorizes a seat's only when [`interface_allowed`] takes
+//! what the kernel parsed.
 
 use anyhow::{Context, Result};
 use pf_inject::usbip;
@@ -31,7 +32,8 @@ fn lock() -> MutexGuard<'static, ()> {
 }
 
 /// At the supervisor's start: makes the map, drops stale rows (attachments outlive a restart,
-/// the kernel holds their sockets) and starts every new vhci interface unauthorized.
+/// the kernel holds their sockets) and, when the udev fence rule is installed, starts every new
+/// vhci interface unauthorized.
 pub fn prepare() {
     let _held = lock();
     let dir = Path::new(MAP);

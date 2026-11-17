@@ -140,11 +140,10 @@ shoot_sim() {
   # for the platform. CI runners commonly ship a runtime but not every device (the iPhone 16 Pro
   # Max is absent on ours), so create-on-demand is what makes it reproducible.
   #
-  # The created device is named after the DEVICE, not after this script, for two reasons. It used
-  # to be "pf-shot-<prefix>", which `$match` never matches — so every run created another
-  # simulator and none was ever reused (they piled up on the runner). And the name is user-visible:
-  # `UIDevice.current.name` is what the pairing sheet prefills as this device's name, so
-  # "pf-shot-iphone-6.9" was rendered into an App Store screenshot.
+  # The created device is named after the DEVICE, not after this script, for two reasons. The
+  # name must match `$match`, or every run creates another simulator and none is reused. And the
+  # name is user-visible: `UIDevice.current.name` is what the pairing sheet prefills as this
+  # device's name, so a script-flavoured name would be rendered into an App Store screenshot.
   # PF_SHOT_UDID (optional): capture on this device. The first match may be the simulator
   # someone is working in, and the capture installs its build there.
   local udid="${PF_SHOT_UDID:-}"
@@ -195,7 +194,7 @@ shoot_sim() {
     --wifiBars 3 >/dev/null 2>&1 || true
   # Every scene is a dark-mode scene. The in-app `.environment(\.colorScheme, .dark)` override
   # does NOT cross a presentation boundary — a `.sheet` gets its own environment and follows the
-  # DEVICE appearance — so the pairing sheet came out light grey over the dark app. Set the
+  # DEVICE appearance — so the pairing sheet would be light grey over the dark app. Set the
   # simulator itself to dark and the whole hierarchy, presentations included, agrees.
   xcrun simctl ui "$udid" appearance dark >/dev/null 2>&1 || true
 

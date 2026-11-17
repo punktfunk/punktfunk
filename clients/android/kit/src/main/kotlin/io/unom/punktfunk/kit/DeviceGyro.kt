@@ -19,18 +19,19 @@ import android.view.WindowManager
  * is rigidly attached to (or simply is) the thing in the player's hands. [GamepadFeedback]'s
  * rumble-on-phone mirror with the data flowing the other way.
  *
- * On Android the only motion sources are the capture links (USB DualSense / SC2 — pads with a
- * real IMU, claimed as [GamepadRouter.ExternalPad]s), so the stand-down rule is exactly
- * [GamepadRouter.padHasOwnMotion]: when a capture link holds pad 0, the mirror sends nothing —
- * two motion writers on one wire pad would fight. It also sends nothing while pad 0 has no slot
- * at all (motion never creates a host pad; a controller must have arrived first).
+ * A pad's own motion comes from a capture link (USB DualSense / SC2, claimed as
+ * [GamepadRouter.ExternalPad]s) or, on API 31+, from [PadSensors] reading a Bluetooth pad's IMU,
+ * so the stand-down rule is exactly [GamepadRouter.padHasOwnMotion]: when either holds pad 0,
+ * the mirror sends nothing — two motion writers on one wire pad would fight. It also sends
+ * nothing while pad 0 has no slot at all (motion never creates a host pad; a controller must
+ * have arrived first).
  *
  * Two properties this class enforces itself:
  *  - samples ride a dedicated [HandlerThread] with batching disabled (`maxReportLatencyUs = 0`) —
  *    sensor batching would trade the exact latency gyro aim exists to avoid;
- *  - a stand-down edge (capture link claims pad 0, or [stop]) sends ONE zero-gyro sample, so the
- *    host's virtual pad never keeps integrating an angular velocity this device stopped
- *    producing (the gyro-sweep "stale angular velocity re-sent forever" failure mode).
+ *  - a stand-down edge (a pad with its own motion takes pad 0, or [stop]) sends ONE zero-gyro
+ *    sample, so the host's virtual pad never keeps re-emitting an angular velocity this device
+ *    stopped producing.
  *
  * Units are the wire contract, converted by [Gamepad.motionGyroWire] / [Gamepad.motionAccelWire] —
  * the same two functions [PadSensors] uses, so a scale this client ever has to correct is corrected
@@ -108,8 +109,8 @@ class DeviceGyro(
             Sensor.TYPE_GYROSCOPE -> {
                 // The write gate, per sample: sends must be on at all (the forwarding
                 // preference AND the session's GAMEPAD grant — an AccessUpdate can revoke it
-                // mid-session), pad 0 must exist (motion never creates a pad) and must not be
-                // a capture link's (its own IMU is streaming).
+                // mid-session), pad 0 must exist (motion never creates a pad) and must not have
+                // a motion source of its own (its IMU is streaming).
                 val write = router.sendsEnabled() && router.padPresent(0) &&
                     !router.padHasOwnMotion(0)
                 if (!write) {

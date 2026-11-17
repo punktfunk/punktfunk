@@ -2,22 +2,21 @@
 //!
 //! Raw `nvEncodeAPI` so this host can do reference-frame invalidation, the recovery-anchor
 //! tag, `reset()`, and HDR/Main10. CUDA frames go in zero-copy; CPU frames are uploaded.
-//! The session itself is the shared [`NvSession`]; this file owns the `.so`, the CUDA
-//! context, the input ring, the fused dmabuf convert and the cursor blend. Design:
-//! `design/linux-direct-nvenc.md`; recovery: `encoder-recovery-hardening.md`.
+//! The session itself is the shared [`NvSession`]; this file owns the `.so`, the input ring,
+//! the fused dmabuf convert and the cursor blend. Design: `design/linux-direct-nvenc.md`;
+//! recovery: `encoder-recovery-hardening.md`.
 //!
 //! Loads `libnvidia-encode.so.1` at runtime (never a link-time import: AMD/Intel boxes still
 //! start and fall through to VAAPI/software). Session is `NV_ENC_DEVICE_TYPE_CUDA` on the
 //! shared process-wide `CUcontext`. Input is an encoder-owned ring of registered CUDA
 //! surfaces; each `FramePayload::Cuda` is device→device copied into a slot. Stream-ordered
-//! submit (default; `PUNKTFUNK_NVENC_STREAM_ORDERED=0` reverts) binds IO streams so copy +
+//! submit (`PUNKTFUNK_NVENC_STREAM_ORDERED`, read in `env_knobs`) binds IO streams so copy +
 //! blend enqueue without a CPU sync.
 //!
 //! Two-thread retrieve (`PUNKTFUNK_NVENC_ASYNC`: `1` always, `0` never, unset = adaptive via
 //! [`Encoder::set_pipelined`]) keeps the session SYNC — Linux has no completion events — and
-//! moves blocking `nvEncLockBitstream` off the encode thread. Sub-frame chunked poll (default
-//! 4 slices + `SUBFRAME_READBACK`) is mutually exclusive with pipelined retrieve.
-//!
+//! moves blocking `nvEncLockBitstream` off the encode thread. Sub-frame chunked poll
+//! (multi-slice + `SUBFRAME_READBACK`) is mutually exclusive with pipelined retrieve.
 //! Compiles GPU-less; [`try_api`] fails cleanly without a driver.
 
 // `unsafe_op_in_unsafe_fn` off: this file is raw CUDA/`nvEncodeAPI` calls. Wrapping each one
@@ -51,8 +50,8 @@ use std::sync::mpsc;
 
 use nvidia_video_codec_sdk::sys::nvEncodeAPI as nv;
 
-// Runtime-loaded NVENC entry table. Never a link-time import: `nvenc` is compiled in
-// unconditionally, and a load-time `.so` would refuse to start on AMD/Intel-only boxes.
+// Runtime-loaded NVENC entry table. Never a link-time import: packaged builds compile `nvenc`
+// in for every box, and a load-time `.so` would refuse to start on AMD/Intel-only boxes.
 
 /// Resolve the table once per process. `Err` = no driver, no `.so`, or a driver older than
 /// our headers. [`NvencCudaEncoder::open`] gates on it.
@@ -265,8 +264,8 @@ fn load_api() -> std::result::Result<EncodeApi, String> {
 }
 
 /// A dead convert worker waits this long before the lane spawns another. A crash loop would
-/// otherwise cost a process and a CUDA context on every frame; three deaths trip the raw lane's
-/// degrade latch, and the next session negotiates the import path instead.
+/// otherwise cost a process and a CUDA context on every frame; pf-zerocopy's `RAW_IMPORT_BUDGET`
+/// deaths trip the raw lane's degrade latch, and the next session negotiates the import path.
 const WORKER_RESPAWN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The raw frame the fused pass last converted, and the ring slot holding the result.
@@ -406,7 +405,6 @@ fn log_refusal(captured: &CapturedFrame, d: &DmabufFrame) {
     );
 }
 
-/// Encoder-owned input surface + NVENC registration (once at init, unregistered at teardown).
 /// What a submit carries: a CUDA buffer the encoder copies into a ring slot, or the held
 /// dmabuf the zero-copy worker's fused pass writes into the slot directly.
 #[derive(Clone, Copy)]
@@ -520,6 +518,7 @@ struct Direct {
     bufs: HashMap<((u64, u64), pf_zerocopy::Span, u32), DirectBuf>,
 }
 
+/// Encoder-owned input surface + NVENC registration (once at init, unregistered at teardown).
 struct RingSlot {
     surface: SlotSurface,
     reg: nv::NV_ENC_REGISTERED_PTR,
@@ -1732,8 +1731,8 @@ impl NvencCudaEncoder {
             bufferUsage: nv::NV_ENC_BUFFER_USAGE::NV_ENC_INPUT_IMAGE,
             ..Default::default()
         };
-        // Padded planes: `chromaOffsetIn` (the 12.1 bindings' `reserved1[0]`), read only by
-        // struct version 5. A driver that refuses it fails the register and the lane.
+        // Padded planes: `chromaOffsetIn` (SDK 13.0; the 12.1 bindings' `reserved1[0]`), read
+        // only by struct version 5. A driver that refuses it fails the register and the lane.
         if chroma != 0 && u64::from(chroma) != u64::from(span.stride) * u64::from(height) {
             rr.version = nv::NVENCAPI_VERSION | (5 << 16) | (0x7 << 28);
             rr.reserved1[0] = chroma;

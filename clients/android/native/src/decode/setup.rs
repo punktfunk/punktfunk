@@ -144,11 +144,11 @@ pub(super) fn hdr_static(client: &NativeClient) -> Option<punktfunk_core::quic::
 /// `adb shell setprop debug.punktfunk.low_latency_key mtk-boost`.
 pub(super) const LOW_LATENCY_KEY_PROP: &std::ffi::CStr = c"debug.punktfunk.low_latency_key";
 
-/// TV platforms that show half the stream rate, as (`ro.product.manufacturer`, `ro.product.device`):
-/// Philips' Pentonic 1000 sets (OLED809/810/888, PUS8508) and TCL's Pentonic 700 `G08` (C6K, C755,
-/// C805). Under the standard `low-latency` key their display stack registers the stream at the
-/// 120 Hz panel maximum, runs VRR only for HDMI inputs, and drops every other frame to fit the
-/// 60 Hz app output (HWC log `PqLink … => 1/2`). They get the `mtk-tv` profile.
+/// TV platforms players report showing half the stream rate, as (`ro.product.manufacturer`,
+/// `ro.product.device`): Philips' Pentonic 1000 sets (OLED809/810/888, PUS8508) and TCL's
+/// Pentonic 700 `G08` (C6K, C755, C805). On a MediaTek Sony, the standard `low-latency` key
+/// registers the stream at the 120 Hz panel maximum, VRR runs only for HDMI inputs, and every
+/// other frame of the 60 Hz app output drops (`PqLink … => 1/2`). These get the `mtk-tv` profile.
 const HALF_RATE_TVS: &[(&str, &str)] = &[("TPV", "PH1M_WW_9972"), ("TCL", "G08")];
 
 fn half_rate_tv() -> bool {

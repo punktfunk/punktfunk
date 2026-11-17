@@ -134,7 +134,7 @@ pub struct SurfaceFeedback {
     globals: Option<GlobalList>,
     surface: wl_surface::WlSurface,
     presentation: wp_presentation::WpPresentation,
-    /// The window's content tag, held for the session: dropping it untags the surface.
+    /// The window's content tag. Never destroyed here: dropping the handle sends nothing.
     _content_type: Option<ct::WpContentTypeV1>,
     dead: bool,
     // SAFETY: field drop order keeps SDL's display alive past every borrowed proxy and queue.

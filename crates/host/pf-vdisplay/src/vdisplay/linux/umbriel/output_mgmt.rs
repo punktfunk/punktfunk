@@ -2,7 +2,8 @@
 //!
 //! Umbriel's `output-enable` reuses the head's current mode. A monitor switched off while
 //! disabled comes back disabled with no mode, so that request fails; this one names it.
-//! Only the target head is configured: wlroots leaves the others as they are.
+//! Only the target head is sent. The protocol forbids omitting a head; wlroots 0.20 does not
+//! enforce that, and Umbriel leaves the other heads as they are.
 
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;

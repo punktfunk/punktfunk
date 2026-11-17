@@ -1,8 +1,8 @@
 //! The send thread: sealed access units out of the encode loop and onto the wire.
 //!
-//! [`send_loop`] owns the socket side — chunking under `send_pacing`, the reconfig gate, and
-//! the per-second [`SendStats`] line. The encode loop hands it [`FrameMsg`]s and never blocks
-//! on a write.
+//! [`send_loop`] owns the socket side — chunking under `send_pacing`, NACK resends, and the
+//! 2 s [`SendStats`] sample. The encode loop hands it [`SendMsg`]s and never blocks on a
+//! write. [`reconfig_allowed`], the mid-stream `Reconfigure` gate, lives here too.
 
 use super::recovery::ResendRing;
 use super::*;
@@ -53,7 +53,8 @@ pub(super) enum SendMsg {
 }
 
 /// The client's NACKs for the send thread, which sends them before its next message: one per
-/// frame, the newest ask replacing an older one. Past the ring's three frames the oldest goes.
+/// frame, the newest ask replacing an older one. Past the ring's `RESEND_FRAMES` frames the
+/// oldest goes.
 #[derive(Default)]
 pub(super) struct ResendAsks(std::sync::Mutex<std::collections::VecDeque<(u32, Vec<u16>)>>);
 
@@ -309,8 +310,8 @@ pub(super) struct SendStats {
     pub(super) driver_dropped: Arc<AtomicU64>,
     /// The encode loop's `keyframe_left`, stamped when a keyframe's last packet leaves.
     pub(super) keyframe_left: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
-    /// Sealed wire bytes go here each aggregation tick; the control task diffs them into the
-    /// per-minute `link health` line's `egress_mbps`.
+    /// Sealed wire bytes go here after every turn of the loop; the control task diffs them into
+    /// the per-minute `link health` line's `egress_mbps` and the shared-path share window.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
 }
 
@@ -336,9 +337,10 @@ const IDLE_TICK: std::time::Duration = std::time::Duration::from_millis(50);
 /// socket write is stuck, and the thread is left to it rather than holding the session's end.
 pub(super) const SEND_JOIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// The send thread and the one strong sender to it. A client's NACK reaches the thread
-/// through a weak sender, so dropping this one ends the loop; the drop then waits for the
-/// thread, so a summary built after it holds every counter the thread writes.
+/// The send thread and a strong sender to it; the session's screen set holds the others.
+/// A client's NACK reaches the thread through a weak sender, so dropping them all ends the
+/// loop; the drop then waits for the thread, so a summary built after it holds every counter
+/// the thread writes.
 pub(super) struct SendThread {
     tx: Option<Arc<std::sync::mpsc::SyncSender<SendMsg>>>,
     thread: Option<std::thread::JoinHandle<()>>,

@@ -466,8 +466,8 @@ impl Drop for ParkPads {
     }
 }
 
-/// What a seat's worker holds from the OS. Which of them are live follows from the
-/// state's phase; nothing here is read to decide what the seat does next.
+/// What a seat's worker holds from the OS. The state's phase says which of them are live; the
+/// rig only probes them and performs, and the state decides what comes next.
 struct Rig {
     root: SecretRoot,
     accounts: AccountManager,

@@ -42,8 +42,8 @@ use crate::session::PictureLayers;
 use crate::sys::{now_monotonic_ns, sysprop};
 
 /// Reader pool depth: the presents SurfaceFlinger may hold ([`PRESENTED_CAP`]), the store's
-/// deepest buffer, and the acquire in hand. Images allocate lazily, so a display that holds two
-/// costs what it did at eight.
+/// deepest buffer, and the acquire in hand. Images allocate lazily, so the depth costs memory
+/// only as far as a display holds presents.
 ///
 /// The pool never runs dry: the budget applies nothing while [`PRESENTED_CAP`] presents are
 /// held, and [`Retire::complete`] lets at most one completed present wait behind a missing
@@ -219,13 +219,14 @@ impl AscSink {
     /// ([`super::super::DecodeOptions::force_rate_switch`]).
     ///
     /// `overlay` sets the reader's gralloc ask. `true` adds `COMPOSER_OVERLAY` so HWC scans the
-    /// buffer out directly: the default. It is also the one reader parameter that can make
-    /// `AMediaCodec_start` fail after a clean configure: start gralloc-allocates every codec
-    /// output buffer from this reader's window with our consumer usage OR'd into the decoder's
-    /// producer bits, and an old 32-bit OMX BSP (the Mi TV Stick's Amlogic gralloc) can refuse the
-    /// combined allocation. `false` asks for `GPU_SAMPLED_IMAGE` alone, the SurfaceTexture shape
-    /// every TextureView path exercises; SurfaceFlinger then GPU-composites the layer. Images
-    /// allocate lazily, so `READER_MAX_IMAGES` is no start-time factor.
+    /// buffer out directly (the first bring-up rung asks for it). It is also the one reader
+    /// parameter that can make `AMediaCodec_start` fail after a clean configure: start
+    /// gralloc-allocates every codec output buffer from this reader's window with our consumer
+    /// usage OR'd into the decoder's producer bits, and an old 32-bit OMX BSP (the Mi TV Stick's
+    /// Amlogic gralloc) can refuse the combined allocation. `false` asks for `GPU_SAMPLED_IMAGE`
+    /// alone, the SurfaceTexture shape every TextureView path exercises; SurfaceFlinger then
+    /// GPU-composites the layer. Images allocate lazily, so `READER_MAX_IMAGES` is no start-time
+    /// factor.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn create(
         window: &NativeWindow,
@@ -537,11 +538,11 @@ impl AscSink {
     /// drop back to the pool as they are superseded); smooth keeps order up to capacity.
     ///
     /// One `acquireNextImageAsync` at a time, never `acquireLatestImageAsync`: that call
-    /// (`NdkImageReader.cpp`, unfixed as of AOSP main) drains through one `int*` fence out-param it
-    /// overwrites per image, releases each dropped image with its SUCCESSOR's fence, and hands the
-    /// caller the last fence it already gave away. `setBuffer` then transfers that stale fd to
-    /// SurfaceFlinger, which closes it a second time — an `fdsan` `SIGABRT` on the decode thread
-    /// the moment a burst gives it two images to collapse.
+    /// (`NdkImageReader.cpp`, unfixed in AOSP main at `e2f098935447`) drains through one `int*`
+    /// fence out-param it overwrites per image, releases each dropped image with its SUCCESSOR's
+    /// fence, and hands the caller the last fence it already gave away. `setBuffer` wraps that fd
+    /// in a second `Fence` in this process, and the double close is an `fdsan` `SIGABRT` on the
+    /// decode thread the moment a burst gives it two images to collapse.
     fn drain_reader(&mut self) {
         // Each evicted image returns with its acquire fence, so the codec cannot reuse it early.
         while let Some((acq, decoded_mono)) = self.acquire() {
@@ -598,7 +599,8 @@ impl AscSink {
     /// Read every present fence that has signalled, oldest first; a pending one stops the scan
     /// (order is what the intervals measure). One that outlives its patience never signals and
     /// is recorded off its latch instead. Runs on every completion and on every vsync tick, so
-    /// the last frame before a pause is scored off its fence, not off its latch 200 ms later.
+    /// the last frame before a pause is scored off its fence, not off its latch after
+    /// [`FENCE_PATIENCE_NS`].
     fn poll_fences(
         &mut self,
         clock_offset: i64,
@@ -844,7 +846,7 @@ impl Sink for AscSink {
             "asc released={} displays={} skipped={} inflight={} qDepth={} feedMs p50={:.2} \
              p95={:.2} max={:.2} codecMs p50={:.2} p95={:.2} max={:.2} paceMs p50={:.2} \
              max={:.2} latchMs p50={:.2} max={:.2} e2eMs p50={:.2} max={:.2} panelMs={:.2} \
-             glassMs={:.3} leadMs={:.2} sfLeadMs={:.2} sfAim={} marginUs={} held={} slotMiss={} \
+             glassMs={:.3} leadMs={:.2} sfLeadMs={:.2} sfAim={} marginUs={} held={} chained={} slotMiss={} \
              coalesced={} n0={} n1={} n2={} n3+={} \
              judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} sfJitMs p50={:.2} max={:.2} \
              forced={} unlatched={} fence={} fenced={} fenceErr={} fenceTailMs p50={:.2} \
@@ -873,6 +875,7 @@ impl Sink for AscSink {
             sf_aim,
             self.slots.margin_ns() / 1000,
             c.held,
+            c.chained,
             c.slot_miss,
             c.coalesced,
             intervals.n0,
@@ -899,6 +902,7 @@ impl Sink for AscSink {
         c.forced = 0;
         c.unlatched = 0;
         c.held = 0;
+        c.chained = 0;
         c.slot_miss = 0;
         c.coalesced = 0;
         verdict

@@ -8,7 +8,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// No report for this long: the plugin is gone. Six missed 5 s heartbeats.
+/// No report for this long: the plugin is gone. Six missed heartbeats at plugin-kit's default
+/// `heartbeatMs`.
 pub const SILENCE: Duration = Duration::from_secs(30);
 /// `downloading` with no byte moved for this long: a read the plugin never timed out.
 pub const BYTE_STALL: Duration = Duration::from_secs(300);
@@ -106,7 +107,8 @@ pub struct DownloadReport {
     #[serde(default)]
     #[schema(value_type = u64, required = false)]
     pub total_bytes: Option<u64>,
-    /// What the plugin is doing, in its words: `File 2 of 3`, `Verifying`. At most 80 chars.
+    /// What the plugin is doing, in its words: `File 2 of 3`, `Verifying`. Cut to
+    /// [`PHASE_MAX`] bytes.
     #[serde(default)]
     pub phase: Option<String>,
     /// Why it failed, one sentence for the player.
@@ -125,11 +127,12 @@ pub struct Download {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = u64, required = false)]
     pub total_bytes: Option<u64>,
-    /// Bytes per second over the last 5 s, while downloading.
+    /// Bytes per second over the last [`RATE_WINDOW`], while downloading.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = u64, required = false)]
     pub rate_bps: Option<u64>,
-    /// Seconds left at the last 30 s's pace, while downloading with a known total.
+    /// Seconds left at the pace over the last [`ETA_WINDOW`], while downloading with a known
+    /// total.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = u64, required = false)]
     pub eta_s: Option<u64>,

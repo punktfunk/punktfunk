@@ -1,5 +1,5 @@
 //! Per-session capture, topology, and encoder decision, resolved once from
-//! [`HostConfig`](crate::config), the session's encode resolution, and handshake-negotiated
+//! [`HostConfig`](pf_host_config::HostConfig), the session's encode resolution, and handshake-negotiated
 //! depth, HDR, chroma, and codec.
 //!
 //! Capture and topology callers read this artifact instead of re-deriving from config.
@@ -9,13 +9,16 @@
 //! probes the encode backend again.
 //!
 //! Platform-neutral so it threads through `virtual_stream` / `build_pipeline`. Linux
-//! resolves to portal + single-process; Windows is IDD-push + single-process.
+//! resolves to portal + single-process; Windows to IDD-push + single-process, or WGC in a
+//! capture worker for a mirrored or joined session ([`CaptureBackend::resolve`],
+//! [`SessionPlan::sharing_live_display`]).
 //!
 //! See `design/windows-host-rewrite.md`.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureBackend {
-    /// Linux: xdg ScreenCast portal → PipeWire. The only Linux capture path.
+    /// Linux: every capture, PipeWire or direct `ext-image-copy-capture-v1`. The only value
+    /// off Windows.
     Portal,
     /// Windows: IDD direct-push from the pf-vdisplay driver's shared ring. The
     /// host runs as SYSTEM in the interactive console session, so it captures
@@ -49,8 +52,8 @@ impl CaptureBackend {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionTopology {
-    /// One process captures and encodes: Linux portal, or Windows IDD-push in the
-    /// host's SYSTEM process in the interactive console session.
+    /// No capture worker: the Linux portal, or Windows IDD-push, whose driver captures and
+    /// encodes for the host's SYSTEM process in the interactive console session.
     SingleProcess,
     /// Windows: a capture worker in the user's session captures and encodes; the host reads
     /// its access units.
@@ -91,8 +94,8 @@ pub struct SessionPlan {
     pub bit_depth: u8,
     /// Handshake HDR verdict, handed to the capturer (not derived from depth).
     /// Windows IDD-push enables advanced colour; Linux offers 10-bit PQ/BT.2020.
-    /// Set only where `capture::capturer_supports_hdr_for` said yes — Linux means
-    /// a gamescope output off our `pipewire-hdr` build; other compositors are 8-bit.
+    /// Set only where the source can deliver it: `capture::capturer_supports_hdr_for` on the
+    /// native plane, `gamestream::launch_hdr_capable` on GameStream.
     pub hdr: bool,
     /// 4:2:0, or 4:4:4 when client, host, and GPU all support it. `Yuv420` on every backend that declined.
     pub chroma: crate::encode::ChromaFormat,
@@ -106,9 +109,10 @@ pub struct SessionPlan {
     /// resolves uses it. The host's row `pyrowave_bpp` until the native handshake sets the
     /// client's.
     pub pyrowave_bpp: f64,
-    /// Encoder composites cursor bitmaps. Set only via [`cursor_blend_for`]: Linux
-    /// when the encoder is the compositing stage; Windows always `false` (IDD
-    /// composites the pointer). Encoders whose fast path cannot blend stay off
+    /// Encoder composites cursor bitmaps. Decided by [`cursor_blend_for`], or by its blend term
+    /// `encoder_blends_cursor` where a GameStream plan knows no compositor yet; a further
+    /// screen forces it off. Linux when the encoder is the compositing stage; Windows always
+    /// `false` (IDD composites the pointer). Encoders whose fast path cannot blend stay off
     /// those shapes — see [`Self::output_format`] and `Resolved::cursor_blend_capable`.
     pub cursor_blend: bool,
     /// Client draws the pointer locally, so `cursor_blend` is off and (on Windows)
@@ -207,7 +211,8 @@ pub const DEFAULT_SLICES: u32 = 4;
 
 /// Slices per frame a native client takes: 1 without
 /// [`VIDEO_CAP_MULTI_SLICE`](punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE), else its
-/// `ClientHello` ask, else [`DEFAULT_SLICES`]. An ask past 32 (NVENC's limit) is no ask.
+/// `ClientHello` ask, else [`DEFAULT_SLICES`]. An ask past 32 (the `PUNKTFUNK_NVENC_SLICES`
+/// range) is no ask.
 pub fn client_slices(video_caps: u8, asked: u8) -> u32 {
     if video_caps & punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE == 0 {
         return 1;

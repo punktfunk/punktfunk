@@ -289,9 +289,9 @@ impl From<&Sps> for NegotiationInfo {
     }
 }
 
-/// Mainstream hardware DPB slots: DXVA's H.264 picparams array is 16 entries;
-/// Vulkan Video reports the same. Backends need one extra slot for the picture
-/// in flight, so a 16-frame DPB demands 17 and is refused.
+/// Mainstream hardware DPB slots: DXVA's H.264 picparams array is 16 entries.
+/// Backends need one extra slot for the picture in flight, so a 16-frame DPB
+/// demands 17.
 const MAINSTREAM_MAX_DPB_SLOTS: usize = 16;
 
 /// DPB size in frames. Same question as [`crate::h265::dpb_limit`], different
@@ -729,7 +729,8 @@ impl H264Planner {
         self.report.flush(live)
     }
 
-    /// Reject interlaced and separate-colour-plane streams; hosts never emit them.
+    /// Reject interlaced and separate-colour-plane streams (hosts never emit them),
+    /// and a DPB deeper than [`MAINSTREAM_MAX_DPB_SLOTS`] frames.
     fn check_envelope(sps: &Sps) -> Result<(), PlanError> {
         if !sps.frame_mbs_only_flag {
             return Err(PlanError::OutsideEnvelope(
@@ -1834,8 +1835,8 @@ mod tests {
     }
 
     /// Picture-level warnings, dropping [`PlanWarning::LevelDerivedDpb`].
-    /// [`base_sps`] is 64×64 with no VUI restriction, so A.3.1 saturates
-    /// (`MaxDpbMbs(L1)=396` / 16 MBs) and every plan carries that warning.
+    /// [`authored_sps_pps`] is level 4 at 64×64 with no VUI restriction, so A.3.1
+    /// saturates (`MaxDpbMbs(L4)=32768` / 16 MBs) and every plan carries that warning.
     fn picture_warnings(plan: &AuPlan) -> Vec<&PlanWarning> {
         plan.warnings
             .iter()
@@ -2339,7 +2340,7 @@ mod tests {
 
     /// Consumer-side pin: `dpb_limit + 1 <= 16` for the (picture, level, VUI)
     /// triples hosts actually emit. Producer-side HEVC equivalent:
-    /// `pf-encode`'s `rfi_dpb_fits_a_mainstream_vulkan_decoder`.
+    /// `pf-encode-core`'s `rfi_dpb_fits_a_mainstream_vulkan_decoder`.
     #[test]
     fn every_reachable_h264_stream_fits_a_mainstream_slot_pool() {
         // (picture, level, VUI max_dec_frame_buffering)
@@ -2756,8 +2757,8 @@ mod tests {
     }
 
     /// An IDR that fails to plan restarts nothing. Clearing the latch on sight
-    /// of the IDR let the P behind it plan on an empty DPB and be stored as a
-    /// reference for everything after.
+    /// of the IDR would let the P behind it plan on an empty DPB and be stored as
+    /// a reference for everything after.
     #[test]
     fn an_idr_that_fails_to_plan_keeps_the_planner_awaiting_an_idr() {
         let (sps, pps) = authored_sps_pps();
@@ -2928,8 +2929,8 @@ mod tests {
         assert_eq!(output_lags(sps), vec![0; 40]);
     }
 
-    /// NVENC's shape: no VUI restriction, `pic_order_cnt_type` 2. 8.2.1.3 makes
-    /// output order the decoding order, so nothing waits.
+    /// `pic_order_cnt_type` 2 with no VUI restriction: 8.2.1.3 makes output order the
+    /// decoding order, so nothing waits.
     #[test]
     fn poc_type_2_shows_each_picture_in_its_own_au_with_no_stated_bound() {
         let sps = base_sps().resolution(64, 64).pic_order_cnt_type(2).build();

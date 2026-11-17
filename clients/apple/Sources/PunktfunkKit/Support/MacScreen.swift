@@ -99,8 +99,8 @@ extension NSScreen {
     /// The PANEL's pixels, which are not the framebuffer's. A scaled mode ("More Space") renders
     /// into a buffer LARGER than the panel and the window server shrinks it, so
     /// `frame × backingScaleFactor` reads 3420×2224 on a 2560×1664 MacBook Air — a mode the host
-    /// would really drive, at a third more pixels than the screen can show. The mode list carries
-    /// the panel size on the modes IOKit marks native.
+    /// would really drive, at a third more pixels per axis than the screen can show. The mode
+    /// list carries the panel size on the modes IOKit marks native.
     ///
     /// Falls back to the framebuffer for a display that publishes no native mode at all (Sidecar,
     /// screen sharing, some virtual outputs), which is the best guess available there.

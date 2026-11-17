@@ -321,8 +321,8 @@ pub fn resetup_cursor(m: &Monitor) {
 }
 
 /// Declare (or RE-declare) the hardware cursor for `monitor` against `data_event`, returning
-/// the DDI status. Called at initial channel delivery AND on every swap-chain assignment, since
-/// a mode commit reverts the path to a software cursor.
+/// the DDI status. Called at channel delivery, on an enable flip and on every swap-chain
+/// assignment, since a mode commit reverts the path to a software cursor.
 ///
 /// `data_event` is a BORROWED value: the monitor entry owns the event and closes it only after
 /// joining the worker, so the handle this registers with the OS stays open for as long as the
@@ -331,16 +331,10 @@ pub fn resetup_cursor(m: &Monitor) {
 pub fn setup_hardware_cursor(monitor: iddcx::IDDCX_MONITOR, data_event: isize) -> i32 {
     let caps = iddcx::IDDCX_CURSOR_CAPS {
         Size: core::mem::size_of::<iddcx::IDDCX_CURSOR_CAPS>() as u32,
-        // On-glass finding (2026-07-22, .173): the hardware-cursor query delivers ONLY
-        // `IDDCX_CURSOR_SHAPE_TYPE_ALPHA` shapes, in EVERY configuration — all three
-        // ColorXorCursorSupport levels, event-driven AND ~30 Hz polled. Masked/monochrome
-        // cursors (I-beam, resize, SIZEALL, app hand cursors) never arrive: NONE rejects the
-        // query outright (STATUS_NOT_SUPPORTED); EMULATION software-composites them into the
-        // frame (double cursor vs the client's stale local shape); FULL excludes them from the
-        // frame but never delivers them (shape freezes on the last alpha cursor). FULL is the
-        // right resting state: the frame stays cursor-free for ALL cursor types, and the
-        // full-fidelity SHAPE comes from the session-side cursor source in the host, not from
-        // this query (design/remote-desktop-sweep.md §8).
+        // The query delivers only ALPHA shapes, at every ColorXorCursorSupport level; masked
+        // cursors (I-beam, resize) never arrive. NONE rejects the query, EMULATION composites
+        // them into the frame, FULL excludes them undelivered. FULL keeps the frame cursor-free;
+        // the full shape comes from the host's session source (design/remote-desktop-sweep.md §8).
         ColorXorCursorSupport: iddcx::IDDCX_XOR_CURSOR_SUPPORT::IDDCX_XOR_CURSOR_SUPPORT_FULL,
         MaxX: CURSOR_SHAPE_MAX,
         MaxY: CURSOR_SHAPE_MAX,
@@ -356,9 +350,9 @@ pub fn setup_hardware_cursor(monitor: iddcx::IDDCX_MONITOR, data_event: isize) -
 }
 
 // There is NO un-declare path: empty caps are rejected `STATUS_INVALID_PARAMETER`. The
-// composite flip is a flag plus a mode re-commit: `set_cursor_forward(false)` stores
-// the flag, the host forces a same-mode re-commit, and the OS's per-commit software-cursor
-// default sticks because `resetup_cursor` skips the flagged monitor.
+// composite flip is a flag: `set_cursor_forward(false)` makes `resetup_cursor` skip the flagged
+// monitor while nothing declared, so the OS's per-commit software-cursor default sticks; where a
+// target declared, the pool blends the pointer instead.
 
 /// Map the delivered section and start the query→publish worker for `monitor`.
 ///
@@ -476,7 +470,7 @@ fn run_worker(monitor_v: usize, view_v: usize, data_v: isize, stop: HANDLE, cell
             pShapeBuffer: shape_buf.as_mut_ptr(),
         };
         // Zeroed, the OS writes every field it reports. v3: the base query DDI slot is stubbed
-        // to NOT_SUPPORTED on current IddCx.
+        // to NOT_SUPPORTED on IddCx 1.10.
         let mut out = iddcx::IDARG_OUT_QUERY_HWCURSOR3::default();
         // SAFETY: `monitor` is live (departure drops this worker FIRST), args outlive the call.
         let st =

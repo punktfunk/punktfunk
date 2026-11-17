@@ -28,7 +28,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R16_UNORM, DXGI_SAMPLE_DESC,
 };
 
-/// f64 analogue of the HLSL in `CURVE_PQ2020` + `P010_COMMON`.
+/// f64 analogue of the HLSL in `CURVE_PQ2020` + `CSC_FULL`.
 /// One scRGB pixel in (linear Rec.709, 1.0 = 80 nits, HDR may exceed 1.0);
 /// out is 10-bit full-range (Y, Cb, Cr) for a flat block.
 #[cfg(target_os = "windows")]
@@ -68,12 +68,11 @@ fn p010_reference(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
     (yc, cbc, crc)
 }
 
-/// Colour-bar P010 on `luid` with the IDD out-ring bind profile:
+/// Colour-bar P010 on `luid` with the P010 pool-slot bind profile (`Targets::new`):
 /// `BIND_RENDER_TARGET` only, `MiscFlags` 0. CPU-upload encoder tests cannot
 /// use that profile; this is the RTV-written P010 → encoder ingest path.
-/// Eight sRGB bars (1.0 = 80 nits). Expected 10-bit codes:
-/// (490,512,512) (478,423,518) (464,525,473) (450,432,476) (350,584,585)
-/// (325,448,598) (226,650,535) (64,512,512).
+/// Eight sRGB bars (1.0 = 80 nits), converted at full range; each bar's expected 10-bit
+/// codes are `p010_reference` of its colour.
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub fn hdr_p010_convert_bars_on_luid(
@@ -170,7 +169,7 @@ pub fn hdr_p010_convert_bars_on_luid(
             .context("CreateShaderResourceView(fp16 bars)")?;
         let src_srv = src_srv.context("null src srv")?;
 
-        // The IDD out-ring's exact profile: P010, RENDER_TARGET only, MiscFlags 0.
+        // The P010 pool slot's exact profile: P010, RENDER_TARGET only, MiscFlags 0.
         let p010_desc = D3D11_TEXTURE2D_DESC {
             Width: w,
             Height: h,
@@ -216,7 +215,8 @@ pub fn hdr_p010_selftest_at(w: u32, h: u32, vendor: Option<u32>) -> Result<()> {
     if w < 16 || h < 16 || 8u32.div_ceil(w / 16) * 16 > h {
         bail!("hdr-p010-selftest needs room for its 8 16x16 blocks, got {w}x{h}");
     }
-    // 16×16 flats: each 2×2 chroma footprint is uniform, so Cb/Cr can match exactly.
+    // 16×16 flats: away from a block's left edge each chroma footprint is one colour, so Cb/Cr
+    // can match exactly.
     #[allow(non_snake_case)]
     let (W, H) = (w, h);
     const BLK: u32 = 16;
@@ -452,8 +452,9 @@ pub fn hdr_p010_selftest_at(w: u32, h: u32, vendor: Option<u32>) -> Result<()> {
     }
 }
 
-/// A hardware device for a self-test: the first adapter with PCI vendor `vendor`, else the
-/// default one. Prints which adapter it got, since a PASS speaks only for that GPU.
+/// A hardware device for a self-test: the first adapter with PCI vendor `vendor` (an error when
+/// none has it), or the default one when `vendor` is `None`. Prints which adapter it got, since
+/// a PASS speaks only for that GPU.
 #[cfg(target_os = "windows")]
 fn selftest_device(vendor: Option<u32>) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};

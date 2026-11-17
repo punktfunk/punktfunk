@@ -5,8 +5,8 @@
 # run on main at least once before a stub that points at `latest` can ship.
 #
 # musl needs no C cross-toolchain here — punktfunk-setup is pure Rust, so rust-lld plus the
-# target's self-contained crt objects link a static-pie for both architectures (measured:
-# ~1 MB, seconds). See design/installer-v2.md D8 and WP4.1.
+# target's self-contained crt objects link a static binary for both architectures. See
+# design/installer-v2.md D8 and §6.
 name: setup-binary
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

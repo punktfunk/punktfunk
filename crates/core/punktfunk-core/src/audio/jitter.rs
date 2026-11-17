@@ -4,7 +4,7 @@
 use super::*;
 
 /// Tuning for [`JitterPolicy`], in milliseconds. Depth is time, not device quanta: `3 × quantum`
-/// is 15 ms at 5 ms and 64 ms at 20 ms.
+/// is 15 ms at 5 ms and 60 ms at 20 ms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JitterTuning {
     /// Depth to prime to before the first sample plays, and the depth drift correction pulls
@@ -43,7 +43,7 @@ impl JitterTuning {
         hard_cap_ms: 180,
         deprime_ms: 50,
     };
-    /// CoreAudio via AVAudioEngine. Same engine as WASAPI; longer `deprime_ms` because wireless
+    /// CoreAudio via AVAudioEngine. WASAPI's tuning with a longer `deprime_ms`, because wireless
     /// clients stall more. See [`AAUDIO`].
     ///
     /// [`AAUDIO`]: JitterTuning::AAUDIO
@@ -72,7 +72,7 @@ impl JitterTuning {
     }
 
     /// Depth-average excess that arms drift shed: middle of the headroom band, never less than
-    /// two protocol frames. Derived from `headroom_ms` so the shed stays strictly below the trim.
+    /// `2 × FRAME_MS`. Derived from `headroom_ms` so the shed stays strictly below the trim.
     pub const fn shed_excess_ms(&self) -> u32 {
         let half = self.headroom_ms / 2;
         if half > 2 * FRAME_MS {
@@ -118,7 +118,7 @@ const INSERT_SUSTAIN_MS: u32 = SHED_SUSTAIN_MS;
 const INSERT_MARGIN_MS: u32 = AV_DEADBAND_MS / 2;
 const _: () = assert!(INSERT_MARGIN_MS < AV_DEADBAND_MS);
 /// Linear crossfade across a drift shed. 2 ms is a fraction of a 5 ms Opus frame and the whole
-/// of a 2 ms lossless one. [`JitterPolicy::set_frame_us`] caps the fade at half a frame.
+/// of a 2 ms lossless one. [`JitterPolicy::crossfade_samples`] caps the fade at half a frame.
 const SHED_CROSSFADE_MS: u32 = 2;
 /// Underruns inside [`GROW_WINDOW_MS`] before the live target grows.
 const GROW_UNDERRUNS: u32 = 3;
@@ -1089,7 +1089,8 @@ mod tests {
     }
 
     /// `depth_ms(target)` must round-trip to `target_ms()`. Multiply-before-divide holds for the
-    /// whole ladder; `per_ms = rate_hz / 1000 × channels` truncated 44 100 Hz to 44 samples/ms.
+    /// whole ladder; dividing first (`rate_hz / 1000 × channels`) truncates 44 100 Hz to 44
+    /// samples/ms.
     #[test]
     fn the_shipping_rate_ladder_round_trips_ms_to_samples_exactly() {
         let presets = [
@@ -1598,8 +1599,8 @@ mod tests {
     }
 
     /// A link that parks ~100 ms at once every ~100 ms delivers exactly the audio that bridges
-    /// the next hole. Trimming the clump on sight deleted it and then concealed the gap it made
-    /// — ten and more trims a second. The clump fits under the hard cap and drains before the
+    /// the next hole. Trimming the clump on sight would delete it and then conceal the gap it
+    /// made — ten and more trims a second. The clump fits under the hard cap and drains before the
     /// average ever crosses the headroom line, so nothing is cut.
     #[test]
     fn a_clumping_link_keeps_its_clump() {
@@ -1609,8 +1610,7 @@ mod tests {
             ("WASAPI", JitterTuning::WASAPI),
             ("AAUDIO", JitterTuning::AAUDIO),
         ] {
-            // 90 ms holes every 100 ms, a slightly fast host, ten minutes. (Trimmed on sight this
-            // was 6 000 trims and 6 000 starved reads on COREAUDIO.)
+            // 90 ms holes every 100 ms, a slightly fast host, ten minutes.
             let s = simulate_bunching(t, None, 600_000, 90, 100, 50);
             assert!(s.trims <= 8, "{name}: the clump is being trimmed: {s:?}");
             assert!(s.audible <= 16, "{name}: {s:?}");

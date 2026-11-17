@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-/// 45 s: intro animation plus ~12 steps on a loaded CI box.
+/// 45 s: a demo run to the outro takes about 4 s (0.6 s intro, 140 ms per command, the 2 s
+/// wait before the check); the rest is headroom for a loaded CI box.
 const DEADLINE: Duration = Duration::from_secs(45);
 
 fn run(args: &[&str], keys: &[u8], until: &str) -> String {
@@ -215,8 +216,8 @@ fn quitting_the_settings_screen_changes_nothing() {
     );
 }
 
-/// The default run shows progress, not a transcript: luxus counted the lines on Omarchy and
-/// the wall of them is what hid the one warning that mattered.
+/// The default run shows progress, not a transcript: a wall of echoed commands hides the one
+/// warning that matters.
 #[test]
 fn the_default_run_collapses_to_a_progress_line() {
     let text = plain(&run(&["--demo", "debian-fresh"], b"\r\r\r", "Done. Next"));

@@ -5,7 +5,6 @@
 //! The export's modifier must pass this device's importability query — a
 //! foreign GPU's tiling refuses before image create. A refusal or driver
 //! rejection is a clean error; the caller demotes to software decode.
-//! EGL sibling: `video_gl.rs`.
 
 use crate::knobs::HwFault;
 use crate::vk::gpu::destroy_image_with_memory;
@@ -197,7 +196,7 @@ impl HwFrame {
 
 /// One decoder surface's plane images, imported once and reused every time the
 /// surface comes round. An import costs two image creates, two memory imports and
-/// a mapping each; a pool of ~17 surfaces at 4K did that per frame before.
+/// a mapping each.
 struct Planes {
     generation: u64,
     coded_width: u32,
@@ -628,7 +627,7 @@ fn plane_image(
 
         // Vulkan owns the fd it imports — dup so the decoder guard keeps the original.
         // SAFETY: `fd` is a plane fd of the caller's `DmabufFrame`. `DrmFrameGuard`
-        // keeps those fds open until `import` moves it onto `HwFrame`. The borrow
+        // keeps those fds open until `get_or_import` moves it onto `HwFrame`. The borrow
         // ends at `try_clone_to_owned`.
         let owned = unsafe { BorrowedFd::borrow_raw(fd) }
             .try_clone_to_owned()

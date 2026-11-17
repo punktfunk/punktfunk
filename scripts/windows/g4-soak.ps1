@@ -9,7 +9,7 @@
   marker into live-g4-<Tag>.log; a status poller writes one timed /api/v1/status sample every
   two seconds into g4-<Tag>-status.jsonl. g4-report.ps1 cuts both into the six section 5 criteria.
 
-  Detached, so it survives the ssh drop and the sleep leg:
+  Detached, so it survives the ssh drop and the sleep leg (kick-task.ps1 is not in this repo):
     kick-task.ps1 -Name pf-g4 -Script C:\Users\Public\g4-soak.ps1 -ScriptArgs "-Tag g4n -Minutes 240"
   -ScriptArgs carries no commas and no colons, so list arguments use '/' as the separator.
 

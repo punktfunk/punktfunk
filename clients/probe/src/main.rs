@@ -1,4 +1,4 @@
-//! Reference `punktfunk/1` client for protocol verification and stream diagnostics.
+//! Reference `punktfunk/2` client for protocol verification and stream diagnostics.
 //!
 //! A synthetic host enables deterministic frame checks; a virtual host writes encoded AUs and
 //! reports capture-to-receive latency. Input, microphone, touch and rich-input flags exercise the
@@ -8,7 +8,7 @@
 //! verified fingerprint; literal PIN arguments are refused. `--discover` lists native mDNS hosts.
 //!
 //! Usage: `punktfunk-probe [--connect HOST:PORT] [--mode WxHxFPS] [--out FILE]
-//! [--bitrate KBPS] [--codec auto|h264|hevc|av1]
+//! [--bitrate KBPS] [--codec auto|h264|hevc|av1|pyrowave]
 //! [--input-test|--mic-test|--touch-test|--type TEXT|--pad-audio-test [--pads N]]
 //! [--pin HEX|--pair -] [--compositor NAME] [--gamepad NAME] [--trajectory FILE] |
 //! --discover [SECS]`
@@ -64,7 +64,7 @@ struct Args {
     pad_hz: u32,
     /// `--quit` — close the connection with the deliberate-quit code (`QUIT_CLOSE_CODE`) at end of
     /// stream, so the host tears its virtual display down immediately (skips keep-alive linger). A
-    /// bare exit closes with code 0 → the host lingers for a reconnect. Tests the #2 quit path.
+    /// bare exit closes with code 0 → the host lingers for a reconnect.
     quit: bool,
     /// `--seconds N` — cap the receive loop at N seconds, then end the session gracefully (reach the
     /// `conn.close`). Without it the loop runs to the 120s cap. Lets a test bound a live-host stream so
@@ -76,8 +76,8 @@ struct Args {
     remode: Vec<(Mode, u32, bool)>,
     /// `--rebitrate KBPS:SECS` — send a mid-stream [`SetBitrate`] (the adaptive-bitrate control
     /// message) SECS seconds into the stream: the headless validator for the host's in-place
-    /// encoder rate retarget (Phase 3.2) / rebuild fallback. Wiggles the cursor around the switch
-    /// so a damage-driven idle desktop actually publishes frames through it.
+    /// encoder rate retarget (`reconfigure_bitrate`) / rebuild fallback. Wiggles the cursor
+    /// around the switch so a damage-driven idle desktop actually publishes frames through it.
     rebitrate: Option<(u32, u32)>,
     /// `--link-kbps N` — send the link rate a real client's bring-up ramp would, so the
     /// host paces a pinned stream at that link rate. The probe runs no ramp of its own.
@@ -86,15 +86,17 @@ struct Args {
     pair: Option<String>,
     /// `--name LABEL` — how the host labels this client when pairing.
     name: String,
-    /// `--compositor NAME` — request a host compositor backend (auto|kwin|wlroots|mutter|gamescope|hyprland|niri|umbriel).
+    /// `--compositor NAME` — request a host compositor backend; `CompositorPref::from_name`
+    /// decides the names.
     compositor: CompositorPref,
-    /// `--gamepad NAME` — request a host virtual-pad backend (auto|xbox360|dualsense).
+    /// `--gamepad NAME` — request a host virtual-pad backend; `GamepadPref::from_name` decides
+    /// the names.
     gamepad: GamepadPref,
     /// `--bitrate KBPS` — request this encoder bitrate (kilobits/s); 0 = host default.
     bitrate_kbps: u32,
     /// `--audio-channels N` — request stereo (2), 5.1 (6) or 7.1 (8) audio; default 2. The probe
-    /// multistream-decodes the host's frames and asserts the per-channel sample count, so it's the
-    /// headless validator for the surround encode path.
+    /// multistream-decodes the host's frames and logs the first one's channel and sample counts,
+    /// so it's the headless validator for the surround encode path.
     audio_channels: u8,
     /// `--audio-format opus|lossless48|lossless96|<rate>/<bits>` — what to ask the host for on the
     /// audio plane. `opus` (default) sends the UNSPECIFIED sentinel and keeps the legacy `0xC9`
@@ -109,9 +111,10 @@ struct Args {
     /// and look for energy above 24 kHz in the result. A brick wall there means the host's capture
     /// resampled and the session is claiming a rate its content does not have.
     audio_out: Option<String>,
-    /// `--codec h264|hevc|av1|auto` — the preferred video codec (soft; the host honors it when it can
-    /// emit it, else falls back). The probe always advertises it can decode all three; this just sets
-    /// the preference byte. `auto` (default) = no preference (host decides). `0` = auto.
+    /// `--codec h264|hevc|av1|pyrowave|auto` — the preferred video codec (soft; the host honors it
+    /// when it can emit it, else falls back). The probe always advertises H.264, HEVC and AV1,
+    /// and PyroWave only when it is the preference. `auto` (default) = no preference (host
+    /// decides). `0` = auto.
     preferred_codec: u8,
     /// `--launch ID` — ask the host to launch a library title in this session (a store-qualified
     /// id from the host's `GET /api/v1/library`, e.g. `steam:570`). Host resolves it; `None` = none.
@@ -125,14 +128,12 @@ struct Args {
     /// flip it to the capture model (`CursorRenderMode { client_draws: false }`), then wiggle the
     /// pointer with RELATIVE motion for the whole stream: the headless reproduction of a
     /// pointer-lock client expecting the HOST to composite the cursor into the video. Decode the
-    /// dump and look for the pointer — a cursorless dump is the bug this flag was built to catch.
+    /// dump and look for the pointer; a cursorless dump is a failure.
     cursor_capture: bool,
     /// `--cursor-nochannel` — the same relative wiggle WITHOUT the cursor channel: no
-    /// `CLIENT_CAP_CURSOR`, no render-mode flip. The headless reproduction of a client LATCHED
-    /// in capture mode at connect (`console.rs` `latched_mouse` — it never advertises the
-    /// channel), the shape of the 2026-07 "no cursor in Mutter capture mode" field report. The
-    /// host must composite the metadata cursor on its own; decode the dump and look for the
-    /// pointer.
+    /// `CLIENT_CAP_CURSOR`, no render-mode flip. The headless stand-in for a client that never
+    /// advertises the channel. The host must composite the metadata cursor on its own; decode
+    /// the dump and look for the pointer.
     cursor_nochannel: bool,
     /// `--cursor-channel` — negotiate the channel and leave the client drawing (a desktop
     /// client), flip to the capture model at 15 s and back at 35 s, wiggling throughout. The
@@ -515,9 +516,9 @@ fn run(args: Args) -> Result<()> {
 }
 
 /// Browse the LAN for native (`_punktfunk._udp`) hosts for `secs` seconds and print them, then
-/// exit — the discovery side of the host's mDNS advert (host crate `discovery.rs`). TXT keys:
-/// `fp` (host cert fingerprint to pin), `pair` (required|optional), `id` (stable host id),
-/// `wire` (the protocols the host answers).
+/// exit — the discovery side of the host's mDNS advert (host crate `hostsys/discovery.rs`).
+/// It prints the TXT keys `fp` (host cert fingerprint to pin), `pair` (required|optional) and
+/// `wire` (the protocols the host answers), and dedups on `id` (stable host id).
 fn discover(secs: u64) -> Result<()> {
     use mdns_sd::{ServiceDaemon, ServiceEvent};
     use std::collections::BTreeMap;
@@ -594,8 +595,9 @@ fn discover(secs: u64) -> Result<()> {
 /// Pads `--pad-audio-test` can declare and count.
 const PAD_AUDIO_PADS: usize = 4;
 
-/// Counters the planes share. The data loop mirrors the session's figures into the first four
-/// for the control tasks; the datagram task counts the host→client planes for the report.
+/// Counters the planes share. The data loop mirrors the session's figures into the first five
+/// (through `dropped_frames`) for the control tasks; the datagram task counts the host→client
+/// planes for the report.
 #[derive(Default)]
 struct Counters {
     /// Packet-level receive counters. The speed test reads their delta over the burst window, so
@@ -774,7 +776,7 @@ async fn session(mut args: Args) -> Result<()> {
     report_side_planes(&counters);
 
     // Under PUNKTFUNK_TEST_FEEDBACK (a loopback harness scripts a feedback burst), a run with no
-    // v2 rumble tail (seq + TTL) fails: a host back on v1 level datagrams bumps the rumble counter
+    // v2 rumble tail (seq + TTL) fails: a host sending v1 level datagrams bumps the rumble counter
     // identically. Only tightens an otherwise-OK run; a video failure stays the primary error.
     let result = if std::env::var("PUNKTFUNK_TEST_FEEDBACK").as_deref() == Ok("1")
         && result.is_ok()
@@ -864,11 +866,10 @@ async fn handshake(
             name: Some(args.name.clone()),
             // `--launch ID` — host resolves it against its own library and runs it this session.
             launch: args.launch.clone(),
-            // This headless tool just dumps the bitstream (no decode), so it can always claim
-            // 10-bit / 4:4:4 support. Gated by env so latency runs stay on the 8-bit 4:2:0 baseline:
-            // PUNKTFUNK_CLIENT_10BIT=1 advertises VIDEO_CAP_10BIT (host Main10 path);
-            // PUNKTFUNK_CLIENT_444=1 advertises VIDEO_CAP_444 (host HEVC 4:4:4 path) — verify the
-            // resulting chroma with `ffprobe` on the `--out` .h265.
+            // This headless tool dumps the bitstream (no decode), so it can claim 10-bit / 4:4:4.
+            // Each PUNKTFUNK_CLIENT_* switch in this block counts when set, any value (even 0);
+            // unset keeps latency runs on 8-bit 4:2:0. _10BIT advertises VIDEO_CAP_10BIT (Main10),
+            // _444 VIDEO_CAP_444 (HEVC 4:4:4): check its chroma with `ffprobe` on the `--out` file.
             video_caps: {
                 // Always ask for per-AU host timings (0xCF) — this is a measurement tool, and the
                 // host/network split is exactly what it exists to report. Old hosts ignore the bit.
@@ -885,14 +886,14 @@ async fn handshake(
                 if std::env::var_os("PUNKTFUNK_CLIENT_444").is_some() {
                     caps |= punktfunk_core::quic::VIDEO_CAP_444;
                 }
-                // PUNKTFUNK_CLIENT_HDR=1 advertises VIDEO_CAP_HDR (BT.2020 PQ), and 10-bit
+                // PUNKTFUNK_CLIENT_HDR advertises VIDEO_CAP_HDR (BT.2020 PQ), and 10-bit
                 // with it — the host needs both for an HDR session. Pairs with
                 // PUNKTFUNK_CLIENT_PEAK_NITS, which carries the panel's ST.2086 volume.
                 if std::env::var_os("PUNKTFUNK_CLIENT_HDR").is_some() {
                     caps |=
                         punktfunk_core::quic::VIDEO_CAP_HDR | punktfunk_core::quic::VIDEO_CAP_10BIT;
                 }
-                // PUNKTFUNK_CLIENT_CHACHA20=1 advertises VIDEO_CAP_CHACHA20 — drives the
+                // PUNKTFUNK_CLIENT_CHACHA20 advertises VIDEO_CAP_CHACHA20 — drives the
                 // host's ChaCha20-Poly1305 session-cipher resolution (the soft-AES armv7
                 // negotiation, design/chacha20-session-cipher.md §7) without a webOS build;
                 // the negotiated cipher is reported in the welcome log line below.
@@ -901,8 +902,8 @@ async fn handshake(
                 }
                 caps
             },
-            // `--audio-channels` (default stereo); the probe multistream-decodes + validates the
-            // host's frames to exercise the surround encode path headlessly.
+            // `--audio-channels` (default stereo); the probe multistream-decodes the host's
+            // frames to exercise the surround encode path headlessly.
             audio_channels: args.audio_channels,
             // Legacy coupling; the probe decodes whatever the host answers (`Welcome::audio_layout`).
             audio_layout: 0,
@@ -911,14 +912,14 @@ async fn handshake(
             // No receiver behind the probe: it decodes Opus itself.
             audio_bitstreams: 0,
             // The probe just dumps the bitstream (no decode), so it advertises every codec — HEVC
-            // (the host default) AND H.264 (so it can drive a GPU-less software host,
-            // `PUNKTFUNK_ENCODER=software`) AND AV1. The host picks one and reports it in
+            // (first on `resolve_codec`'s ladder) AND H.264 (so it can drive a GPU-less software
+            // host, `PUNKTFUNK_ENCODER=software`) AND AV1. The host picks one and reports it in
             // `Welcome::codec`; the dump extension follows that.
             video_codecs: punktfunk_core::quic::CODEC_H264
                 | punktfunk_core::quic::CODEC_HEVC
                 | punktfunk_core::quic::CODEC_AV1
-                // PyroWave only on request: a PyroWave-default host would otherwise pick it
-                // for every probe run, changing the dump format under long-standing recipes.
+                // PyroWave only on request: a host whose Encoder pin is pyrowave would
+                // otherwise pick it for every probe run, changing the dump format.
                 | if args.preferred_codec == punktfunk_core::quic::CODEC_PYROWAVE {
                     punktfunk_core::quic::CODEC_PYROWAVE
                 } else {
@@ -931,9 +932,9 @@ async fn handshake(
             // path can be validated headlessly (check the host's monitor caps / ADD log line).
             display_hdr: punktfunk_core::client::display_hdr_env_override(),
             // No CLIENT_CAP_CURSOR by default: this headless tool renders nothing — advertising
-            // it would just strip the pointer from the dumped bitstream. `--cursor-capture`
-            // advertises it deliberately and then flips the channel to the capture model, so the
-            // HOST composites and the dump is where the pointer must appear.
+            // it would just strip the pointer from the dumped bitstream. `--cursor-capture` and
+            // `--cursor-channel` advertise it; `--cursor-capture` then flips the channel to the
+            // capture model, so the HOST composites and the dump shows the pointer.
             client_caps: {
                 let mut c = if args.cursor_capture || args.cursor_channel {
                     punktfunk_core::quic::CLIENT_CAP_CURSOR
@@ -1282,8 +1283,8 @@ fn spawn_speed_test(
     counters: &Arc<Counters>,
 ) {
     let c = counters.clone();
-    // Per-packet wire size to express delivered bytes as link bytes (header + shard + tag);
-    // every shard is zero-padded to shard_payload so all data packets are this exact size.
+    // `bytes_received` counts each opened packet (header + shard); the AEAD tag is added
+    // back per packet to express delivered bytes as link bytes.
     let crypto_overhead = punktfunk_core::crypto::TAG_LEN as u64;
     let conn2 = conn.clone();
     tokio::spawn(async move {
@@ -1325,8 +1326,8 @@ fn spawn_speed_test(
                 return;
             }
         };
-        // A declined burst comes back all-zero (duration_ms = 0) — e.g. the host predates
-        // speed tests. Say so instead of dividing a settle-window sliver by 1 ms.
+        // A declined burst comes back all-zero (duration_ms = 0), e.g. a rate-limited probe.
+        // Say so instead of dividing a settle-window sliver by 1 ms.
         if res.duration_ms == 0 {
             tracing::error!(
                 "SPEED TEST declined by host (all-zero ProbeResult) — host too old, or it \
@@ -1379,9 +1380,9 @@ fn spawn_speed_test(
 /// "host composites" and drive RELATIVE pointer motion, exactly like a pointer-lock
 /// client. `--cursor-nochannel`: the same motion with NO channel at all (a
 /// capture-latched client) — the host must composite unprompted. Owns BOTH control
-/// halves: the host may send CursorShape (0x50) messages while a negotiated channel is
-/// still in its initial client-draws state, and dropping our recv half would fail those
-/// writes host-side.
+/// halves: the host may send CursorShape (`MSG_CURSOR_SHAPE`) messages while a negotiated
+/// channel is still in its initial client-draws state, and dropping our recv half would fail
+/// those writes host-side.
 fn spawn_cursor_test(
     conn: &Wire,
     mut cs: CtlTx,
@@ -1625,9 +1626,8 @@ fn spawn_type_test(conn: &Wire, text: String) {
 /// mic passthrough end to end without a real microphone (the host decodes it into its virtual
 /// source; record that source to hear the tone). Two pacing modes:
 ///   default      — Opus 5 ms frames on a steady 5 ms tick (smooth arrival).
-///   --mic-burst  — two 20 ms Opus frames back-to-back every 40 ms, replicating a real
-///                  client's input-tap cadence (the Mac client's AVAudioEngine tap yields
-///                  ~2048-frame buffers → two packets per ~42 ms). A host without a jitter
+///   --mic-burst  — two 20 ms Opus frames back-to-back every 40 ms, the bursty arrival of a
+///                  client whose input tap batches its buffers. A host without a jitter
 ///                  buffer crackles on this pattern; a steady 5 ms stream never trips it.
 ///                  Record the host mic and count silence gaps to test host-side buffering.
 fn spawn_mic_test(conn: &Wire, burst: bool) {
@@ -1719,10 +1719,6 @@ fn spawn_touch_test(conn: &Wire, mode: Mode) {
     });
 }
 
-/// Rich-input plane: instantiate pad 0 on the host (a gamepad event creates the virtual
-/// DualSense), then drive its touchpad (drag a finger across) + motion (gyro wobble) over the
-/// 0xCC plane. Proves the rich client→host path; the 0xCD feedback is logged by the receive
-/// loop below. Requires the host on the DualSense backend (`PUNKTFUNK_GAMEPAD=dualsense`).
 /// Pad 0 as a player holds it: every stick and trigger moves each frame and A taps once a
 /// second, as `GamepadState` snapshots. RT counts frames, so a reader can tell lost from late.
 fn spawn_pad_soak(conn: &Wire, secs: u64, hz: u32) {
@@ -1762,6 +1758,10 @@ fn spawn_pad_soak(conn: &Wire, secs: u64, hz: u32) {
     });
 }
 
+/// Rich-input plane: instantiate pad 0 on the host (a gamepad event creates the virtual
+/// DualSense), then drive its touchpad (drag a finger across) + motion (gyro wobble) over the
+/// 0xCC plane. Proves the rich client→host path; the 0xCD feedback is logged by the receive
+/// loop below. Requires the host on the DualSense backend (`PUNKTFUNK_GAMEPAD=dualsense`).
 fn spawn_rich_input_test(conn: &Wire) {
     let conn2 = conn.clone();
     tokio::spawn(async move {
@@ -1798,8 +1798,9 @@ fn spawn_rich_input_test(conn: &Wire) {
                     RichInput::Motion {
                         pad: 0,
                         gyro: [g, 0, 0],
-                        // At rest, gravity is 1 g on +Z — in WIRE units, which are 10000 LSB/g
-                        // and not the 8192 or 16384 a particular driver happens to use.
+                        // 1 g in WIRE units (`MOTION_ACCEL_LSB_PER_G`), not the 8192 or 16384 a
+                        // driver happens to use. It goes on index 2; the rest pose,
+                        // `MOTION_NEUTRAL_ACCEL`, has 1 g on index 1.
                         accel: [0, 0, MOTION_ACCEL_LSB_PER_G as i16],
                     }
                     .encode(),
@@ -1850,9 +1851,6 @@ fn spawn_pad_audio_test(conn: &Wire, pads: u8) {
     });
 }
 
-/// Host→client datagrams: count Opus audio + rumble (playback is the platform clients'
-/// job; here we verify the planes flow), decode the audio, and forward per-AU host timings
-/// to the data plane.
 /// One datagram off the side planes, by its kind byte. A PCM datagram is audio only on a
 /// lossless session: the RESOLVED codec off the Welcome, never what was asked for, since a
 /// probe that assumed its own request would mis-parse what it was actually sent.
@@ -1894,8 +1892,8 @@ fn classify_side_datagram(d: &[u8], lossless: bool) -> SideDatagram<'_> {
 
 /// The probe's audio decode on the host-RESOLVED layout, so it decodes the surround stream
 /// it was sent (the headless validator for the encode path), written raw interleaved f32 LE
-/// to `--audio-out` when asked: the rate and channel count are on the stats line and in the
-/// log. The first decoded frame is logged so a loopback test can assert surround decoded.
+/// to `--audio-out` when asked. The first decoded frame is logged with its channel count (and
+/// rate, for lossless PCM) so a loopback test can assert surround decoded.
 struct AudioTap {
     channels: u8,
     rate_hz: u32,
@@ -1960,8 +1958,8 @@ impl AudioTap {
         Self::write(&mut self.out, &self.lossless_pcm);
     }
 
-    /// An Opus multistream datagram, decoded and validated: the per-channel sample count must
-    /// be a legal Opus frame size.
+    /// An Opus multistream datagram, decoded. The first success is logged; a decode error is
+    /// only a debug line.
     fn opus(&mut self, opus: &[u8]) {
         let Some(dec) = self.dec.as_mut() else {
             return;
@@ -2021,7 +2019,7 @@ fn stream_over(
 /// The host/network split from the per-AU 0xCF timings (design/stats-unification.md Phase
 /// 2): host = the host's own capture→sent, network = capture→received minus it, tiled per
 /// frame. Received AUs wait here for their timing, bounded, since an old host sends none.
-/// The T0.1 stage tail (queue, encode, pace and the derived seal/xfer residual) stays empty
+/// The stage tail (queue, encode, pace and the derived seal/xfer residual) stays empty
 /// against a host that predates it.
 #[derive(Default)]
 struct LatencySplit {
@@ -2078,7 +2076,7 @@ impl LatencySplit {
         if self.queue_us.is_empty() {
             return;
         }
-        // The T0.1 per-stage host attribution: queue (capture→submit) → encode
+        // The per-stage host attribution: queue (capture→submit) → encode
         // (submit→bitstream) → xfer (seal/FEC + send-channel wait, derived residual)
         // → pace (the microburst spread). The four tile host_us per frame.
         tracing::info!(
@@ -2167,7 +2165,7 @@ impl VideoTally {
 }
 
 /// PUNKTFUNK_PERF: the cumulative receive-path stage split for the whole run — where the
-/// receive core's time went (kernel drain vs AES-GCM open vs reassembly+FEC), the
+/// receive core's time went (batch take vs media-suite open vs reassembly+FEC), the
 /// measurement tool's view of the client-pump wall.
 fn report_pump_perf(session: &mut Session) {
     let Some(p) = session.take_pump_perf() else {
@@ -2195,6 +2193,9 @@ fn percentile(v: &mut [u64], p: f64) -> u64 {
     v[((v.len() as f64 * p) as usize).min(v.len() - 1)]
 }
 
+/// Host→client datagrams: count the audio, rumble, HID and pad-audio planes (playback is the
+/// platform clients' job; here we verify the planes flow), decode the audio, and forward
+/// per-AU host timings to the data plane.
 fn spawn_datagram_rx(
     conn: &Wire,
     welcome: &Welcome,
@@ -2396,7 +2397,7 @@ fn data_plane(
     let expected = welcome.frames;
     // Our receive time in the host clock before differencing against the host-stamped capture
     // pts. 0 ⇒ same-host or an old host that didn't answer the skew handshake (the latency is
-    // then only valid same-host, as before).
+    // then only valid same-host).
     let clock_offset = clock_offset_ns.unwrap_or(0);
     let skew_corrected = clock_offset_ns.is_some();
     let mut session =

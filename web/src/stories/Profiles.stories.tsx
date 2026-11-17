@@ -66,7 +66,7 @@ export const AddOnLinux: Story = {
 	),
 };
 
-/** **Add profile** on a host that is not Linux: sharing the desktop is the one choice today. */
+/** **Add profile** on neither Linux nor Windows: sharing the desktop is the one choice. */
 export const AddElsewhere: Story = {
 	render: () => (
 		<AddProfileDialog

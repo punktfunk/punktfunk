@@ -490,8 +490,8 @@ mod tests {
         );
     }
 
-    /// A seat's list: its own Steam, a drive it adopted before `/run/media` was hidden, a box
-    /// library still wanted and one the owner dropped, around a top-level field.
+    /// A seat's list: its own Steam, a `/run/media` drive no longer wanted, a box library still
+    /// wanted and one the owner dropped, around a top-level field.
     const SEAT: &str = "\"libraryfolders\"\n{\n\
         \t\"contentstatsid\"\t\t\"-123\"\n\
         \t\"0\"\n\t{\n\t\t\"path\"\t\t\"/var/lib/punktfunk/seats/s/home/.local/share/Steam\"\n\

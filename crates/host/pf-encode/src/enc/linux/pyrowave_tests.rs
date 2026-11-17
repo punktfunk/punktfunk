@@ -144,8 +144,6 @@ fn pyrowave_smoke() {
     assert!(enc.poll().expect("poll").is_some());
 }
 
-/// 24-bpp CPU payloads expand 3→4, not refuse. Channel order is load-bearing: a
-/// swapped R/B or misplaced pad moves chroma means by tens of codes.
 /// A real encoder's windowed AU leads with its level-4 head: the sealer finds it short of the
 /// whole AU, and the reordered windows still decode.
 #[test]
@@ -179,6 +177,8 @@ fn pyrowave_au_leads_with_its_head() {
     unsafe { decode_planes(w, h, &stream) };
 }
 
+/// 24-bpp CPU payloads expand 3→4, not refuse. Channel order is load-bearing: a
+/// swapped R/B or misplaced pad moves chroma means by tens of codes.
 #[test]
 #[ignore = "needs a real Vulkan 1.3 compute device (run on a GPU host, not the build box)"]
 fn pyrowave_smoke_cpu_rgb24() {
@@ -780,7 +780,7 @@ fn luma_psnr(src_bgra: &[u8], decoded_y: &[u8]) -> f64 {
 #[ignore = "needs a real Vulkan 1.3 compute device (run on a GPU host, not the build box)"]
 fn pyrowave_streamed_chunks_reassemble_and_keep_the_picture() {
     const WINDOW: usize = 1408;
-    // 1280×720 at 60 Mb/s ≈ 125 KB/AU — several chunks, many windows.
+    // 1280×720 at 200 Mb/s: a ≈ 417 KB per-AU budget — several chunks, many windows.
     let (w, h) = (1280u32, 720u32);
     let mut enc = PyroWaveEncoder::open(
         w,

@@ -335,8 +335,8 @@ mod tests {
         }
     }
 
-    /// Rows with no catalog entry: this client's own variants and device pickers, and Host
-    /// screen, which only a preset holds.
+    /// Rows with no catalog entry: this client's own rows and device pickers, and Host screen,
+    /// which only a preset holds.
     const LOCAL: &[&str] = &[
         "fullscreen",
         "host_screen",

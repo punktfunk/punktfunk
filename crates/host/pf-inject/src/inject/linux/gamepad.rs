@@ -731,9 +731,8 @@ mod ff_state_tests {
         );
     }
 
-    /// Playback window from the uploaded fields. Separate from `mix` because the `EV_FF`
-    /// handler that calls [`Effect::window`] needs a live uinput fd; a mix-only test would
-    /// pass with the delay ignored.
+    /// Playback window from the uploaded fields. Separate from `mix`: [`FfState::apply`] is
+    /// what calls [`Effect::window`], and a mix-only test would pass with the delay ignored.
     #[test]
     fn window_offsets_the_whole_playback_by_replay_delay() {
         let at = Instant::now();

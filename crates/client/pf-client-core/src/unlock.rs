@@ -125,7 +125,8 @@ impl<'a> DeviceKey<'a> {
     }
 }
 
-/// An id `enumerate` can list: 1 to 64 of `[A-Za-z0-9_-]`. It names a key and a URL path.
+/// An id `enumerate` can list: 1 to `msg::PROFILE_ID_MAX` of `[A-Za-z0-9_-]`. It names a key
+/// and a URL path.
 pub fn is_profile_id(id: &str) -> bool {
     (1..=msg::PROFILE_ID_MAX).contains(&id.len())
         && id

@@ -1,10 +1,8 @@
 # Ask every Windows input API, in one shot, whether it can see a given gamepad.
 #
-# The whole Xbox-pad-on-Windows programme is a matrix of five rows — classic XInput, WGI `Gamepad`,
-# WGI `RawGameController`, GameInput, and the HID/DirectInput/Steam family — and until this crate
-# existed NOTHING in the tree measured any of it. Every reading in
-# `design/xbox-pad-windows-handoff.md` came from ad-hoc off-tree tools, which is why several of them
-# could not be reproduced or A/B'd later. This makes the matrix a command.
+# The Xbox-pad-on-Windows work (`design/xbox-pad-windows-handoff.md`) is a matrix of five rows —
+# classic XInput, WGI `Gamepad`, WGI `RawGameController`, GameInput, and the HID/DirectInput/Steam
+# family. This makes the matrix a command.
 #
 # Deliberately NOT a workspace member (see the root `Cargo.toml` `exclude` list): it is a
 # bring-your-own-hardware measurement tool, Windows-only, and has no business on a CI leg.

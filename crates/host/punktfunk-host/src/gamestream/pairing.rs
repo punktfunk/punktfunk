@@ -30,7 +30,8 @@ const MAX_PARKED_WAITERS: usize = 4;
 const MAX_PARKED_PER_IP: usize = 1;
 const PAIRING_PIN_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// One parked ceremony. Fingerprint is the identity; `uniqueid` and peer IP are operator labels.
+/// One parked ceremony. A PIN submit must match all three fields; `fingerprint` is the
+/// SHA-256 of the cert phase 4 pins.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CeremonyId {
     pub uniqueid: String,
@@ -350,8 +351,8 @@ impl Pairing {
         if client_hash.len() < 32 {
             bail!("short challenge response");
         }
-        // Latch first: a rejected repeat used to overwrite the stored hash on its way out,
-        // which fails phase 4 for the client that legitimately sent the first one.
+        // Latch before storing: a rejected repeat must not overwrite the first response's
+        // hash, or phase 4 fails for the client that sent it.
         if s.responded {
             bail!("serverchallengeresp already answered for this pairing session");
         }

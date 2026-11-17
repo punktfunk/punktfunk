@@ -3,10 +3,11 @@
 //!
 //! PyroWave is the opt-in wired-LAN wavelet codec (`design/pyrowave-codec-plan.md`). It
 //! shares nothing with the other three codecs on this client: no `AMediaCodec`, no
-//! `AImageReader`, no `ASurfaceControl` layer — the access unit is one self-delimiting
-//! packet stream decoded by GPU compute into three Y′CbCr planes, and those planes are
-//! sampled straight into a Vulkan swapchain on the same `SurfaceView`
-//! ([`present`]). The decoder itself is the SHARED one the Linux and Windows clients use
+//! `AImageReader` — the access unit is one self-delimiting packet stream decoded by GPU
+//! compute into three Y′CbCr planes. Those planes are sampled into a Vulkan swapchain on the
+//! same `SurfaceView` ([`present`]) or, where the device can import `AHardwareBuffer`s, drawn
+//! into buffers the compositor takes as an `ASurfaceControl` layer ([`asc`]). The decoder
+//! itself is the SHARED one the Linux and Windows clients use
 //! (`pf_client_video::video_pyrowave`); only the device and the present path are ours.
 //!
 //! **Intra-only, which removes most of a decode loop.** Every frame stands alone, so
@@ -329,11 +330,10 @@ mod imp {
         let clock_offset = client.clock_offset_shared();
         let video_e2e = client.video_e2e_shared();
         let measure_decode = client.wants_decode_latency();
-        // Nothing-ever-arrived backstop, the one the MediaCodec loops also keep: a session
-        // that receives no AU at all sits connected behind a black surface, and this line is
-        // what separates that from "we received AUs and could not decode them". No keyframe
-        // request rides along — every PyroWave frame is already a keyframe, so there is
-        // nothing for the host to re-send.
+        // Nothing-ever-arrived backstop, as the MediaCodec loop keeps it: a session that
+        // receives no AU sits connected behind a black surface, and this line tells that from
+        // "AUs arrived and could not be decoded". No keyframe request rides along: every
+        // PyroWave frame is already a keyframe.
         let started = Instant::now();
         let mut received: u64 = 0;
         let mut warned_silent = false;
@@ -448,7 +448,7 @@ mod imp {
                 h.report_work(work_started.1, to_submit + gpu, cpu, gpu);
             }
 
-            // No latch callback on this path, so the HUD drops the `display` stage. `decode`
+            // This lane reads no latch time, so the HUD drops the `display` stage. `decode`
             // ends when the GPU finishes, as on desktop (stamped by `retire`); present time is
             // in the split log. E2E is stamped whatever the HUD state: the audio plane steers
             // by `video_e2e`.

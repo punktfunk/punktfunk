@@ -8,8 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The reachability sweep behind the online pips. A device that moved from Wi-Fi to Ethernet
- * probed only the address the old browse had resolved, and read a live host as dead.
+ * The reachability sweep behind the online pips. A host is probed at its saved address, then the
+ * live advert's and the addresses it left, so a host that moved from Wi-Fi to Ethernet still
+ * reads as live.
  */
 class PresenceTest {
     private val fp = "ab".repeat(32)

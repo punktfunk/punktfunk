@@ -7,10 +7,11 @@
 # Runtime Depends are computed by `dpkg-shlibdeps` from the binaries' actual DT_NEEDED, NOT
 # hand-listed: the exact soname package names (libpipewire-0.3-0t64, …) drift across distro
 # releases — shlibdeps tracks them automatically and pins them to whatever the BUILD distro
-# ships. Build this inside the Ubuntu 26.04 rust-ci image so those names match the target
-# boxes exactly. `--ignore-missing-info` drops libcuda.so.1 (the NVIDIA driver lib, linked via
-# FFI): on a GPU-less builder it resolves to no package, and we must never hard-depend on a
-# specific libnvidia-compute-<ver> anyway — NVENC/EGL come from the driver, out of band.
+# ships. Build this inside the Ubuntu 24.04 rust-ci-noble image: its names and glibc floor
+# install on 24.04 through 26.04. `--ignore-missing-info` drops libcuda.so.1 (the NVIDIA driver
+# lib, linked via FFI): on a GPU-less builder it resolves to no package, and we must never
+# hard-depend on a specific libnvidia-compute-<ver> anyway — NVENC/EGL come from the driver, out
+# of band.
 #
 # Usage: VERSION=0.0.1~ci42.gdeadbee [ARCH=amd64] bash packaging/debian/build-deb.sh
 # Output: dist/punktfunk-host_<version>_<arch>.deb
@@ -25,7 +26,7 @@ cd "$ROOTDIR"
 BIN="target/release/$PKG"
 # The PyroWave encode worker — the capability-carrying half. A SEPARATE executable, never a
 # hardlink or a host subcommand: a shared inode would share the file capability and make the host
-# unidentifiable to KWin all over again (see the postinst note below). It ships in this same .deb
+# unidentifiable to KWin (see the postinst note below). It ships in this same .deb
 # because host and worker version-check each other over their socket and fall back to the
 # in-process encoder on any mismatch, so they must move in lockstep.
 WORKER_BIN="target/release/punktfunk-encode-worker"
@@ -38,17 +39,15 @@ if [ ! -x "$BIN" ] || [ ! -x "$WORKER_BIN" ]; then
     -p "$PKG" -p punktfunk-encode-worker   # PUNKTFUNK_BUILD_VERSION stamps --version (build.rs)
 fi
 TRAY_BIN="target/release/punktfunk-tray"
-# ALWAYS built here, in its OWN cargo invocation — load-bearing, not tidiness, and deliberately not
-# skipped when the artifact already exists. Cargo unifies features across everything in one build,
-# so a caller that co-built the tray with the host (the .deb workflow used to) leaves behind a
-# binary whose zbus took the host's ashpd -> zbus/tokio while the tray runs ksni's async-io
-# executor with no tokio runtime by design — it then panics at every launch with "there is no
-# reactor running, must be called from the context of a Tokio 1.x runtime". Skipping the rebuild is
-# exactly how that binary shipped. Building it alone keeps its zbus on async-io; cargo no-ops this
+# ALWAYS built here, in its OWN cargo invocation, even when the artifact already exists. Cargo
+# unifies features across everything in one build, so a tray co-built with the host gets a zbus on
+# the host's ashpd -> zbus/tokio, while the tray runs ksni's async-io executor with no tokio
+# runtime by design: it panics at every launch ("there is no reactor running, must be called from
+# the context of a Tokio 1.x runtime"). Built alone, its zbus stays on async-io; cargo no-ops this
 # when the existing artifact was already resolved that way, and rebuilds it when it wasn't.
 echo "==> building punktfunk-tray (release, own invocation — see comment above)"
 cargo build --release -p punktfunk-tray --locked
-# The web-console-update root helper (dep-free; see crates/install/pf-update).
+# The web-console-update root helper (no HTTP or TLS dependencies; see crates/install/pf-update).
 echo "==> building pf-update (release)"
 cargo build --release -p pf-update --locked
 
@@ -139,9 +138,10 @@ sed -i 's#%h/punktfunk/scripts/headless/run-headless-kde.sh#/usr/share/punktfunk
     "$STAGE/usr/lib/systemd/user/punktfunk-kde-session.service"
 
 # KWin Desktop-mode authorization: non-launcher .desktop whose X-KDE-Wayland-Interfaces lets the
-# host bind KWin's restricted zkde_screencast (virtual output) + fake_input globals on an
-# interactive Plasma session. Must ship with the host — KWin caches the per-exe grant on first
-# connect, so it has to be present before the host ever connects. See the file's header comment.
+# host bind KWin's restricted zkde_screencast (virtual output), fake_input and plasma window
+# management globals on an interactive Plasma session. Must ship with the host — KWin caches the
+# per-exe grant on first connect, so it has to be present before the host ever connects. See the
+# file's header comment.
 install -Dm0644 packaging/linux/io.unom.punktfunk.host.desktop \
     "$STAGE/usr/share/applications/io.unom.punktfunk.host.desktop"
 # Status tray: the per-user SNI icon + the hicolor status icons it names. Its autostart entry is
@@ -174,8 +174,9 @@ install -Dm0644 packaging/linux/punktfunk-gamestream.xml \
                 "$STAGE/usr/lib/firewalld/services/punktfunk-gamestream.xml"
 install -Dm0644 packaging/linux/punktfunk-native.xml \
                 "$STAGE/usr/lib/firewalld/services/punktfunk-native.xml"
-# Web console opener (TCP 47992) — only meaningful with the optional punktfunk-web package; opened
-# deliberately (see README.md → Firewall). ufw's equivalent is the punktfunk-web profile above.
+# Web console opener (TCP 47992, plugin UIs on 47993) — only meaningful with the optional
+# punktfunk-web package; opened deliberately (see packaging/debian/README.md → Install, firewall,
+# updates). ufw's equivalent is the punktfunk-web profile above.
 install -Dm0644 packaging/linux/punktfunk-web.xml \
                 "$STAGE/usr/lib/firewalld/services/punktfunk-web.xml"
 install -Dm0644 LICENSE-MIT                         "$DOCDIR/LICENSE-MIT"
@@ -246,7 +247,7 @@ DEPENDS="$SHDEPS, libei1, pipewire, wireplumber, punktfunk-seats (= $VERSION)"
 # (iHD) — pulled by default so the auto-selected VAAPI backend works out of the box; NVIDIA boxes
 # don't need them (NVENC comes from the driver) and can --no-install-recommends.
 # punktfunk-web = the management web console (pairing + status) every user needs — a separate
-# Architecture:all .deb; Recommends so `apt install punktfunk-host` pulls it by default, while a
+# .deb; Recommends so `apt install punktfunk-host` pulls it by default, while a
 # headless/encoding-only box can opt out with --no-install-recommends.
 # punktfunk-scripting = the plugin/script runner (host automation on bun). Recommends so it's pulled
 # by default; its postinst enables the systemd --user unit for every user on a first install.

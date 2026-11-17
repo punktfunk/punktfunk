@@ -1,4 +1,5 @@
-# Installed as $CARGO_HOME/config.toml in every Linux CI builder image (ci/*.Dockerfile).
+# Installed as $CARGO_HOME/config.toml in the CI builder images that link x86_64 Linux binaries
+# (rust-ci, rust-ci-noble, arch-ci, fedora-rpm); rust-ci-arm64cross builds FROM rust-ci.
 #
 # WHAT: link the x86_64 Linux targets with mold instead of GNU ld. Linking is the one phase of a
 # Rust build that sccache CANNOT cache — every job relinks punktfunk-host, punktfunk-client-linux,
@@ -12,10 +13,8 @@
 #   1. A `RUSTFLAGS` ENVIRONMENT VARIABLE OVERRIDES CONFIG RUSTFLAGS ENTIRELY. It does not merge
 #      and it does not append. Any job that sets RUSTFLAGS silently loses mold here — it still
 #      builds, just with the default linker. Never "simplify" this file into a RUSTFLAGS export.
-#      (This trap used to be far worse: the workspace .cargo/config.toml carried aarch64
-#      `--cfg aes_armv8` / `--cfg polyval_armv8`, worth ~10x on the decrypt path, and an override
-#      dropped those too. The RustCrypto aes 0.9 / polyval 0.7 bump retired both cfgs — see the
-#      tombstone in .cargo/config.toml — so today only mold is at stake here.)
+#      (The workspace .cargo/config.toml carries no rustflags — see its header — so only mold
+#      is at stake here.)
 #
 #   2. CONFIG FILES MERGE PER KEY, HIGHEST-PRECEDENCE FILE WINS — they do not concatenate. The
 #      workspace's .cargo/config.toml outranks this one ($CARGO_HOME is the LOWEST precedence).
@@ -30,9 +29,9 @@
 #      separate thing to prove, and those legs are already the fast ones (~1.5 min of clippy, ~5 min
 #      for the arm64 .deb). Add it only with a measurement, and in a commit of its own.
 #
-# Requires GCC >= 12.1 (or clang) for `-fuse-ld=mold`; every base here ships far newer. mold itself
-# is installed in the same Dockerfile layer that copies this file, so an image can never carry the
-# flag without the linker — see the `mold --version` assertion there.
+# Requires GCC >= 12.1 (or clang) for `-fuse-ld=mold`; every base here ships far newer. Each
+# Dockerfile installs mold and asserts `mold --version` beside the COPY of this file, so an image
+# can never carry the flag without the linker.
 #
 # NOTE this affects the HOST-targeted compiles of build scripts and proc macros too (they are
 # x86_64-unknown-linux-gnu), which is exactly what we want: those link constantly and are pure

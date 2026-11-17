@@ -1,11 +1,12 @@
 //! Network speed test: one decode-less connect, then the core's measurement.
 //!
 //! Shared by every shell that offers "Test network speed…" — the Windows client's speed
-//! page and its `--headless --speed-test`, and the console shell's host menu through the
-//! session binary. The measurement runs over the REAL data plane, which is why it is a
-//! connect and not a synthetic socket: a path that carries QUIC video is the path worth
-//! measuring. What it measures is [`punktfunk_core::client::health::speed_test`]'s: the
-//! ceiling the bring-up ramp proved, then one clean round under it.
+//! page and its `--headless --speed-test`, the Linux client's speed page, and the console
+//! shell's host menu through the session binary. The measurement runs over the REAL data
+//! plane, which is why it is a connect and not a synthetic socket: a path that carries QUIC
+//! video is the path worth measuring. What it measures is
+//! [`punktfunk_core::client::health::speed_test`]'s: the ceiling the bring-up ramp proved,
+//! then one clean round under it.
 //!
 //! Where the answer goes is the caller's decision, not this module's — a measured bitrate
 //! belongs in the layer the tested host resolves bitrate from

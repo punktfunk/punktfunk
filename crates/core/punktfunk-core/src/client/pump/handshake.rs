@@ -260,12 +260,12 @@ async fn dial(
                 // Unconditional: receive buffers are `MAX_DATAGRAM_BYTES`, so every
                 // embedder accepts a mid-session shard grow (design/shard-payload-reneg.md).
                 max_shard_payload: crate::config::max_shard_payload() as u16,
-                // Asked-for format. Legacy 48 kHz / 16-bit omits both fields (Hello stays
-                // pre-hi-res). Non-legacy travels with CLIENT_CAP_AUDIO_HIRES — the bit
-                // is the opt-in, these are its parameters.
+                // Asked-for format; `0` reads back as `SAMPLE_RATE_HZ` / `BITS_16`. Non-zero
+                // travels with CLIENT_CAP_AUDIO_HIRES — the bit is the opt-in, these are
+                // its parameters.
                 audio_rate_hz: p.audio_rate_hz,
                 audio_bits: p.audio_bits,
-                // The coupling asked for; `0` (legacy) keeps the Hello byte-identical.
+                // The coupling asked for; `0` is the legacy coupling.
                 audio_layout: p.audio_layout.wire(),
                 // How this client fills its view; a host framing for another device reframes to it.
                 video_fit: p.video_fit.wire(),

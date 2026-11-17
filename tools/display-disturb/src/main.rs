@@ -1,12 +1,11 @@
 //! `display-disturb` — deterministic display-stack disturbance generator (Windows).
 //!
-//! The vdisplay stall-immunity bench (design: punktfunk-planning
-//! `design/vdisplay-disturbance-immunity.md`) needs both stall classes reproducible on demand,
-//! without waiting for a standby TV or a monitor-tool storm:
+//! Reproduces both stall classes of the vdisplay stall-immunity bench on demand (design:
+//! punktfunk-planning `design/vdisplay-disturbance-immunity.md`):
 //!
 //! * `ddc` — Class 2: DDC/CI traffic through the win32k → dxgkrnl → miniport I2C path, exactly
-//!   what Twinkle-Tray/PowerDisplay-class tools emit after every HPD blip (one VCP read ≈ 100 ms,
-//!   a capabilities string up to ~1 s — serialized per physical I2C bus). Requires a physical
+//!   what Twinkle-Tray/PowerDisplay-class tools emit after every HPD blip (one VCP read ≈ 40 ms,
+//!   a capabilities string up to seconds — serialized per physical I2C bus). Requires a physical
 //!   monitor; virtual displays expose no DDC handle.
 //! * `modeset` — Class 1: a same-mode `ChangeDisplaySettingsExW(CDS_RESET)` re-commit — a
 //!   Level-Two modeset-class DDI entry that idles the whole adapter ("the graphics hardware is
@@ -15,9 +14,8 @@
 //!   connector-emulation caps/state, and `--lock`/`--unlock` to pin the live EDID +
 //!   `ADL_EMUL_MODE_ALWAYS` (the software HPD-dummy experiment — see `adl.rs`).
 //!
-//! Every operation prints `epoch_ms op target duration_ms result` so stalls in a concurrent
-//! stream's host.log correlate line-for-line. The per-op duration is itself measurement: it is
-//! the I2C/modeset service time the GPU driver spent, per disturbance.
+//! Each operation prints `epoch_ms op target duration_ms result`, to line up with stalls in a
+//! concurrent stream's host.log; the duration is the I2C/modeset service time the driver spent.
 //!
 //! Usage: `display-disturb ddc [--interval-ms 2000] [--caps] [--vcp 0x10]`
 //!        `display-disturb modeset [--interval-ms 2000]`
@@ -157,8 +155,8 @@ mod win {
     /// One `SetDisplayConfig(SDC_TOPOLOGY_EXTEND)` poke — re-activates every attachable display
     /// from the CCD database, i.e. exactly the "a non-managed display re-activated after the
     /// verified isolate" event the exclusive-topology watchdog exists to evict. Fired ONCE (not a
-    /// loop): the point is to trigger one reassert round and observe the recovery — one
-    /// `reassert-recover` trace, ONE ring recreate, stream alive.
+    /// loop): the point is to trigger one reassert round and observe the recovery — the
+    /// `reassert-recover` trace, stream alive.
     fn extend_once() -> ! {
         let t = Instant::now();
         // SAFETY: the no-buffers topology form of SetDisplayConfig; flags request the stored
@@ -200,8 +198,7 @@ mod win {
     /// The physical (DDC-capable) monitors behind one HMONITOR, with their descriptions. The
     /// handle-ACQUISITION timing is itself reported (`ddc-open`): it is the poller's first contact
     /// with every monitor — including a virtual one that then yields no handles — and on a
-    /// streaming host in exclusive topology the virtual monitor is the only one there is, so the
-    /// cost of this failing path is exactly what the DDC-fail-fast driver work changes.
+    /// streaming host in exclusive topology the virtual monitor is the only one there is.
     fn physical_monitors(mon: HMONITOR, label: &str) -> Vec<(HANDLE, String)> {
         let t = Instant::now();
         let mut count = 0u32;
@@ -246,7 +243,7 @@ mod win {
                     };
                     if args.caps {
                         // The heavy transaction: length + full capabilities string (the
-                        // PowerDisplay-discovery load, ~100 ms-1 s of serialized I2C).
+                        // PowerDisplay-discovery load, up to seconds of serialized I2C).
                         let t = Instant::now();
                         let mut len = 0u32;
                         // SAFETY: `h` is a live physical-monitor handle; `len` a valid out-param.

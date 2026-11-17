@@ -52,7 +52,7 @@ const KEY_READ_64 = 0x2_0019 | 0x0100;
 const ERROR_FILE_NOT_FOUND = 2;
 const ERROR_ACCESS_DENIED = 5;
 const ERROR_MORE_DATA = 234;
-/** Longest value name a key can hold, in UTF-16 units, with its NUL. */
+/** Longest value name a key can hold, in UTF-16 units, with its NUL (Windows 2000 and later). */
 const MAX_VALUE_NAME = 16_384;
 /** No launcher fact runs this long; a larger value is skipped, not truncated. */
 const MAX_VALUE_BYTES = 64 * 1024;
@@ -153,7 +153,7 @@ const withKey = <T>(
 
 const enumSubKeys = (api: Advapi, handle: bigint): string[] => {
 	const out: string[] = [];
-	// A key name is at most 255 characters.
+	// A key name is at most 255 characters (Windows 2000 and later).
 	const name = Buffer.alloc(512);
 	const length = new Uint32Array(1);
 	for (let i = 0; ; i++) {

@@ -1,10 +1,9 @@
 #version 450
 // Cursor-overlay blend for the direct-SDK NVENC path (cursor-as-metadata), dispatched over the
-// cursor's rectangle only — the Vulkan replacement for the retired cursor_blend.cu PTX kernels
-// (PTX is JIT'd against the driver's ISA ceiling, so a vendored blob silently dies on older
-// drivers: CUDA errors 222/218 on-glass; SPIR-V has no such coupling). The NVENC input surface is
-// Vulkan-allocated, CUDA-imported external memory (see vkslot.rs), so this shader writes the very
-// bytes NVENC encodes.
+// cursor's rectangle only. SPIR-V, not PTX: PTX is JIT'd against the driver's ISA ceiling, so a
+// vendored PTX blob dies on older drivers, and SPIR-V has no such coupling. The NVENC input
+// surface is Vulkan-allocated, CUDA-imported external memory (see vkslot.rs), so this shader
+// writes the very bytes NVENC encodes.
 //
 // MODE (spec constant): 0 = packed 4-byte ARGB (NVENC byte order B,G,R,A), 1 = NV12 (Y plane +
 // interleaved half-res UV at row surfH), 2 = planar YUV444 (3 full-res planes stacked at
@@ -169,9 +168,9 @@ void main() {
 
     // NV12: rows walk 2-row luma blocks anchored to the SURFACE chroma grid (block top = an even
     // surface row), the same way spans are anchored to the surface word grid in x. Anchoring to
-    // the cursor's oy instead put every chroma sample one luma row high whenever oy was odd —
-    // and never wrote the cursor's last row's chroma at all. y0 = floor(oy/2)*2; the arithmetic
-    // shift keeps that floor for negative oy. blend_geometry counts blocks from this same anchor.
+    // the cursor's oy would put every chroma sample one luma row high whenever oy is odd.
+    // y0 = floor(oy/2)*2; the arithmetic shift keeps that floor for negative oy. blend_geometry
+    // counts blocks from this same anchor.
     int y0 = (pc.oy >> 1) << 1;
     int py_top = y0 + row * 2;          // this block's top luma row (even by construction)
     if (py_top >= pc.oy + int(pc.curH)) return; // dispatch-padding block below the cursor
@@ -191,7 +190,7 @@ void main() {
             rmw_byte(off / 4u, off % 4u, y_of(s), s.a);
         }
     }
-    // Chroma: two UV samples covering the span's 2x2 blocks, alpha-weighted like the .cu kernel.
+    // Chroma: two UV samples covering the span's 2x2 blocks, alpha-weighted.
     // Because py_top sits on the chroma grid, sample uvy covers exactly luma rows py_top and
     // py_top+1 — the rows averaged below. The UV plane starts at row surfH; sample (uvx, uvy)
     // lives at uv_base + uvy*pitch + uvx*2.

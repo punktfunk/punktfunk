@@ -372,12 +372,6 @@ impl Facts {
     }
 }
 
-/// The sh script's detection ladder, in the same order — `rpm-ostree`/`bootc` before the
-/// debian and fedora tests, because Bazzite answers `like fedora` too.
-/// The family, its docs page, and the punt a **host** install would hit here.
-///
-/// NixOS and SteamOS refuse outright — they own installers for both halves. An unknown distro
-/// is a dead end only for the host: the client still has a user-scope flatpak (§5).
 impl Family {
     /// The command that installs `certutil`, named in the warning when it is missing. `None`
     /// where no host install reaches it (the flatpak client has no console).
@@ -393,6 +387,11 @@ impl Family {
 
 type Detected = (Family, &'static str, Option<Punt>);
 
+/// The family, its docs page, and the punt a **host** install would hit here.
+///
+/// `rpm-ostree`/`bootc` are tested before the debian and fedora tests, because Bazzite answers
+/// `like fedora` too. NixOS refuses outright (`Err`). An unknown distro is a dead end only for
+/// the host: the client still has a user-scope flatpak (`design/installer-v2.md` §5).
 fn detect_family(os: &OsRelease, run: &dyn CommandRunner) -> Result<Detected, Punt> {
     if os.id == "nixos" {
         return Err(Punt::NixOs);
@@ -473,9 +472,10 @@ fn graphical_seat(env: &Env) -> bool {
         || matches!(env.get("XDG_SESSION_TYPE"), Some("x11" | "wayland"))
 }
 
-/// Same split as `punktfunk-host detect-conflicts`: exit 1 is the only "yes". Any other
-/// code is a host too old to know the subcommand, a half-install, or a crash — fall
-/// through to the unit probe rather than opening the GameStream surface on a guess.
+/// Same split as `punktfunk-host detect-conflicts`: exit 1 is the only "yes", 0 the only "no".
+/// Any other code is a half-install or a crash — fall through to the unit probe rather than
+/// opening the GameStream surface on a guess. A host older than v0.13.0 lacks the command; it
+/// exits 1 too and reads as "yes".
 fn sunshine_active(run: &dyn CommandRunner) -> bool {
     if run.which("punktfunk-host")
         && let Some(out) = run.probe("punktfunk-host", &["detect-conflicts"])
@@ -541,8 +541,8 @@ fn firewall(paths: &BasePaths, run: &dyn CommandRunner) -> Firewall {
     Firewall::None
 }
 
-/// One `KEY=VALUE` out of an env file. Last line wins, comments and blanks do not count — the
-/// same reading systemd gives the file, so what we report is what the unit will get.
+/// One `KEY=VALUE` out of an env file. The last non-empty assignment wins; comments and blank
+/// values do not count.
 fn env_line(path: &std::path::Path, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     text.lines()
@@ -576,9 +576,9 @@ fn local_ip(run: &dyn CommandRunner) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    // host.env is hand-edited, so the reading has to be systemd's: last assignment wins, a
-    // comment is not one, and a blank value means unset (the same rule `PUNKTFUNK_MGMT_BIND`
-    // takes in pf-host-config). Getting it wrong here moves a console on the next re-run.
+    // host.env is hand-edited: the last non-empty assignment wins, a comment is not one, and a
+    // blank value means unset (the rule `PUNKTFUNK_MGMT_BIND` takes in pf-host-config). Getting
+    // it wrong here moves a console on the next re-run.
     #[test]
     fn env_line_reads_the_file_the_way_the_unit_will() {
         let dir = std::env::temp_dir().join(format!("pf-env-line-{}", std::process::id()));
@@ -680,8 +680,8 @@ mod tests {
         assert_eq!(family, Family::Steamos);
     }
 
-    // Game Mode / HTPC images only. rpm-ostree, bootc, and ujust are not tells: Silverblue
-    // and Bluefin ship all three and are workstations.
+    // Game Mode / HTPC images only. rpm-ostree, bootc and ujust are not tells: Silverblue
+    // ships the first two, Bluefin all three, and both are workstations.
     #[test]
     fn couch_box_is_bazzite_and_nobara_only() {
         assert!(os("bazzite", "fedora", "43").like("bazzite"));
@@ -728,7 +728,7 @@ mod tests {
         assert!(!sunshine_active(&no));
     }
 
-    // A host too old to know the subcommand exits 127/2 — that is not an answer. The unit probe decides.
+    // An exit code other than 0 or 1 is not an answer. The unit probe decides.
     #[test]
     fn an_unknown_detect_conflicts_code_falls_through_to_the_unit_probe() {
         let old = FakeRunner::new()

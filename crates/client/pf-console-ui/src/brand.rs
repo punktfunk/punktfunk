@@ -1,17 +1,18 @@
 //! The punktfunk mark: two discs and the lens where they overlap, on the theme's accent.
 //!
-//! Geometry is the app icon's (`Punktfunk_App-Icon_512.svg`): equal discs of radius a third of
-//! the box, centres offset by `(r, -r)`, and a highlight that is NOT their overlap — it is the
-//! lens between the deep disc and a copy of itself shifted one radius down the axis, so it runs
-//! from the deep rim to the deep centre with its tips 60° either side of the axis, lit from
-//! nothing at the rim to the foreground at the centre. The colours follow [`crate::theme`]'s
-//! accent rather than the brand violet, so the mark reads on every palette like the chrome.
+//! Geometry is the app icon's (`docs-site/src/components/BrandMark.tsx`): equal discs of
+//! radius a third of the box, centres offset by `(r, -r)`, and a highlight that is NOT their
+//! overlap — it is the lens between the deep disc and a copy of itself shifted one radius down
+//! the axis, so it runs from the deep rim to the deep centre with its tips 60° either side of
+//! the axis, lit from nothing at the rim to the foreground at the centre. The colours follow
+//! [`crate::theme`]'s accent rather than the brand violet, so the mark reads on every palette
+//! like the chrome.
 //!
-//! [`draw`] also plays the website's one-shot entrance (`BrandMark.tsx`): the discs orbit in
-//! antiphase on an axis into the screen — swelling toward and away from the viewer with a small
-//! diagonal sway — and settle exactly onto the resting lens, which fades and scales in over the
-//! tail. The caller owns the clock: pass [`intro_progress`] of the seconds since the mark first
-//! showed, or `1.0` for the resting mark. Honours the frame's Reduce Motion.
+//! [`draw`] also plays a one-shot entrance: the discs orbit in antiphase on an axis into the
+//! screen — swelling toward and away from the viewer with a small diagonal sway — and settle
+//! exactly onto the resting lens, which fades and scales in over the tail. The caller owns the
+//! clock: pass [`intro_progress`] of the seconds since the mark first showed, or `1.0` for the
+//! resting mark. Honours the frame's Reduce Motion.
 
 use skia_safe::{gradient, Canvas, ClipOp, Color4f, Path, Point, TileMode};
 
@@ -26,7 +27,8 @@ const R_DEPTH: f32 = 0.34;
 const PERSP: f32 = 1.05;
 /// In-plane breathing along the lens axis, gone at rest.
 const SWAY: f32 = 0.06;
-/// The website's sway is in its 1000-unit viewBox, where the mark spans 583.6; per box side.
+/// `SWAY` is per 1000-unit viewBox; the mark spans 583.6 of it (`BrandMark.tsx`), so this
+/// makes it per box side.
 const SWAY_UNITS: f32 = 1000.0 / 583.6;
 /// The lens fades in over this slice of the entrance, once the discs are nearly home.
 const LENS_FROM: f32 = 0.6;
@@ -37,7 +39,7 @@ pub fn intro_progress(elapsed_secs: f32) -> f32 {
     (elapsed_secs / INTRO_SECS).clamp(0.0, 1.0)
 }
 
-/// The website's `cubic-bezier(0.22, 1, 0.36, 1)`: a quintic ease-out.
+/// A quintic ease-out: CSS's `cubic-bezier(0.22, 1, 0.36, 1)` approximates it.
 fn ease_out_quint(t: f32) -> f32 {
     let u = 1.0 - t.clamp(0.0, 1.0);
     1.0 - u * u * u * u * u

@@ -61,7 +61,7 @@ fn transcript(
     (outcome, text)
 }
 
-// The fielded spawn, dry: the subcommand lines the runner smoke (WP3.3) will assert on.
+// The fielded spawn, dry: the subcommand lines the smoke in `windows-host.yml` asserts on.
 #[test]
 fn golden_silent_fresh_is_the_updater_spawn() {
     let (outcome, text) = transcript(&fresh(), Artifact::Host, false, &args(&UPDATER_ARGS), true);
@@ -89,8 +89,9 @@ fn golden_silent_public_warns_and_never_touches_the_profile() {
     assert!(!text.contains("--allow-public-network=on"));
 }
 
-// The troubleshooting docs' exact reconfigure line, on an installed box: the explicit task
-// reaches the plan, the deselect removes the tray key, and /DIR is ignored with a warning.
+// The reconfigure form `windows-host.mdx` documents (`/MERGETASKS` with bare and `!` names),
+// on an installed box: the explicit task reaches the plan, the deselect removes the tray key,
+// and /DIR is ignored with a warning.
 #[test]
 fn golden_silent_mergetasks_reconfigures_an_upgrade() {
     let (outcome, text) = transcript(

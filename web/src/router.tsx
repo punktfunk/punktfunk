@@ -29,10 +29,8 @@ function createQueryClient() {
  *
  * `getRouter()` can run more than once per page load (hydration discards and rebuilds the tree),
  * and a fresh client each time means a fresh, empty cache that nothing else holds a reference to.
- * That is how the event stream ended up invalidating a cache no component was reading: the
- * subscription captured the client from the first router, the live pages read the second one, and
- * every invalidation went to the dead one. One client per browser session fixes that and keeps the
- * cache across a router rebuild.
+ * The event stream invalidates the client it was last handed, so that must be the one the live
+ * pages read. One client per browser session keeps the cache across a router rebuild.
  *
  * Deliberately browser-only: on the SERVER every request must get its OWN client, or one visitor's
  * data would be served from another's cache.

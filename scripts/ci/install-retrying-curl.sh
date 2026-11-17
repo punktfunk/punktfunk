@@ -10,14 +10,12 @@
 # When that transfer truncates the job does not fail with a network error. skia-bindings'
 # `try_prepare_download` swallows it, prints `DOWNLOAD AND INSTALL FAILED`, and falls through to
 # `STARTING A FULL BUILD` — a from-source Skia build that the CI containers carry no deps for.
-# What the operator sees is a Gradle stack trace under "Clippy (Android target)" with the real
-# cause 1,800 lines up. Measured on main 2026-08-22:
+# What the operator sees is an unrelated-looking failure far below the real cause in the log:
 #
 #   DOWNLOAD AND INSTALL FAILED: curl error code: "18"
 #   curl stderr: "curl: (18) end of response with 17054400 bytes missing"
 #
-# (19,057,024 bytes on the wire; it got 2 MB before git.unom.io closed the connection. The same
-# asset pulls fine from a dev box, so this is the load-shedding retry.sh was written for.)
+# A truncated transfer is the runner-box load-shedding that retry.sh was written for.
 #
 # A shim is the only lever that reaches inside a build script. It is also the cheapest correct
 # one: skia-bindings already passes `-C -` (resume) and caches the part-file under
@@ -27,7 +25,7 @@
 # fetches are single-shot too.
 #
 # POSIX sh on purpose: Gitea's act_runner executes a step's `run:` under `sh -e` (dash) inside
-# the Linux job containers — see the shader-gate note in ci.yml for what assuming bash cost.
+# the Linux job containers — see the shader-gate note in ci.yml.
 #
 # Usage:  sh scripts/ci/install-retrying-curl.sh
 set -e

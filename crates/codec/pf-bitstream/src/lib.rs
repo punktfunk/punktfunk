@@ -26,7 +26,7 @@ pub mod testing;
 mod plan_error_tests {
     use crate::{h264, h265};
 
-    /// The idle rule the Vulkan, VAAPI and D3D11VA rungs all read.
+    /// The idle rule the Vulkan, VA-API, D3D11VA and V4L2 rungs all read.
     #[test]
     fn only_a_missing_idr_or_parameter_set_is_idle() {
         assert!(h264::PlanError::AwaitingIdr.awaits_idr());

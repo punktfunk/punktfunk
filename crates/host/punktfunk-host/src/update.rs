@@ -432,8 +432,8 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
         if !newer {
             return Err(ApplyError::NothingToApply);
         }
-        // Linux legs resolve artifacts through the package manager. An ARM64 host reads only
-        // its own key: the x64 asset is the wrong exe, not a fallback.
+        // Only the installer leg downloads an asset. An ARM64 host reads only its own key: the
+        // x64 asset is the wrong exe, not a fallback.
         let asset = if cfg!(target_arch = "aarch64") {
             checked.manifest.windows_host_arm64.clone()
         } else {
@@ -482,19 +482,18 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
             }
             #[cfg(target_os = "linux")]
             {
-                let _ = &asset; // unused: Linux legs use the package manager
-                let run = if leg == Leg::SteamosSource {
+                let _ = &asset; // unused: no Linux leg downloads an asset
+                if leg == Leg::SteamosSource {
+                    // The script queued our restart; boot reconcile writes the outcome.
                     linux::run_apply_steamos(&target_version, serial, &stage)
+                        .map(|()| PostApply::AwaitRestart)
                         .map_err(jobs::ApplyFailed::from)
                 } else {
-                    linux::run_apply(&target_version, serial, &stage)
-                };
-                run.map(|()| {
                     // Staged / nothing-to-do wrote a durable result; in-place
                     // wrote the intent and queued restart. Either way the
                     // in-process job is finished.
-                    PostApply::Done
-                })
+                    linux::run_apply(&target_version, serial, &stage).map(|()| PostApply::Done)
+                }
             }
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {

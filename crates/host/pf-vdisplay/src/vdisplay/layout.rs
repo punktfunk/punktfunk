@@ -53,8 +53,8 @@ fn pin_of(m: &Member, layout: &Layout) -> Option<Placement> {
         .map(|p| Placement { x: p.x, y: p.y })
 }
 
-/// One [`Placement`] per member, same order. Shared by the state readout and
-/// (KWin) the per-backend position apply.
+/// One [`Placement`] per member, same order. Shared by the state readout and the
+/// position apply (the Linux pool, the Windows group layout).
 pub fn arrange(members: &[Member], layout: &Layout) -> Vec<Placement> {
     match layout.mode {
         LayoutMode::AutoRow => (0..members.len())
@@ -70,10 +70,10 @@ pub fn arrange(members: &[Member], layout: &Layout) -> Vec<Placement> {
 /// Pins verbatim; unpinned members row out past the rightmost pinned edge.
 ///
 /// The cursor is seeded from every pin, so an already-placed unpinned `x`
-/// shifts when a pinned sibling arrives later in acquire order. Nothing here
-/// re-applies: `registry::position_for_new` takes only `.last()` and moves the
-/// new display. The registry must re-apply the whole group on a Manual
-/// membership change (`windows/manager.rs` `arrange_slots` already does).
+/// shifts when a pinned sibling arrives later in acquire order. On Linux nothing
+/// re-applies: `registry::position_for_new` takes only `.last()` and moves the new
+/// display, so a Manual membership change leaves earlier members where they were.
+/// Windows' `apply_group_layout` (`windows/manager.rs`) re-applies the whole group.
 /// Seeding from preceding pins only restores incremental stability by
 /// bringing the overlap back — the wrong trade.
 fn arrange_manual(members: &[Member], layout: &Layout) -> Vec<Placement> {
@@ -115,9 +115,10 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 /// (`lit`) and its own current rect. `None` keeps the compositor's arrangement.
 ///
 /// Alone it takes the desktop origin: a compositor appends a new output to the
-/// right of the row and need not re-normalize when the row goes dark, and a lone
-/// screen whose origin is not zero makes KDE place popups off it. Beside a lit
-/// screen the arrangement stands — unless a stored origin sits us on top of one.
+/// right of the row and need not re-normalize when the row goes dark. KWin before
+/// 6.7 hands clients that offset, and Plasma then places popups off the screen.
+/// Beside a lit screen the arrangement stands — unless a stored origin sits us on
+/// top of one.
 pub fn origin_for(lit: &[Rect], ours: Option<Rect>) -> Option<Placement> {
     if lit.is_empty() {
         return Some(Placement { x: 0, y: 0 });
@@ -292,7 +293,7 @@ mod tests {
     /// No height, so "share space" is x-only.
     #[test]
     fn no_unpinned_member_overlaps_a_sibling_under_any_layout() {
-        // Numerical Recipes LCG — reproducible, no crate.
+        // Knuth MMIX LCG — reproducible, no crate.
         let mut rng: u64 = 0x0bad_f00d_dead_beef;
         let mut next = || {
             rng = rng

@@ -73,7 +73,8 @@ impl AudioPcmState {
         let dec = self.decoder.as_mut().unwrap();
         let ch = fmt.channels as usize;
 
-        // Conceal the seq gap first (50 ms cap), less drought frames already in the ring.
+        // Conceal the seq gap first (capped by `max_conceal_packets`), less drought frames
+        // already in the ring.
         let missing = self
             .gaps
             .missing_before(seq)
@@ -185,8 +186,8 @@ pub struct PunktfunkAudioPacket {
 /// Pull the next audio packet, waiting up to `timeout_ms`.
 /// [`PunktfunkStatus::NoFrame`] on timeout, [`PunktfunkStatus::Closed`] once ended.
 /// On `Ok`, `out->data` borrows until the next audio call (independent of video).
-/// Drain from a dedicated thread — Opus every 5 ms, lossless every 1–5 ms; queue
-/// holds 320 ms.
+/// Drain from a dedicated thread — Opus every 5 ms, lossless every 1–5 ms. The queue holds
+/// 64 packets: 320 ms at the Opus frame, less at a shorter lossless frame.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `out` is writable. At most one audio puller;
@@ -304,7 +305,7 @@ pub unsafe extern "C" fn punktfunk_connection_audio_bits(
     conn_out!(c, out => c.inner.audio_format().bits)
 }
 
-/// Resolved frame length in µs (ladder has sub-ms rungs); Opus is
+/// Resolved frame length in µs (some ladder rungs are not whole ms); Opus is
 /// `PUNKTFUNK_AUDIO_FRAME_MS × 1000`. On 44.1 kHz this is a nominal length, not a
 /// duration — size rings from it, advance clocks from samples / rate.
 /// Not derivable from `next_audio_pcm`'s `frame_count` (that includes concealment).
@@ -355,9 +356,9 @@ fn since_first(since_first_ms: i64) -> Option<std::time::Duration> {
 
 /// Milliseconds to wait before dialing again a host that refused a connect with `refusal` (the
 /// connect's `PUNKTFUNK_STATUS_*`), `since_first_ms` after its first such refusal (`-1`: this is
-/// the first); `-1` means show the refusal. With `auto_wake` on, a setup refusal dials again for
-/// 20 s from the first: a host that just woke answers before it can stream. One rule for every
-/// client.
+/// the first); `-1` means show the refusal. With `auto_wake` on, a setup refusal dials again
+/// until `WAKE_SETTLE` (`punktfunk_core::reject`) has passed since the first: a host that just
+/// woke answers before it can stream. One rule for every client.
 #[cfg(feature = "quic")]
 #[unsafe(no_mangle)]
 pub extern "C" fn punktfunk_wake_redial_delay_ms(

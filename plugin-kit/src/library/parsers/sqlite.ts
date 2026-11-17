@@ -13,8 +13,8 @@ import { isFile } from "./fs.js";
  * The `{ readonly: true }` options object does NOT enable SQLite's URI filename parsing, so a
  * `file:…?immutable=1` name is taken literally, no such file exists, and the open throws
  * `SQLiteError: unable to open database file`. Every caller here degrades an open failure to
- * "launcher not installed", so that turned into a silent, total "0 games" on every box — see the
- * regression test in test/library-parsers.test.ts. SQLITE_OPEN_URI is what makes the query string
+ * "launcher not installed", so that would read as a silent, total "0 games" on every box;
+ * test/library-parsers.test.ts pins it. SQLITE_OPEN_URI is what makes the query string
  * mean anything. (`{ readonly: true, uri: true }` is not a thing — measured on bun 1.3.14.)
  */
 const OPEN_READONLY_URI =
@@ -30,8 +30,9 @@ export interface ReadOnlyDb {
 }
 
 /**
- * Open a launcher database read-only and immutably. `undefined` if the file is absent or not a
- * database — the normal "this launcher isn't installed" case, not an error.
+ * Open a launcher database read-only and immutably. `undefined` if the file is absent or will not
+ * open — the normal "this launcher isn't installed" case, not an error. A file that is not a
+ * database still opens, and its queries return `[]`.
  *
  * Always `close()` when done (or use {@link withReadOnlyDb}, which does it for you).
  */

@@ -62,7 +62,7 @@ final class DialRecoveryTests: XCTestCase {
             .alert(String(localized: L10n.errorRequestFailed)))
     }
 
-    /// R1-2: a wake redial keeps the launch hold up to the game; every other recovery drops it.
+    /// A wake redial keeps the launch hold up to the game; every other recovery drops it.
     func testOnlyAWakeRedialKeepsTheLaunchHold() {
         XCTAssertTrue(
             decide(PunktfunkClientError.rejected(.setupFailed), wake: .seconds(2)).keepsLaunchHold)
@@ -76,7 +76,7 @@ final class DialRecoveryTests: XCTestCase {
         for recovery in drops { XCTAssertFalse(recovery.keepsLaunchHold, "\(recovery)") }
     }
 
-    /// R1-3: a redial dials the store's record as it is now; a loss redial keeps its proven pin.
+    /// A redial dials the store's record as it is now; a loss redial keeps its proven pin.
     func testARedialDialsTheCurrentRecord() {
         let proven = Data([7])
         let dialed = StoredHost(name: "Den", address: "10.0.0.2", pinnedSHA256: proven)

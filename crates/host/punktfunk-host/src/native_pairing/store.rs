@@ -106,7 +106,6 @@ fn mtime(path: &Path) -> Option<std::time::SystemTime> {
 }
 
 fn default_path() -> Result<PathBuf> {
-    // `config_dir()` falls back to %APPDATA% when HOME is unset (Windows service).
     Ok(pf_paths::config_dir().join("punktfunk1-paired.json"))
 }
 

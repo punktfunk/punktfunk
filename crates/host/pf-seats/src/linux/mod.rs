@@ -162,7 +162,8 @@ struct Inner {
     /// The box owner's account, once their row is known: whose home the box's library comes
     /// from and whose Steam a seat clones.
     owner: Mutex<Option<accounts::Passwd>>,
-    /// The `punktfunk` group's gid, once looked up: the door reads the box's library through it.
+    /// The door group's gid ([`socket::DOOR_GROUP`]), once looked up: the door reads the box's
+    /// library through it.
     door_gid: OnceLock<u32>,
     /// A seat stopped since the ACL mask was last repaired.
     acl_dirty: AtomicBool,
@@ -202,8 +203,9 @@ fn cached(
     checks
 }
 
-/// Runs beside a seat's unit: `Some(uid)` before the unit starts and for a seat found running,
-/// `None` once it stopped; neither for the owner's row. Every call must be idempotent.
+/// Runs beside a made seat's unit: `Some(uid)` before the unit starts and for a seat found
+/// running, `None` once it stopped; never for a row on a person's own account, the owner's
+/// included. Every call must be idempotent.
 pub type UnitHook = Box<dyn Fn(&str, Option<u32>) + Send + Sync>;
 
 fn unit_hook(inner: &Inner, account: &str, uid: Option<u32>) {
@@ -278,7 +280,6 @@ impl Tracked {
     }
 }
 
-/// The wall clock in unix seconds, as presence is kept.
 /// Whether an account no ledger row names is what a stopped create left under `state`: its seat
 /// directory is here and its seat never started. A create makes that directory before the
 /// account, so an account without one belongs to a state directory that isn't mounted or was
@@ -290,6 +291,7 @@ fn reapable(state: &Path, id: &SeatId) -> bool {
     here && !started
 }
 
+/// The wall clock in unix seconds, as presence is kept.
 fn unix_now() -> i64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     now.map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
@@ -1323,8 +1325,9 @@ impl PlatformBackend for LinuxBackend {
         Ok(out)
     }
 
-    /// The checks are the last ones run within [`CHECKS_FRESH`]: the door asks every 2 s and
-    /// reads `enabled`, which is constant. Doctor and Enable run them afresh.
+    /// The checks are the last ones run within [`CHECKS_FRESH`], so a frequent caller doesn't fork
+    /// `systemctl` and walk `PATH` each time. `enabled` is constant. Doctor and Enable run them
+    /// afresh.
     fn seating(&self) -> Result<SeatingStatus, BackendError> {
         let mut slot = self.inner.checks.lock().unwrap_or_else(|e| e.into_inner());
         let checks = cached(&mut slot, Instant::now(), || self.prerequisites());
@@ -1791,8 +1794,8 @@ fn acl_due(dirty: bool, seat_up: bool, since: Duration) -> bool {
 /// unlocks here too; without one, or once the helper is `off`, as systemd's `PAMName=` opens
 /// it. With SELinux on, the helper runs in PID 1's context, the one systemd's own PAM child
 /// has: pam_selinux computes the session's context from the caller's, so every user gets what
-/// today's start gives them, a confined one included. That needs the login socket to carry the
-/// context too ([`handover::Label::Init`]); without it, today's start. A switch for the wallet
+/// the plain start gives them, a confined one included. That needs the login socket to carry the
+/// context too ([`handover::Label::Init`]); without it, the plain start. A switch for the wallet
 /// login goes here.
 fn login_with<'a>(
     password: Option<&'a Secret>,
@@ -1822,8 +1825,8 @@ impl Drop for LoginDropin<'_> {
 }
 
 /// The login drop-in for this binary in SELinux `context`, `None` when its path can't go in a
-/// unit file. After an upgrade replaced the file, the link names the new one with a
-/// ` (deleted)` suffix.
+/// unit file. A binary an upgrade replaced reads as its path plus ` (deleted)`; the suffix is
+/// dropped to name the file now at that path.
 fn login_dropin(context: Option<&str>) -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let path = exe.to_str()?;

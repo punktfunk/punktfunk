@@ -53,14 +53,14 @@ pub struct DemoSession {
     /// [`quic::CODEC_H264`] or [`quic::CODEC_HEVC`].
     pub codec: u8,
     pub bitrate_kbps: u32,
-    /// The library id the client asked to launch ([`Hello::launch`]).
+    /// The library id the client asked to launch ([`quic::Hello::launch`]).
     pub launch: Option<String>,
 }
 
 /// Annex-B access units and their keyframe bit, embedder → send thread.
 type VideoQueue = mpsc::SyncSender<(Vec<u8>, bool)>;
 
-/// The control stream's halves, `punktfunk/2`'s behind the translation edges.
+/// The control stream's halves.
 type CtlSend = quinn::SendStream;
 type CtlRecv = v2io::FrameReader<quinn::RecvStream>;
 

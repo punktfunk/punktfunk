@@ -1,9 +1,10 @@
-//! The no-TTY / `--yes` renderer: the sh installer's `==>` / `ok` / `!!` lines.
+//! The no-TTY / `--yes` renderer: `==>` / `ok` / `!!` lines.
 //!
-//! D5: a box with no terminal sees that output byte-for-byte, so CI containers
-//! and scripts do not notice a renderer swap. Warnings and the die line stay
-//! on stderr for the same reason. The TUI renders the same `Plan` through a
-//! different surface; nothing below `ui` knows which one is attached.
+//! D5: a box with no terminal sees the lines the plan goldens pin, so CI containers and
+//! scripts do not notice a renderer swap. Warnings and the die line stay on stderr for the
+//! same reason. The goldens are uncoloured; here the tags are coloured unless `NO_COLOR` is
+//! set. The TUI renders the same `Plan` through a different surface; nothing below `ui`
+//! knows which one is attached.
 //!
 //! `Sink::Buffer` is what the golden suite renders into — one stream, so the ordering of
 //! warnings against commands is part of what the goldens pin. `Sink::Writer` is the Windows

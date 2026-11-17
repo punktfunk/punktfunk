@@ -1,6 +1,7 @@
-// Present-path diagnostics: the once-a-second pacing line, the display link's advertised
-// timing, and the phase reporter behind PUNKTFUNK_PRESENT_DEBUG. None of it participates
-// in presenting a frame — it only watches — so it lives beside the pipeline, not in it.
+// Present-path diagnostics and the facts they read: the pf-present line (`PresentDebugStats`),
+// the deadline link's latency readback (`PresentLinkInfo`), its flight record (`PresentFlight`),
+// `PanelInfo` and `FrameRateHint`. The first three only watch; `FrameRateHint` also sets the
+// deadline link's frame-rate range and the cadence clock's source interval.
 
 #if canImport(Metal) && canImport(QuartzCore)
 import AVFoundation
@@ -174,9 +175,10 @@ final class FrameRateHint: @unchecked Sendable {
         // keeps a refresh of slack in hand.
         return CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz)
         #else
-        // Pinned at the panel's top rate: a frame shows at the first refresh after its pick, and
-        // a lower minimum lets the system drop the panel mid-stream (judder). UIKit samples
-        // touch and Pencil at the panel's cadence, so the pin also keeps their full rate.
+        // Pinned at the higher of the stream rate and 120 Hz: a frame shows at the first refresh
+        // after its pick, and a lower minimum lets the system drop the panel mid-stream (judder).
+        // UIKit samples touch and Pencil at the panel's cadence, so the pin also keeps their
+        // full rate.
         let cap = max(hz, 120)
         return CAFrameRateRange(minimum: cap, maximum: cap, preferred: cap)
         #endif

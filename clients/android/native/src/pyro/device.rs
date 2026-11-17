@@ -44,8 +44,9 @@ pub(super) struct WindowSurface {
 
 impl Drop for WindowSurface {
     fn drop(&mut self) {
-        // SAFETY: only `PyroDevice` holds this past bring-up, and it destroys its device (and
-        // with it every swapchain on the surface) before its fields drop.
+        // SAFETY: only `PyroDevice` holds this past bring-up. Every swapchain on the surface
+        // is a `Present`'s, which borrows the device and destroys its swapchain when it drops;
+        // the device is destroyed after that and before this struct's fields drop.
         unsafe {
             ash::khr::surface::Instance::new(&self.entry, &self.instance)
                 .destroy_surface(self.surface, None);

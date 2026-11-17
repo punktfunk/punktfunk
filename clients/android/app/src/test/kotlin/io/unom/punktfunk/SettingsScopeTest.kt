@@ -27,14 +27,14 @@ import org.robolectric.annotation.Config
  * An edit must land in the scope the chips say is selected — the one thing the two-layer settings
  * surface can get wrong without looking wrong.
  *
- * The regression this pins: `update` reached the rows as `::update`, and two callable references
- * compare EQUAL however different the scope they captured, so Compose skipped the whole detail page
- * on a scope switch that moved nothing on screen (the ordinary case — a preset inherits the globals
- * until it overrides something). Each edit then wrote to the scope the user had just left: change a
- * default, switch to a preset, change the same row — the globals moved again and the preset
- * recorded nothing — and back on the defaults the next edit went into the preset, which reads as
- * "the default settings can't be changed any more". It needs the real Compose runtime to catch, so
- * this drives the actual screen rather than the model underneath it.
+ * `update` reaches the rows as `::update`, and two callable references compare EQUAL however
+ * different the scope they captured, so Compose may skip the whole detail page on a scope switch
+ * that moves nothing on screen (the ordinary case — a preset inherits the globals until it
+ * overrides something). A scope captured at composition would then send each edit to the scope the
+ * user just left: change a default, switch to a preset, change the same row — the globals move
+ * again and the preset records nothing — and back on the defaults the next edit goes into the
+ * preset, which reads as "the default settings can't be changed any more". It needs the real
+ * Compose runtime to catch, so this drives the actual screen rather than the model underneath it.
  *
  * `sdk = [36]` for the reason every Robolectric test here pins it: android-all jars stop at 36 while
  * the app compiles against 37.
@@ -84,7 +84,7 @@ class SettingsScopeTest {
 
         // 2. In preset scope the SAME row — untouched by the preset, so it still shows the global
         //    value and nothing on the page changed — must record an override and leave the globals
-        //    alone. This is the step that used to write straight through to the globals.
+        //    alone. A stale scope would write straight through to the globals here.
         selectScope("Work")
         toggleTheRow()
         assertEquals("the globals must not move while a preset is selected", true, saved.invertScroll)

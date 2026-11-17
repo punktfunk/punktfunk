@@ -2,8 +2,8 @@
 // `DefaultsKey.statsVerbosity` stores the tier a session STARTS at; the in-stream cycle (⌃⌥⇧S,
 // the three-finger tap, Select + X) moves only the session it was pressed in.
 //
-// Lives in PunktfunkKit (not the app) because the kit's input paths (TouchMouse's three-finger
-// tap, InputCapture's captured-state ⌃⌥⇧S) ask for the cycle directly.
+// Lives in PunktfunkKit (not the app) because the kit's input paths (`TouchMouse`'s three-finger
+// tap, `GamepadCapture`, `Sc2Capture`, `SiriRemotePointer`) ask for the cycle directly.
 
 import Foundation
 import PunktfunkShared
@@ -34,9 +34,9 @@ public enum StatsVerbosity: String, CaseIterable, Sendable {
         }
     }
 
-    /// The persisted tier. When `statsVerbosity` has never been written, migrates from the
-    /// legacy `hudEnabled` bool the pre-tiered clients stored: absent-or-true → `.normal`
-    /// (the old "on" look minus the equation lines), explicit false → `.off`.
+    /// The persisted tier. `EffectiveSettings.storedStatsVerbosity` decides it, migrating the
+    /// legacy `hudEnabled` bool of the pre-tiered clients: explicit false → `.off`, otherwise
+    /// `SettingDefault.statsVerbosity`.
     public static var current: StatsVerbosity {
         StatsVerbosity(rawValue: EffectiveSettings.storedStatsVerbosity(.standard)) ?? .normal
     }

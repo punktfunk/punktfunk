@@ -3,9 +3,10 @@
 //! A `Step` is data. `--dry-run` renders the Plan; uninstall and channel-switch are Plans
 //! from a different `Action`, not modes with their own I/O.
 //!
-//! Four actions cannot be command strings: apt madison pins, the pacman availability split,
-//! linger, and unit enable each need something the previous step created. They stay
-//! `StepAction` variants so `exec` owns the trap. `design/installer-v2.md`.
+//! Some actions cannot be command strings, so they stay `StepAction` variants and `exec` owns
+//! the trap: apt madison pins, the pacman availability split and the unit enable each need
+//! something an earlier step created, and linger needs a systemd to run on.
+//! `design/installer-v2.md`.
 
 use pf_l10n::tools as t;
 use serde::{Deserialize, Serialize};
@@ -82,8 +83,8 @@ pub enum StepAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     pub action: StepAction,
-    /// On success, skip every later phase. Only Omarchy sets it: that command already did
-    /// groups, firewall, and autostart.
+    /// On success, skip every later phase. Set by the hand-offs, Omarchy's setup and the SteamOS
+    /// on-device build: each already did the groups and autostart.
     pub ends_run: bool,
 }
 
@@ -291,9 +292,8 @@ fn install_phase(
             return false;
         };
         // The install line is the only step that moves an installed box onto the channel's
-        // current build; skipping it stranded one on whatever it had, so a re-run could never
-        // deliver a fix and only an uninstall could. Minus the repo write: having a channel is
-        // how we got here, so re-importing the signing key every time buys nothing.
+        // current build, so a re-run keeps it. Minus the repo write: having a channel is how
+        // we got here, so re-importing the signing key every time buys nothing.
         let repo = backend.write_repo(facts, choices);
         let mut steps = flatpak_client(facts, choices);
         steps.extend(
@@ -360,10 +360,8 @@ fn flatpak_client(facts: &Facts, choices: &Choices) -> Vec<Step> {
 /// firewall, a user unit. Omarchy has a better local answer for each and one command that does
 /// them all and knows how to reverse itself, so offer that instead of a weaker second version.
 ///
-/// Every optional part is passed explicitly. `punktfunk-omarchy setup` used to ask for four of
-/// them itself, which is how an Omarchy install grew a second round of questions after this one
-/// had finished — and how `--yes` skipped the integration entirely, since that script's prompt
-/// defaulted to no on a pipe.
+/// Every optional part is passed explicitly. `punktfunk-omarchy setup` prompts for nothing, so
+/// an Omarchy install gets one round of questions, and `--yes` runs the integration.
 fn omarchy_steps(_facts: &Facts, choices: &Choices) -> Vec<Step> {
     if !choices.omarchy_setup {
         return vec![Step::note(
@@ -429,7 +427,8 @@ fn group_steps(facts: &Facts, choices: &Choices) -> Vec<Step> {
     } else if facts.has_ujust {
         // Bazzite's input group is recipe-managed; usermod is the wrong tool. With no action
         // the recipe opens a gum menu, which the captured progress line hides while the step
-        // waits on stdin. A recipe older than that action takes none, and usermod is its body.
+        // waits on stdin. A recipe older than that action takes none; its body seeds `input`
+        // into /etc/group, then runs usermod.
         steps.push(Step::run(
             r#"ujust add-user-to-input-group add || sudo usermod -aG input "$USER""#,
         ));
@@ -526,8 +525,8 @@ fn start_steps(facts: &Facts, choices: &Choices, console_installed: bool) -> Vec
             t::setup_start_no_console(&facts.docs_page),
         ));
     }
-    // apt/dnf/sysext already start the plugin runner; Arch does not. Only on the run that
-    // installs it: a re-run must not turn back on a runner the operator switched off.
+    // Only on the run that installs the runner: a re-run must not turn back on a runner the
+    // operator switched off.
     if console_installed
         && facts.family == Family::Pacman
         && facts.missing.iter().any(|m| m == "plugin-runner")

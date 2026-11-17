@@ -81,8 +81,8 @@ apt_try     "libei (reis is pure-Rust so optional)"  libei-dev
 # ---------------------------------------------------------------------------
 log "NVIDIA GL/EGL userspace (headless GPU Wayland needs this — nvidia-utils alone is NOT enough)"
 # ---------------------------------------------------------------------------
-# nvidia-utils-NNN ships nvidia-smi + NVENC (libnvidia-encode) but NOT the GL/EGL libs.
-# Without libnvidia-gl-NNN there is no libEGL_nvidia.so.0 and no GLVND vendor JSON
+# nvidia-utils-NNN ships nvidia-smi and libnvidia-encode-NNN ships NVENC; neither ships the
+# GL/EGL libs. Without libnvidia-gl-NNN there is no libEGL_nvidia.so.0 and no GLVND vendor JSON
 # (/usr/share/glvnd/egl_vendor.d/10_nvidia.json), so libglvnd falls back to Mesa, wlroots
 # can't init EGL on the NVIDIA GPU, Sway is forced to the pixman software renderer, and the
 # ScreenCast portal then can't negotiate a dmabuf buffer format (capture fails). Install the
@@ -104,8 +104,8 @@ fi
 log "GPU device group membership (render + video) — required to open /dev/dri/*"
 # ---------------------------------------------------------------------------
 # wlroots opens the render node (/dev/dri/renderD128, group 'render') and the DRM card
-# (/dev/dri/card*, group 'video'); both are 0660. Without membership Sway aborts with
-# 'Permission denied' on the render node.
+# (/dev/dri/card*, group 'video'); both are 0660 on Ubuntu 24.04 and 26.04. Without
+# membership Sway aborts with 'Permission denied' on the render node.
 TARGET_USER="${SUDO_USER:-$USER}"
 NEED_GROUPS=""
 for g in render video; do

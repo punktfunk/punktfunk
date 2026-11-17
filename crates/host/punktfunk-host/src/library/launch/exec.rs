@@ -4,9 +4,6 @@
 //! runtime widens what can run: the program and the argv shape come from the installed package's
 //! manifest, every value is checked against the parameter's character class, and a `path` value
 //! must sit under a root that manifest declares.
-//!
-//! This replaces the older `plugin` kind, where the host dialled the plugin at launch and ran the
-//! command line it answered with (security-review 2026-08-15 §10, 2026-08-31 H-1).
 
 use super::*;
 use crate::plugins::manifest::{param_ok, ParamKind, PluginManifest};

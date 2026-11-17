@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(f.rung(), 0);
     }
 
-    /// A rung that showed a second of picture works on this device, whatever fails later.
+    /// A rung that showed `SETTLED_FRAMES` of picture works on this device, whatever fails later.
     #[test]
     fn a_rung_that_settled_keeps_its_place() {
         let mut f = RungFloor::default();

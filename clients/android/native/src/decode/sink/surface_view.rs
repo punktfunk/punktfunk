@@ -46,12 +46,12 @@ fn latch_margin_ns() -> Option<i64> {
 }
 
 /// Latch samples + display confirms recorded by the `OnFrameRendered` callback thread, drained by
-/// the presenter's 1 Hz `pf-present` line. Always on (independent of the HUD) — this is what makes
-/// a HUD-off wireless A/B readable from logcat.
+/// the presenter's 1 Hz `pf.present` line. Always on (independent of the HUD): this is what
+/// makes a HUD-off run readable from logcat.
 pub(crate) struct PresentMeter {
     inner: Mutex<PresentMeterInner>,
     /// Frames released to SurfaceFlinger that `OnFrameRendered` has not yet confirmed reached
-    /// glass: the budget's structural rail and the pf-present line's queue-depth readout.
+    /// glass: the budget's structural rail and the pf.present line's queue-depth readout.
     /// Lock-free because the release side runs on the decode loop and the confirm side on the
     /// codec's callback thread, once per frame each.
     undisplayed: AtomicI32,
@@ -63,14 +63,14 @@ pub(crate) struct PresentMeter {
 struct PresentMeterInner {
     latch_us: Vec<u64>,
     displays: u64,
-    /// The `decode` stage's feed split, received→queued µs (P3 science: hand-off + input-slot
-    /// wait). Empty when no receipt stamp matched (HUD off and ABR not measuring decode).
+    /// The `decode` stage's feed split, received→queued µs (hand-off + input-slot wait).
+    /// Empty when no receipt stamp matched (HUD off and ABR not measuring decode).
     feed_us: Vec<u64>,
     /// The codec-pure half, queued→decoded µs, measured from the AU's LAST piece — always on,
-    /// so a HUD-off logcat A/B still reads the decoder's own time.
+    /// so a HUD-off logcat still reads the decoder's own time.
     codec_us: Vec<u64>,
     /// Capture→decoded end-to-end µs (skew-corrected, clamped) — always on for the same reason:
-    /// the wireless A/B's headline without having to reach the on-screen HUD.
+    /// the headline without having to reach the on-screen HUD.
     e2e_us: Vec<u64>,
 }
 

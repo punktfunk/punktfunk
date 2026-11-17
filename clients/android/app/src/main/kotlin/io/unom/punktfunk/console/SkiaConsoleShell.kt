@@ -55,7 +55,8 @@ import kotlin.math.roundToInt
 
 /**
  * The console UI drawn by the Skia shell (`crates/client/pf-console-ui`), hosted on a `SurfaceView` this
- * composable owns and driven through [SkiaConsole]. `App.kt` shows it when [SkiaConsole.wanted].
+ * composable owns and driven through [SkiaConsole]. `App.kt` shows it when [SkiaConsole.wanted],
+ * [SkiaConsole.healthy] and the gamepad-UI gate hold.
  *
  * What lives here is only what needs a composition: the surface lifecycle, the safe-area insets,
  * the pad probes (raw pad → the shared menu synthesizer, over JNI), the system Back, the system
@@ -131,13 +132,14 @@ fun SkiaConsoleShell(
 
     // The console owns the whole panel while it fronts the app, exactly like the stream: the
     // status bar and the gesture bar are hidden (a swipe shows them transiently). This is both the
-    // space win AND the safe-area fix — hidden bars report zero insets, so the scroll clips that
-    // used to end at the visible gesture-bar line now run to the panel edge. Only the display
+    // space win AND the safe-area fix — hidden bars report zero insets, so scroll clips run to
+    // the panel edge instead of ending at the gesture-bar line. Only the display
     // cutout stays a real inset. The hide/show itself lives in App.kt (one owner; a per-screen
     // `onDispose { show }` fired after the stream's hide during the AnimatedContent cross-fade).
 
-    // The safe area, in surface pixels: system bars ∪ display cutout — the NP3's landscape punch
-    // is a SIDE inset, and the console's chrome must stay clear of it (its backdrop need not).
+    // The safe area, in surface pixels: system bars ∪ display cutout — a landscape phone's
+    // punch-hole is a SIDE inset, and the console's chrome must stay clear of it (its backdrop
+    // need not).
     // With the bars hidden above, this is normally just the cutout.
     val density = LocalDensity.current
     val ld = LocalLayoutDirection.current
@@ -146,13 +148,10 @@ fun SkiaConsoleShell(
     val top = insets.getTop(density).toFloat()
     val right = insets.getRight(density, ld).toFloat()
     val bottom = insets.getBottom(density).toFloat()
-    // Design-unit scale: TVs take the couch formula (0 = the shell decides: a 4K panel is 2.7×,
-    // the same 800-unit field as a Deck); a phone or tablet in the hand gets a density FLOOR
-    // under that formula, so type never shrinks below what the touch UI draws at the same
-    // density (design D5 — a bare height/800 on a 460 dpi phone lands ~26 % smaller than a Deck).
-    // The 0.75 is the on-glass tuning knob — raised from 0.6 after a 460 dpi phone (Nothing
-    // Phone) still read a step too small in the hand: the floor is what sets the phone scale
-    // (the couch term only wins on tablets and TVs), so this is a phones-only bump.
+    // Design-unit scale: a TV passes 0 and the shell takes panel height / 800 (a 4K panel is
+    // 2.7×). A phone or tablet in the hand gets a density FLOOR under that formula, so type never
+    // shrinks below what the touch UI draws at the same density (design D5). The 0.75 sets the
+    // phone scale, tuned on glass: at 0.6 a 460 dpi phone reads a step too small.
     val tv = remember { io.unom.punktfunk.isTvDevice(context) }
     // The SurfaceView's own laid-out size, fed back by `onSizeChanged` below — deliberately not
     // `displayMetrics`. The reduced buffer's aspect ratio has to match the RECT it is scaled into
@@ -236,9 +235,8 @@ fun SkiaConsoleShell(
                 followTest()
                 if (SkiaConsole.padTestKey(Gamepad.padKeyCode(ev), down)) return@probe true
                 // The CORRECTED keycode: a pad Android has no key layout for delivers its buttons
-                // under other buttons' names, so read raw this console answered ✕ with whatever
-                // sat in BUTTON_A's scancode slot. Same resolution the stream uses — the console
-                // and the game must not disagree about which button a user pressed.
+                // under other buttons' names. Same resolution the stream uses — the console and
+                // the game must not disagree about which button a user pressed.
                 val code = Gamepad.padKeyCode(ev)
                 val bit = when (code) {
                     KeyEvent.KEYCODE_BUTTON_A -> 0
@@ -277,8 +275,8 @@ fun SkiaConsoleShell(
                     return@probe true
                 }
                 // Only a key a pad can produce stops here. A composite keyboard (dongle
-                // receiver, Fire OS) stamps GAMEPAD on every key it sends — dropping those left
-                // its Enter and its typing dead in the menus.
+                // receiver, Fire OS) stamps GAMEPAD on every key it sends; its Enter and its
+                // typing must still reach the menus.
                 if (padShaped(code)) return@probe false
             }
             // A remote / keyboard. D-pad keys and DPAD_CENTER as discrete events with the
@@ -356,7 +354,7 @@ fun SkiaConsoleShell(
         onDispose {
             im.unregisterInputDeviceListener(plug)
             // Remove OUR claim only — a platform screen pushed over us keeps its own, and when it
-            // pops, this one resurfaces (the stack is what fixed the pad dying after Controllers).
+            // pops, this one resurfaces.
             activity.removePadProbes(probes)
             padState.reset()
             if (handle != 0L) padState.push(handle)
@@ -470,14 +468,6 @@ fun SkiaConsoleShell(
 }
 
 /**
- * A `ConsoleCmd::PadAction` from the console's Connected-controllers screen — the handful of
- * things only the platform can do: a rumble pulse on the real [InputDevice], the USB/Bluetooth
- * grant dialogs, the DualSense pad-audio self test. The touch Controllers screen keeps its own
- * buttons for the same actions; both routes end in the same helpers ([testRumble], the grant
- * intents, `nativePadAudioSelfTest`), so the support answer cannot drift between interfaces.
- * Runs on the main thread (the command drain lives there); results ride [SkiaConsole.notice].
- */
-/**
  * Is [code] a key only a controller sends? The pad route claims those and nothing else, so a
  * keyboard whose device also advertises `SOURCE_GAMEPAD` keeps its typing. BACK counts: a pad
  * with no Select scancode delivers Select as `KEYCODE_BACK`, and the console's Back is the
@@ -486,6 +476,14 @@ fun SkiaConsoleShell(
 internal fun padShaped(code: Int): Boolean =
     KeyEvent.isGamepadButton(code) || code == KeyEvent.KEYCODE_BACK
 
+/**
+ * A `ConsoleCmd::PadAction` from the console's Connected-controllers screen — the handful of
+ * things only the platform can do: a rumble pulse on the real [InputDevice], the USB/Bluetooth
+ * grant dialogs, the DualSense pad-audio self test. The touch Controllers screen keeps its own
+ * buttons for the same actions; both routes end in the same helpers ([testRumble], the grant
+ * intents, `nativePadAudioSelfTest`), so the support answer cannot drift between interfaces.
+ * Runs on the main thread (the command drain lives there); results ride [SkiaConsole.notice].
+ */
 private fun padAction(activity: MainActivity?, action: String, padKey: String) {
     if (activity == null) return
     val settings = SettingsStore(activity).load()
@@ -570,9 +568,9 @@ private const val SC2_PAD_KEY = "sc2:"
 
 /**
  * The Steam Controller 2 as a pad row, when it has no [android.view.InputDevice] of its own:
- * capture detaches the kernel node, and a USB one awaiting its grant never had one. Without the
- * row the console's chip reads "TV remote" while the pad is driving it. Probed through
- * [Sc2Capture] — USB first, then a bonded BLE controller — so the console and the touch
+ * a USB capture detaches the kernel driver, and a USB one awaiting its grant never had one.
+ * Without the row the console's chip reads "TV remote" while the pad is driving it. Probed
+ * through [Sc2Capture] — USB first, then a bonded BLE controller — so the console and the touch
  * Controllers screen cannot disagree about which pads exist.
  */
 private fun sc2Extras(activity: MainActivity?): List<ConsoleJson.ExtraPad> {

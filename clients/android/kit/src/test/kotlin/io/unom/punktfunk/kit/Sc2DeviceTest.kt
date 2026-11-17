@@ -172,8 +172,8 @@ class Sc2DeviceTest {
         val write = Sc2Device.outputWrite(rumble)!!
         assertEquals("100f6cb5-1735-4313-b402-38567131e5f3", write.charUuid)
         assertArrayEquals(rumble.copyOfRange(1, rumble.size), write.payload)
-        // 0x82, Steam's ping/test buzz, rides B7. This is the mis-route that made every actuator
-        // but one silent: the link used to send every id to the first writable characteristic.
+        // 0x82, Steam's ping/test buzz, rides B7: each id has its own characteristic, not the
+        // first writable one.
         val buzz = byteArrayOf(0x82.toByte(), 0x03, 0x01, 0xFF.toByte())
         val buzzWrite = Sc2Device.outputWrite(buzz)!!
         assertEquals("100f6cb7-1735-4313-b402-38567131e5f3", buzzWrite.charUuid)
@@ -249,8 +249,7 @@ class Sc2DeviceTest {
     fun `the lizard-off keepalive leads with the settings command`() {
         // The characteristic value carries no 0x01 channel byte, so the firmware reads byte 0 as
         // the command id: unstripped, the frame parses as command 0x01 and lizard mode never
-        // goes off. That was the Bluetooth defect — the pad kept emulating a keyboard and mouse
-        // on the phone, and Steam's forwarded gyro-enable was swallowed the same way.
+        // goes off.
         val payload = Sc2Device.featurePayload(Sc2Device.DISABLE_LIZARD)!!
         assertEquals(0x87.toByte(), payload[0]) // ID_SET_SETTINGS_VALUES, never the channel id
         assertArrayEquals(Sc2Device.DISABLE_LIZARD.copyOfRange(1, 64), payload)
@@ -258,8 +257,8 @@ class Sc2DeviceTest {
 
     @Test
     fun `the feature characteristic is outside the per-report block`() {
-        // The regression that made every feature write land on a rumble actuator: resolving
-        // writes by scanning the output block alone can never reach the feature characteristic.
+        // Resolving writes by scanning the output block alone can never reach the feature
+        // characteristic, so a feature write would land on a rumble actuator.
         val outputs = (0x80..0x89).map { Sc2Device.bleOutputChar(it) }
         assertFalse(Sc2Device.BLE_FEATURE_CHAR in outputs)
         assertEquals("100f6c34-1735-4313-b402-38567131e5f3", Sc2Device.BLE_FEATURE_CHAR)

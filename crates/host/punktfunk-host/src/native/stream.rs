@@ -7,7 +7,7 @@
 //! in `run`, one file per concern under `stream/`.
 //!
 //! Pin `PUNKTFUNK_IDD_ADAPTIVE=0`, `PUNKTFUNK_DELIVERY=burst`, `PUNKTFUNK_STREAMED_AU=0` for
-//! the rebuild-free A/B levers. Evidence: `design/midstream-resolution-resize.md`.
+//! the rebuild-free A/B levers.
 
 use super::wiring::{SessionShared, StreamEnds};
 use super::*;
@@ -130,8 +130,7 @@ pub(super) fn synthetic_stream(
 /// A moving picture through the software H.264 encoder until the session stops. Linux only,
 /// because the encoder is; elsewhere a client gets a refusal it can read, not a hang.
 ///
-/// Named, not resolved from the ladder: `auto` never picks software, and `PUNKTFUNK_ENCODER`
-/// is latched long before a session arrives.
+/// Named, not resolved from the ladder: `auto` never picks software.
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn software_stream(
@@ -205,8 +204,9 @@ pub(super) fn software_stream(
 /// past the rate a session will actually use.
 const MAX_PROBE_KBPS: u32 = 10_000_000;
 const MAX_PROBE_MS: u32 = 5_000;
-/// One pump's send ceiling: a whole catch-up backlog in one batch overruns a ~400 KiB send
-/// buffer. The rest follows on the next pump, which video shares.
+/// One pump's send ceiling: a whole catch-up backlog in one batch overruns the ~416 KiB send
+/// buffer Linux grants without the packaged sysctl. The rest follows on the next pump, which
+/// video shares.
 const PROBE_PUMP_BYTES: u64 = 64 * 1024;
 
 /// A speed-test burst in flight: zero-filled [`FLAG_PROBE`] AUs at `target_kbps` for
@@ -224,7 +224,7 @@ struct ProbeBurst {
     bytes_sent: u64,
     packets_sent: u32,
     /// Wire packets this burst offered, and those the send buffer refused. Counted per submit:
-    /// video shares the loop now, so a session-stats delta would fold its shards in.
+    /// video shares the loop, so a session-stats delta would fold its shards in.
     wire_offered: u32,
     send_dropped: u32,
     /// `0` is the smooth train; otherwise `rate / burst_hz` bytes come due every period.
@@ -255,7 +255,8 @@ impl ProbeBurst {
             return None;
         }
         let bytes_per_sec = u64::from(target_kbps) * 125;
-        // ≤16 KiB ≈ a dozen MTU shards; a 256 KiB AU overflowed a ~400 KiB send buffer on one submit.
+        // ≤16 KiB ≈ a dozen MTU shards; a 256 KiB submit can overflow the ~416 KiB send
+        // buffer Linux grants without the packaged sysctl.
         let chunk = (bytes_per_sec / 240).clamp(1200, 16 * 1024) as usize;
         let start = std::time::Instant::now();
         Some(ProbeBurst {

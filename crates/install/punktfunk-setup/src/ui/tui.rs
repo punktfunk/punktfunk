@@ -43,7 +43,7 @@ const FORBIDDEN: &str = "\"'\\`$";
 pub struct Tui<'a> {
     term: RefCell<&'a mut dyn Terminal>,
     caps: Caps,
-    /// 0 in tests and under `--demo --fast`, so nothing waits on wall-clock time.
+    /// Delay between intro frames; 0 in tests, so nothing waits on wall-clock time.
     frame_ms: u64,
     /// `Some` while the run is collapsed to one live line; `None` under `-v`.
     progress: RefCell<Option<Progress>>,
@@ -429,7 +429,7 @@ impl<'a> Tui<'a> {
     }
 
     /// Where the console listens. Asked, not derived: the answer decides who on the network can
-    /// reach the pairing screen, and until now nobody was ever told it was every device.
+    /// reach the pairing screen.
     ///
     /// `None` on Esc leaves `current` standing, so backing out of a re-run never moves a console
     /// someone already placed. "Any address" is deliberately not an option: a console on the open
@@ -571,7 +571,7 @@ impl<'a> Tui<'a> {
                 }
                 Key::Down | Key::Char('j') => cursor = (cursor + 1) % options.len(),
                 Key::Enter | Key::Space => {
-                    // No collapsed transcript line: the row below already holds the answer.
+                    // The prompt is cleared, not collapsed to an answer line.
                     self.term.borrow_mut().clear_last_lines(drawn);
                     return Some(cursor);
                 }

@@ -134,7 +134,7 @@ impl Rung for NativeVulkanDecoder {
     }
 }
 
-// libva has no per-picture decode-status query: `health` reports concealment and
+// This rung runs no per-picture decode-status query: `health` reports concealment and
 // refusals from the planner, and `failed` stays 0.
 #[cfg(target_os = "linux")]
 impl Rung for crate::video_vaapi_native::NativeVaapiDecoder {
@@ -190,7 +190,7 @@ impl Rung for crate::video_v4l2::NativeV4l2Decoder {
     }
 }
 
-// DXVA has no per-picture status read either: `health` is the planner's view.
+// This rung reads no per-picture status either: `health` is the planner's view.
 #[cfg(windows)]
 impl Rung for crate::video_d3d11_native::NativeD3d11Decoder {
     fn id(&self) -> Option<NativeRung> {

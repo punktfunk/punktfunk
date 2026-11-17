@@ -39,8 +39,7 @@ pub fn shot_size() -> Option<(i32, i32)> {
 /// Render one mock-populated, host-free scene over the already-presented window, then
 /// print `PF_SHOT_READY` once it has settled. When `PUNKTFUNK_SHOT_OUT=/path.png` is set
 /// the app CAPTURES ITSELF (widget snapshot → gsk render → PNG) — no Xvfb/ImageMagick
-/// needed. The stream and gamepad-library scenes are gone with the pages (both live in
-/// the session binary now).
+/// needed.
 pub fn run_shot(ctx: &ShotCtx, scene: &str) {
     let sender = &ctx.sender;
     // A plausible host for the trust/pair dialogs (fp_hex = 64 hex chars).
@@ -245,8 +244,6 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
     });
 }
 
-/// The mock game set for the `library` scene: mixed stores exercising the badge set,
-/// plus one solid-colour poster texture.
 /// A probe sweep that found the first saved host, the rest asleep.
 fn mock_online(ctx: &ShotCtx) -> std::collections::HashMap<String, bool> {
     ctx.store
@@ -258,6 +255,8 @@ fn mock_online(ctx: &ShotCtx) -> std::collections::HashMap<String, bool> {
         .collect()
 }
 
+/// The mock game set for the `library` scene: mixed stores exercising the badge set,
+/// plus one solid-colour poster texture.
 fn mock_library() -> (
     Vec<pf_client_core::library::GameEntry>,
     Vec<(String, gtk::gdk::Texture)>,

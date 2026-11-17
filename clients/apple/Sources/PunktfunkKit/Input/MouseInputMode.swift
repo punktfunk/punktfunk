@@ -2,8 +2,8 @@
 /// `MouseMode` / `Settings::mouse_mode`, design/remote-desktop-sweep.md M1). Stored stringly
 /// under `DefaultsKey.mouseMode`.
 public enum MouseInputMode: String, CaseIterable, Sendable {
-    /// Pointer capture (disassociated, hidden cursor, relative deltas) — the game model,
-    /// and the default: the only cursor you see is the host's.
+    /// Pointer capture (disassociated, hidden cursor, relative deltas) — the game model: the
+    /// only cursor you see is the host's. `SettingDefault.mouseMode` picks the default.
     case capture
     /// Absolute pointer, uncaptured: the cursor enters and leaves the stream freely and
     /// motion is forwarded as absolute positions through the letterbox. The remote desktop

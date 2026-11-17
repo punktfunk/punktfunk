@@ -32,9 +32,10 @@ use slot::PlaneSlot;
 /// Run a JNI body, catching any panic at the FFI boundary and returning `default` instead.
 ///
 /// A panic unwinding out of an `extern "system"` function aborts the whole process on Rust ≥ 1.81 —
-/// a hard crash of the embedding Android app with no logcat trace. Every entry point that does not
-/// go through `EnvUnowned::with_env` (which carries its own catch) wraps its body in this; the
-/// `panic = "unwind"` profile in the workspace `Cargo.toml` exists precisely so these guards work.
+/// a hard crash of the embedding Android app that only the panic hook's `pf.crash` line names. A
+/// `NativeBridge` entry point that does more than read a constant or an atomic outside
+/// `EnvUnowned::with_env` (which carries its own catch) wraps its body in this; the workspace
+/// `Cargo.toml` leaves `panic = "abort"` off so it works.
 pub(crate) fn jni_guard<T>(default: T, f: impl FnOnce() -> T) -> T {
     std::panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
         log::error!("punktfunk JNI: caught a panic at the FFI boundary (returning default)");
@@ -53,8 +54,7 @@ pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// One table-owned live session: its connector, media workers, and session-scoped state.
 pub(crate) struct SessionHandle {
-    // Read only by the android decode path (`nativeStartVideo` → `crate::decode`); on the host
-    // build (CI's workspace clippy/build) those readers are cfg'd out, so it's intentionally unused.
+    // The connector: the JNI modules in this directory read it on every build.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub client: Arc<NativeClient>,
     /// The overlay's Android facts plus a handle on the connector's window, read ~1 Hz by
@@ -99,9 +99,8 @@ pub(crate) struct SessionHandle {
     /// that is never recreated: hiding the system bars and switching the window to
     /// `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS` both happen a frame or two AFTER `surfaceCreated`,
     /// and each one grows the video view. A destination rect captured once at creation then keeps
-    /// compositing the picture at its old, smaller size anchored at the layer's origin — the
-    /// "stream in the top-left corner" field report. `0` = nothing reported yet, and the layer
-    /// falls back to the window's buffer geometry.
+    /// compositing the picture at its old, smaller size anchored at the layer's origin. `0` =
+    /// nothing reported yet, and the layer falls back to the window's buffer geometry.
     pub surface_size: Arc<AtomicU64>,
     /// The visible part of the frame ([`pack_src_crop`]), written by `nativeVideoSourceCrop`
     /// whenever Kotlin re-places the picture. Not the full frame only under Crop to fill (or a
@@ -413,8 +412,7 @@ mod tests {
         assert!(A.get(a).is_none() && A.remove(a).is_none());
     }
 
-    /// The pair the presenter reads as one atomic load must survive the round trip — including a
-    /// size wider than a signed 16-bit value, which every panel this runs on now is.
+    /// The pair the presenter reads as one atomic load must survive the round trip.
     #[test]
     fn surface_size_round_trips() {
         assert_eq!(

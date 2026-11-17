@@ -7,7 +7,7 @@
 //!
 //! The portal/Mutter session and the EIS connection must stay alive, and the event
 //! stream must be polled (resume/pause/ping). The worker parks on the shared portal
-//! runtime (`pf_portal`); the control thread only enqueues via
+//! runtime (`pf_portal`); the calling thread only enqueues via
 //! [`LibeiInjector::inject`].
 //!
 //! Keyboard codes are Linux evdev. The compositor supplies the keymap, so there is
@@ -66,8 +66,9 @@ impl LibeiInjector {
             .name("punktfunk-libei".into())
             .spawn(move || worker(rx, source))
             .map_err(|e| anyhow!("spawn libei worker thread: {e}"))?;
-        // Handshake stays off the control thread: a slow or denied portal would freeze
-        // the ENet stream. Events enqueue until a device resumes; a few early ones drop.
+        // Handshake stays off the caller's thread (the injector service's): a slow or denied
+        // portal would hold up every input event. Events enqueue until a device resumes; a few
+        // early ones drop.
         Ok(Self { tx })
     }
 }

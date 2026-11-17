@@ -7,8 +7,15 @@ import android.media.MediaCodecInfo.VideoCapabilities.PerformancePoint
 import android.media.MediaCodecList
 import android.os.Build
 
-/** The decoder Kotlin ranked for a MIME, handed to [NativeBridge.nativeStartVideo]. */
-data class DecoderChoice(val name: String, val lowLatencyFeature: Boolean)
+/**
+ * The decoder Kotlin ranked for a MIME, handed to [NativeBridge.nativeStartVideo]. [pixelRate]
+ * is the most pixels a second it declares, 0 when it declares none.
+ */
+data class DecoderChoice(
+    val name: String,
+    val lowLatencyFeature: Boolean,
+    val pixelRate: Long = 0,
+)
 
 /** What a session asks of its decoder: the requested size and rate, and 10-bit (HDR or SDR). */
 data class DecodeNeed(val width: Int, val height: Int, val fps: Int, val tenBit: Boolean)
@@ -84,13 +91,12 @@ object VideoDecoders {
 
     /**
      * Whether EVERY decoder this device would use tolerates multi-slice access units — the
-     * `VIDEO_CAP_MULTI_SLICE` advertisement (decoder truth, per the 0.17.0 field regression:
-     * Amlogic HEVC decoders wedge the whole DEVICE on multi-slice frames — Chromecast with
-     * Google TV, onn 4K — which is why Moonlight requests single-slice for every hardware
-     * decoder). We advertise per-family instead: tolerant unless the pick for ANY advertised
-     * codec is an Amlogic decoder or can't be inspected (a null pick = the platform default —
-     * uninspectable, so conservatively single-slice). Probed once at connect time; the host
-     * defaults to >1 slice only toward clients that set the bit.
+     * `VIDEO_CAP_MULTI_SLICE` advertisement (decoder truth: Amlogic HEVC decoders wedge the
+     * whole DEVICE on multi-slice frames — Chromecast with Google TV, onn 4K). We advertise
+     * per family: tolerant unless the pick for ANY advertised codec is an Amlogic decoder or can't
+     * be inspected (a null pick = the platform default — uninspectable, so conservatively
+     * single-slice). Probed once at connect time; the host defaults to >1 slice only toward
+     * clients that set the bit.
      */
     fun multiSliceTolerant(): Boolean {
         val mimes = advertisedMimes()
@@ -143,8 +149,9 @@ object VideoDecoders {
     /**
      * One-line per-mime probe readout for the connect log (`adb logcat -s pf.caps`): which
      * decoder each advertised mime resolves to, whether it declares `FEATURE_PartialFrame` (the
-     * P2 slice-pipeline gate) and which latency-named vendor parameters it declares — whether a
-     * `low_latency_key` profile's keys exist on this device, otherwise invisible from a report.
+     * [partialFrameCapable] gate) and which latency-named vendor parameters it declares —
+     * whether a `low_latency_key` profile's keys exist on this device, otherwise invisible from
+     * a report.
      */
     fun capsReport(): String {
         val mimes = advertisedMimes()
@@ -228,9 +235,19 @@ object VideoDecoders {
     fun pickDecoder(mime: String): DecoderChoice? {
         if (mime.isEmpty()) return null
         val infos = codecInfos() ?: return null
-        return bestDecoder(facts(infos, mime, null, false), Build.VERSION.SDK_INT)
-            ?.let { DecoderChoice(it.name, it.lowLatency) }
+        val best = bestDecoder(facts(infos, mime, null, false), Build.VERSION.SDK_INT)
+            ?: return null
+        val video = infos.firstOrNull { it.name == best.name }
+            ?.let { runCatching { it.getCapabilitiesForType(mime).videoCapabilities }.getOrNull() }
+        return DecoderChoice(best.name, best.lowLatency, video?.let(::pixelRate) ?: 0)
     }
+
+    /** The most pixels a second [video] declares: its largest size at the rate it takes there. */
+    private fun pixelRate(video: MediaCodecInfo.VideoCapabilities): Long = runCatching {
+        val w = video.supportedWidths.upper
+        val h = video.getSupportedHeightsFor(w).upper
+        (w.toLong() * h * video.getSupportedFrameRatesFor(w, h).upper).toLong()
+    }.getOrDefault(0L)
 
     private fun codecInfos(): Array<MediaCodecInfo>? =
         runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos }.getOrNull()
@@ -277,7 +294,8 @@ object VideoDecoders {
 
     /**
      * Below API 35 some vendors' performance points leave real modes out. They count only when an
-     * H.264 decoder's list covers 720p60, which the CDD asks of every device (as ExoPlayer does).
+     * H.264 decoder's list covers 720p60, which the CDD requires wherever the display is 720 lines
+     * or taller (ExoPlayer checks the same).
      */
     private fun pointsTrusted(infos: Array<MediaCodecInfo>): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) return true
@@ -373,10 +391,11 @@ internal fun codecCaps(decoders: List<DecoderFacts>, tenBit: Boolean, api: Int):
 }
 
 /**
- * A Qualcomm display HAL from before the Android 13 vendor release (kalama, SM8550) converts every
- * BT.709 YUV layer with the limited matrix whatever its range tag (`SelectCscType`): full-range
- * video shows crushed blacks and clipped highlights. Later HALs check the range. A Qualcomm
- * decoder marks the HAL's vendor; an unreadable vendor level (0) counts as old.
+ * A Qualcomm display HAL older than kalama's (SM8550) converts every BT.709 YUV layer with the
+ * limited matrix whatever its range tag (`SelectCscType`): full-range video shows crushed blacks
+ * and clipped highlights. Vendor API 33 approximates the cut; some API-33 HALs (DIVAR) still
+ * ignore the range. A Qualcomm decoder marks the HAL's vendor; an unreadable vendor level (0)
+ * counts as old.
  */
 internal fun limitedOnlyBt709Hal(decoder: String, vendorApi: Int): Boolean {
     val name = decoder.lowercase()

@@ -18,8 +18,8 @@ const _: () = assert!(std::mem::size_of::<aes_gcm::Tag>() == TAG_LEN);
 const _: () = assert!(std::mem::size_of::<chacha20poly1305::Tag>() == TAG_LEN);
 
 /// aws-lc-rs behind the detached-tag shape both suites share. `LessSafeKey` because the
-/// nonce is ours (`salt || seq`), not a counter the library owns; uniqueness is this file's
-/// invariant.
+/// nonce is ours (`media_nonce`: the key's IV XOR the packet number), not a counter the
+/// library owns; uniqueness is this file's invariant.
 #[cfg(any(feature = "aes-aws-lc-rs", feature = "chacha-aws-lc-rs"))]
 mod aws_lc {
     use aws_lc_rs::aead::{Aad, Algorithm, LessSafeKey, Nonce, UnboundKey};

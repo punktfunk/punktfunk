@@ -12,7 +12,7 @@ name: plugin-kit-publish
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Both installs retried: bun's download-and-extract is single-shot, and a truncated tarball
-      # reads as `Fail extracting tarball` (ci.yml's web job has the measurement). A publish job
+      # reads as `Fail extracting tarball` (see ci.yml's web job). A publish job
       # is the worst place to lose to a dropped packet — the tag is already pushed.
       - name: Build the SDK (file:../sdk dependency source)
         working-directory: sdk
@@ -50,12 +50,10 @@ jobs:
         working-directory: plugin-kit
         run: bash ../scripts/ci/retry.sh 3 bun install --frozen-lockfile --ignore-scripts
 
-      # bun 1.3 installs a `file:` dependency by copying its DIRECTORIES but symlinking each
-      # top-level FILE to itself — `node_modules/@punktfunk/host/package.json -> package.json`, a
-      # dangling self-reference. `dist/` therefore arrives intact while the manifest that points at
-      # it does not, so module resolution dies at the first step and every `@punktfunk/host` import
-      # reads as "cannot find module". Replacing the tree with a real copy is the whole fix; drop
-      # this step once bun links `file:` deps correctly again.
+      # bun 1.3 symlinks each file of a `file:` dependency and, on a name clash, links it to
+      # itself, so `node_modules/@punktfunk/host/package.json` dangles and every `@punktfunk/host`
+      # import reads as "cannot find module". bun 1.4.4 (this image) hardlinks the folder; the
+      # step replaces the tree with a real copy only when the manifest does not resolve.
       - name: "Repair the file: dependency (bun 1.3 self-symlink)"
         working-directory: plugin-kit
         run: |
@@ -69,9 +67,8 @@ jobs:
           test -f node_modules/@punktfunk/host/package.json
           test -f node_modules/@punktfunk/host/dist/index.d.ts
 
-      # The kit had no biome config and no lint step, while every plugin repo that consumes it does
-      # — so its source drifted (unused imports, formatting) with nothing to catch it. Now gated
-      # here, on the same config and pinned biome version the plugins use.
+      # Gated on plugin-kit's biome config, in the plugins' style (tabs, double quotes,
+      # recommended rules).
       - name: Lint & format
         working-directory: plugin-kit
         run: bun run check
@@ -96,8 +93,8 @@ jobs:
           PKG="$(node -p "require('./package.json').version")"
           test "$TAG" = "$PKG" || { echo "tag $GITHUB_REF_NAME does not match package version $PKG"; exit 1; }
 
-      # A version published by hand (the runner queue was deep) must not turn the tag's lane red:
-      # the registry refuses a second upload of the same version, so skip it instead.
+      # A version published by hand must not turn the tag's lane red: the registry refuses a
+      # second upload of the same version, so skip it instead.
       - name: Skip a version the registry already serves
         id: published
         working-directory: plugin-kit

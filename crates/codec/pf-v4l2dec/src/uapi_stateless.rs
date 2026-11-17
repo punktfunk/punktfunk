@@ -5,7 +5,7 @@
 //! Same ABI and the same rules as [`crate::uapi`]: fixed-width fields, sizes
 //! and union offsets asserted at compile time. Pointers are `u64`. The HEVC
 //! structs are plain `repr(C)`; their explicit `reserved` members are the
-//! padding the kernel header spells out, and the kernel zeroes them on entry.
+//! padding the kernel header spells out and asks the caller to zero.
 
 /// `_IOC(dir, type, nr, size)`.
 const fn ioc(dir: u32, kind: u8, nr: u32, size: usize) -> u32 {

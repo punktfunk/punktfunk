@@ -2,12 +2,11 @@
 # Generate the per-release CycloneDX SBOM (CRA Annex I Part II §1 — machine-readable component
 # inventory, attached to every stable release by .gitea/workflows/sbom.yml).
 #
-# syft walks the checkout and catalogs every lockfile-pinned dependency (both Rust workspaces via
-# their Cargo.locks, the Bun/pnpm/npm trees, the Swift Package.resolved);
+# syft walks the checkout and catalogs every lockfile-pinned dependency (every Cargo.lock, the
+# Bun/pnpm/npm trees, the Swift Package.resolved);
 # compliance/sbom/manual-components.cdx.json contributes the components no lockfile records —
-# vendored C/C++ trees (pyrowave/Granite/volk/Vulkan-Headers, libvpl), dynamically-linked/bundled
-# libraries (SDL3), and the patched gamescope. Keep that file current when vendoring
-# changes (scripts/vendor-pyrowave.sh etc.).
+# vendored source trees, dynamically-linked or bundled libraries, and the patched gamescope.
+# Keep that file current when vendoring changes (scripts/vendor-pyrowave.sh etc.).
 #
 # Usage: scripts/ci/gen-sbom.sh VERSION [OUTPUT]
 # Requires: syft (pinned install in the workflow), python3 (a proven runner dependency).

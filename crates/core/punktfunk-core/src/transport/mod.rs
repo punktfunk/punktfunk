@@ -1,5 +1,5 @@
-//! Pluggable packet I/O. The hot path calls [`Transport::send`] / [`Transport::recv`]
-//! directly — no async runtime is involved.
+//! Pluggable packet I/O. The hot path calls the [`Transport`] methods directly — no async
+//! runtime is involved.
 
 /// Interface kinds, as [`ifinfo`] reads them and the wire carries them
 /// ([`crate::quic::HostLink`], [`crate::quic::LinkFacts`]).

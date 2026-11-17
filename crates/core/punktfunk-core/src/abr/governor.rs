@@ -31,8 +31,8 @@ pub const SHARE_CLOCK: Duration = Duration::from_secs(5);
 /// Twelve times the share clock, because this one has no evidence behind it:
 /// a group pressed against its shares is delivering exactly what it asks for,
 /// and the only way to find out whether the path grew is to ask for more and
-/// see. Every ask costs a rebuild and a window of queue, so it is asked about
-/// as often as a learned cap re-probes a standing limit.
+/// see. Every ask costs a rebuild and a window of queue, so it is asked once a
+/// minute, inside the 12–96 s a learned cap waits to re-probe a standing limit.
 pub const SHARE_LIFT_CLOCK: Duration = Duration::from_secs(60);
 
 /// The two clocks an up-move rides. A cut needs neither.
@@ -336,7 +336,7 @@ mod tests {
     use crate::abr::{Action, Driver, DriverConfig};
     use crate::stats::Stats;
 
-    /// One wire packet: shard payload plus its header and seal.
+    /// One wire packet as the reassembler counts it: shard payload plus header, unsealed.
     const WIRE: u64 = 1_448;
 
     /// Every delivery count a real [`Driver`] asks the host for over `windows`

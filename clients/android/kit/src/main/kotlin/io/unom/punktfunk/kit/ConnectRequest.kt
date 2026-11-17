@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 /**
  * Everything [NativeBridge.nativeConnect] needs, carried as one JSON object so the JNI seam has
- * one argument instead of twenty-six. The Rust side deserialises the same field names
+ * one argument instead of one per field. The Rust side deserialises the same field names
  * (`session/connect.rs`, `ConnectRequest`), which is where each one is read.
  *
  * The identity is presented when both PEMs are non-empty, else the session is anonymous.
@@ -38,7 +38,7 @@ data class ConnectRequest(
     val tenBitSdr: Boolean,
     /** Every decoder this device would use tolerates multi-slice AUs
      *  ([VideoDecoders.multiSliceTolerant]) — advertises `VIDEO_CAP_MULTI_SLICE`; false keeps
-     *  the host at single-slice frames (the safe pre-0.17 wire shape). */
+     *  the host at single-slice frames. */
     val multiSliceOk: Boolean,
     /** Every decoder this device would use accepts partial-frame input
      *  ([VideoDecoders.partialFrameCapable]) — opts into slice-progressive delivery (the
@@ -46,7 +46,7 @@ data class ConnectRequest(
     val framePartsOk: Boolean,
     val audioChannels: Int,
     /** Requested audio sample rate: **`0` (with [audioBits] `0`) for the legacy Opus plane**, or
-     *  any rung of the lossless ladder — `44100`, `48000`, `88200`, `96000`, `176400`.
+     *  any rate of the lossless ladder (`punktfunk_core::audio::pcm::rate_is_supported`).
      *
      *  ⚠ **`48000`/`16` is NOT "the default" — it is the cheapest lossless rung.** Core sets
      *  `CLIENT_CAP_AUDIO_HIRES` when either field is non-zero, and the host's gate accepts
@@ -58,7 +58,7 @@ data class ConnectRequest(
      *  with no recovery once the wire is negotiated), downgrading the request if it cannot. */
     val audioRateHz: Int,
     /** Requested audio sample depth: `0` alongside a `0` [audioRateHz] for the legacy Opus
-     *  plane, else `16` or `24`. */
+     *  plane, else a depth `punktfunk_core::audio::pcm::depth_is_supported` accepts. */
     val audioBits: Int,
     /** `quic::CODEC_*` bitfield of codecs this device decodes ([VideoDecoders.decodableCodecBits]);
      *  `0` falls back to H.264|HEVC. The host resolves the emitted codec from this ∩ its GPU. */
@@ -96,7 +96,8 @@ data class ConnectRequest(
     val deliveryFlags: Int = 0,
     /** The host profile to play as (its id); `null` sends none. Rides the Hello as `profile`. */
     val profile: String? = null,
-    /** PyroWave quality in hundredths of a bit per pixel, 50 to 200; `0` leaves the host's own. */
+    /** PyroWave quality in hundredths of a bit per pixel, between `punktfunk_core::pyrowave`'s
+     *  `BPP_FLOOR` and `BPP_MAX`; `0` leaves the host's own. */
     val pyrowaveBppX100: Int = 0,
     /** This display shows full-range video as studio ([VideoDecoders.showsFullRangeAsStudio]):
      *  asks the host for studio-range SDR. An older host ignores it. */

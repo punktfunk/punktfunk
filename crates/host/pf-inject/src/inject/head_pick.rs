@@ -28,7 +28,7 @@ impl HeadFacts<'_> {
     }
 }
 
-/// The streamed head as the host published it, read in one go ([`crate::stream_target`]).
+/// The streamed head as the host published it, read in one go ([`crate::stream_target_for`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct StreamTarget {
     /// The session's output name ([`crate::set_stream_output`]).
@@ -301,7 +301,6 @@ mod tests {
     }
 
     /// A supersede leaves the old head alive under the same name; the newer one is live.
-    /// KWin and wlroots used to disagree here.
     #[test]
     fn a_shared_name_takes_the_newest_head() {
         let kwin = [

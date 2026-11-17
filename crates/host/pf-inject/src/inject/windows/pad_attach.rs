@@ -139,9 +139,9 @@ impl DriverAttach {
 
     /// One-shot WARN: driver-store presence, devnode PnP problem, where to look next.
     ///
-    /// Spawns a thread and returns. The caller is the pad service thread (input + rumble);
-    /// `pnputil` can block for tens of seconds and a deadline wait would stall every
-    /// unattached pad on that same wait.
+    /// Spawns a thread and returns. The caller is the pad service thread (input + rumble) or
+    /// the mouse keeper; `pnputil` can block for tens of seconds and a deadline wait would
+    /// stall every unattached pad on that same wait.
     fn diagnose(&self) {
         let (driver, inf, driver_log) = (self.driver, self.inf, self.driver_log);
         let shm_name = self.shm_name.clone();

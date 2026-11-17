@@ -195,7 +195,7 @@ fn touch_kind(kind: jint) -> InputKind {
 /// distinguishes fingers (reusable after up); coordinates are pixels on the client's touch
 /// surface, whose size rides in `flags` so the host can rescale into the output (identical
 /// packing to MouseMoveAbs). On up only the id matters. The host injects a real touch contact
-/// (libei touchscreen / wlroots / SendInput).
+/// where it can (`pf_inject::touch_supported`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendTouch(
     _env: EnvUnowned,
@@ -216,7 +216,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendTouch(
 
 /// `NativeBridge.nativeSendKey(handle, vk, down, mods)` — one key transition. `vk`: Windows
 /// Virtual-Key code (0 = unmapped → dropped). `down`: 1=press, 0=release. `mods`: VK modifier
-/// bitmask (0 for now — the host folds modifiers from the L/R modifier key events themselves).
+/// bitmask (Kotlin passes 0: the host folds modifiers from the L/R modifier key events itself).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendKey(
     _env: EnvUnowned,
@@ -289,7 +289,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHostSupport
 
 /// `NativeBridge.nativeHostPresentsTouchpad(handle)` — the host presents touchpad frames as a
 /// touchpad of its own (`FEATURE_TOUCHPAD`), so a touch surface sends contacts, not mouse
-/// counts (design/touchpad-passthrough.md §4). `0` handle → false.
+/// counts. `0` handle → false.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeHostPresentsTouchpad(
     _env: EnvUnowned,
@@ -413,9 +413,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeTouchpadSur
 /// Floats per sample in the `nativeSendPen` flat array.
 const PEN_JNI_STRIDE: usize = 10;
 
-/// Sample ceiling per `nativeSendPen` call: over-cap runs are SPLIT into consecutive ≤8-sample
-/// `send_pen` batches (the send_pen contract — never truncated), so this only bounds the stack
-/// buffer. 64 samples ≈ >250 ms of 240 Hz history = a pathological UI-thread stall.
+/// Sample ceiling per `nativeSendPen` call: over-cap runs are SPLIT into consecutive `send_pen`
+/// batches of at most [`PEN_BATCH_MAX`] (the send_pen contract — never truncated), so this only
+/// bounds the stack buffer. 64 samples ≈ >250 ms of 240 Hz history = a pathological UI-thread
+/// stall.
 const PEN_JNI_MAX_SAMPLES: usize = PEN_BATCH_MAX * 8;
 
 /// How many samples to read for Kotlin's `count`: none unless positive, at most
@@ -555,15 +556,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendText(
 }
 
 // ---- Gamepad: Kotlin captures (KeyEvent/MotionEvent) → NativeClient::send_input ---------------
-// Multi-pad model: each physical controller is forwarded on its own wire pad index (0..15), carried
-// in the low byte of `flags` on every per-pad event — the Kotlin side (`GamepadRouter`) assigns a
-// stable lowest-free index per Android device and threads it here. Buttons carry the gamepad::BTN_*
-// bit in `code` and pressed/released in `x` (1/0); axes carry the gamepad::AXIS_* id in `code` and
-// the value in `x` (sticks i16 −32768..32767, +y = up; triggers 0..255). The host accumulates the
-// incremental events per pad into a matching virtual device. The core input task folds these into
-// the seq'd GamepadState snapshots (keyed on this same `flags` index) and owns the per-pad seq — so
-// the only thing this layer must get right is the index. Wire contract: input.rs::gamepad. A single
-// controller lands on index 0, so its wire is byte-identical to the old single-pad path.
+// Each controller rides its own wire pad index (0..15) in the low byte of `flags`, assigned by
+// Kotlin's `GamepadRouter`; toward `HOST_CAP_GAMEPAD_STATE` hosts core folds the events into
+// seq-stamped per-pad snapshots. Wire contract: `input::gamepad` in core.
 
 /// `NativeBridge.nativeSendGamepadButton(handle, bit, down, pad)` — one gamepad button transition on
 /// wire pad index `pad`. `bit`: a `gamepad::BTN_*` bit (e.g. BTN_A = 0x1000). `down`: 1=press,
@@ -649,10 +644,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeCyclePadMou
 
 /// `NativeBridge.nativeSendGamepadArrival(handle, pref, pad)` — declare the controller KIND presented
 /// on wire pad index `pad` so the host builds a matching virtual device (mixed types — pad 0 a
-/// DualSense, pad 1 an Xbox pad). `pref`: the `GamepadPref` wire byte (rides `code`). `pad`: wire pad
-/// index 0..15 (rides `flags`). Sent ONCE when a pad opens, BEFORE any of its input; the core re-sends
-/// it a few times against datagram loss, and an older host ignores the unknown tag (that pad then uses
-/// the session-default kind from the handshake — the pre-existing single-pad behaviour on pad 0).
+/// DualSense, pad 1 an Xbox pad). `pref`: the `GamepadPref` wire byte (rides `code`). `pad`: wire
+/// pad index 0..15 (rides `flags`). Sent ONCE when a pad opens, BEFORE any of its input; the core
+/// re-sends it against datagram loss, and an older host ignores the unknown tag (that pad then
+/// uses the session-default kind from the handshake).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendGamepadArrival(
     _env: EnvUnowned,
@@ -768,7 +763,7 @@ fn hid_report_len(len: jint, capacity: usize) -> usize {
 /// the rich-input plane (`RichInput::HidReport`, 0xCC). `buf` is a DIRECT ByteBuffer whose first
 /// `len` bytes are the report, id byte first (`0x42`/`0x45`/`0x47` state, `0x43` battery, …);
 /// `len` is bounded by [`hid_report_len`]. Called from the capture thread at the controller's
-/// own report rate (~250–500 Hz) — the direct-buffer read avoids a JNI array copy per report.
+/// own report rate (~250 Hz) — the direct-buffer read avoids a JNI array copy per report.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadHidReport(
     mut env: EnvUnowned,
@@ -1278,8 +1273,8 @@ mod tests {
         }
     }
 
-    /// Only a NaN `x`/`y` drops the sample. A NaN in a field with an "unknown" reads as that,
-    /// and so does an angle that is not finite; the rest read it as 0.
+    /// Only a non-finite `x`/`y` drops the sample. A NaN in a field with an "unknown" reads as
+    /// that, and so does an angle that is not finite; the rest read it as 0.
     #[test]
     fn a_nan_outside_the_coordinates_reads_as_unknown_or_zero() {
         const CASES: &[PenRow] = &[

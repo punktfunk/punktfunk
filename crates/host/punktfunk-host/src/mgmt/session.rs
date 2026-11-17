@@ -4,9 +4,9 @@
 //! `DELETE /session` is a deliberate stop: skip keep-alive linger and apply
 //! `game_on_session_end`. Policy: `design/session-game-lifetime.md`.
 //!
-//! Each verb comes in two forms. The id-less one is host-wide and unchanged; the
-//! `/{id}` one takes an id from `GET /status` and touches that session only. An id
-//! nothing is streaming is a 404, never another session's teardown.
+//! Stop and IDR come in two forms: the id-less one is host-wide, the `/{id}` one touches
+//! that session only. Every `/{id}` route takes an id from `GET /status`; an id nothing is
+//! streaming is a 404, never another session's teardown.
 //!
 //! `GET /{id}/pads` is the read-only live view of what the host injects
 //! ([`crate::pad_feed`]).
@@ -393,7 +393,8 @@ pub(crate) async fn stream_session_pads(Path(id): Path<u64>) -> Response {
     let Some(slot) = super::events::try_acquire_slot() else {
         return super::events::stream_cap_reached();
     };
-    // Subscribing arms the resync; the input thread answers on its next wake (≤ 4 ms).
+    // Subscribing arms the resync; the input thread answers on its next wake
+    // (`InputLoop::poll_interval` in `native::input`).
     let rx = controls.pads.subscribe();
     let stream = futures_util::stream::unfold((rx, slot), |(mut rx, slot)| async move {
         // Lagged: drop a consumer too slow for a stick sweep rather than buffer it.

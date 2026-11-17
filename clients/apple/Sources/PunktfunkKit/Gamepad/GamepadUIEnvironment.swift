@@ -7,12 +7,11 @@ import Foundation
 import PunktfunkShared
 
 public enum GamepadUIEnvironment {
-    /// `DefaultsKey.gamepadUIMode`: take over only while a controller is attached. The default,
-    /// and what the switch meant when it was a lone Bool.
+    /// `DefaultsKey.gamepadUIMode`: take over only while a controller is attached. The default.
     public static let modeWhenConnected = "connected"
-    /// `DefaultsKey.gamepadUIMode`: take over whenever the switch is on, pad or no pad — asked
-    /// for by people driving a TV-connected iPad or a couch Mac, where the console layout is the
-    /// one they want and the pad is not always awake.
+    /// `DefaultsKey.gamepadUIMode`: take over whenever the switch is on, pad or no pad — for a
+    /// TV-connected iPad or a couch Mac, where the console layout is the one wanted and the pad
+    /// is not always awake.
     public static let modeAlways = "always"
 
     /// `enabledSetting` is the user's Settings switch (`DefaultsKey.gamepadUIEnabled`) — off means

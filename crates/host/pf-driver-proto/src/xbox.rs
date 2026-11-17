@@ -1,5 +1,5 @@
-//! Xbox Bluetooth HID report descriptors, served by `pf-gamepad` for device types 4–6 and packed
-//! by `pf-inject`'s `xbox_proto`.
+//! Xbox Bluetooth HID report descriptors, served by `pf-gamepad` for `DEVTYPE_XBOX`,
+//! `DEVTYPE_XBOX_ONE_S` and `DEVTYPE_XBOX_ELITE`, and packed by `pf-inject`'s `xbox_proto`.
 //!
 //! [`SERIES_RDESC`] is the Series X|S pad (`045E:0B13`). Its input report matches the Linux
 //! capture of a real one (xpadneo `docs/descriptors/xbxs.md`) byte for byte; the triggers are

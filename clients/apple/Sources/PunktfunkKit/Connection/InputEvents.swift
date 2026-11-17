@@ -58,12 +58,12 @@ public extension PunktfunkInputEvent {
     }
 
     // Gamepad (wire contract in punktfunk_core::input::gamepad): one transition per event,
-    // `pad` = controller index, accumulated host-side into a virtual Xbox 360 or DualSense
-    // pad (the session's negotiated `GamepadType`).
+    // `pad` = controller index, accumulated host-side into a virtual pad of the kind
+    // `gamepadArrival` declared, else the session's negotiated `GamepadType`.
 
     /// `button` is a GameStream buttonFlags bit (A=0x1000 B=0x2000 X=0x4000 Y=0x8000,
     /// dpad=0x1/2/4/8, start=0x10 back=0x20 LS=0x40 RS=0x80 LB=0x100 RB=0x200 guide=0x400,
-    /// touchpad click=0x100000 — DualSense sessions only, the xpad has no such button).
+    /// touchpad click=0x100000 — `gamepad::BTN_TOUCHPAD` lists the backends that map it).
     static func gamepadButton(_ button: UInt32, down: Bool, pad: UInt32 = 0) -> PunktfunkInputEvent {
         make(
             PUNKTFUNK_INPUT_KIND_GAMEPAD_BUTTON.rawValue,
@@ -91,7 +91,7 @@ public extension PunktfunkInputEvent {
     /// bare index; the core stamps the per-pad removal seq (`encode_gamepad_remove`) in the shared
     /// snapshot seq space and arms a loss-resistant re-send burst, so the host tears the pad's
     /// virtual device down and no reordered snapshot can resurrect it. A host that predates the tag
-    /// ignores it (the pad then lingers until session end — the pre-existing behaviour).
+    /// ignores it (the pad then lingers until session end).
     static func gamepadRemove(pad: UInt32) -> PunktfunkInputEvent {
         make(PUNKTFUNK_INPUT_KIND_GAMEPAD_REMOVE.rawValue, code: 0, x: 0, y: 0, flags: pad)
     }

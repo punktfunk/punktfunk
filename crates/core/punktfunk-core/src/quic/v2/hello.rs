@@ -2,9 +2,9 @@
 //!
 //! A [`ClientHello`] decodes to a [`Hello`] plus what the client adds beside it, a
 //! [`ServerHello`] to a [`Welcome`]. Decoding folds what this build cannot honour onto its
-//! default (unknown codec to HEVC, unsupported rate to 48 kHz, bad name to none), so host and
-//! client logic only sees values it can act on; `tests::hellos_settle_after_one_trip` pins that
-//! one trip settles both.
+//! default (unknown codec to HEVC, unsupported rate to [`crate::audio::SAMPLE_RATE_HZ`], bad name
+//! to none), so host and client logic only sees values it can act on;
+//! `tests::hellos_settle_after_one_trip` pins that one trip settles both.
 //!
 //! The hellos carry no wire version (ALPN picks the wire), no data port (media rides the QUIC
 //! path) and no session key (both ends derive it).
@@ -1089,8 +1089,8 @@ mod tests {
         }
     }
 
-    /// A tag this build does not know is skipped, so an older host reads past tag 32 and an
-    /// older client past tag 30, as this one reads past 33.
+    /// A tag this build does not know is skipped, as an older peer skips the tags added after
+    /// it.
     #[test]
     fn an_unknown_tag_is_skipped() {
         let ch = Fields::new().u8(10, 6).bytes(33, &[9, 9]).into_body();

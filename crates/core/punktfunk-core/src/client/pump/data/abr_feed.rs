@@ -115,6 +115,7 @@ impl DataPump {
             mode: events.mode,
             acks: events.acks,
             decode_lat: (dec.sum_us, dec.count),
+            decoder_spare: self.shared.decoder_spare.load(Ordering::Relaxed),
             encode_lat: (enc.sum_us, enc.count),
             host_timings: enc.timings,
             keyframe_asks: self.shared.recovery_kf.swap(0, Ordering::Relaxed),
@@ -222,8 +223,8 @@ impl DataPump {
                         .try_send(CtrlRequest::SetBitrate(kbps))
                         .is_err()
                     {
-                        // Never reached the control task. Three of these
-                        // retire the controller as "the host never acked".
+                        // Never reached the control task: uncount it, or a full
+                        // queue retires the controller as "the host never acked".
                         abr.on_request_dropped(kbps);
                     }
                 }

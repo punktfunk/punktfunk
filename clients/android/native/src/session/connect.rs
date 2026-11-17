@@ -16,10 +16,9 @@ use std::time::Duration;
 use super::{hex, jni_guard, lock_recover, parse_hex32, SessionHandle, SESSIONS};
 
 /// Machine token of the most recent `nativeConnect`/`nativePair` failure, taken (and cleared)
-/// by `nativeTakeLastError` so Kotlin can render a cause-specific message instead of the old
-/// catch-all "wrong PIN, or the host isn't armed" (which blamed the PIN for dead network paths
-/// — the moko0878-class support threads). The app runs one attempt at a time, so one slot
-/// suffices; a stale token is harmless (it is taken immediately after the failed call).
+/// by `nativeTakeLastError` so Kotlin can render a cause-specific message. The app runs one
+/// attempt at a time, so one slot suffices; a stale token is harmless (it is taken immediately
+/// after the failed call).
 static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
 /// What the host said with that failure's refusal, beside its token; empty when it said nothing.
 static LAST_SAID: Mutex<String> = Mutex::new(String::new());
@@ -119,9 +118,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetLowLaten
 }
 
 /// `debug.punktfunk.force_parts` = 1: arm slice-progressive parts delivery even when the
-/// Kotlin `FEATURE_PartialFrame` probe said no — the rebuild-free on-glass experiment for a
-/// decoder that may accept `BUFFER_FLAG_PARTIAL_FRAME` without declaring the feature (the NP3's
-/// c2.qti decoders declare nothing). Android-only; everywhere else the probe verdict stands.
+/// Kotlin `FEATURE_PartialFrame` probe said no, for a decoder that may accept
+/// `BUFFER_FLAG_PARTIAL_FRAME` without declaring the feature. Android-only; everywhere else the
+/// probe verdict stands.
 fn force_parts_sysprop() -> bool {
     crate::sys::sysprop(c"debug.punktfunk.force_parts").as_deref() == Some("1")
 }
@@ -155,58 +154,26 @@ fn rate_fallback_ladder(rate_hz: u32) -> &'static [u32] {
     }
 }
 
-/// Resolve the audio format this `Hello` should ASK for, from what Kotlin's setting requested —
-/// after proving this device can actually open it.
+/// Resolve the audio format this `Hello` ASKS for from Kotlin's setting, after proving this device
+/// can open it (`design/hi-res-audio.md` §7: a client that cannot open an output at the format it
+/// requests must not set `CLIENT_CAP_AUDIO_HIRES`). It has to happen before the handshake: AAudio
+/// grants an explicitly requested rate or fails the open, and the host does not renegotiate the
+/// plane mid-session (§6), so the fallback is made in the request.
 ///
-/// This is `design/hi-res-audio.md` §7's rule made mechanical: *"a client that cannot open a
-/// 96 kHz output must not set `CLIENT_CAP_AUDIO_HIRES`"*. It has to happen here, before the
-/// handshake, because after it there is no recovery: AAudio grants an explicitly-requested rate or
-/// fails the open (it never substitutes), the host does not renegotiate the plane mid-session
-/// (§6), and the only ways to play a wire of one rate through a stream of another are the wrong
-/// speed or a resampler nobody asked for — which §9 forbids in as many words ("say so and fall
-/// back, not resample quietly"). So the fall back happens where falling back is still free: in the
-/// request.
+/// A rate the device cannot open steps down [`rate_fallback_ladder`] and keeps the depth, so the
+/// session stays lossless. Every rung above the 48 kHz floor is probed with
+/// [`crate::audio::output_rate_is_openable`] until one holds; the floor is never probed, so an
+/// ordinary session opens no stream here.
 ///
-/// **Every rung above the floor is probed, and admitting the 44.1 kHz family made that matter
-/// more, not less.** When the ladder was 96 → 48 there was one uncertain rate; now there are four,
-/// and their odds are nothing alike — 44 100 Hz is granted by very nearly every Android output,
-/// 176 400 Hz by very nearly none, and 88 200 Hz by whatever the HAL happens to think. None of
-/// that is inferable from the number, so [`crate::audio::output_rate_is_openable`] opens a stream
-/// and reads back what it was granted, once per rung, until one holds.
-///
-/// Dropping the RATE keeps the depth, so a device that refuses the rate still gets a 24-bit
-/// lossless session rather than being pushed all the way back to Opus — the depth is where the
-/// plane earns its bandwidth anyway (and it is the half that is audible at all: §12).
-///
-/// The 48 kHz floor is never probed. It is universally supported, and the DEPTH never reaches
-/// AAudio at all (the device is opened as f32 on both planes — see `crate::audio`), so there is
-/// nothing about 16-vs-24-bit for a probe to discover. An ordinary session therefore opens no
-/// stream here and pays nothing.
-///
-/// # ⚠⚠ "Not asking" is `(0, 0)`, and it is NOT `(48 000, 16)`
-///
-/// Core's `advertised_client_caps` sets `CLIENT_CAP_AUDIO_HIRES` when **either field is non-zero**
-/// — it keys on *the caller specified a format*, not on *the format differs from the default*, and
-/// deliberately: 48 kHz/16-bit is the cheapest lossless rung as well as the legacy pair, so a
-/// "differs from the default" rule would make it the one rung on the ladder nobody could ask for.
-///
-/// So returning the legacy-looking `(48 000, 16)` for a user who chose **Standard (Opus)** does not
-/// mean "no request" — it advertises the capability, the host's gate accepts 48 kHz/16-bit as a
-/// perfectly supported format, and the host then silently gives that user the lossless `0xD3` plane
-/// at 1.5 Mbps in place of 256 kbps of Opus. This returned exactly that pair until it was caught by
-/// comparing all four clients; the desktop client and every pre-v24 `punktfunk_connect_ex*` send
-/// `(0, 0)`, and so does this now.
-///
-/// ⚠⚠ The reach of that slip grew on 2026-08-17: `PUNKTFUNK_AUDIO_HIRES` went default-ON, so where
-/// this used to need a host whose operator had opted in, it now lands on every host that has not
-/// deliberately opted out.
-///
-/// `(0, 0)` is also what keeps the `Hello` byte-identical to a legacy one, because the wire encodes
-/// an explicit 48 000/16 the same as absent — the difference lives entirely in the capability bit.
+/// "Not asking" is `(0, 0)`, not `(48 000, 16)`. Core's `advertised_client_caps` sets
+/// `CLIENT_CAP_AUDIO_HIRES` when either field is non-zero, so `(48 000, 16)` for the Standard
+/// (Opus) setting would request the lossless `0xD3` plane. A rate or depth core cannot carry
+/// resolves to `(0, 0)`. That pair also keeps the `Hello` byte-identical to a legacy one: the
+/// wire encodes an explicit 48 000/16 the same as absent, so the difference is the capability bit.
 fn resolve_requested_audio_format(rate_hz: u32, bits: u8, channels: u8) -> (u32, u8) {
     const HZ48: u32 = punktfunk_core::audio::SAMPLE_RATE_HZ;
-    /// "This session did not ask for the lossless plane" — see the ⚠⚠ section above for why this
-    /// is a pair of zeroes and not the legacy 48 000/16.
+    /// "This session did not ask for the lossless plane" — see the fn docs for why this is a
+    /// pair of zeroes and not the legacy 48 000/16.
     const UNSPECIFIED: (u32, u8) = (0, 0);
     // A format core would not carry — including Kotlin's `0`/`0` for the Opus setting — asks for
     // nothing, rather than being an error: the request is a preference, and an unrecognized one
@@ -612,7 +579,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConnectWith
 }
 
 /// `NativeBridge.nativeProfileUnlockMessage(challenge, seatId, deviceFp, boxFp): ByteArray?` —
-/// the 152 bytes a profile's unlock key signs, with SHA-256 as the digest
+/// the [`msg::UNLOCK_SIGNED_LEN`] bytes a profile's unlock key signs, with SHA-256 as the digest
 /// ([`punktfunk_core::quic::v2::msg::unlock_signed_message`]). `seatId` is the seat's 32
 /// lowercase hex characters; the three arrays are 32 bytes each. Null for anything else.
 #[unsafe(no_mangle)]
@@ -630,7 +597,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProfileUnlo
 }
 
 /// `NativeBridge.nativeLockedProfileUnlockMessage(challenge, profileId, deviceFp, boxFp):
-/// ByteArray?` — the 187 bytes a locked profile's unlock key signs, with SHA-256 as the digest
+/// ByteArray?` — the [`msg::PROFILE_UNLOCK_SIGNED_LEN`] bytes a locked profile's unlock key signs,
+/// with SHA-256 as the digest
 /// ([`msg::profile_unlock_signed_message`]). `profileId` is 1 to 64 of `[A-Za-z0-9_-]`; the three
 /// arrays are 32 bytes each. Null for anything else.
 #[unsafe(no_mangle)]
@@ -731,15 +699,13 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
     let profile = non_empty(profile);
     let device_name = device_label(device_name);
     let identity = identity_of(cert, key);
-    // Slice-progressive parts, by decoder truth (Kotlin's FEATURE_PartialFrame probe) — with a
-    // sysprop escape hatch for the on-glass science question the probe can't answer: does the
-    // decoder ACTUALLY choke on BUFFER_FLAG_PARTIAL_FRAME input, or does it merely not declare
-    // the feature? (`adb shell setprop debug.punktfunk.force_parts 1` + stream restart; a codec
-    // that can't take parts errors recoverably and the reanchor gate + keyframe path recovers.)
+    // Slice-progressive parts, by decoder truth (Kotlin's FEATURE_PartialFrame probe), or forced
+    // on by `debug.punktfunk.force_parts` for a decoder that may take BUFFER_FLAG_PARTIAL_FRAME
+    // input without declaring the feature.
     let force_parts = force_parts_sysprop();
     let frame_parts = frame_parts_ok || force_parts;
-    // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline is
-    // inert client-side unless BOTH probes pass — this line is the one place that says which.
+    // The connect-time capability readout (`adb logcat -s pf.caps`): slice-progressive delivery
+    // needs multi_slice and partial_frame (or the sysprop), and this line says which it has.
     log::info!(
         target: "pf.caps",
         "decoder caps: multi_slice={} partial_frame={}{} hdr={} ten_bit_sdr={} studio_range={} \
@@ -772,7 +738,7 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
     .stating(refresh_mhz);
     // Requested surround layout (2 = stereo / 6 = 5.1 / 8 = 7.1); anything else is stereo. The
     // host clamps it and echoes the resolved count in `connector.audio_channels`, which drives the
-    // decoder + AAudio layout (read in `crate::audio::AudioPlayback::start`).
+    // decoder + AAudio layout (read through `client.audio_format()` in `AudioPlayback::start`).
     let audio_channels = punktfunk_core::audio::normalize_channels(audio_channels);
     // The audio format, downgraded to something this device has PROVED it can open before the
     // `Hello` carries it — see `resolve_requested_audio_format` for why it cannot wait until
@@ -789,12 +755,10 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         reopens_audio: true,
         video_caps: video_caps(hdr_enabled, ten_bit_sdr, multi_slice_ok),
         audio_channels,
-        // The audio format this session ASKS for (resolved above). A non-default pair is what
-        // makes core set `CLIENT_CAP_AUDIO_HIRES` in the `Hello` — capable AND the user turned it
-        // on, the `VIDEO_CAP_444` precedent — and it is answered by the host re-formatting the
-        // wire, so it must never be advertised on a device that cannot open the output. The host
-        // may still decline; `connector.audio_codec`/`audio_sample_rate_hz`/`audio_bits` are what
-        // actually happened, and `crate::audio` opens the device from those, never from these.
+        // The audio format this session ASKS for (resolved above). A non-zero pair makes core set
+        // `CLIENT_CAP_AUDIO_HIRES`, so it must never name a format this device cannot open. The
+        // host may still decline: the device opens from `connector.audio_codec`,
+        // `audio_sample_rate_hz` and `audio_bits`, never from these.
         audio_rate_hz,
         audio_bits,
         // Legacy coupling: libopus here decodes either, and nothing on Android needs the other.
@@ -804,8 +768,8 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         // pick in `connector.codec`.
         video_codecs: advertised_codecs(video_codecs),
         preferred_codec,
-        // No display-volume forwarding from Android yet (the panel tone-maps PQ itself via the
-        // Surface dataspace + static metadata) — the host keeps its virtual-display EDID defaults.
+        // Android forwards no display volume (the panel tone-maps PQ itself via the Surface
+        // dataspace + static metadata); the host keeps its virtual-display EDID defaults.
         display_hdr: None,
         client_caps: client_caps(pad_audio_ok, keep_host_audio, client_cursor),
         // Slice-progressive delivery, by decoder truth (Kotlin probes FEATURE_PartialFrame on
@@ -816,20 +780,21 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         // The decode loop rebuilds its codec on a frame in a new format (`RunEnd::Reformat`).
         rebuilds_decoder: true,
         launch, // a store-qualified library id to boot into a game, or None for the desktop
-        name: device_name, // Kotlin's Build.MODEL — the host's approval-list / trust-store label
+        name: device_name, // Kotlin's `deviceName()` — the host's approval-list / trust-store label
         pin,    // Some → Crypto on host-fp mismatch
         identity, // owned (cert, key) PEM, or None (anonymous)
         preset,
         profile,
-        // An older Qualcomm display shows full-range BT.709 as studio, so ask for studio SDR. The
-        // decode path takes the range from the Welcome either way.
+        // An older Qualcomm display HAL (sm8150's `SelectCscType`) shows full-range BT.709 as
+        // studio, so ask for studio SDR. The decode path takes the range from the Welcome either
+        // way.
         studio_range,
         view: view_of(view_width.into(), view_height.into()),
         screen_wish: ScreenWish::parse(&host_screen),
-        // Handshake budget from Kotlin: ~10 s for a normal connect, ~185 s for "request access"
-        // (the host parks the connection until the operator approves the device — see ConnectScreen).
-        // No `cancel`: Kotlin drops the result (`Dial.cancelled`) rather than abort the dial — its
-        // connect runs on a pool thread, so a parked one costs a thread, not a stuck UI.
+        // Handshake budget from Kotlin: `CONNECT_TIMEOUT_MS`, or `REQUEST_ACCESS_TIMEOUT_MS` for
+        // "request access" (the host parks the connection until the operator approves the device).
+        // No `cancel`: Kotlin drops the result (`HostServices.Ticket`) rather than abort the dial;
+        // its connect runs on a pool thread, so a parked one costs a thread, not a stuck UI.
         on_pending: Some(Arc::new(|| DIAL_PENDING.store(true, Ordering::Relaxed))),
         prompts_unlock,
         unlock,
@@ -841,8 +806,8 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
     match dialed {
         Ok(client) => {
             let client = Arc::new(client);
-            // A forwarded cursor starts out of the picture: the host composites it until the
-            // mouse takes it (Kotlin's HostCursor), so no session starts without a pointer.
+            // A forwardable cursor starts composited by the host until the mouse takes it
+            // (Kotlin's HostCursor), so no session starts without a pointer.
             if client.host_caps() & punktfunk_core::quic::HOST_CAP_CURSOR != 0 {
                 let _ = client.set_cursor_render(false);
             }
@@ -1227,21 +1192,18 @@ mod tests {
     use punktfunk_core::audio::pcm::{BITS_16, BITS_24};
     use punktfunk_core::audio::SAMPLE_RATE_HZ;
 
-    /// The rule this leg exists to enforce: the `Hello` never asks for an audio format this device
-    /// has not proved it can open, because after the handshake there is no way back — AAudio grants
-    /// an explicit rate or fails the open, the host does not renegotiate the plane mid-session, and
-    /// playing a 96 kHz wire through a 48 kHz stream is not a fallback, it is the wrong audio.
+    /// The `Hello` never asks for an audio format this device has not proved it can open: after
+    /// the handshake there is no way back, because AAudio grants an explicit rate or fails the
+    /// open and the host does not renegotiate the plane mid-session.
     ///
-    /// Off-device (this test's target) `audio_rate_is_openable` answers `false` for everything, so
-    /// what is pinned here is the DOWNGRADE, which is the half that has to be right: a device that
-    /// cannot do the rate still gets a lossless session at 48 kHz rather than being pushed all the
-    /// way back to Opus, and the depth — the thing lossless is actually for — survives.
+    /// Off-device `audio_rate_is_openable` answers `false` for everything, so what is pinned here
+    /// is the DOWNGRADE: a device that cannot do the rate still gets a lossless session at 48 kHz
+    /// rather than Opus, and the depth survives.
     #[test]
     fn an_unopenable_rate_is_downgraded_before_the_hello_and_keeps_its_depth() {
-        // 48 kHz/16-bit is the cheapest LOSSLESS rung, not a way of spelling "default" — asking
-        // for it explicitly passes through and probes nothing. What a default session sends is
-        // `(0, 0)`, pinned in `an_opus_session_asks_for_nothing_and_a_lossless_one_asks_for_
-        // something`, and conflating the two is what silently upgraded every Opus user.
+        // 48 kHz/16-bit is the cheapest LOSSLESS rung, not a way of spelling "default": asking
+        // for it passes through and probes nothing. A default session sends `(0, 0)`, pinned in
+        // `an_opus_session_asks_for_nothing_and_a_lossless_one_asks_for_something`.
         assert_eq!(
             resolve_requested_audio_format(SAMPLE_RATE_HZ, BITS_16, 2),
             (SAMPLE_RATE_HZ, BITS_16)
@@ -1252,9 +1214,8 @@ mod tests {
             (SAMPLE_RATE_HZ, BITS_24)
         );
         // Every rung above the floor IS probed, is refused here, and lands on 48 kHz with the
-        // depth intact — including the whole 44.1 kHz family, which this pass admitted. AAudio
-        // never substitutes a rate, so a device that would not grant 176 400 Hz and was asked for
-        // it anyway is silence, not a slower session.
+        // depth intact, the 44.1 kHz family included. AAudio never substitutes a rate, so a
+        // device asked for 176 400 Hz it would not grant gets silence, not a slower session.
         for rate in [44_100u32, 88_200, 96_000, 176_400] {
             assert_eq!(
                 resolve_requested_audio_format(rate, BITS_24, 2),
@@ -1262,10 +1223,8 @@ mod tests {
                 "{rate} Hz should have fallen to 48 kHz and kept 24-bit"
             );
         }
-        // Surround asks exactly as stereo does. The lossless plane was stereo-only while a
-        // surround frame did not fit a datagram; the frame ladder is channel-aware, the host
-        // decides, and this leg's only job is to prove the OUTPUT opens (at the layout it will
-        // actually be opened with).
+        // Surround asks exactly as stereo does: the host decides the frame ladder per channel
+        // count, and this leg only proves the OUTPUT opens, at the layout it will be opened with.
         assert_eq!(
             resolve_requested_audio_format(SAMPLE_RATE_HZ, BITS_24, 6),
             (SAMPLE_RATE_HZ, BITS_24)
@@ -1273,13 +1232,10 @@ mod tests {
     }
 
     /// A settings string, a preset written by a newer build, or a corrupted preference must never
-    /// reach the wire as a format the plane cannot carry — and must never block a connect either.
+    /// reach the wire as a format the plane cannot carry, and must never block a connect either.
     /// Every one resolves to the "did not ask" sentinel, which every host can answer.
     ///
-    /// The rate set is `pcm::rate_is_supported`'s, not a second copy of it: 44 100 Hz used to sit
-    /// in this table because §4.1's integer samples-per-millisecond arithmetic could not express
-    /// it, and the day that stopped being true a locally re-expressed set would have kept refusing
-    /// it with a stale reason.
+    /// The rate set is `pcm::rate_is_supported`'s, not a second copy of it.
     #[test]
     fn an_unrepresentable_request_falls_back_instead_of_failing() {
         for (rate, bits) in [
@@ -1299,20 +1255,16 @@ mod tests {
         }
     }
 
-    /// ⚠⚠ **The one that decides whether a user who chose Opus is quietly given 1.5 Mbps of PCM.**
+    /// The one that decides whether a user who chose Opus is quietly given lossless PCM.
     ///
     /// Core's `advertised_client_caps` sets `CLIENT_CAP_AUDIO_HIRES` when **either** field of the
     /// pair below is non-zero. It keys on "a format was specified" rather than "the format differs
-    /// from the default", and deliberately: 48 kHz/16-bit is the legacy pair AND the cheapest
-    /// lossless rung, so the other rule would make that rung the one nobody could request.
+    /// from the default": 48 kHz/16-bit is the legacy pair AND the cheapest lossless rung, so the
+    /// other rule would make that rung the one nobody could request.
     ///
-    /// The consequence is that `(48 000, 16)` is not a way of saying "default" — it is a request,
-    /// the host's gate accepts it as a supported format, and the user who chose Standard gets the
-    /// lossless `0xD3` plane instead of Opus on every host that has not opted out of it (which,
-    /// since the host gate went default-ON on 2026-08-17, is all of them). Nothing surfaces it: the
-    /// settings screen shows what was asked for, and a granted
-    /// session and a declined one look identical from there. This function returned that pair until
-    /// all four clients were compared against each other.
+    /// So `(48 000, 16)` is not a way of saying "default": it is a request, and a host whose gate
+    /// accepts that format gives the user who chose Standard the lossless `0xD3` plane instead of
+    /// Opus.
     ///
     /// The rule is restated here rather than called, because it is private to core; core's own
     /// tests pin the other half of it. What this test owns is that **this** client never hands it a

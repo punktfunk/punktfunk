@@ -2,8 +2,8 @@
 # Package an already-built punktfunk-gamescope binary as a .deb, for the Gitea apt registry.
 #
 # Counterpart to ../gamescope/build-gamescope-rpm.sh, and the same argument: the binary is a
-# ~10-minute meson build of an unrelated tree that CI does once and caches, so this repacks rather
-# than rebuilds. The Arch package (../gamescope/PKGBUILD) is the one recipe that builds from source,
+# meson build of an unrelated tree that CI does once and caches, so this repacks rather than
+# rebuilds. The Arch package (../gamescope/PKGBUILD) is the one recipe that builds from source,
 # because that is what makepkg is for.
 #
 # Installed as /usr/bin/punktfunk-gamescope — it does NOT replace the distro's gamescope, and does

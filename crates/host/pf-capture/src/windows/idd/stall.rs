@@ -1,8 +1,10 @@
 //! Capture-stall reporting for IDD-push: the log lines for a hole that
 //! [`StallWatch`] found, with the OS display events that coincide.
 //!
-//! Probes and the DxgKrnl ETW session ride the report as evidence when
-//! `PUNKTFUNK_IDD_DIAG` turned them on; they name no class.
+//! Probes (`PUNKTFUNK_IDD_DIAG`) ride the report as evidence and name no class. The DxgKrnl
+//! ETW session (`PUNKTFUNK_IDD_DIAG` or `PUNKTFUNK_IDD_FLOW`) rides it too and feeds
+//! [`attribute`]: with it on, a still-pointer hole reads damage-idle only when every
+//! presenter before it was DWM.
 
 use super::*;
 use crate::knobs::Knobs;
@@ -95,8 +97,8 @@ impl StallWatch {
             verdict = %verdict,
             probes = evidence.probes.as_ref().map(tracing::field::display),
             etw = evidence.etw.as_deref().unwrap_or("unavailable"),
-            // Presents from any process vs virtual-display kernel-queue adds,
-            // both only under PUNKTFUNK_IDD_DIAG.
+            // Presents from any process vs virtual-display kernel-queue adds, both
+            // only while the ETW session runs (PUNKTFUNK_IDD_DIAG or PUNKTFUNK_IDD_FLOW).
             etw_presents = evidence.etw_counts.map(|c| c.presents),
             etw_queue_adds = evidence.etw_counts.map(|c| c.queue_adds),
             // 0 = nothing to compose. >0 = damage existed and DWM composed none of it.

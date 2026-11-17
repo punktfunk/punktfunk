@@ -1,4 +1,4 @@
-// `/status` as an answer or a miss (D3): only a 200 with a status body is an answer.
+// `/status` as an answer or a miss: only a 200 with a status body is an answer.
 
 import XCTest
 @testable import PunktfunkKit

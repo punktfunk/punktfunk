@@ -3,16 +3,18 @@
 //
 // Units:
 // - **Plugins** — a file whose default export is a [`PluginDef`] (`definePlugin`), from the
-//   scripts dir or an installed `punktfunk-plugin-*` package. Supervised: a failure restarts
+//   scripts dir or an installed plugin package. Supervised: a failure restarts
 //   it with capped exponential backoff; a clean return completes it. The Effect `main` shape
 //   runs with the `PunktfunkHost` layer provided and is interrupted STRUCTURALLY on shutdown
 //   (scoped finalizers run — release the preset, deregister cleanly); the async-fn shape gets
 //   a connected facade client whose close is guaranteed by the same scope.
 // - **Bare scripts** — any other `.ts`/`.js` file in the scripts dir: importing it IS the run
-//   (top-level await). One-shot: completion logs, failure logs — no restart (a bare script's
-//   background work is invisible to supervision; export a plugin to be supervised).
+//   (top-level await). A clean import completes it with no restart (a bare script's background
+//   work is invisible to supervision; export a plugin to be supervised). An import that throws
+//   is retried like a plugin's failure.
 //
-// Trust model (RFC §9.4): a unit is code the operator chose to run — no sandbox is pretended.
+// Trust model (RFC §9.4): a loose script is code the operator chose to run — no sandbox is
+// pretended for it. With the sandbox on, a plugin package runs only inside its own sandbox.
 // The same sshd rule as hooks applies on BOTH platforms: a unit file a non-privileged principal
 // could have written is refused loudly (mode bits on Unix, owner + DACL on Windows).
 import {
@@ -49,12 +51,15 @@ export interface RunnerOptions {
 	connect?: ConnectOptions;
 	/** Restart backoff base (test seam). Default 1 s, capped at 60 s, jittered. */
 	restartBase?: Duration.Input;
-	/** `"off"` runs plugins in-process. Default: `PUNKTFUNK_PLUGIN_SANDBOX` on Linux, off elsewhere. */
+	/**
+	 * `"off"` runs plugins unsandboxed. Default: `sandboxMode()` on Linux and Windows, off
+	 * elsewhere.
+	 */
 	sandbox?: "on" | "off";
 	/**
 	 * With the sandbox off, still give each plugin that declared a manifest a process of its
-	 * own. Default: on Windows, where no sandbox exists yet and a plugin's crash must not take
-	 * the others down. The Linux sandbox is already a process.
+	 * own. Default: on Windows, so one plugin's crash cannot take the others down. A sandbox is
+	 * already a process.
 	 */
 	ownProcess?: boolean;
 	/** The pinned fetch the sandbox proxy forwards with (test seam). */
@@ -142,8 +147,8 @@ const client = (own: ConnectOptions | undefined) =>
 /**
  * The lease behind the store's "running", held while a plugin runs: a plugin with no page has no
  * other, and over a page the host only extends it. The settle keeps a plugin that dies at start
- * from reading as running. The host's TTL is 90 s, so a killed plugin drops out by itself. A
- * lease that can't be held never stops the plugin.
+ * from reading as running. The host's `LEASE_TTL` (plugin_host/registry.rs) expires a killed
+ * plugin by itself. A lease that can't be held never stops the plugin.
  */
 const holdLease = (
 	acquire: Effect.Effect<Punktfunk, unknown, Scope.Scope>,
@@ -182,9 +187,9 @@ const attemptUnit = (
 	log: LogSink,
 ): Effect.Effect<"plugin" | "script", unknown> =>
 	Effect.gen(function* () {
-		// A plugin that declared a manifest runs in its own sandbox, in its own process. A loose
-		// script is the operator's own code and stays here, as does everything on a box that
-		// cannot sandbox — with the reason said out loud at startup, never silently.
+		// A plugin that declared a manifest runs in its own sandbox, in its own process. With the
+		// sandbox off it gets a process of its own only under `ownProcess`; a loose script is the
+		// operator's own code and stays here.
 		const id = unit.manifest?.id ?? unit.name;
 		if (unit.manifest && options.sandbox !== "off") {
 			const run =
@@ -250,8 +255,8 @@ export const describeFailure = (cause: Cause.Cause<unknown>): string => {
 };
 
 /**
- * A unit under supervision: plugins restart on failure (capped exponential backoff, jittered);
- * a clean completion ends the unit; bare scripts are one-shot either way. Never fails the
+ * A unit under supervision: a failure restarts it (capped exponential backoff, jittered); a
+ * clean completion ends it, which for a bare script is its import returning. Never fails the
  * runner — every outcome is logged.
  */
 export const superviseUnit = (
@@ -260,7 +265,6 @@ export const superviseUnit = (
 ): Effect.Effect<void> => {
 	const log = options.log ?? defaultLog;
 	// Exponential backoff, capped at 60 s (min-delay of the two schedules), then jittered.
-	// (v4 replaced `Schedule.union` with the array-form `Schedule.min`.)
 	const restart = Schedule.min([
 		Schedule.exponential(options.restartBase ?? "1 second"),
 		Schedule.spaced("60 seconds"),
@@ -390,8 +394,8 @@ export class SandboxRefused extends Error {}
 
 /**
  * The exit status for `SandboxRefused`: sysexits' EX_CONFIG. Every supervisor leaves the runner
- * stopped on it (`RestartPreventExitStatus=` in the systemd unit and the NixOS module, a clean
- * exit in `scripting-run.cmd`), because a restart would only probe the same box again.
+ * stopped on it (`RestartPreventExitStatus=` in the systemd units, which NixOS installs too;
+ * a clean exit in `scripting-run.cmd`), because a restart would only probe the same box again.
  */
 export const SANDBOX_REFUSED_EXIT = 78;
 

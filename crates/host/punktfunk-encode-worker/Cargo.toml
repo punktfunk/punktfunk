@@ -5,9 +5,9 @@
 # may carry `cap_sys_nice=ep`; `punktfunk-host` carries no capability on any channel, ever, because
 # a capped process cannot be identified by KWin (`cap_ptrace_access_check` refuses
 # `/proc/<pid>/exe` to a reader whose effective set is not a superset of the target's PERMITTED
-# set) and therefore never gets `zkde_screencast_unstable_v1` — that was 0.26.0-1, and it killed
-# every KDE desktop session. A hardlink to the host, or a hidden host subcommand, shares the inode
-# and so shares the capability: same incident, silently. Never do either.
+# set) and therefore never gets `zkde_screencast_unstable_v1`, so every KDE desktop session
+# fails. A hardlink to the host, or a hidden host subcommand, shares the inode and so shares the
+# capability: same failure, silently. Never do either.
 #
 # All the logic lives in `pf-encode::worker` and `pf-zerocopy::worker`; this crate is the file,
 # not the code.

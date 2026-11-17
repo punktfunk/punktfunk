@@ -1,7 +1,7 @@
 // POST /_auth/login {password} — verify the shared password against its stored argon2id hash,
 // then seal an authenticated session cookie. Public (allowlisted in the gate) so an
 // unauthenticated user can actually log in. Brute force is bounded by an in-memory per-IP
-// throttle (loginThrottle); the argon2 verify costs ~50 ms, which that throttle already covers.
+// throttle (loginThrottle); the argon2 verify costs ~60 ms or more, which the throttle covers.
 import {
 	createError,
 	defineEventHandler,

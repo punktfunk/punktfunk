@@ -272,7 +272,7 @@ mod tests {
         let owned = sequence_to_std(&seq).expect("a plain 8-bit header converts");
         // Same address `ensure_parameters` puts in `pStdSequenceHeader`.
         let handed = std::ptr::from_ref(owned.std());
-        // Same final move as `ensure_parameters`: `self.parameters = Some(…)`.
+        // Same final move as `ensure_parameters`: the wrapper goes into `Some(…)`.
         let parameters = Some(StoredParamsAv1 {
             object: vk::VideoSessionParametersKHR::null(),
             _sequence: owned,

@@ -594,7 +594,8 @@ impl Pads {
     }
 }
 
-/// Per-pad 0xD1 streamers (`super::pad_audio`). `spawn` refuses pads past 0..4.
+/// Per-pad 0xD1 streamers (`super::pad_audio`). `spawn` refuses an OS slot past
+/// `PUNKTFUNK_PAD_AUDIO_SLOTS`.
 /// Opened when a DualSense-family arrival declares renderer bits; reaped on
 /// remove / re-declare / teardown.
 struct PadAudioSlots {
@@ -707,7 +708,7 @@ impl PadAudioSlots {
 }
 
 /// Both input planes on one channel so the thread wakes on either. A second
-/// rich channel drained after the 4 ms recv timeout quantized every gyro sample.
+/// rich channel drained after the 4 ms recv timeout would quantize every gyro sample.
 pub(super) enum ClientInput {
     /// 0xC8: pointer / keyboard / gamepad button+axis.
     Event(InputEvent),
@@ -1511,9 +1512,9 @@ impl InputLoop {
         });
     }
 
-    /// Every wake (≤1 ms Triton, ≤4 ms else): games block on EVIOCSFF and HID GET_REPORT.
-    /// Rumble is 0xCA; rich HID-out is 0xCD, and a feature report goes to the control task
-    /// for a client that reads them there.
+    /// Every wake (≤1 ms Steam Controller, ≤4 ms else): games block on EVIOCSFF and HID
+    /// GET_REPORT. Rumble is 0xCA; rich HID-out is 0xCD, and a feature report goes to the
+    /// control task for a client that reads them there.
     fn pump_feedback(&mut self) {
         let (conn, rumble) = (&self.conn, &mut self.rumble);
         let (pad_tx, pad_writes) = (&self.pad_tx, self.pad_writes);

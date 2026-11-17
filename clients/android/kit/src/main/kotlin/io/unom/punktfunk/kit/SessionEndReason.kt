@@ -6,9 +6,9 @@ package io.unom.punktfunk.kit
  *
  * The distinction that matters to a UI is **normal vs alarming**, and it is not a spectrum: a
  * player quitting their game and a host falling off the network both arrive as "the session
- * ended". With no way to tell them apart this client showed one message for all of them — and it
- * was the alarming one ("Connection lost — the host may be asleep"), in front of players who had
- * just quit their own game.
+ * ended". Without a way to tell them apart, one message serves all of them — and it would be the
+ * alarming one ("Connection lost — the host may be asleep"), shown to players who had just quit
+ * their own game.
  *
  * Ordinals are an ABI contract with the Rust side: append only, never renumber.
  */

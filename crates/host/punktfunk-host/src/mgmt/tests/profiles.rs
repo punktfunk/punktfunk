@@ -1381,7 +1381,7 @@ mod person {
     /// No route of the door starts a person's own account or sends a device there: a wake from
     /// a device or the console and the console's start are refused, and a device's own play,
     /// with that profile its default, stays on the door. The supervisor and every seat host go
-    /// unasked, while a Windows seat on an existing account still wakes as before.
+    /// unasked, while a Windows seat on an existing account still wakes.
     #[tokio::test]
     async fn no_route_starts_or_reaches_a_person_s_own_account() {
         let fp = "ab".repeat(32);

@@ -3,8 +3,8 @@
 //! [`uapi`] and [`uapi_stateless`] hand-declare the kernel structs, ioctl
 //! numbers, and fourccs the decode rungs use; sizes are pinned by compile-time
 //! assertions and the request codes by tests against the kernel's published
-//! values. The layouts are the 64-bit little-endian ABI, which is every target
-//! the rungs build for.
+//! values. The layouts are the 64-bit little-endian ABI; the client's probe
+//! skips V4L2 on any other target.
 //!
 //! [`stateful`] is the flow of a decoder that parses the stream itself —
 //! formats, queues, the source-change renegotiation. [`stateless`] is the flow

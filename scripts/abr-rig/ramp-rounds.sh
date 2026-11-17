@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The rest of the ramp's round: the no-wall profile's ten, the failure paths,
-# and the sessions. One script so a long evening of real time runs unattended.
+# The bring-up ramp's rows: the no-wall profile's ten, the failure paths, and the
+# sessions. One script so a long stretch of real time runs unattended.
 #
 #   scripts/abr-rig/ramp-rounds.sh
 set -euo pipefail

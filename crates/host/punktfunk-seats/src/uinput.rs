@@ -6,7 +6,7 @@
 //! supervisor stamps `phys` itself and records each device it makes for the udev fence
 //! ([`vouch_made`]), and a seat holds at most [`MAX_OPENS`].
 //!
-//! Steam is a 32-bit client: the kernel marks its ioctls, and its `input_event` and FF upload
+//! A caller may be 32-bit: the kernel marks its ioctls, and its `input_event` and FF upload
 //! layouts are translated. The CUSE fd and each open's uinput fd sit in systemd's fd store, so a
 //! supervisor restart keeps the node the seat has bound and the devices on it.
 
@@ -32,9 +32,9 @@ pub const MAX_OPENS: usize = 16;
 const MAX_WAITING_READS: usize = 4;
 /// Events one read moves at most.
 const READ_EVENTS: usize = 64;
-/// Bytes one kernel read or write request carries; the kernel never takes less than 4096.
+/// Bytes one kernel read or write request carries; Linux 7.4 never takes less than 4096.
 const MAX_IO: u32 = 4096;
-/// One request, whole: the kernel refuses a `/dev/cuse` read buffer under 8192 bytes.
+/// One request, whole: Linux 7.4 refuses a `/dev/cuse` read buffer under 8192 bytes.
 const CHANNEL_BUF: usize = 16 * 1024;
 /// `O_NONBLOCK` in a read's flags, asm-generic and x86 alike.
 const O_NONBLOCK: u32 = 0o4000;
@@ -686,7 +686,7 @@ impl<U: Uinput> Proxy<U> {
             }
             Answer::Error(errno) => cuse::error(unique, errno),
             Answer::Refused(nr, code) => {
-                // Bounded: a seat can't grow the set past the code space it may name.
+                // Bounded at 1024 entries, so a seat cannot grow the set without limit.
                 if self.refused.len() < 1024 && self.refused.insert((nr, code)) {
                     tracing::warn!(
                         account = self.account,
@@ -1449,7 +1449,7 @@ mod tests {
         }
     }
 
-    /// A 32-bit Steam's virtual pad through the proxy, over a socket standing in for
+    /// A 32-bit caller's virtual pad through the proxy, over a socket standing in for
     /// `/dev/cuse` and a fake uinput.
     #[test]
     fn a_32_bit_pad_is_made_fed_and_rumbled_through_the_proxy() {

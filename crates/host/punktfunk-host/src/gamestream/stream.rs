@@ -1,9 +1,9 @@
 //! GameStream video data plane.
 //!
 //! On RTSP PLAY the client pings [`VIDEO_PORT`]; we learn that UDP endpoint and run
-//! capture → encode → [`VideoPacketizer`] → UDP. Source is portal PipeWire
-//! (`PUNKTFUNK_VIDEO_SOURCE=portal`), a compositor virtual output (`virtual`), or
-//! a synthetic test pattern (default).
+//! capture → encode → [`VideoPacketizer`] → UDP. Source is a compositor virtual output
+//! (`PUNKTFUNK_VIDEO_SOURCE=virtual`, the default), portal PipeWire (`portal`), or a
+//! synthetic test pattern (any other value).
 //!
 //! Runs on its own native thread. Encode, FEC packetize, and paced send are
 //! separate threads joined by depth-2 queues. Game lifetime:
@@ -48,7 +48,7 @@ pub struct StreamConfig {
     /// TV decoders wedge on multi-slice AUs they did not request. Absent ⇒ 1.
     pub slices: u32,
     /// Client echoed `SS_ENC_VIDEO`; shards are AES-128-GCM-sealed under the `/launch` rikey.
-    /// Only true when the host advertised the bit (`gs_video_encryption_offered`).
+    /// Only true when the host advertised the bit (`rtsp::gs_encryption_offer`).
     pub encrypt_video: bool,
     /// The range the client's `encoderCscMode` asked for, one bit for SDR and HDR alike.
     pub studio_asked: crate::session_plan::StudioAsk,
@@ -84,10 +84,10 @@ impl std::fmt::Debug for StreamConfig {
     }
 }
 
-/// Pooled capturer plus the three reuse keys: HDR-ness, metadata-cursor mode (both fixed at
-/// PipeWire negotiation), and the monitor the device streams (`None` = portal's pick). A
-/// mismatch needs a fresh screencast session. The monitor is live — without it a reconnect
-/// keeps the previous screen (`design/per-monitor-portal-capture.md`).
+/// Pooled capturer plus the four reuse keys: HDR-ness, metadata-cursor mode (both fixed at
+/// PipeWire negotiation), full range, and the monitor the device streams (`None` = portal's
+/// pick). A mismatch needs a fresh screencast session. The monitor is live — without it a
+/// reconnect keeps the previous screen (`design/per-monitor-portal-capture.md`).
 pub type PooledCapturer = (Box<dyn Capturer>, bool, bool, bool, Option<String>);
 
 /// Slot for the persistent screen capturer, shared with the control plane and reused across
@@ -126,7 +126,7 @@ struct LiveTelemetry {
 /// Spawn the video stream thread (idempotent via `running`). Stops when `running` clears.
 /// `force_idr` is set by the control stream on a client recovery request; `video_cap` holds
 /// the persistent capturer the thread borrows for the stream's duration. The thread is
-/// tracked on `media`, for `/resume` and the next PLAY to wait on.
+/// tracked on `media`, for `/resume` and the next `/launch` to wait on.
 #[allow(clippy::too_many_arguments)]
 pub fn start(
     cfg: StreamConfig,
@@ -562,7 +562,7 @@ fn run(
         );
     }
 
-    // Reuse gated on HDR + cursor mode + pin. Depth is a PipeWire-negotiation property;
+    // Reuse gated on HDR + cursor mode + range + pin. Depth is a PipeWire-negotiation property;
     // mismatch needs a fresh session. The pointer follows the compositor that is up now.
     #[cfg(target_os = "linux")]
     let metadata_cursor =
@@ -948,11 +948,6 @@ fn gs_capture_output(
     Ok(capturer)
 }
 
-/// Shared [`SessionPlan`](crate::session_plan::SessionPlan) at this plane's shape: 4:2:0 unless
-/// PyroWave negotiated 4:4:4 (stock Moonlight cannot decode it), depth 10 only with HDR, no
-/// cursor-forward (GameStream has no client cursor channel), exactly the slices the client asked
-/// for (a TV decoder wedges on more), and the device's screen ([`StreamConfig::mirrored`]). A
-/// joined display is fitted into the client's size: Moonlight cannot be told another mode.
 /// The samples `cfg` streams: what a capture it shares must deliver, and what its own hands
 /// a joiner.
 pub(super) fn sample_format(cfg: &StreamConfig) -> crate::vdisplay::admission::SampleFormat {
@@ -970,6 +965,11 @@ pub(super) fn sample_format(cfg: &StreamConfig) -> crate::vdisplay::admission::S
     }
 }
 
+/// Shared [`SessionPlan`](crate::session_plan::SessionPlan) at this plane's shape: 4:2:0 unless
+/// PyroWave negotiated 4:4:4 (stock Moonlight cannot decode it), depth 10 only with HDR, no
+/// cursor-forward (GameStream has no client cursor channel), exactly the slices the client asked
+/// for (a TV decoder wedges on more), and the device's screen ([`StreamConfig::mirrored`]). A
+/// joined display is fitted into the client's size: Moonlight cannot be told another mode.
 fn gs_session_plan(cfg: &StreamConfig, cursor_blend: bool) -> crate::session_plan::SessionPlan {
     let mut plan = crate::session_plan::SessionPlan::resolve(
         &cfg.encoder,
@@ -1091,8 +1091,8 @@ fn sendmmsg_all(sock: &UdpSocket, pkts: &[Vec<u8>]) -> std::io::Result<()> {
 }
 
 /// Windows USO: equal-size packets of a paced burst go in one `WSASendMsg`. Remainder
-/// (USO off, mixed sizes, the frame's short last packet, or what a full buffer cut off) is a
-/// per-packet `send`. A packet the full buffer refuses is lost, and the session goes on.
+/// (USO off, mixed sizes, or what a full buffer cut off) is a per-packet `send`. A packet the
+/// full buffer refuses is lost, and the session goes on.
 #[cfg(target_os = "windows")]
 fn sendmmsg_all(sock: &UdpSocket, pkts: &[Vec<u8>]) -> std::io::Result<()> {
     let refs: Vec<&[u8]> = pkts.iter().map(|p| p.as_slice()).collect();
@@ -1177,9 +1177,9 @@ fn spawn_packetizer(
 
 /// Paced send thread: every frame on one [`Pacer`](crate::send_pacing::Pacer) at the link
 /// rate, bounded to ~2 frame intervals. Moonlight says nothing about its link, so `L` is
-/// this host's port under the 800 Mbit/s floor, and `PUNKTFUNK_DELIVERY` the only other
-/// way to shape it. Send failure ends the whole session via `on_lost` — audio would
-/// otherwise keep streaming at the dead endpoint.
+/// this host's port, else [`FLOOR_KBPS`](crate::send_pacing::FLOOR_KBPS), and
+/// `PUNKTFUNK_DELIVERY` the only other way to shape it. Send failure ends the whole session
+/// via `on_lost` — audio would otherwise keep streaming at the dead endpoint.
 #[allow(clippy::too_many_arguments)]
 fn spawn_sender(
     sock: UdpSocket,
@@ -1256,7 +1256,7 @@ fn instant_of(pts_ns: u64) -> Option<Instant> {
 }
 
 /// At most one IDR per this window. Floor is 100 ms: `frame_interval * 2` is 16.7 ms at
-/// 120 fps, while a client under loss re-asks every ~30 ms — every request would pass and the
+/// 120 fps, while a client under loss re-asks after each loss — every request would pass and the
 /// IDR storm would feed the loss that prompts the next request.
 fn keyframe_coalesce_window(frame_interval: Duration) -> Duration {
     (frame_interval * 2).max(Duration::from_millis(100))
@@ -1314,7 +1314,7 @@ struct GsWire {
     au_seq: u32,
     /// Submitted, not yet polled; the next submit is numbered `au_seq + inflight`.
     inflight: u32,
-    /// Without RFI each request is a full IDR. One IDR resolves pending loss; NVENC
+    /// Without RFI each request is a full IDR. One IDR resolves pending loss; a reference
     /// invalidate is never rate-limited.
     keyframes: KeyframeGate,
 }
@@ -1333,7 +1333,7 @@ struct GsEncoder {
     /// Format and size it runs at. The source can change under the loop with nothing
     /// negotiating it.
     src: (capture::PixelFormat, u32, u32),
-    /// Fixed per encoder; one without NVENC RFI skips the always-false invalidate.
+    /// Fixed per encoder; one without RFI skips the always-false invalidate.
     supports_rfi: bool,
     wire: GsWire,
     /// Submit/poll failure, a stall or a ladder rung rebuilds in place.
@@ -1496,10 +1496,11 @@ fn stream_body(
     }
     let stream_start = Instant::now();
 
-    // Depth-2 queues: a slow stage buffers one frame; beyond that the newest drops (FEC/RFI).
+    // Depth-2 queues: a slow stage buffers two frames; beyond that the newest drops (FEC/RFI).
     let goodput = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let (batch_tx, batch_rx) = std::sync::mpsc::sync_channel::<PacketBatch>(2);
-    // Depth 4 > the two depth-2 queues combined, so a batch always has a return slot.
+    // Depth 4: two batches queued, one sending, one blocked on the hand-off, so a returned batch
+    // always finds a slot.
     let (pool_tx, pool_rx) = std::sync::mpsc::sync_channel::<PacketBatch>(4);
     let spread_us = Arc::new(std::sync::Mutex::new(Vec::<u32>::new()));
     let stream_bps = Arc::new(std::sync::atomic::AtomicU64::new(enc_bps));
@@ -2274,8 +2275,9 @@ fn gs_adapt_enabled() -> bool {
 /// Loss-driven FEC percent and wire budget, stepped ~1 s from client `0x0201` reports.
 /// FEC climbs `+max(5, pct/2)` per lossy window (cap [`Self::FEC_MAX`]) and decays −5 per
 /// 8 clean (floor `base_pct`). Budget de-rates ×0.85 from the 2nd consecutive lossy window
-/// (floor max(¼ cap, 5 Mbps)) and climbs cap/20 per 4 clean. Apply site re-derives the
-/// encoder rate under (budget, percent) so the wire never exceeds the live budget.
+/// (floor min(cap, max(¼ cap, 5 Mbps))) and climbs max(cap/20, 500 kbps) per 4 clean. Apply
+/// site re-derives the encoder rate under (budget, percent) so the wire never exceeds the live
+/// budget.
 #[derive(Clone, Copy, Debug)]
 struct GsAdapt {
     /// Decay floor.

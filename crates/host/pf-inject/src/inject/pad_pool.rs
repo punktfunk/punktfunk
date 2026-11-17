@@ -5,11 +5,9 @@
 //! `Global\pfxusb-boot-<i>` / `Global\pfds-boot-<i>` mailboxes, `SwDeviceCreate`
 //! instance ids, DualSense pairing MAC, Deck serial, and Switch Pro MAC.
 //! `hid-playstation` uses the MAC as HID `uniq`; SDL/Steam dedup on that serial.
-//! Clients each number their first pad 0, and the host serves several sessions.
-//!
-//! A session's wire index stays its own; the OS slot is claimed on first frame
-//! and released when the pad (or this map) goes away. Name format is unchanged,
-//! so drivers that parse the index need no change.
+//! Clients each number their first pad 0, and the host serves several sessions. A
+//! session's wire index stays its own; the OS slot is claimed on first frame and
+//! released when the pad (or this map) goes away.
 //!
 //! The slot is the player number a co-op game reads, so it is also a preference:
 //! [`PadSlotPool::reserve`] names one and [`PadIdentity`] keys it to the pairing
@@ -31,7 +29,7 @@ use std::sync::Mutex;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PadIdentity {
     pub owner: u64,
-    /// Player slot the operator picked, 0-based. `None` = today's lazy claim.
+    /// Player slot the operator picked, 0-based. `None` = the lazy claim.
     pub preferred: Option<u8>,
 }
 
@@ -154,9 +152,10 @@ impl PadSlotPool {
         true
     }
 
-    /// No-op if `slot` was never claimed, so a double release cannot free another
-    /// session's pad. The claim on it stays as an idle preference: a re-plug lands
-    /// back here, and anyone else reads the slot as free.
+    /// Frees `slot` whoever holds it; [`PadSlotMap::release`] passes only a slot its
+    /// session holds, so a double release cannot free another session's pad. The claim
+    /// on it stays as an idle preference: a re-plug lands back here, and anyone else
+    /// reads the slot as free.
     pub fn release(&self, slot: u8) {
         if (slot as usize) < MAX_PADS {
             let mut st = self.lock();

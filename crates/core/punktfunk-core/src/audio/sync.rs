@@ -11,8 +11,7 @@ use super::*;
 pub struct AudioSyncCell {
     depth: std::sync::atomic::AtomicUsize,
     target: std::sync::atomic::AtomicUsize,
-    /// Concealment the decode side has synthesized this session, ms. Produced on decode, read
-    /// from the callback's 10 s playback line.
+    /// Concealment the decode side has synthesized this session, ms, for the 10 s playback line.
     plc_ms: std::sync::atomic::AtomicU64,
     /// Device output latency past the ring, ns ([`AvSyncObservation::output_latency_ns`]).
     /// Produced by the backend, read on decode.
@@ -157,7 +156,7 @@ impl AvSync {
     }
 
     /// The negotiated frame, one per [`Self::observe`] call. Default [`FRAME_MS`]; a lossless
-    /// plane sends 1–4 ms frames, and the weights are in audio time, not calls.
+    /// plane sends any [`pcm::FRAME_US_LADDER`] rung, and the weights are in audio time, not calls.
     pub(crate) fn set_frame_us(&mut self, frame_us: u32) {
         self.frame_us = frame_us.max(1);
     }

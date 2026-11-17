@@ -228,8 +228,9 @@ fn valid_entry_id(id: &str) -> bool {
             .is_some_and(|(s, x)| !s.is_empty() && !x.is_empty())
 }
 
-/// Drop the pairs a source could not match on: keys `[a-z0-9_]{1,16}`, values ≤ 256 chars
-/// with no control characters, at most eight. Returns how many went.
+/// Drop the pairs a source could not match on: keys `[a-z0-9_]{1,16}`, values of 1 to
+/// [`ID_VALUE_MAX`] bytes with no control characters; past [`IDS_MAX`] pairs, the last keys go
+/// too. Returns how many went.
 pub fn sanitize_ids(ids: &mut BTreeMap<String, String>) -> usize {
     let before = ids.len();
     ids.retain(|k, v| {

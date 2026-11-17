@@ -1,16 +1,17 @@
 // Session audio, both directions.
 //
 // Host → speaker: a drain thread pulls decoded audio off its plane in the core (nextAudioPcm)
-// into a jitter ring, and an AVAudioSourceNode plays the ring. An underrun plays silence and
-// re-primes. The ring, the A/V sync loop and the render format are built from the NEGOTIATED
-// rate and channel count (`connection.audioFormat`), never from 48 kHz stereo: the
-// lossless plane carries other rates and surround (design/hi-res-audio.md §9).
+// into a jitter ring, and an AVAudioSourceNode plays the ring. An underrun plays silence; a
+// sustained one, or one on a hollow ring, re-primes (`JitterPolicy`). The ring, the A/V sync
+// loop and the render format are built from the NEGOTIATED rate and channel count
+// (`connection.audioFormat`, design/hi-res-audio.md §9), never from 48 kHz stereo: the lossless
+// plane carries other rates and surround.
 //
 // Mic → host: `MicUplink` folds each IO quantum to mono, and a worker resamples to 48 kHz,
-// slices 10 ms chunks, Opus-encodes and sends them. The uplink is always 48 kHz Opus.
+// slices `framesPerPacket` chunks, Opus-encodes and sends them. The uplink is always 48 kHz Opus.
 //
-// Topology. With the mic and echo cancellation on, both defaults, both directions run on ONE
-// engine with the voice processor engaged: it cancels echo only when render and capture share
+// Topology. With the mic on and echo cancellation on (it is by default), both directions run on
+// ONE engine with the voice processor engaged: it cancels echo only when render and capture share
 // a unit. It follows the system default devices only, so a pinned endpoint takes two engines
 // instead. See `wantsCombined`.
 //
@@ -74,9 +75,8 @@ public final class SessionAudio: @unchecked Sendable {
         label: "io.unom.punktfunk.audio.engines", qos: .userInitiated)
     /// The video plane's end-to-end meter (capture→on-glass), if the owner wired one — the
     /// reference the A/V sync loop steers the ring against. `nil` leaves the loop inert and the
-    /// ring exactly as it was before sync existed, which is also what the stage-1 fallback
-    /// presenter gets: it decodes and presents inside the layer with no per-frame stamp, so it can
-    /// offer no reference, and a loop with no reference must not invent one. Written ONCE in
+    /// ring free-running: a loop with no reference must not invent one. The stage-1 pump feeds
+    /// the same meter at ENQUEUE, not on glass (`StreamPump.start`). Written ONCE in
     /// `start()` before anything is dispatched (the queue hop orders it for `startDrain`); the
     /// meter itself is internally locked and read from the drain thread.
     private var videoLatency: LatencyMeter?
@@ -120,7 +120,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// Watches the hardware for us (see `AudioDeviceWatcher`). Guarded by `stateLock`.
     private var deviceWatcher: AudioDeviceWatcher?
     /// Whether the engines have been built at least once. Distinguishes "not started yet" (every
-    /// platform starts asynchronously now) from "started and dead", which is what the recovery
+    /// platform starts asynchronously) from "started and dead", which is what the recovery
     /// may act on. Guarded by `stateLock` (set on `engineQueue`, read on the main queue).
     private var enginesAttempted = false
     /// A rebuild is already on the main queue — one device switch produces a burst of triggers
@@ -131,8 +131,8 @@ public final class SessionAudio: @unchecked Sendable {
     @MainActor private var rebuildBackoff = RebuildBackoff()
     #if os(macOS)
     /// Latches a voice-processing start failure per input device, so a rebuild never re-attempts
-    /// a topology that deterministically fails — the retry is what turned one failure into a
-    /// rebuild loop (see `CombinedTopologyGate` and the note on `installDeviceChangeRecovery`).
+    /// a topology that deterministically fails — each retry would trigger another rebuild (see
+    /// `CombinedTopologyGate` and the note on `installDeviceChangeRecovery`).
     /// `engineQueue`-confined, like the start paths that consult and feed it.
     private var combinedGate = CombinedTopologyGate()
     #endif
@@ -174,8 +174,8 @@ public final class SessionAudio: @unchecked Sendable {
     ///
     /// `videoLatency` is the session's END-TO-END latency meter (capture→on-glass). Pass it to arm
     /// A/V sync: it is the only thing that tells the audio plane where the picture actually is, and
-    /// without it the ring keeps today's free-running behaviour. Omit it for a playback-only or
-    /// stage-1 session, where no such figure is measured.
+    /// without it the ring free-runs. Omit it for a playback-only session, where no such figure
+    /// is measured.
     @MainActor
     public func start(
         speakerUID: String, micUID: String, micChannel: Int, micEnabled: Bool, echoCancel: Bool,
@@ -225,12 +225,12 @@ public final class SessionAudio: @unchecked Sendable {
     /// because it is what `nextAudioPcm` hands back.
     private var wireRateHz: Int { Int(connection.audioFormat.rateHz) }
 
-    /// How much audio one datagram carries, in MICROSECONDS — `Welcome`'s resolved
-    /// `audio_frame_us`. 5 000 on every Opus session; on the lossless plane the host sizes it so
-    /// the payload fits one datagram, which is 4 000 at 48 kHz/24-bit stereo, 2 000 at
-    /// 96 kHz/24-bit stereo, and shorter again for surround (a 5.1 frame carries three times the
-    /// samples, so it drops to roughly 1 000–1 500). Microseconds because the ladder has
-    /// sub-millisecond rungs (`AudioRing.setFrameUs`).
+    /// How much audio one frame carries, in MICROSECONDS — `Welcome`'s resolved
+    /// `audio_frame_us`. 5 000 on every Opus session; on the lossless plane the host picks the
+    /// longest rung of `pcm::FRAME_US_LADDER` that fits one datagram (`frame_us_for`), or, for a
+    /// frame sent in parts, the send buffer (`parted_frame_us_for`). At a 1 400-byte datagram
+    /// that is 4 000 for 48 kHz/24-bit stereo and 2 000 for 96 kHz/24-bit stereo.
+    /// Microseconds because the ladder has sub-millisecond rungs (`AudioRing.setFrameUs`).
     private var wireFrameUs: Int { Int(connection.audioFormat.frameUs) }
 
     /// The same figure rounded UP to whole milliseconds, for the one consumer that can only express
@@ -264,7 +264,7 @@ public final class SessionAudio: @unchecked Sendable {
             } else {
                 try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             }
-            #else // tvOS — no app-accessible mic
+            #else // tvOS: the app opens no mic
             // No `.mixWithOthers` here: a mixable playback session is offered a stereo mix, so
             // HDMI would carry PCM 2.0 whatever the wire negotiated — and there is nothing to
             // mix with on the box anyway.
@@ -286,7 +286,7 @@ public final class SessionAudio: @unchecked Sendable {
             #endif
             // Asked for on every branch, mic on or off. The hardware IO buffer is one shared,
             // device-wide setting: a session that asks for nothing runs at whatever iOS or another
-            // mixing app chose (85 ms seen), and the ring's floor is this quantum plus one packet.
+            // mixing app chose, and the ring's floor is this quantum plus one packet.
             try? session.setPreferredIOBufferDuration(Self.preferredIOBufferSeconds)
             // The session's rate, on every branch. BEFORE `setActive`: the hardware is configured
             // on activation, and a preference expressed after it only takes effect at the next
@@ -417,7 +417,7 @@ public final class SessionAudio: @unchecked Sendable {
         enginesAttempted = true // even if every path below fails — see `reviveStoppedEngines`
         stateLock.unlock()
         #if os(tvOS)
-        // No app-accessible microphone input on tvOS — playback only.
+        // The tvOS app opens no microphone: playback only.
         startPlayback(speakerUID: speakerUID)
         #else
         guard micEnabled else {
@@ -493,7 +493,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// unit can only follow the system DEFAULT devices — so echo cancellation gets the combined
     /// engine only while nothing is explicitly pinned. On macOS a chosen speaker/mic UID or a
     /// picked input channel (the voice processor's capture side is its own mono mix — a
-    /// per-channel pick can't survive it) keeps today's two-engine path, AEC-less but honoring
+    /// per-channel pick can't survive it) keeps the two-engine path, AEC-less but honoring
     /// the exact endpoints the user named. On iOS routes are session-managed and the UIDs are
     /// ignored, so the toggle alone decides.
     private func wantsCombined(
@@ -784,9 +784,10 @@ public final class SessionAudio: @unchecked Sendable {
         }
     }
 
-    /// A rebuild's playback did not come back (main queue): retry after 0.3 s, 0.6 s, then 1.2 s.
-    /// A failed rebuild leaves no engine to post the next notification, so this ladder (and, on
-    /// macOS, the HAL listener) keeps a device still going away from leaving the session silent.
+    /// A rebuild's playback did not come back (main queue): retry after 2, 4, then 8 times
+    /// `RebuildBackoff.debounce`. A failed rebuild leaves no engine to post the next notification,
+    /// so this ladder (and, on macOS, the HAL listener) keeps a device still going away from
+    /// leaving the session silent.
     @MainActor
     private func rebuildFailed(attempt: Int) {
         guard !flag.isStopped else { return }
@@ -1337,12 +1338,11 @@ public final class SessionAudio: @unchecked Sendable {
         log.info("audio engines joined — voice processing (echo cancellation) active")
     }
 
-    /// The split path: capture on its OWN engine, playback on another — the pre-echo-cancel
-    /// topology, kept verbatim. Two engines, not one — a single AVAudioEngine ties
-    /// input+output to one aggregate clock, separate engines keep arbitrary mic/speaker
-    /// combinations trivial. That freedom is exactly why the voice processor can't ride this
-    /// path (AEC needs both directions on one unit) and why explicitly pinned endpoints land
-    /// here — see `wantsCombined`.
+    /// The split path: capture on its OWN engine, playback on another. Two engines, not one — a
+    /// single AVAudioEngine ties input+output to one aggregate clock, separate engines keep
+    /// arbitrary mic/speaker combinations trivial. That freedom is exactly why the voice
+    /// processor can't ride this path (AEC needs both directions on one unit) and why explicitly
+    /// pinned endpoints land here — see `wantsCombined`.
     private func startCapture(micUID: String, micChannel: Int) {
         let engine = AVAudioEngine()
         defer { retire(engine) } // covers every failure return below
@@ -1456,7 +1456,7 @@ public final class SessionAudio: @unchecked Sendable {
         }
 
         // Worker-confined from here: copy into `chain.mono`, resample into `chain.staging`,
-        // gather in `fifo`, slice `framesPerPacket` (10 ms) chunks for the encoder.
+        // gather in `fifo`, slice `framesPerPacket` chunks for the encoder.
         var fifo: [Float] = []
         fifo.reserveCapacity(48_000)
         var seq: UInt32 = 0

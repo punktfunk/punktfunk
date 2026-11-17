@@ -60,7 +60,7 @@ impl DemoSeams {
     }
 }
 
-/// The real box's seams (WP3.1): system runner + NLA probe, `%ProgramData%` paths, the
+/// The real box's seams: system runner + NLA probe, `%ProgramData%` paths, the
 /// extracted tree as payload (a `FakePayload` when there is none — dry runs only).
 pub struct RealSeams {
     pub run: SystemRunner,

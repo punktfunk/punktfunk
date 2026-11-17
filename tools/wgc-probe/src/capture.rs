@@ -61,7 +61,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::win::{hr, log, Opts};
 
-/// A stage that runs longer than this is a hang; the design's bound on `OPEN_SOURCE`.
+/// A stage that runs longer than this is a hang: the host waits `SOURCE_BOUND` (pf-capture
+/// `windows/wgc.rs`) for `OPEN_SOURCE`.
 const HANG: Duration = Duration::from_secs(5);
 /// How long a capture waits for its first frame before it reports none.
 const FIRST_FRAME: Duration = Duration::from_secs(5);
@@ -551,7 +552,8 @@ impl Session {
         last.ok_or("no frame followed a canary kick".into())
     }
 
-    /// A texture shaped like `tex` for `usage`, kept until the source's shape changes.
+    /// A texture shaped like `tex` (staging or default, per `staging`), kept until the source's
+    /// shape changes.
     fn like(
         device: &ID3D11Device,
         slot: &mut Option<(ID3D11Texture2D, D3D11_TEXTURE2D_DESC)>,
@@ -1011,7 +1013,7 @@ pub fn capture(o: &Opts) -> Result<i32, String> {
     }
 
     // A still desktop composes nothing, so a rate needs its own damage. Stopped before the
-    // cursor and shot legs, which want a still frame.
+    // cursor leg, which wants a still frame.
     let animating = Arc::new(AtomicBool::new(o.animate));
     if o.animate {
         let (on, rect) = (animating.clone(), t.rect);

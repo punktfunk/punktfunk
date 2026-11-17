@@ -1,12 +1,11 @@
 # Windows driver workspace CI — runs on a self-hosted Windows runner (home-windows-runner-1, host
-# mode; label windows-amd64). Part of the Windows-host rewrite (design/windows-host-rewrite.md, M0).
+# mode; label windows-amd64). Part of the Windows-host rewrite (design/windows-host-rewrite.md).
 #
-# Stage 1 (this file): PROBE the runner's driver toolchain (WDK / EWDK / cargo-make / LLVM / the
-# inf2cat/stampinf/devgen/signtool tools) so we know what's provisioned BEFORE writing driver code,
-# and build+test the owned ABI crate (pf-driver-proto) on MSVC to prove it compiles cross-OS and the
-# CI wiring works. The runner has no RTX GPU — that's fine: builds, the IddCx bindgen/link, the
-# /INTEGRITYCHECK self-sign-load, and (later) IDD-push frame flow on the basic display do not need one;
-# only live NVENC encode does, which defers to the RTX box.
+# probe-and-proto PROBES the runner's driver toolchain (WDK / EWDK / cargo-make / LLVM / the
+# inf2cat/stampinf/devgen/signtool tools) and builds+tests the owned ABI crate (pf-driver-proto)
+# on MSVC. driver-build builds, lints and tests the UMDF driver workspace. The runner has no RTX
+# GPU — that's fine: builds, the IddCx bindgen/link and the /INTEGRITYCHECK self-sign-load do not
+# need one; only live NVENC encode does, which defers to the RTX box.
 #
 # shell: pwsh deliberately (PowerShell 5.1's Out-File -Encoding utf8 prepends a BOM that corrupts the
 # first GITHUB_ENV line — see windows-client.yml).
@@ -14,7 +13,7 @@ name: windows-drivers
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -33,15 +32,15 @@ on:
       - 'crates/host/pf-encode-win/**'
       # …and the crates those backends compile against: pf-frame owns the frame vocabulary
       # their signatures take, pf-zerocopy and pf-dmabuf sit under it, and the two -sys crates are the
-      # QSV and PyroWave features. Unlisted, a change to any of them reached main with no
-      # driver build behind it — the Cargo.lock-luck gap the host lane already closed.
+      # QSV and PyroWave features. Unlisted, a change to any of them runs no driver build;
+      # scripts/ci/check-workflow-paths.py fails CI on that gap.
       - 'crates/codec/libvpl-sys/**'
       - 'crates/codec/pyrowave-sys/**'
       - 'crates/core/pf-dmabuf/**'
       - 'crates/host/pf-frame/**'
       - 'crates/host/pf-zerocopy/**'
       - 'packaging/windows/drivers/**'
-      # Every build job below runs these, and they sit beside the driver tree rather than in it.
+      # The driver-build job below runs these. They sit beside the driver tree, not in it.
       - 'packaging/windows/drivers-cargo.ps1'
       - 'scripts/ci/ensure-windows-toolchain.ps1'
       - 'scripts/ci/src-mtimes.rs'
@@ -55,15 +54,15 @@ on:
       - 'crates/host/pf-encode-win/**'
       # …and the crates those backends compile against: pf-frame owns the frame vocabulary
       # their signatures take, pf-zerocopy and pf-dmabuf sit under it, and the two -sys crates are the
-      # QSV and PyroWave features. Unlisted, a change to any of them reached main with no
-      # driver build behind it — the Cargo.lock-luck gap the host lane already closed.
+      # QSV and PyroWave features. Unlisted, a change to any of them runs no driver build;
+      # scripts/ci/check-workflow-paths.py fails CI on that gap.
       - 'crates/codec/libvpl-sys/**'
       - 'crates/codec/pyrowave-sys/**'
       - 'crates/core/pf-dmabuf/**'
       - 'crates/host/pf-frame/**'
       - 'crates/host/pf-zerocopy/**'
       - 'packaging/windows/drivers/**'
-      # Every build job below runs these, and they sit beside the driver tree rather than in it.
+      # The driver-build job below runs these. They sit beside the driver tree, not in it.
       - 'packaging/windows/drivers-cargo.ps1'
       - 'scripts/ci/ensure-windows-toolchain.ps1'
       - 'scripts/ci/src-mtimes.rs'
@@ -203,11 +202,11 @@ jobs:
         # whose subst keeps MSBuild's CMake .tlog paths under MAX_PATH.
         working-directory: packaging/windows/drivers
     env:
-      # wdk-build otherwise picks 10.0.28000.0 (no km/crt) and bindgen fails — pin the WDK SDK version.
+      # wdk-build otherwise takes the newest SDK under Kits\10\Lib, which may lack the WDK's km
+      # headers; pin the WDK's SDK version.
       Version_Number: '10.0.26100.0'
       # No LIBCLANG_PATH pin: the vendored bindgen 0.72 builds clean on the runner's default clang 22
-      # (the shipping pack proves it). A 0.71-era layout-test overflow once needed LLVM 21; the 0.72 bump
-      # retired that — see design/windows-build-and-packaging.md.
+      # (the shipping pack proves it) — see design/windows-build-and-packaging.md.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Ensure Windows toolchain (WDK, ARM64 target)
@@ -232,24 +231,25 @@ jobs:
           & "$env:RUNNER_TEMP\src-mtimes.exe" 'C:\t\drivers'; if ($LASTEXITCODE) { throw "src-mtimes" }
       - name: cargo build the driver workspace (wdk-iddcx + pf-vdisplay + gamepad drivers)
         # Whole workspace: wdk-iddcx (DDI wrappers + the iddcx bindgen surface asserts) + pf-vdisplay
-        # (the real IddCx driver) + pf-umdf-util (the safe UMDF primitive layer) + the two gamepad
-        # drivers. pf-vdisplay linking proves the IddCx call sites resolve against IddCxStub end-to-end
-        # (M1 step 2 gate); the gamepad drivers prove pf-umdf-util's WDF dispatch links.
+        # (the real IddCx driver) + pf-umdf-util (the safe UMDF primitive layer) + the four input
+        # drivers (pf-gamepad, pf-xusb, pf-mouse, pf-touchpad). pf-vdisplay linking proves the IddCx
+        # call sites resolve against IddCxStub end-to-end; the input drivers prove pf-umdf-util's
+        # WDF dispatch links.
         run: ../drivers-cargo.ps1 'build --locked -v'
       - name: cargo clippy the shipped drivers (-D warnings — enforces the unsafe-audit gates)
-        # The gamepad drivers' business logic is 100% safe (it moved onto pf-umdf-util, the audited
-        # unsafe layer); pf-vdisplay + wdk-iddcx are inherently FFI-bound but every `unsafe {}` carries a
-        # `// SAFETY:` proof. Both invariants are lint-gated (`unsafe_op_in_unsafe_fn` +
+        # The gamepad drivers' business logic is 100% safe (the unsafe surface is pf-umdf-util, the
+        # audited layer); pf-vdisplay + wdk-iddcx are inherently FFI-bound but every `unsafe {}`
+        # carries a `// SAFETY:` proof. Both invariants are lint-gated (`unsafe_op_in_unsafe_fn` +
         # `undocumented_unsafe_blocks`); this step keeps them from regressing.
         run: ../drivers-cargo.ps1 'clippy --locked -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p pf-touchpad -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
       - name: cargo test pf-umdf-util (the safe helpers the drivers share)
         # A plain lib links no WDF import libs, so its tests run where the cdylib drivers' cannot:
-        # the HID IOCTL table, descriptor lengths, string replies and the channel state machine.
+        # the HID IOCTL table, descriptor lengths, string replies and the log helpers.
         run: ../drivers-cargo.ps1 'test --locked -p pf-umdf-util'
       - name: cargo test pf-vdisplay --lib (the display driver's own models)
         # `--lib` builds the cdylib's unit tests as an ordinary test binary, so the pure models
-        # inside the driver (the cursor cell) run here. The host lane's `-p pf-vdisplay` is the
-        # Linux crate of that name, not this driver.
+        # inside the driver (the cursor cell among them) run here. The host lane's `-p pf-vdisplay`
+        # is the host crate of that name (crates/host/pf-vdisplay), not this driver.
         run: ../drivers-cargo.ps1 'test --locked -p pf-vdisplay --lib'
       - name: cargo fmt --check the driver workspace
         run: cargo fmt -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p pf-touchpad -p wdk-iddcx -p pf-vdisplay --check
@@ -270,8 +270,9 @@ jobs:
       - name: cargo build pf-vdisplay --features encode-probe (S5 probe gate)
         # The shipped build already links NVENC/AMF/QSV/PyroWave; this proves the S5 probe on top
         # of them still compiles under the WDK toolchain and the static CRT.
-        # LAST on purpose: same profile and target dir, so it overwrites pf_vdisplay.dll and would
-        # otherwise hand the PE-inspection steps above the probe DLL instead of the shipped one.
+        # Last x64 build on purpose: same profile and target dir, so it overwrites pf_vdisplay.dll
+        # and would otherwise hand the PE-inspection steps above the probe DLL instead of the
+        # shipped one.
         run: ../drivers-cargo.ps1 'build --locked -p pf-vdisplay --features encode-probe -v'
       - name: cargo build + clippy the driver workspace for aarch64-pc-windows-msvc
         # The ARM64 host leg (#298). Same x64 runner: the MSVC ARM64 cross compiler and the WDK's

@@ -7,9 +7,8 @@ import PunktfunkKit
 import SwiftUI
 // The tvOS slide transition ships with the Xcode PROJECT only — its manifest breaks SwiftPM's
 // whole-graph validation, so `swift build` never sees it. `canImport` rather than `os(tvOS)` so
-// the tvOS sources still TYPECHECK from the command line (the hand recipe in the Apple client's
-// README), where the module is genuinely absent; in the app it is present and the transition
-// applies exactly as before.
+// the tvOS sources still TYPECHECK from the command line, where the module is genuinely absent;
+// in the app it is present and the transition applies.
 #if os(tvOS) && canImport(SwiftUINavigationTransitions)
 import SwiftUINavigationTransitions
 #endif
@@ -34,7 +33,7 @@ struct HomeView: View {
     let connectDiscovered: (DiscoveredHost) -> Void
     /// Pairing succeeded (tvOS PairSheet route) — pin it (ContentView guards staleness).
     let onPaired: (StoredHost, Data) -> Void
-    /// Picked a title in the (experimental) library — start a session that launches it, with the
+    /// Picked a title in the library — start a session that launches it, with the
     /// shelf's preset (a pinned card's own; the host's binding on its primary card).
     let onLaunchTitle: (LibraryTarget, String) -> Void
     /// Stream a shelf's host without launching anything (its menu's Connect / Resume row).
@@ -57,7 +56,7 @@ struct HomeView: View {
     /// An act the sectioned page handed back, run once the page is gone.
     @State private var pendingHandOff: HostPageRequest?
     #endif
-    /// The start-screen pointer; the default host's card carries the accent bar.
+    /// The start-screen pointer; the default host's tile carries a star.
     @AppStorage(DefaultsKey.defaultHost) private var defaultHostID = ""
     /// The outcome of the last "Send Logs to Host" — drives its alert.
     @State private var sendLogsResult: (ok: Bool, message: String)?
@@ -72,8 +71,8 @@ struct HomeView: View {
     /// A destructive host action awaiting its confirmation.
     @State private var confirmHostAction: PendingHostAction?
     @State private var hostActionResult: (ok: Bool, message: String)?
-    // How this device shows its own list. `.added` is the default because it is what the grid
-    // did before it could sort at all — an update should not rearrange anyone's hosts.
+    // How this device shows its own list. The sort defaults to `.added`, so an update never
+    // rearranges anyone's hosts.
     @AppStorage(DefaultsKey.hostSort) private var sortRaw = SettingDefault.hostSort
     @AppStorage(DefaultsKey.hostGrouping) private var groupingRaw = SettingDefault.hostGrouping
 
@@ -150,8 +149,9 @@ struct HomeView: View {
             #if !os(tvOS)
             .navigationTitle("Punktfunk")
             #endif
-            // The host page, from a card's ⓘ or its menu (design §2.4), and the speed test pushed
-            // from it. The Mac opens both in the host's own window (`MacHostWindow`).
+            // The host page, from a card's ⓘ or its menu (design/apple-touch-ui-overhaul.md
+            // §2.4), and the speed test pushed from it. The Mac opens both in the host's own
+            // window (`MacHostWindow`).
             #if !os(macOS)
             .navigationDestination(item: $detailTarget) { id in
                 #if os(tvOS)
@@ -334,7 +334,7 @@ struct HomeView: View {
             host: host,
             isOnline: isOnline(host),
             isConnecting: model.phase == .connecting && model.activeHost?.id == host.id,
-            // The bar marks the default HOST; pinned cards stay quiet.
+            // The star marks the default HOST; pinned cards stay quiet.
             isDefaultHost: pinned == nil && host.id == defaultHost,
             isBusy: model.isBusy,
             actions: hostActions(for: host, pinned: pinned),
@@ -466,9 +466,9 @@ struct HomeView: View {
         }
     }
 
-    /// Re-run mDNS discovery from scratch. Discovery heals itself now (`HostDiscovery`'s sweep),
-    /// so this is the fallback the field asked for — and the fastest way past the iOS
-    /// local-network permission gate, which only a NEW browser can clear.
+    /// Re-run mDNS discovery from scratch. `HostDiscovery`'s sweep heals a dead browse on its own,
+    /// so this is the manual fallback — and the fastest way past the iOS local-network
+    /// permission gate, which only a NEW browser can clear.
     private var refreshButton: some View {
         Button {
             discovery.refresh()
@@ -527,9 +527,9 @@ struct HomeView: View {
         #endif
         #if os(macOS)
         // A Menu draws its label in the ACCENT colour where a Button draws it in the label
-        // colour, so next to Add Host and Settings this one came out brand-purple. macOS only:
-        // on iOS every toolbar item is accent-tinted, and pinning this one to primary would make
-        // it the odd one out there instead.
+        // colour, so next to Add Host and Settings it would stand out. macOS only: on iOS
+        // every toolbar item is accent-tinted, and pinning this one to primary would make it
+        // the odd one out there instead.
         .tint(.primary)
         #endif
     }

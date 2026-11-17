@@ -44,8 +44,8 @@ pub fn boost_thread_priority(critical: bool) {
     {
         tighten_timer_slack();
         // Best-effort nice of the calling thread. Linux `setpriority(PRIO_PROCESS, 0, …)`
-        // is the current task. Do not use SCHED_RR/FIFO by default: realtime can preempt
-        // the compositor and the game's render thread (opt-in: PUNKTFUNK_SCHED_RR).
+        // is the current task. Do not use SCHED_RR/FIFO: realtime can preempt the
+        // compositor and the game's render thread.
         let nice = if critical { -10 } else { -5 };
         // SAFETY: `setpriority` takes three by-value integers and no pointers, so there is nothing to
         // alias or outlive. `PRIO_PROCESS` with `who == 0` targets the calling task on Linux and
@@ -128,9 +128,9 @@ pub fn current_thread_sched() -> (&'static str, i32, i32) {
 /// thread when `setpriority` was refused. No file capability — a cap on the
 /// host binary breaks KWin's client identification.
 ///
-/// High-priority (nice) only, never `MakeThreadRealtime` — the SCHED_RR
-/// reservations in [`boost_thread_priority`] apply to rtkit-granted RR too,
-/// and the RT verb also demands an RLIMIT_RTTIME we do not set.
+/// High-priority (nice) only, never `MakeThreadRealtime` — [`boost_thread_priority`] avoids
+/// SCHED_RR/FIFO, and rtkit-granted RR is the same policy. The RT verb also demands an
+/// RLIMIT_RTTIME we do not set.
 #[cfg(target_os = "linux")]
 mod linux_rtkit {
     /// One-shot blocking D-Bus call. Must run on a plain worker thread, never

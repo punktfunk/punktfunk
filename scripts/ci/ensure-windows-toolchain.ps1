@@ -63,11 +63,10 @@ if (-not (Test-Path $sccacheExe)) {
 if ($env:GITHUB_PATH) { Add-Content -Path $env:GITHUB_PATH -Value $sccacheDir }
 
 # --- zstd: what actions/cache compresses with. Without it the toolkit falls back to gzip,
-# and Git's GNU tar then shells out to a `gzip` that is NOT on the runner's PATH — every
-# cache SAVE died with "Child returned status 127" / "Cannot write: Broken pipe" / exit 2,
-# reported only as a ::warning:: so runs stayed green while nothing was ever cached
-# (measured 2026-07-30 on windows-host). Own directory on purpose: putting Git's usr\bin on
-# PATH would shadow Windows' find/sort/echo and break unrelated steps.
+# and Git's GNU tar then shells out to a `gzip` that is NOT on the runner's PATH, so a cache
+# SAVE fails and is reported only as a ::warning:: while the run stays green. Own directory
+# on purpose: putting Git's usr\bin on PATH would shadow Windows' find/sort/echo and break
+# unrelated steps.
 $zstdDir = 'C:\Users\Public\zstd'
 $zstdExe = Join-Path $zstdDir 'zstd.exe'
 if (-not (Test-Path $zstdExe)) {

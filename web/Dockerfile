@@ -19,14 +19,10 @@ WORKDIR /repo/web
 # --ignore-scripts: the root `prepare` script runs codegen, which needs sources that
 # aren't copied yet — `bun run build` regenerates everything below.
 COPY web/package.json web/bun.lock ./
-# Retried, because a single failed tarball kills the whole install and takes the image build with
-# it. Seen in CI as `error: Fail extracting tarball for "@rolldown/binding-linux-x64-musl"` — a
-# 7.7 MB optional binding that bun fetches on any linux-x64 host (the lockfile records `os`/`cpu`
-# but no libc, so the musl and glibc bindings are equally eligible) and that had arrived truncated.
-# The lockfile is not at fault: `bun install --frozen-lockfile` accepts it, regenerating it with the
-# same bun is byte-identical, and this exact layer builds clean for --platform linux/amd64.
-# Two attempts with a pause, then fail for real — this recovers a truncated download and does NOT
-# paper over a runner that is out of disk, which fails identically on every attempt.
+# Retried once after a pause, because a single failed tarball (`error: Fail extracting tarball`,
+# a truncated download) kills the whole install and takes the image build with it.
+# Two attempts, then fail for real: a runner that is out of disk fails identically on both, so
+# the retry does not paper over it.
 RUN bun install --frozen-lockfile --ignore-scripts \
     || { echo "bun install failed — retrying once"; sleep 5; \
          bun install --frozen-lockfile --ignore-scripts; }

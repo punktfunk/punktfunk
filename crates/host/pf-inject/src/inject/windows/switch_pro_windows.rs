@@ -124,7 +124,8 @@ impl SwitchWinPad {
 
 /// Slot table, unplug, heartbeat, and `HidoutDedup` live in [`UhidManager`].
 pub struct SwitchWinProto {
-    /// Steam back-grip fold. A Pro Controller has no paddle slot; `PUNKTFUNK_STEAM_REMAP=paddles=…`, default drop.
+    /// Steam back-grip fold. A Pro Controller has no paddle slot; `PUNKTFUNK_STEAM_REMAP`
+    /// (`paddles=`) picks the fold, see [`crate::steam_remap::RemapConfig`].
     remap: crate::steam_remap::RemapConfig,
 }
 

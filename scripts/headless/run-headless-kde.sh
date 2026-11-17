@@ -33,9 +33,8 @@ export KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
 
 # The probe binary (gates readiness on KWin actually exposing zkde_screencast — not merely
 # the socket existing). Prefer a source-tree build (dev box), then a packaged install on PATH
-# (the RPM/.deb put it at /usr/bin — there is no $ROOT/target there, and the old cargo-run
-# fallback has no Cargo.toml either, so without this the probe never succeeds and the session
-# restart-loops), then `cargo run` as a last resort.
+# (the RPM/.deb put it at /usr/bin, where there is no $ROOT/target or Cargo.toml), then
+# `cargo run` as a last resort.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 if [[ -x "$ROOT/target/release/punktfunk-host" ]]; then
     PROBE=("$ROOT/target/release/punktfunk-host" probe-compositor)
@@ -55,9 +54,9 @@ fi
 # The log lives in the per-user 0700 XDG_RUNTIME_DIR, not at a fixed name in a world-writable
 # /tmp. This file is not just a log: the DISPLAY detection below GREPS it for "Using public X11
 # display :N" and exports the result, so at a predictable path in a shared directory any local user
-# could pre-create it (or symlink it) and steer the DISPLAY of a shipped systemd service
-# (2026-08-05 review L-15). `pf-vdisplay` already resolves XDG_RUNTIME_DIR for its own paths; this
-# matches. Without a runtime dir, fall back to a private mktemp rather than a guessable name.
+# could pre-create it (or symlink it) and steer the DISPLAY of a shipped systemd service.
+# `pf-vdisplay` already resolves XDG_RUNTIME_DIR for its own paths; this matches. Without a
+# runtime dir, fall back to a private mktemp rather than a guessable name.
 if [[ -n "${XDG_RUNTIME_DIR:-}" && -d "${XDG_RUNTIME_DIR}" ]]; then
     KWIN_LOG="${XDG_RUNTIME_DIR}/punktfunk-kwin.log"
     : >"$KWIN_LOG"
@@ -100,16 +99,16 @@ for _ in $(seq 1 40); do
     # killing KWin — on the first iteration instead of retrying. Tolerate it so the loop polls,
     # and so a session with no Xwayland at all still proceeds (DISPLAY just stays unset → warn).
     # Primary: KWin reserves + logs the X11 display ("Using public X11 display :N") up front, even
-    # with Xwayland-on-demand (no Xwayland *process* until the first X client connects) — so the
-    # old pgrep-the-process check found nothing and never set DISPLAY. Read the log; fall back to a
-    # live Xwayland process for older KWin.
+    # with Xwayland-on-demand (no Xwayland *process* until the first X client connects), so read
+    # the log; fall back to a live Xwayland process for older KWin.
     d=$(grep -oE 'Using public X11 display :[0-9]+' "$KWIN_LOG" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)
     if [[ -n "$d" ]]; then DISPLAY_NUM="$d"; break; fi
     d=$(pgrep -a Xwayland 2>/dev/null | grep -oE ' :[0-9]+' | tr -d ' :' | head -1 || true)
     if [[ -n "$d" && -S "/tmp/.X11-unix/X$d" ]]; then DISPLAY_NUM="$d"; break; fi
-    # Most reliable here: KWin --xwayland reserves the /tmp/.X11-unix/X<N> socket up front (Xwayland
-    # starts on demand on first connect) and on this KWin neither logs the display nor runs a process
-    # until then. The socket IS the signal — take it. (Fresh boot has a tmpfs /tmp, so no stale one.)
+    # Most reliable here: KWin --xwayland reserves the /tmp/.X11-unix/X<N> socket up front
+    # (Xwayland starts on demand on first connect) and KWin 6.6–6.7 neither logs the display nor
+    # runs a process until then. The socket IS the signal — take it. (Fresh boot has a tmpfs /tmp,
+    # so no stale one.)
     s=$(ls /tmp/.X11-unix/X[0-9]* 2>/dev/null | head -1 || true)
     if [[ -n "$s" && -S "$s" ]]; then DISPLAY_NUM="${s##*/X}"; break; fi
     sleep 0.25
@@ -124,7 +123,7 @@ fi
 # Only NOW restart the portals, and against the correct env: the xdg-desktop-portal chain
 # binds the compositor that existed when it started, so a stale portal points at a dead
 # socket and RemoteDesktop/EIS (input injection) times out. Import the session env into the
-# systemd/D-Bus activation environment FIRST (the missing piece — the Sway script does this;
+# systemd/D-Bus activation environment FIRST (prepare-session.sh does the same for Sway;
 # without it the restarted portal can inherit an empty WAYLAND_DISPLAY) — including DISPLAY so
 # D-Bus-activated X11 apps inherit it — then restart.
 systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR ${DISPLAY:+DISPLAY} 2>/dev/null || true
@@ -166,8 +165,8 @@ if [[ ! -f "$GST_DROPIN/10-punktfunk-headless.conf" ]]; then
 fi
 systemctl --user start graphical-session.target 2>/dev/null || true
 
-# Bring the portal up against the env imported above. `start` (not the old `try-restart`, a no-op
-# when inactive — the headless first-boot case) so it actually comes up; `--no-block` since
+# Bring the portal up against the env imported above. `start`/`restart`, not `try-restart`, a no-op
+# when inactive (the headless first-boot case), so it actually comes up; `--no-block` since
 # xdg-desktop-portal is Type=dbus and blocks ~30s waiting for its bus name, and it only needs to be
 # ready before the FIRST client streams (seconds later), not before plasmashell.
 systemctl --user --no-block restart plasma-xdg-desktop-portal-kde.service 2>/dev/null || true

@@ -225,8 +225,8 @@ class DsDeviceTest {
         assertEquals(32767, cal.gyroToWire(0, 30000))
         assertEquals(-32768, cal.gyroToWire(0, -30000))
         assertEquals(32767, cal.accelToWire(0, 30000))
-        // The capture logs this, and it is the discriminator the owed on-glass check reads: a pad
-        // whose blob was read declares its own resolution, the fallback declares the wire's.
+        // The capture logs this: a pad whose blob was read declares its own resolution, the
+        // fallback declares the wire's.
         assertTrue(cal.toString().startsWith("gyro 16/16/16 LSB/°·s"))
         assertTrue(DsDevice.MotionCal.NOMINAL.toString().startsWith("gyro 20/20/20 LSB/°·s"))
     }
@@ -258,9 +258,9 @@ class DsDeviceTest {
     }
 
     /**
-     * Anything unusable keeps the pre-calibration behaviour — accel on the nominal 8192 LSB/g,
-     * gyro straight through. A pad with no readable calibration is better off slightly mis-scaled
-     * than silent, so nothing here may zero motion.
+     * Anything unusable scales as [DsDevice.MotionCal.NOMINAL] does — accel on the nominal 8192
+     * LSB/g, gyro straight through. A pad with no readable calibration is better off slightly
+     * mis-scaled than silent, so nothing here may zero motion.
      */
     @Test
     fun unusableCalibrationFallsBackInsteadOfZeroing() {

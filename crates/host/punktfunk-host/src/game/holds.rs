@@ -1,9 +1,9 @@
 //! Launch holds: plugins and automations that must act before a game starts.
 //!
 //! [`launching`] emits `game.launching`, then waits for every participant at once: each live
-//! plugin registered with the stage (`POST /__hold` on its loopback UI port) and each hook with
-//! `hold` set. Each runs to its own deadline. The stage is fail-open: a late, failed or refused
-//! participant is logged and the launch goes ahead.
+//! plugin registered with the stage (`POST /__hold`, on its loopback UI port or over the host's
+//! channel) and each hook with `hold` set. Each runs to its own deadline. The stage is
+//! fail-open: a late, failed or refused participant is logged and the launch goes ahead.
 //!
 //! A seat host runs no plugins. Its event carries a `hold` token, and the launch also waits, up
 //! to [`RELAYED_HOLD`], for the host with the plugins to run them ([`plugins`]) and call

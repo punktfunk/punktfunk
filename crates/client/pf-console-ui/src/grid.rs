@@ -1,4 +1,4 @@
-//! Cursor and grid arithmetic the library screens share, ported from the GTK launcher.
+//! Cursor and grid arithmetic the library screens share.
 //!
 //! [`GridShape`] is the layout both the cursor maths and the renderer read.
 

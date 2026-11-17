@@ -1,14 +1,12 @@
 // Schema-driven plugin config with raw round-trip semantics.
 //
-// The invariant that kills the raw-vs-resolved muddle of the first-generation plugins:
-// the file on disk is ALWAYS the operator-authored (raw / Encoded) shape; defaults live
-// ONLY in the Schema (`Schema.withDecodingDefaultKey(..., { encodingStrategy: "omit" })`)
-// and are applied at decode time. `saveRaw` validates by decoding but persists the raw
-// shape verbatim — a UI save never bakes defaults into the file.
+// The invariant: the file on disk is ALWAYS the operator-authored (raw / Encoded) shape;
+// defaults live ONLY in the Schema (`Schema.withDecodingDefaultKey(..., { encodingStrategy:
+// "omit" })`) and are applied at decode time. `saveRaw` validates by decoding but persists
+// the raw shape verbatim — a UI save never bakes defaults into the file.
 //
-// Ported semantics from rom-manager's state.ts: state dir 0700, atomic temp+rename 0600
-// writes, POSIX group/world-writable refusal (config controls commands run as the host
-// user), missing file == empty config.
+// Also: state dir 0700, atomic temp+rename 0600 writes (paths.ts), POSIX group/world-writable
+// refusal (config controls commands run as the host user), missing file == empty config.
 import * as fs from "node:fs";
 import { Effect, PubSub, Schema, Stream } from "effect";
 import {

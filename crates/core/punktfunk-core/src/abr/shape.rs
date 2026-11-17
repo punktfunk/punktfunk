@@ -1,6 +1,6 @@
 //! The wake shape, switched by evidence: a receiver that loses the head of a burst while
-//! its adapter wakes gets a small first group and a short gap on every frame. It costs
-//! about half a millisecond a frame, so it runs only while the loss says so.
+//! its adapter wakes gets a small first group and a short gap on every frame. It delays
+//! every frame by up to 0.3 ms, so it runs only while the loss says so.
 
 use std::time::{Duration, Instant};
 

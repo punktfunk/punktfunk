@@ -9,7 +9,7 @@ import { decodeHostEvent, type HostEvent } from "./wire.js";
 
 /** One parsed SSE frame. */
 export interface SseFrame {
-	/** The `event:` name — an event kind, or `dropped`, or `message` when absent. */
+	/** The `event:` name — an event kind, `dropped`, `live`, or `message` when absent. */
 	event: string;
 	/** The joined `data:` payload. */
 	data: string;
@@ -96,7 +96,7 @@ export class SseParser {
 
 export interface EventStreamOptions {
 	/**
-	 * Resume cursor (`?since=`); reconnects use the newer `Last-Event-ID` automatically.
+	 * Resume cursor, sent as `Last-Event-ID`; reconnects advance it to the newest received id.
 	 * **Omitted = live tail only** (events from now on — a fresh notify script must not
 	 * re-fire on the host's replayed history); `0` = replay the host's full ring first;
 	 * `N` = resume after seq N.

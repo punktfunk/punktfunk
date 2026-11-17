@@ -33,10 +33,9 @@ const fmtSize = (bytes: number): string =>
 /**
  * Container for bundle housekeeping: fetch the raw file, delete one.
  *
- * Reading a bundle is no longer this component's job — the device chips merge it into the viewer
- * above. What is left is the file-cabinet half (keep the raw bytes, throw one away), which is
- * occasional and belongs behind a disclosure rather than in a card of its own competing with the
- * log for the top of the page.
+ * Reading a bundle is the device chips' job — they merge it into the viewer above. This is the
+ * file-cabinet half (keep the raw bytes, throw one away), which is occasional and belongs behind
+ * a disclosure rather than in a card of its own competing with the log for the top of the page.
  */
 export const ClientLogsSection: FC<{
 	list: Loadable<ClientLogMeta[]>;
@@ -100,7 +99,7 @@ export const ClientLogsSection: FC<{
  * Uploaded bundles as a collapsed disclosure: Download (raw) / Delete per row.
  *
  * Collapsed by default because it answers a question nobody arrives with. It renders nothing at all
- * when there is nothing stored — the "no device has sent logs yet" hint now lives beside the source
+ * when there is nothing stored — the "no device has sent logs yet" hint lives beside the source
  * chips, where someone who has never used the feature will actually meet it.
  */
 export const ClientLogsCard: FC<{

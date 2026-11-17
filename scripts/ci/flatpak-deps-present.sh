@@ -4,17 +4,13 @@
 #   bash scripts/ci/flatpak-deps-present.sh <manifest.yml>   -> exit 0 = yes, 1 = no
 #   bash scripts/ci/flatpak-deps-present.sh --self-test      -> run the asserts below
 #
-# WHY THIS EXISTS: flatpak.yml used to prefetch deps with `flatpak-builder --install-deps-only`,
-# which does NOT mean "install what is missing". builder_manifest_install_dep() branches on
-# `flatpak info --show-commit <ref>` succeeding and runs `flatpak update` for every dep that IS
-# installed (a failed update is fatal there — it never falls back to install) — and
-# ci/flatpak-ci.Dockerfile bakes the whole runtime set, so on a healthy run that flag did nothing
-# except make the build depend on Flathub being up at that minute. On 2026-08-22 it took the job
-# down: dl.flathub.org returned HTTP 404 for one .filez object of the then-current
-# rust-stable//25.08 commit, identically on all 10 retry.sh attempts (~9 min), and flatpak-builder
-# segfaulted on its own error path (rc=139) so the retry wrapper could not tell a dead end from a
-# blip. Nothing about the build wanted that newer commit: the manifest pins a runtime VERSION, not
-# a commit, and the baked one satisfies it.
+# WHY THIS EXISTS: `flatpak-builder --install-deps-only` does NOT mean "install what is missing".
+# builder_manifest_install_dep() (flatpak-builder 1.4.12) branches on `flatpak info --show-commit
+# <ref>` succeeding and runs `flatpak update` for every dep that IS installed (a failed update is
+# fatal there — it never falls back to install) — and ci/flatpak-ci.Dockerfile bakes the whole
+# runtime set, so that flag would do nothing except make the build depend on Flathub being up at
+# that minute. Nothing about the build wants a newer commit: the manifest pins a runtime VERSION,
+# not a commit, and the baked one satisfies it.
 #
 # So the workflow asks this first and only reaches for Flathub on a real miss.
 #
@@ -92,7 +88,7 @@ org.freedesktop.Sdk.Extension.llvm20'
   check 1 "cold box -> install"                  ""                                   "$tmp/ok.yml"
   check 1 "runtime missing -> install"           "${full/org.gnome.Platform\/\/50/x}" "$tmp/ok.yml"
   check 1 "sdk missing -> install"               "${full/org.gnome.Sdk\/\/50/x}"      "$tmp/ok.yml"
-  # The regression that started all this: llvm20 fine, rust-stable not.
+  # One extension present, one missing: llvm20 fine, rust-stable not.
   check 1 "one sdk-extension missing -> install" "${full/*.rust-stable/x}"            "$tmp/ok.yml"
   # A runtime installed at ANOTHER version must not pass just because the name matches.
   check 1 "runtime at the wrong version"         'org.gnome.Platform//51

@@ -50,7 +50,8 @@ pub(crate) enum Bg {
 }
 
 /// This device, from [`crate::shell::ConsoleOptions`]. Fixed for the shell's life but for
-/// `av1_ok`, which the overlay corrects before the first frame.
+/// `av1_ok` (the overlay corrects it before the first frame), `native_mode` (each frame) and
+/// `code` ([`crate::ConsoleShared::set_device_code`]).
 #[derive(Clone, Debug)]
 pub struct Device {
     pub platform: crate::platform::Platform,

@@ -12,9 +12,10 @@ import { hostExe, type PluginManifest } from "./sandbox.js";
 
 /**
  * Run one plugin in a process of its own with nothing around it: the Windows shape with the
- * sandbox off. The child re-execs this runner in `--run-unit` mode and resolves its own token
- * and host URL from the config dir, so nothing secret rides in its environment or argv. A crash
- * is an exit code, and the supervisor restarts this plugin alone.
+ * sandbox off. The child re-execs this runner in `--run-unit` mode and reads its own token from
+ * the config dir, so the runner adds nothing secret to its environment or argv; it reaches the
+ * host over the plugin's pipe when the host serves one. A crash is an exit code, and the
+ * supervisor restarts this plugin alone.
  */
 export const runInOwnProcess = (
 	unit: Unit,

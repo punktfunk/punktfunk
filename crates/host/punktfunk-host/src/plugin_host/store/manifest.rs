@@ -1,6 +1,6 @@
 //! Provenance of each installed plugin (design `plugin-store.md`).
 //!
-//! `<plugins_dir>/install-manifest.json`, written only by store installs.
+//! `<plugins_dir>/install-manifest.json`, written only by store install and uninstall jobs.
 //! `node_modules` names the package; this file names how it arrived.
 //!
 //! Absence is [`Tier::Cli`]: CLI `plugins add` never writes a row, and a

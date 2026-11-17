@@ -52,8 +52,8 @@ def call(method, url, token=None, data=None, content_type=None, want_json=True):
     if content_type:
         headers["Content-Type"] = content_type
     # Transient-fault retries: googleapis.com occasionally drops the TLS session ("EOF
-    # occurred in violation of protocol" — failed two release uploads on 2026-07-02) or
-    # answers 5xx. Retry those with backoff; 4xx raises immediately (a real API error).
+    # occurred in violation of protocol") or answers 5xx. Retry those with backoff; 4xx
+    # raises immediately (a real API error).
     # The edits API is transactional until commit, so re-sending any of these is safe.
     last = None
     for attempt in range(4):

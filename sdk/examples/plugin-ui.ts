@@ -2,8 +2,8 @@
 // A plugin that surfaces a UI inside the punktfunk web console (plugin-ui-surface design). It
 // serves a page + a live SSE feed on a loopback port behind a per-boot secret; `servePluginUi`
 // registers it, and the console proxies to it and adds a "Demo UI" nav entry — no second password,
-// no second port for the operator to learn. This also exercises the streaming path end-to-end (the
-// U0 spike): the SSE feed must arrive through the console's reverse proxy unbuffered.
+// no second port for the operator to learn. This also exercises the streaming path end-to-end:
+// the SSE feed must arrive through the console's reverse proxy unbuffered.
 //
 // Run under the scripting runner, or directly for a quick look:  bun examples/plugin-ui.ts
 import {
@@ -26,7 +26,7 @@ new EventSource("./events").onmessage = (e) => {
 </script>`;
 
 // The plugin's dynamic handler. Paths arrive prefix-stripped (the console proxy removed
-// `/plugin-ui/demo-ui`), so we match `/` and `/events` directly.
+// `/plugin-ui/<page segment>`), so we match `/` and `/events` directly.
 const handle = (req: Request): Response | undefined => {
 	const { pathname } = new URL(req.url);
 	if (pathname === "/events") {

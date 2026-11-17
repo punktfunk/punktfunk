@@ -358,7 +358,7 @@ pub fn write_devparam_dword(
 
 /// Create + register a MEDIA-class root devnode carrying `hwid`, then `mark`
 /// writes the durable owner marker. DeviceDesc only survives until the INF
-/// installs. Shared by the pad provisioner and the `audio-probe` devtest.
+/// installs. Shared by the pad and minted-audio provisioners and the `audio-probe` devtest.
 pub fn create_media_devnode(
     desc: &str,
     hwid: &str,

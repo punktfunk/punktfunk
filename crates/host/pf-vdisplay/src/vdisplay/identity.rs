@@ -327,8 +327,8 @@ impl DisplayIdentityMap {
     }
 }
 
-/// Write one of this module's files under `config_dir()` (host key, allow-list, mgmt token):
-/// the parent is `create_private_dir` (0700), never `create_dir_all`. A write that fails is
+/// Write one of this module's files under `config_dir()` (the identity and scale maps): the
+/// parent is `create_private_dir` (0700 on Unix), never `create_dir_all`. A write that fails is
 /// logged, not dropped: the next start re-derives what it should have found.
 fn write_private(path: &std::path::Path, bytes: &[u8], what: &str) {
     if let Some(dir) = path.parent() {

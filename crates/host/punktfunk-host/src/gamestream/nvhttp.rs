@@ -1,6 +1,7 @@
 //! GameStream nvhttp: plain HTTP on 47989 and mutual-TLS on 47984.
 //!
-//! Routes: `/serverinfo`, `/pair`, `/applist`, `/appasset`, `/launch`, `/resume`, `/cancel`.
+//! Routes: `/serverinfo`, `/pair`, `/unpair`, `/applist`, `/appasset`, `/launch`, `/resume`,
+//! `/cancel` ([`routes`]).
 //! HTTPS is mTLS; `/serverinfo` reports `PairStatus=1` only for a pinned client cert.
 //!
 //! The PIN is out of band via bearer `POST /api/v1/pair/pin`. Do not add an nvhttp PIN

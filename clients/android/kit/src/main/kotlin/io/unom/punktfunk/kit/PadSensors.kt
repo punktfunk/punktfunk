@@ -14,18 +14,17 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Motion from a controller the Android input stack owns — the Bluetooth pads.
  *
- * Before this, the only motion sources on Android were the capture links: [DsCapture] (a Sony pad
- * claimed over USB, raw HID) and [Sc2Capture] (Steam Controller 2 passthrough). A DualSense, a
- * DualShock 4, a Switch Pro or an 8BitDo paired over BLUETOOTH is neither — it arrives as an
- * ordinary [InputDevice], its buttons and sticks work, and its gyro was silently dead. That is a
- * whole class of controller with no motion at all.
+ * A DualSense, a DualShock 4, a Switch Pro or an 8BitDo paired over BLUETOOTH is not a capture
+ * link ([DsCapture] claims a Sony pad over USB, [Sc2Capture] a Steam Controller 2): it arrives as
+ * an ordinary [InputDevice], and its motion is reachable only through the platform sensor API
+ * (checked on API 37).
  *
  * Android 12 (API 31) exposes those sensors: [InputDevice.getSensorManager] hands back a
  * [android.hardware.SensorManager] scoped to that one controller, carrying the usual
  * TYPE_GYROSCOPE / TYPE_ACCELEROMETER. This class registers a listener per forwarded controller
  * that has a gyroscope, converts each sample to wire units, and sends it on that pad's wire index
- * through [GamepadRouter.deviceMotion]. Below API 31 nothing is registered and the class is inert —
- * those pads keep working, minus motion, exactly as they did.
+ * through [GamepadRouter.deviceMotion]. Below API 31 nothing is registered and the class is inert:
+ * those pads keep working, minus motion.
  *
  * It follows [DeviceGyro] (the phone-gyro mirror) wherever the two solve the same problem:
  *  - samples ride ONE dedicated [HandlerThread] with batching disabled (`maxReportLatencyUs = 0`)
@@ -33,8 +32,7 @@ import java.util.concurrent.ConcurrentHashMap
  *    thread is where Compose recomposition lives;
  *  - a feed torn down while its wire pad is still alive parks the rotation at zero first, because
  *    the host holds motion as STATE and re-emits it in every virtual-pad report: an angular
- *    velocity left behind reads as a pad rotating forever (the gyro sweep's "stale rate re-sent
- *    forever" finding).
+ *    velocity left behind reads as a pad rotating forever.
  *
  * One writer per pad, three ways:
  *  1. A USB capture claims the physical device away from the input stack; [DsCapture.startUsb]
@@ -49,7 +47,7 @@ import java.util.concurrent.ConcurrentHashMap
  *  3. Exactly one feed exists per deviceId — [onSlotOpened] is idempotent, and it is the only
  *     thing that ever constructs one.
  *
- * Frame: see [gyroToWire] — the mapping is straight through, and NOT yet verified on hardware.
+ * Frame: see [gyroToWire] — the mapping is straight through.
  */
 class PadSensors(private val router: GamepadRouter) {
 
@@ -76,11 +74,9 @@ class PadSensors(private val router: GamepadRouter) {
                 Sensor.TYPE_ACCELEROMETER -> accelToWire(event.values, accel)
                 Sensor.TYPE_GYROSCOPE -> {
                     gyroToWire(event.values, gyro)
-                    // One line per controller per session, on the first sample that carries both
-                    // planes: it is the cheapest possible version of the frame measurement
-                    // [gyroToWire] asks for. Hold the pad flat and still while a stream starts and
-                    // the accel triple says which slot gravity lands on — the one thing that
-                    // settles whether the straight-through mapping is right.
+                    // One line per controller per session, on its first gyro sample. With the pad
+                    // flat and still, the accel triple shows which slot gravity lands on — the
+                    // check that the straight-through mapping in [gyroToWire] holds.
                     if (!wroteMotion) {
                         Log.i(
                             TAG,
@@ -136,18 +132,10 @@ class PadSensors(private val router: GamepadRouter) {
         val dev = InputDevice.getDevice(deviceId) ?: return
         // Declared non-null: a controller with no sensors gets an empty manager, not a null one.
         val sm = dev.sensorManager
-        // A gyroscope is the entry price; the accelerometer alone does not buy a feed. The rotation
-        // is what gyro aim is for, and an accel-only feed would send gravity while pinning rotation
-        // at zero on a pad the phone-gyro mirror is otherwise entitled to speak for — precisely the
-        // two-writers-on-one-pad fight this program has spent its day unpicking. Such a pad stays
-        // on the mirror's terms instead, where at least the accel agrees with the gyro beside it.
-        // Nothing found here is not proof the pad has no IMU. A DualSense's motion arrives on its
-        // own evdev node, and whether InputReader merges that node onto the gamepad InputDevice
-        // (shared descriptor) or leaves it standing alone is the platform's business, not ours —
-        // and a standalone one is exactly what GamepadRouter.isForwardable filters out, so this
-        // would never see it. Android 12's own controller-sensor documentation cites the DualShock
-        // 4 and DualSense, which says the merge happens; it is not something this code can assert.
-        // If a Bluetooth Sony pad ever turns up here with no gyroscope, THAT is the thing to check.
+        // A gyroscope is the entry price: an accel-only feed would send gravity and pin rotation
+        // at zero on a pad the phone-gyro mirror is otherwise entitled to speak for (two writers).
+        // No gyroscope here is not proof the pad has no IMU: a pad's motion can sit on its own
+        // evdev node, which isForwardable filters out, if the platform does not merge the two.
         val gyroSensor = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE) ?: return
         val feed = Feed(deviceId, sm)
         feeds[deviceId] = feed
@@ -213,23 +201,16 @@ class PadSensors(private val router: GamepadRouter) {
         /**
          * One gyroscope sample (Android: rad/s) → the wire's three signed-16 components, in place.
          *
-         * The axis frame is straight through, and that is now MEASURED rather than assumed.
+         * The axis frame is straight through.
          *
-         * The wire is a unit passthrough into a virtual DualSense report, whose frame was measured
-         * over raw HID on 2026-08-07: slot 0 = Right (pitch), slot 1 = Up (yaw), slot 2 = Backward
-         * toward the player (roll), right-handed. Android hands a controller's own sensors over in
-         * that same frame — which was the documented expectation, but the numbers pass through a
-         * HID driver and InputFlinger's sensor mapper, either of which could have permuted or
-         * negated without saying so.
+         * The wire is a unit passthrough into a virtual DualSense report: slot 0 = Right (pitch),
+         * slot 1 = Up (yaw), slot 2 = Backward toward the player (roll), right-handed. Android
+         * (12+) hands a controller's own sensors over in that same frame. Measured with a
+         * DualSense on Bluetooth: the first-sample log read `accel 0, 10000, 0` (1 g on slot 1)
+         * and each rotation drove its correctly-named axis on the host.
          *
-         * Verified 2026-08-07 end to end: a DualSense on Bluetooth to an Android phone, streaming
-         * to a Linux host. This path's own first-sample log read `accel 0, 10000, 0` — exactly 1 g
-         * on slot 1 — and at the far end `hid-playstation` published gravity as +0.991 g on ABS_Y
-         * with every rotation driving its correctly-named axis (yaw→RY, pitch→RX, roll→RZ) and the
-         * signs agreeing with gravity's independent witness on 95 of 100 rotating samples.
-         *
-         * So: no remap. If a future device disagrees, the remap belongs HERE with its own
-         * expectations in `PadSensorsTest` — not spread across callers.
+         * So: no remap. If a device disagrees, the remap belongs HERE with its own expectations
+         * in `PadSensorsTest` — not spread across callers.
          */
         fun gyroToWire(values: FloatArray, out: IntArray) {
             for (i in 0..2) out[i] = Gamepad.motionGyroWire(values.getOrElse(i) { 0f })
@@ -239,8 +220,8 @@ class PadSensors(private val router: GamepadRouter) {
          * One accelerometer sample (Android: m/s², specific force) → the wire's three signed-16
          * components, in place. Same measured frame as [gyroToWire] and the same straight-through
          * mapping; the sign needs no flip, because Android and the DualSense report agree that the
-         * axis pointing up reads +1 g at rest (see [Gamepad.motionAccelWire]) — which is precisely
-         * what the on-glass run read back, `accel 0, 10000, 0` with the pad lying flat.
+         * axis pointing up reads +1 g at rest (see [Gamepad.motionAccelWire]): a pad lying flat
+         * reads `accel 0, 10000, 0`.
          */
         fun accelToWire(values: FloatArray, out: IntArray) {
             for (i in 0..2) out[i] = Gamepad.motionAccelWire(values.getOrElse(i) { 0f })

@@ -254,7 +254,7 @@ describe("folder access", () => {
 		});
 		const pf = {
 			request: async (method: string, path: string) => {
-				// What a Windows host answers a plugin that has no token of its own.
+				// What the host answers a plugin that has no token of its own.
 				if (method === "POST" && path === "/plugin-access/requests")
 					throw Object.assign(new Error("forbidden"), { status: 403 });
 				if (

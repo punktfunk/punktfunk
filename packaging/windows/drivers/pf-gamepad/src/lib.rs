@@ -1,8 +1,9 @@
 //! punktfunk virtual gamepad — UMDF2 HID minidriver, a port of the WDK `vhidmini2` sample.
 //!
 //! One driver presents the pad the host's `device_type` stamp names, answering from that kind's
-//! row in `pf_driver_proto::pad_kind` and the feature blobs the host's `inject/` ships. The
-//! host streams input in and reads output (rumble, lightbar, triggers) back.
+//! row in `pf_driver_proto::pad_kind` and the feature blobs in the per-family modules beside it
+//! (`dualsense`, `deck`, `triton`, …). The host streams input in and reads output (rumble,
+//! lightbar, triggers) back.
 //!
 //! A singleton virtual device: no WDF object contexts, per-device state lives in statics.
 //! The host channel is the sealed pad channel (design/gamepad-channel-sealing.md); its unsafe
@@ -57,13 +58,10 @@ static INPUT_REPORT: std::sync::Mutex<[u8; 64]> = std::sync::Mutex::new(dualsens
 static INPUT_DIRTY: AtomicBool = AtomicBool::new(true);
 
 // ---- the sealed pad channel: layouts + offsets from pf_driver_proto (drift = compile error) ----
-// UMDF runs in WUDFHost.exe (user-mode) and hidclass blocks a control channel on the device stack
-// (custom interface CreateFile → err 31; custom IOCTL on the HID handle → err 1) and UMDF has no
-// control device. So the DATA section (`PadShm` — input report @8, output seq @72, output
-// report @76, device_type @140, health marks @144/@148, pad_index @152, output-report ring
-// @156..) is UNNAMED and reached only
-// through a handle the SYSTEM host duplicated into this WUDFHost, bootstrapped over the named mailbox
-// `Global\pfds-boot-<index>`. The handshake + all shared-memory access live in `pf_umdf_util`.
+// hidclass blocks a control channel on the device stack (custom interface CreateFile → err 31;
+// custom IOCTL on the HID handle → err 1) and UMDF has no control device. So the DATA section
+// (`PadShm`) is UNNAMED, reached through a handle the SYSTEM host duplicated into this WUDFHost
+// and bootstrapped over the mailbox `Global\pfds-boot-<index>`; the code lives in `pf_umdf_util`.
 const SHM_MAGIC: u32 = pf_driver_proto::gamepad::PAD_MAGIC; // "PFDS"
 const SHM_SIZE: usize = core::mem::size_of::<PadShm>();
 const GAMEPAD_PROTO_VERSION: u32 = pf_driver_proto::gamepad::GAMEPAD_PROTO_VERSION;
@@ -84,12 +82,12 @@ const OFF_OUT_RING_LEN: usize = core::mem::offset_of!(PadShm, out_ring_len);
 const OFF_OUT_RING: usize = core::mem::offset_of!(PadShm, out_ring);
 const OFF_INPUT_GEN: usize = core::mem::offset_of!(PadShm, input_gen);
 
-/// How many timer ticks separate two runs of the channel/health housekeeping. The tick itself is
-/// [`TIMER_PERIOD_MS`]; the pump, the `driver_proto` stamp and the heartbeat keep their historical
-/// ~8 ms cadence so nothing that watches them changes rate — only the input path got faster.
+/// How many timer ticks separate two runs of the channel/health housekeeping: the pump, the
+/// `driver_proto` stamp and the heartbeat keep a ~8 ms cadence so nothing that watches them
+/// changes rate, while the input path runs on every [`TIMER_PERIOD_MS`] tick.
 const PUMP_EVERY_N_TICKS: u32 = 4;
 /// Tick period. One pended READ_REPORT completes per tick, so this caps what a game observes: 2 ms
-/// is about a real DualShock 4's Bluetooth cadence and leaves headroom above a Sony pad's 250 Hz.
+/// leaves headroom above a Sony pad's 250 Hz.
 /// The extra ticks only do the cheap half (read the input slot, complete one pended read), see
 /// [`PUMP_EVERY_N_TICKS`].
 const TIMER_PERIOD_MS: u32 = 2;
@@ -198,16 +196,16 @@ extern "C" fn evt_self_managed_io_cleanup(_device: WDFDEVICE) {
     }
 }
 
-/// Read the host's input report out of the section under the v2.3 seqlock, so a report caught
-/// mid-copy is retried instead of handed to a game.
+/// Read the host's input report out of the section under the `input_gen` seqlock, so a report
+/// caught mid-copy is retried instead of handed to a game.
 ///
 /// The host takes `input_gen` odd before writing the 64 bytes and even after, so an odd sample or
 /// a changed one means the read straddled a write. One retry: the host publishes in microseconds
 /// and this runs on a 2 ms timer, so a second collision is not a thing that happens, and if it did,
 /// re-serving the previous whole report beats serving a torn one.
 ///
-/// Against a pre-v2.3 host the field is never written, so it reads 0 — constant and even — and
-/// this accepts on the first pass, exactly as the driver behaved before the seqlock existed.
+/// A host that predates the seqlock never writes the field, so it reads 0 — constant and even —
+/// and this accepts on the first pass.
 /// `false` means "no whole report available"; the caller keeps what it had.
 fn read_input_report(view: &pf_umdf_util::section::MappedView, buf: &mut [u8; 64]) -> bool {
     for _ in 0..2 {
@@ -253,15 +251,13 @@ fn ring_len(view: &pf_umdf_util::section::MappedView) -> u32 {
 /// [`ring_len`] echo (the v2.2 length negotiation — a pre-v2.2 host never reads it), then the
 /// `ring_head` bump with `Release` so the host's Acquire load can never observe the bump without
 /// the slot bytes and the length that indexed them. The ring is what stops a rumble-STOP report
-/// from being coalesced away by a following LED/trigger report inside one host poll window (the
-/// confirmed stuck-rumble path).
+/// from being coalesced away by a following LED/trigger report inside one host poll window.
 ///
 /// `feature` ORs [`pf_driver_proto::triton::OUT_FEATURE_BIT`] (bit 31) into the ring slot's len —
-/// the Triton identity's FEATURE/OUTPUT kind tag, stripped back out by the host's `drain_tagged`.
-/// Only the ring carries the tag; the legacy latest-slot has no length field to tag, which is fine
-/// because the one consumer that needs the split (triton_windows) always drains the ring. Every
-/// pre-Triton call site passes `false` (the Deck host expects untagged frames), so plain lengths
-/// are bit-identical to before the parameter existed.
+/// the FEATURE/OUTPUT kind tag of the Triton and 2015 Steam Controller identities, stripped back
+/// out by the host's `drain_tagged`. Only the ring carries the tag; the legacy latest-slot has no
+/// length field to tag, so a consumer that needs the split always drains the ring. Every other
+/// call site passes `false` (the Deck host expects untagged frames).
 fn publish_output(view: &pf_umdf_util::section::MappedView, bytes: &[u8], feature: bool) {
     // Serialized: the whole publish is a read-modify-write (read the cursor, write the slot it
     // names, then advance it) and the framework dispatches output callbacks in PARALLEL, so two
@@ -349,9 +345,9 @@ fn channel_cfg() -> ChannelConfig {
         boot_name_prefix: "Global\\pfds-boot-",
         data_magic: SHM_MAGIC,
         data_size: SHM_SIZE,
-        // The v2.1 layout grew by tail extension (the output-report ring); against an old host's
-        // 256-byte section the full-size map still succeeds (sections are page-granular), but if
-        // it is ever refused, mapping the legacy size keeps the pad alive with the ring disabled.
+        // The output-report ring is a tail extension; against an old host's legacy-size section
+        // the full-size map still succeeds (sections are page-granular), but if it is ever
+        // refused, mapping the legacy size keeps the pad alive with the ring disabled.
         min_data_size: pf_driver_proto::gamepad::PAD_SHM_LEGACY_SIZE,
         pad_index_off: OFF_PAD_INDEX,
         log,
@@ -368,7 +364,7 @@ fn pad_index() -> u8 {
 
 // The bring-up file log. OPT-IN — debug builds, or the `PFGAMEPAD_DEBUG_LOG` env var — so a RELEASE
 // driver never writes the file and never traps into the debugger. Path, sink and the gate live
-// in `pf_umdf_util::log`, one copy for all four drivers.
+// in `pf_umdf_util::log`, one copy for every driver.
 pf_umdf_util::file_log!("pf_gamepad-driver.log", "PFGAMEPAD_DEBUG_LOG");
 
 #[unsafe(export_name = "DriverEntry")]
@@ -499,7 +495,7 @@ extern "C" fn evt_io_device_control(
     // contract `Request::new` requires. Everything after is safe (the token owns completion).
     let request = unsafe { Request::new(request) };
 
-    // Skip the 8ms READ_REPORT cadence so the log stays readable during a game test;
+    // Skip the READ_REPORT cadence so the log stays readable during a game test;
     // the 0x02 OUTPUT report (the gate) and the descriptor handshake still log.
     if ioctl != IOCTL_HID_READ_REPORT {
         dbglog!("[pf-gamepad] ioctl 0x{ioctl:08x} out={_output_len} in={_input_len}");
@@ -559,9 +555,8 @@ extern "C" fn evt_io_device_control(
             request.copy_to_output(served)
         }
         IOCTL_HID_GET_STRING => on_get_string(&request),
-        // The channel proof (see `pf_umdf_util::hid`): the host asks THIS devnode which process
-        // serves it, and duplicates the DATA section into the answer — so it never has to trust the
-        // LocalService-writable bootstrap mailbox to name its target.
+        // Anything else is unsupported. The channel proof is not an IOCTL here: it rides
+        // GET_FEATURE (`on_get_feature`; see `pf_umdf_util::hid`).
         _ => STATUS_NOT_IMPLEMENTED,
     };
 
@@ -604,8 +599,9 @@ fn on_output_report(request: &Request, ioctl: ULONG) -> NTSTATUS {
     if !bytes.is_empty() {
         match CHANNEL.data() {
             Some(view) => publish_output(view, &bytes, false),
-            // Before the DATA section attaches (the host probes every 250 ms) a title's first
-            // lightbar / trigger write would vanish, and a one-shot arm may never recur.
+            // Before the DATA section attaches (the host probes every `PROOF_PROBE_INTERVAL`) a
+            // title's first lightbar / trigger write would vanish, and a one-shot arm may never
+            // recur.
             None => {
                 let n = bytes.len().min(64);
                 let mut latched = [0u8; 64];
@@ -811,8 +807,8 @@ fn sc_feature_answer() -> [u8; 64] {
     )
 }
 
-/// The channel-proof GET_FEATURE answer both command-driven identities (Deck + Triton) serve:
-/// `[DECK_PROOF_CMD, ChannelProof(16 bytes), zeros…]`.
+/// The channel-proof GET_FEATURE answer the command-driven identities (Deck, Triton, 2015 Steam
+/// Controller) serve: `[DECK_PROOF_CMD, ChannelProof(16 bytes), zeros…]`.
 ///
 /// ⚠️ Security-load-bearing input: the proof carries `CHANNEL.index()`, the pad index this driver
 /// read from its OWN devnode Location at `EvtDeviceAdd`, never a value read from a section. The
@@ -849,13 +845,10 @@ fn on_get_feature(request: &Request) -> NTSTATUS {
                 pf_driver_proto::triton::unit_id(pad_index()),
             )
         };
-        // A real pad echoes the feature id it was asked for, and this collection declares TWO
-        // (0x01/0x02) while `triton::feature_reply` stamps every answer 0x01 — so a GET of
-        // declared report 0x02 came back stamped 0x01. Read the requested id the way the PS arm
-        // below does (input-buffer byte 0) and stamp it over the reply when it names a different
-        // nonzero report. The proof reply is exempt: it is host↔driver plumbing framed
-        // `[DECK_PROOF_CMD, proof…]`, and the host matches that command prefix — an id stamp
-        // would destroy it.
+        // A real pad echoes the feature id it was asked for; this collection declares TWO
+        // (0x01/0x02) while `triton::feature_reply` stamps every answer 0x01. Stamp the requested
+        // id (input-buffer byte 0, as the PS arm below reads it) over the reply when it names a
+        // different nonzero report. The proof reply is exempt: the host matches its prefix.
         if !is_proof
             && let Ok((req, _)) = request.input_bytes(1)
             && let Some(&id) = req.first()
@@ -865,8 +858,8 @@ fn on_get_feature(request: &Request) -> NTSTATUS {
             reply[0] = id;
         }
         // The UMDF request's output-buffer length is authoritative: Steam asks with wLength 64
-        // AND 65 (Phase-0 bench log — the 63-byte declared reports marshal as either), so serve
-        // min(buffer_len, 64) zero-padded bytes and complete with that count.
+        // AND 65 (the 63-byte declared reports marshal as either), so serve min(buffer_len, 64)
+        // zero-padded bytes and complete with that count.
         let n = request.output_buffer_len().min(64);
         return request.copy_to_output(&reply[..n]);
     }
@@ -883,12 +876,10 @@ fn on_get_feature(request: &Request) -> NTSTATUS {
     let Some(&report_id) = bytes.first() else {
         return STATUS_INVALID_PARAMETER;
     };
-    // The CHANNEL PROOF (security-review 2026-07-28): tell the host which process serves this
-    // devnode, so it never has to trust the LocalService-writable bootstrap mailbox to name its
-    // duplication target. `0x85` is already declared as a Feature report in all three captured
-    // descriptors and was previously answered with STATUS_INVALID_PARAMETER, so this costs NO
-    // report-descriptor change — the identity Steam and SDL fingerprint is untouched. Derived only
-    // from our own devnode Location + pid: nothing a caller supplies feeds into it.
+    // The CHANNEL PROOF: which process serves this devnode, so the host never has to trust the
+    // LocalService-writable bootstrap mailbox for its duplication target. `0x85` is already a
+    // declared Feature report in the three PS descriptors (no descriptor change, the identity
+    // SDL/Steam fingerprint is untouched). Derived from our devnode Location + pid only.
     if report_id == pf_driver_proto::gamepad::HID_FEATURE_REPORT_CHANNEL_PROOF {
         // At most 64 bytes, as the Triton arm serves: the proof is 17, and the caller's buffer
         // length is not an allocation size.
@@ -926,11 +917,10 @@ fn on_get_feature(request: &Request) -> NTSTATUS {
     request.copy_to_output(blob)
 }
 
-// IOCTL_HID_GET_STRING: the input is a ULONG whose low word is the string id and whose high word is
-// the language id. Reply with the requested device string as a NUL-terminated UTF-16 buffer. Native
-// PS5 / Steam code reads these (HidD_GetProductString / HidD_GetSerialNumberString — the serial is one
-// way they tell USB from BT). Observed live: Windows polls ids 0x0E/0x0F/0x10 (lang 0x0409)
-// cyclically — the manufacturer/product/serial slots — NOT the 0/1/2 HID_STRING_ID_* constants; both.
+// IOCTL_HID_GET_STRING: the low word of the input ULONG is the string id, the high word the
+// language id; reply with a NUL-terminated UTF-16 string. Native PS5 / Steam code reads these
+// (the serial is one way they tell USB from BT). Windows asks with ids 0x0E/0x0F/0x10
+// (manufacturer/product/serial); 0/1/2 answer the same three strings.
 fn on_get_string(request: &Request) -> NTSTATUS {
     let (bytes, _) = match request.input_bytes(4) {
         Ok(v) => v,

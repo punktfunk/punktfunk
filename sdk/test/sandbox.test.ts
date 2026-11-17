@@ -49,7 +49,7 @@ const binds = (argv: string[], flag: string): Array<[string, string]> => {
 	return out;
 };
 
-// The refusal tests resolve paths under `/home`, which macOS automounts: each lookup takes long.
+// The refusal tests resolve paths under `/home`, which macOS 27 automounts: each lookup is slow.
 setDefaultTimeout(60_000);
 
 describe("refusedRoot", () => {

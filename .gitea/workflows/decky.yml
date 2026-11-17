@@ -9,14 +9,13 @@
 # We build the frontend with pnpm and stage the store-layout tree with the SAME script local
 # builds use (clients/decky/scripts/package.sh) — the plugin's file list lives in exactly ONE
 # place, so a file added there (bin/, assets/, controller_config/, …) can never be silently
-# missing from the published build. (Hand-assembling the zip here is how the shipped plugin
-# lost the shortcut artwork + Steam Input layout for a while.) CI only adds `update.json` on
-# top: the {channel, manifest} pointer the plugin's self-update check polls.
+# missing from the published build. CI only adds `update.json` on top: the {channel, manifest}
+# pointer the plugin's self-update check polls.
 #
 # SELF-UPDATE (no Decky store): alongside the zip we also publish a tiny per-channel
 # `manifest.json` ({version, artifact=<that channel's alias zip URL>, sha256}). The installed
 # plugin polls it (main.py check_update), and the frontend drives Decky's own install RPC to
-# apply a newer build. See clients/decky/README.md "Updating".
+# apply a newer build. See clients/decky/py_modules/pf_decky/update.py.
 #
 # REGISTRY_TOKEN: repo Actions secret, a PAT with write:package scope (shared with deb/rpm/docker).
 name: decky
@@ -34,7 +33,7 @@ on:
     branches: [main]
     # Scope canary builds to what this artifact is built FROM — a docs-only or
     # web-only push should not light up the whole fleet. Applies to branch pushes;
-    # tag runs are matched by `tags:` (proven by flatpak/windows-msix releases).
+    # tag runs are matched by `tags:`.
     paths:
       - 'clients/decky/**'
       - 'scripts/ci/gitea-release.sh'

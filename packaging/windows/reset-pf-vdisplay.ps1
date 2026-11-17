@@ -5,12 +5,10 @@
   churn - no reboot. The dev-iteration counterpart to redeploy-pf-vdisplay.ps1.
 
 .DESCRIPTION
-  Sustained connect/disconnect churn (e.g. a client reconnect loop x the host's 8 pipeline-build
-  retries - ~100 ADD/REMOVE cycles) exhausts the driver's IddCx monitor slots: the per-monitor
-  target_ids climb, ghost "Generic Monitor (Punktfunk)" device nodes pile up, and eventually
-  IOCTL_ADD returns 0x80070490 ERROR_NOT_FOUND ("Element nicht gefunden"). Every session then fails
-  to create a virtual output -> the client gets a hard blackscreen. A host-service restart's
-  IOCTL_CLEAR_ALL does NOT recover it; the driver instance itself must be reloaded.
+  Ghost "Generic Monitor (Punktfunk)" device nodes each pin one of IddCx's ~16 monitor slots; once
+  they pile up, IOCTL_ADD returns 0x80070490 ERROR_NOT_FOUND and every session fails to create a
+  virtual output. A host restart's IOCTL_CLEAR_ALL departs only that host's live monitors; it
+  removes no ghost node.
 
   Steps (run ELEVATED):
     1. Stop the host service (it holds the driver's control device).
