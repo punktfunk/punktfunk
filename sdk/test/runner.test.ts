@@ -16,7 +16,7 @@ import {
 	superviseUnit,
 } from "../src/runner.js";
 import { adoptNestedState, writePluginToken } from "../src/runner-linux.js";
-import { pipeName } from "../src/runner-windows.js";
+import { containerEnv, ownProcessEnv, pipeName } from "../src/runner-windows.js";
 
 const TOKEN = "runner-token";
 // Fixtures live under sdk/ so the generated plugin files can resolve "effect" and the SDK.
@@ -902,4 +902,34 @@ test("a seat's runner dials its seat's pipe, never the box's", () => {
 	expect(pipeName("steam", seat)).toBe(`\\\\.\\pipe\\punktfunk-seat-${seat}-plugin-steam`);
 	expect(pipeName("steam", undefined)).toBe("\\\\.\\pipe\\punktfunk-plugin-steam");
 	expect(pipeName("steam", "../x")).toBe("\\\\.\\pipe\\punktfunk-plugin-steam");
+});
+
+describe("a Windows plugin child's way to the host", () => {
+	const unit = {
+		name: "steam",
+		file: "/p/index.js",
+		manifest: { id: "steam" },
+	};
+
+	// It sends a bearer, and a pipe's server is whoever holds the name first.
+	test("a process of its own never gets a pipe", () => {
+		const saved = process.env.PUNKTFUNK_MGMT_UNIX;
+		process.env.PUNKTFUNK_MGMT_UNIX = pipeName("steam", undefined);
+		try {
+			const env = ownProcessEnv({ configDir: "/cfg" });
+			expect(env.PUNKTFUNK_MGMT_UNIX).toBeUndefined();
+			expect(env.PUNKTFUNK_CONFIG_DIR).toBe("/cfg");
+		} finally {
+			if (saved === undefined) delete process.env.PUNKTFUNK_MGMT_UNIX;
+			else process.env.PUNKTFUNK_MGMT_UNIX = saved;
+		}
+	});
+
+	test("a container keeps its pipe, and its page goes over it", () => {
+		const env = containerEnv(unit, {}, () => true);
+		expect(env.PUNKTFUNK_MGMT_UNIX).toBe(pipeName("steam", process.env.PUNKTFUNK_SEAT_ID));
+		expect(env.PUNKTFUNK_MGMT_URL).toBe("http://punktfunk.host");
+		expect(env.PUNKTFUNK_UI_CHANNEL).toBe("steam");
+		expect(containerEnv(unit, {}, () => false).PUNKTFUNK_MGMT_UNIX).toBeUndefined();
+	});
 });
