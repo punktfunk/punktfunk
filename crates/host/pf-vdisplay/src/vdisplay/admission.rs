@@ -128,6 +128,8 @@ pub struct LiveSession {
     pub display: Option<LiveDisplay>,
     /// The `punktfunk/2` session id a reconnect presents to retire exactly this session.
     pub resume_id: Option<[u8; 16]>,
+    /// Stopped by its own client's reconnect ([`supersede`]).
+    superseded: bool,
 }
 
 #[derive(Debug)]
@@ -381,6 +383,27 @@ fn resumed_stops(
         .collect()
 }
 
+/// Stops the sessions behind `stops` for their own client's reconnect, marking each row first:
+/// the client is on the new connection, so nothing is left to drain to the old one.
+pub fn supersede(stops: &[Arc<AtomicBool>]) {
+    let mut live = table().lock().unwrap();
+    for s in live.iter_mut() {
+        if stops.iter().any(|x| Arc::ptr_eq(x, &s.stop)) {
+            s.superseded = true;
+        }
+    }
+    for stop in stops {
+        stop.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Whether the session holding `stop` was stopped by [`supersede`]. A row that left reads `false`.
+pub fn superseded(stop: &Arc<AtomicBool>) -> bool {
+    let live = table().lock().unwrap();
+    live.iter()
+        .any(|s| s.superseded && Arc::ptr_eq(&s.stop, stop))
+}
+
 /// Whether every session behind `stops` has left the live set. Its guard drops at the end of
 /// its teardown, so its display lease is released by then.
 pub fn all_gone(stops: &[Arc<AtomicBool>]) -> bool {
@@ -407,6 +430,7 @@ fn reserve(
         label: "a connecting client".into(),
         display: None,
         resume_id: None,
+        superseded: false,
     });
     Reservation { id }
 }
@@ -550,6 +574,7 @@ mod tests {
             label: "peer".into(),
             display: Some(LiveDisplay::default()),
             resume_id: None,
+            superseded: false,
         }
     }
     /// A connect admitted but not streaming yet.
@@ -941,6 +966,31 @@ mod tests {
         assert!(!all_gone(std::slice::from_ref(&stop)));
         drop(guard);
         assert!(all_gone(&[stop]));
+    }
+
+    /// A reconnect marks the session it stops until that row leaves. A flag raised any other
+    /// way, as a steal raises it, leaves the row unmarked.
+    #[test]
+    fn only_a_reconnect_marks_the_session_it_stops() {
+        let row = |stop: &Arc<AtomicBool>| {
+            register(
+                None,
+                (1, 1, 2),
+                stop.clone(),
+                "s".into(),
+                LiveDisplay::default(),
+                None,
+            )
+        };
+        let (zombie, victim) = (Arc::default(), Arc::default());
+        let (gone, _stolen) = (row(&zombie), row(&victim));
+        supersede(std::slice::from_ref(&zombie));
+        victim.store(true, Ordering::SeqCst);
+        assert!(zombie.load(Ordering::SeqCst), "the reconnect stops it");
+        assert!(superseded(&zombie));
+        assert!(!superseded(&victim), "a steal's victim keeps its drain");
+        drop(gone);
+        assert!(!superseded(&zombie), "a row that left");
     }
 
     const MODE: (u32, u32, u32) = (1920, 1080, 60);

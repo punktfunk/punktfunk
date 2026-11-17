@@ -1909,7 +1909,7 @@ fn watch_access(
 }
 
 /// The data plane bound, then the source on its stream thread until it returns, or until
-/// [`STREAM_STOP_GRACE`] after `stop`.
+/// [`STREAM_STOP_GRACE`] after `stop`, then the [`drain`].
 async fn stream_session(
     scope: &mut SessionScope,
     host: &SessionHost,
@@ -2026,9 +2026,25 @@ async fn stream_session(
             anyhow::bail!("stream thread wedged after stop");
         }
     }
-    // Drain window before close.
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    drain(scope.life().stop_flag(), || conn.close_reason().is_some()).await;
     Ok(())
+}
+
+/// Longest a session that ended keeps its connection open for its last control bytes to leave.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Waits out [`DRAIN`] until nothing more can leave: `closed` says the connection is gone, or
+/// this client's own reconnect superseded the session
+/// ([`supersede`](crate::vdisplay::admission::supersede)). A stolen session drains in full: its
+/// client is still there.
+async fn drain(stop: &Arc<AtomicBool>, closed: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + DRAIN;
+    while !closed()
+        && !crate::vdisplay::admission::superseded(stop)
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 /// What the display half takes of the session's lanes.

@@ -1321,10 +1321,10 @@ fn game_override_terms(
     (mode, caps, o.gamepad_pref().unwrap_or(pad))
 }
 
-/// Mode-conflict before Welcome: stop this client's own earlier sessions, then join, steal or
-/// refuse a live one; a join inside another connect's bring-up waits for it
-/// ([`JOIN_WAIT`](crate::vdisplay::admission::JOIN_WAIT)). `Some` = joined: the owner's display
-/// and the size this client shows it at, its kept `view` or else the mode it asked for.
+/// Mode-conflict before Welcome: stop this client's own earlier sessions, which skip their
+/// drain, then join, steal or refuse a live one; a join inside another connect's bring-up waits
+/// for it ([`JOIN_WAIT`](crate::vdisplay::admission::JOIN_WAIT)). `Some` = joined: the owner's
+/// display and the size this client shows it at, its kept `view` or else the mode it asked for.
 /// Same-client reconnect never conflicts. The reservation is this connect's place in the live
 /// set from here on: a later client conflicts with it, and a steal raises this session's `stop`.
 async fn admit_mode(
@@ -1340,7 +1340,7 @@ async fn admit_mode(
     let peer_fp = n.conn.peer_fingerprint();
 
     // Own prior session (QUIC idle has not fired), and on `punktfunk/2` the exact session a
-    // `resume` names. Stop them and wait for their release, so this reconnect reuses the
+    // `resume` names. Supersede them and wait for their release, so this reconnect reuses the
     // kept display. Runs before we register, so we never stop ourselves.
     let mut own_zombies = preempt_same_identity(peer_fp);
     if let Some(id) = n.first.resume {
@@ -1355,9 +1355,7 @@ async fn admit_mode(
             count = own_zombies.len(),
             "reconnect: preempting this client's own zombie session(s) so the kept display is reused"
         );
-        for z in &own_zombies {
-            z.store(true, Ordering::SeqCst);
-        }
+        crate::vdisplay::admission::supersede(&own_zombies);
         wait_released(&own_zombies).await;
     }
 
