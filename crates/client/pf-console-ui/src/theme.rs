@@ -601,6 +601,9 @@ pub struct Fonts {
     collection: FontCollection,
     /// The collection's asset manager, kept to register faces added later.
     provider: TypefaceFontProvider,
+    /// Makes every face from bytes. Production shares it with the system fallback: each
+    /// system manager is a whole fontconfig load on Linux.
+    mgr: FontMgr,
     /// The host's own faces ([`build_fonts_with`], [`Fonts::add_fallback`]), tried before
     /// the system's.
     extra: Vec<Typeface>,
@@ -770,23 +773,25 @@ pub fn build_fonts() -> Result<Fonts> {
 
 /// Geist, then `fallback`'s faces for the chars it lacks, then the system's. A host with no
 /// system fonts (a console, the browser) hands a CJK face here, or every Han, kana and Hangul
-/// char draws as a box. Each blob is one face; of a collection, its first.
+/// char draws as a box. Each blob is one face; of a collection, its first. One system
+/// manager makes the faces and serves the system's.
 pub fn build_fonts_with(fallback: &[&[u8]]) -> Result<Fonts> {
-    build(fallback, FontMgr::new())
+    let system = FontMgr::new();
+    build(fallback, system.clone(), system)
 }
 
 /// Fonts with no system faces: what a test draws does not hang on the machine's fonts.
 #[cfg(test)]
 pub(crate) fn test_fonts(fallback: &[&[u8]]) -> Fonts {
-    build(fallback, FontMgr::empty()).expect("faces load")
+    build(fallback, FontMgr::new(), FontMgr::empty()).expect("faces load")
 }
 
 /// A face for chars Geist lacks: Lucide's icons, at private-use codepoints from U+E000.
 #[cfg(test)]
 pub(crate) const TEST_FALLBACK: &[u8] = include_bytes!("../../../../assets/lucide/font/lucide.ttf");
 
-fn build(fallback: &[&[u8]], system: FontMgr) -> Result<Fonts> {
-    let mgr = FontMgr::new();
+/// Geist and `fallback` made by `mgr`; `system` draws the chars none of them has.
+fn build(fallback: &[&[u8]], mgr: FontMgr, system: FontMgr) -> Result<Fonts> {
     let geist = |bytes, which: &str| {
         (mgr.new_from_data(Data::new_copy(bytes), None))
             .ok_or_else(|| anyhow!("embedded Geist face rejected: {which}"))
@@ -812,6 +817,7 @@ fn build(fallback: &[&[u8]], system: FontMgr) -> Result<Fonts> {
         bold,
         collection,
         provider,
+        mgr,
         extra: Vec::new(),
         families: vec!["Geist".to_owned()],
         fallback: RefCell::default(),
@@ -833,14 +839,13 @@ impl Fonts {
         }
     }
 
-    /// Register `faces` after the fallback faces already held; each blob is one face. What was
-    /// found or shaped without them is dropped, so the next draw uses them. On an error none
-    /// is added.
+    /// Register `faces` after the fallback faces already held; each blob is one face, made by
+    /// the manager that made Geist. What was found or shaped without them is dropped, so the
+    /// next draw uses them. On an error none is added.
     pub fn add_fallback(&mut self, faces: &[&[u8]]) -> Result<()> {
-        let mgr = FontMgr::new();
         let loaded = (faces.iter().enumerate())
             .map(|(i, bytes)| {
-                (mgr.new_from_data(Data::new_copy(bytes), None))
+                (self.mgr.new_from_data(Data::new_copy(bytes), None))
                     .ok_or_else(|| anyhow!("fallback face rejected: {i}"))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1377,6 +1382,29 @@ mod tests {
         assert_eq!(fonts.take_missing(), "");
         assert!(fonts.add_fallback(&[b"not a font"]).is_err());
         assert_eq!(fonts.extra.len(), 1);
+    }
+
+    /// One system manager making the faces and serving the fallback resolves every char,
+    /// added faces included, to the face separate managers did.
+    #[test]
+    fn a_shared_manager_resolves_the_faces_separate_ones_did() {
+        let mut shared = build_fonts_with(&[]).unwrap();
+        let mut separate = build(&[], FontMgr::new(), FontMgr::new()).unwrap();
+        for fonts in [&mut shared, &mut separate] {
+            fonts.add_fallback(&[TEST_FALLBACK]).unwrap();
+        }
+        let text = "Punktfunk Ж \u{e58a} 日本 한국 ①";
+        for w in [W::Regular, W::Bold] {
+            for c in text.chars() {
+                let (a, b) = (shared.face_for(c, w), separate.face_for(c, w));
+                assert_eq!(a.family_name(), b.family_name(), "{c:?}");
+                assert_eq!(has(&a, c), has(&b, c), "{c:?}");
+            }
+            assert_eq!(
+                shared.measure(text, w, 16.0),
+                separate.measure(text, w, 16.0)
+            );
+        }
     }
 
     /// A long line of chars Geist lacks ellipsizes inside its box: Lucide icons always, and
