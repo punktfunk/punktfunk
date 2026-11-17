@@ -85,6 +85,12 @@ pub fn recorded_owner() -> Option<String> {
     accounts::recorded_owner(Path::new(STATE_DIR))
 }
 
+/// Whether an off's hold stands under [`STATE_DIR`]: an off that began and didn't finish. An on
+/// removes it before anything else and never sets it.
+pub fn off_held() -> bool {
+    Path::new(STATE_DIR).join(door::HOLD).exists()
+}
+
 /// Whether `account` may switch the door `on` or off now, by the record root keeps
 /// ([`door::admit`]). The owner's host asks before it starts a switch; the error's code says
 /// which rule refused it.

@@ -9,8 +9,9 @@ Description=punktfunk door (the box's host, reachable without logging in)
 After=network-online.target punktfunk-seats.service
 Wants=network-online.target punktfunk-seats.service
 # Off without the owner record, however the unit was enabled: door-helper writes it before the
-# first start and removes it after the last stop.
+# first start and removes it after the last stop. Off while an off holds it, a failed one too.
 ConditionPathExists=/var/lib/punktfunk-seats/owner
+ConditionPathExists=!/var/lib/punktfunk-seats/door-hold
 # The box's only way in keeps trying: a binary that won't load until a rebuild lands is back
 # within RestartSec of it.
 StartLimitIntervalSec=0

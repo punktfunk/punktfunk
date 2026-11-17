@@ -15616,6 +15616,10 @@
             "type": "boolean",
             "description": "This host is the door (Linux, **Reachable without logging in**): a system service that\nplaces every connect on a seat and streams nothing itself."
           },
+          "door_off_unfinished": {
+            "type": "boolean",
+            "description": "An off didn't hand everything back, and this is the owner's own host: the door counts as\non until an off here finishes it. Admin lane only."
+          },
           "door_switch_failed": {
             "type": "boolean",
             "description": "The switch this host last started ran and failed, so the console stops waiting for it.\nAdmin lane only."

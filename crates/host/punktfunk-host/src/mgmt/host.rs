@@ -71,6 +71,11 @@ pub(crate) struct HostInfo {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     #[schema(required = false)]
     door_switch_failed: bool,
+    /// An off didn't hand everything back, and this is the owner's own host: the door counts as
+    /// on until an off here finishes it. Admin lane only.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    door_off_unfinished: bool,
     /// Whether hooks and prep steps marked `elevated` run as administrator: `true` once an
     /// administrator ran `punktfunk-host hooks elevated on` here. `null` where commands can't
     /// elevate (every OS but Windows), and for every lane but the admin one.
@@ -659,6 +664,10 @@ pub(crate) async fn get_host_info(
         && tokio::task::spawn_blocking(crate::door::switch_failed)
             .await
             .unwrap_or(false);
+    let door_off_unfinished = lane == AuthLane::Admin
+        && tokio::task::spawn_blocking(crate::door::off_unfinished)
+            .await
+            .unwrap_or(false);
     // The ledger asks the seat supervisor: off the async workers.
     let seats = tokio::task::spawn_blocking(|| {
         let ledger = crate::seats::ledger();
@@ -706,6 +715,7 @@ pub(crate) async fn get_host_info(
         door_unavailable_params: door_unavailable.as_ref().and_then(|e| e.params.clone()),
         door_unavailable: door_unavailable.map(|e| e.error),
         door_switch_failed,
+        door_off_unfinished,
         elevated_commands: (cfg!(windows) && lane == AuthLane::Admin)
             .then(crate::hooks::elevated_on),
         fingerprint: st.identity_fingerprint.map(hex::encode),

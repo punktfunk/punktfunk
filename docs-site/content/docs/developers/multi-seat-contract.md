@@ -808,7 +808,12 @@ browsers. A seat host without Seat defaults follows its `PUNKTFUNK_WEBTRANSPORT*
   any other `getent` status, or a `passwd` source such as `sss` or `ldap`, refuses both. The
   owner's host applies the same rules before it starts a switch, so the console names the account
   the door is on for instead of asking. A switch it refuses or abandons sets
-  `door_switch_failed` on the starting host's `GET /host`, and the console stops waiting.
+  `door_switch_failed` on the starting host's `GET /host`, and the console stops waiting. A first
+  switch-on other than a takeover removes each box file the member lacks, avatars included. An
+  off whose files don't all arrive home still turns the door off and brings the owner's host and
+  console back, whose `GET /host` reports the failed off. It keeps the record and the box's files,
+  and holds the door's units with `/var/lib/punktfunk-seats/door-hold`: the next on keeps those
+  files, and the off after it hands them back.
 - **The box's ports.** The door binds the ports the owner's `host.env` names
   (`PUNKTFUNK_MGMT_BIND`, `PUNKTFUNK_NATIVE_PORT`), and its console binds where the owner's
   console did (`PUNKTFUNK_UI_BIND`, from `web.env` on SteamOS). Before each door start,

@@ -7,7 +7,7 @@
 //! [`hands::Theirs`], which only [`hands::Cmd::by`] turns into an argument, behind
 //! `runuser -u <side> --`; their bytes pass root's process in two places only: the port lines,
 //! and the password line spliced back into `web.env`. Root writes only its own files in the
-//! state directory: the record, the mark and the port file. Every program runs
+//! state directory: the record, the mark, the hold and the port file. Every program runs
 //! through [`hands::pipe`], which the tests fake, so each path is a table and each step can fail:
 //! `the_door_s_on_runs_exactly_these` and its twins, `a_failed_step_puts_the_box_back`,
 //! `no_door_step_touches_their_path_as_root`.
@@ -600,10 +600,15 @@ fn hand_over(stages: &[Cmd], side: &Side, to: &Theirs) -> Result<(), Stop> {
     }
 }
 
-/// `name` from the owner's folder into the box directory.
-fn take(owner: &Owner, name: &str) -> Result<(), Stop> {
+/// `name` from the owner's folder into the box directory. A `fresh` take of a file the owner
+/// lacks removes the box's copy, so nothing of an earlier owner stays.
+fn take(owner: &Owner, name: &str, fresh: bool) -> Result<(), Stop> {
     if !owner.test("-f", name) {
-        return Ok(());
+        return if fresh {
+            must(&[as_door(&["rm", "-f"], name)])
+        } else {
+            Ok(())
+        };
     }
     hand_over(
         &[owner.cat(name), to_door(name)],
@@ -684,12 +689,16 @@ fn safe_name(name: &[u8]) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(b))
 }
 
-/// The avatars by name: one [`safe_name`] refuses stays put.
-fn take_avatars(owner: &Owner) -> Result<(), Stop> {
+/// The avatars by name: one [`safe_name`] refuses stays put. A `fresh` take empties the box's
+/// folder first, so it holds the owner's avatars alone.
+fn take_avatars(owner: &Owner, fresh: bool) -> Result<(), Stop> {
+    if fresh {
+        must(&[as_door(&["rm", "-rf"], "profiles")])?;
+    }
     must(&[as_door(&["mkdir", "-p", "-m", "0700"], "profiles")])?;
     let ls = owner.cmd(&["ls", "-1", "--"], "profiles");
     for name in avatars(&kept(ls.quiet())) {
-        take(owner, &name)?;
+        take(owner, &name, false)?;
     }
     Ok(())
 }
@@ -708,12 +717,20 @@ fn read(side: &Side, from: &Theirs) -> Vec<u8> {
     hands::pipe(&[cat.quiet().kept(MAX_PORT_INPUT + 1)]).1
 }
 
+/// The hold's name in the state directory. An off sets it first and removes it last, and the
+/// door's units don't start under it.
+pub(super) const HOLD: &str = "door-hold";
+
 /// What a switch puts back when it ends early.
 enum Back<'a> {
     /// A first on: no record, mark or owner row, and the supervisor off unless it was on.
     On { user: &'a str, seats_were_up: bool },
-    /// An off whose files didn't arrive home: the door starts again.
-    Door,
+    /// An off whose files didn't arrive home: it ends as [`Door::stand_down`] does and keeps the
+    /// record, the mark and the hold. The door stays off; an on, then an off, hands them back.
+    Door {
+        user: &'a str,
+        owner: Option<&'a Owner<'a>>,
+    },
 }
 
 /// Puts the box back as [`Back`] says unless disarmed, on every way out of a switch.
@@ -735,17 +752,11 @@ impl Drop for Undo<'_> {
                 user,
                 seats_were_up,
             }) => self.door.undo_on(user, seats_were_up),
-            Some(Back::Door) => {
+            Some(Back::Door { user, owner }) => {
                 eprintln!(
-                    "door-helper: couldn't hand the door's files back, starting the door again"
+                    "door-helper: couldn't hand the door's files back, switch the door off again"
                 );
-                status(Cmd::root(&[
-                    "systemctl",
-                    "start",
-                    "--no-block",
-                    DOOR_UNIT,
-                    WEB_DOOR_UNIT,
-                ]));
+                self.door.stand_down(user, owner);
             }
             None => {}
         }
@@ -803,6 +814,12 @@ impl Door {
 
     fn port_file(&self) -> PathBuf {
         Path::new(&self.state).join("host.env")
+    }
+
+    /// The door's units don't start while it exists: an off writes it first and removes it
+    /// last, so a failed off stays off at boot where the units can't be disabled.
+    fn hold(&self) -> PathBuf {
+        Path::new(&self.state).join(HOLD)
     }
 
     /// The owner's contract, which a stopped supervisor leaves behind.
@@ -956,19 +973,23 @@ impl Door {
         };
         self.write_record(user)?;
         if !self.mark().exists() {
-            // The door's own rows start as the owner set them. Never handed back: the owner's
-            // host keeps its file, and the door sends its rows there before it switches off.
+            // The box holds this member's files alone; only a gone owner's stay where this
+            // member has none. `host-settings.json` is never handed back: the door sends its
+            // rows to the owner's host before it switches off.
+            let fresh = gone.is_none();
             for name in FILES.into_iter().chain(["host-settings.json"]) {
-                take(owner, name)?;
+                take(owner, name, fresh)?;
             }
             take_password(owner)?;
-            take_avatars(owner)?;
+            take_avatars(owner, fresh)?;
             touch(&self.mark())?;
         }
         wire(&[SEATS_UNIT])?;
         // Ready once its socket is bound (Type=notify).
         must(&[Cmd::root(&["systemctl", "start", SEATS_UNIT])])?;
         must(&[Cmd::root(&[self.seats.as_str(), "adopt-owner", user]).hidden()])?;
+        // A failed off's hold would keep the door's units from starting below.
+        remove(&[&self.hold()])?;
         wire(&[DOOR_UNIT, WEB_DOOR_UNIT])?;
         undo.disarm();
         // The box's ports are the door's from here, so the user's console and host leave them
@@ -998,9 +1019,11 @@ impl Door {
     }
 
     fn off(&self, user: &str, owner: Option<&Owner>, recorded: &str) -> Result<(), Stop> {
+        // The door's units stay down until this off ends whole.
+        touch(&self.hold())?;
         let undo = Undo {
             door: self,
-            back: Some(Back::Door),
+            back: Some(Back::Door { user, owner }),
         };
         status(Cmd::root(&["systemctl", "stop", WEB_DOOR_UNIT, DOOR_UNIT]));
         self.legacy_mark(recorded)?;
@@ -1018,30 +1041,39 @@ impl Door {
         undo.disarm();
         // The files are home. A repeat must not copy the door's stale ones over the user's.
         remove(&[&self.mark()])?;
-        // From here only forward: each step is tried, and the record stays until all of them held.
-        let mut problems = false;
+        // From here only forward: the record and the hold stay until every step held.
+        if !self.stand_down(user, owner) {
+            return Err(die(&format!(
+                "cleanup after switching off {user} failed, switch it off again"
+            )));
+        }
+        remove(&[&self.record()])?;
+        remove(&[&self.hold()])?;
+        println!("door off for {user}");
+        Ok(())
+    }
+
+    /// The steps of an off that move no file: the seats the door placed stop, the owner row and
+    /// its contract go, the units no longer start at boot, and the owner's host and console come
+    /// back as theirs. Each is tried; false when one didn't hold.
+    fn stand_down(&self, user: &str, owner: Option<&Owner>) -> bool {
+        let mut held = true;
         if active(SEATS_UNIT) {
             // Seats the door placed stop with it; their accounts and profiles stay.
-            problems |= !ok(Cmd::root(&[self.seats.as_str(), "stop-all"]).hidden());
-            problems |= !ok(Cmd::root(&[self.seats.as_str(), "release-owner"]).hidden());
+            held &= ok(Cmd::root(&[self.seats.as_str(), "stop-all"]).hidden());
+            held &= ok(Cmd::root(&[self.seats.as_str(), "release-owner"]).hidden());
         }
-        remove(&[&self.contract(user)])?;
-        problems |= !unwire(&[WEB_DOOR_UNIT, DOOR_UNIT, SEATS_UNIT]);
-        if let Some(owner) = owner {
+        let unbound = remove(&[&self.contract(user)]).is_ok();
+        held &= unwire(&[WEB_DOOR_UNIT, DOOR_UNIT, SEATS_UNIT]);
+        // A contract that stays would bring their host back as the box's.
+        if unbound && let Some(owner) = owner {
             status(owner.ctl(&["try-restart", "punktfunk-host.service"]));
             // Their console comes back only if it was theirs to begin with.
             if ok(owner.ctl(&["is-enabled", "--quiet", "punktfunk-web.service"])) {
                 status(owner.ctl(&["start", "punktfunk-web.service"]));
             }
         }
-        if problems {
-            return Err(die(&format!(
-                "cleanup after switching off {user} failed, switch it off again"
-            )));
-        }
-        remove(&[&self.record()])?;
-        println!("door off for {user}");
-        Ok(())
+        held && unbound
     }
 
     /// Every door start: the account moves whoever the owner is, then the recorded owner gives
@@ -1418,6 +1450,7 @@ mod tests {
         world: World,
         record: Option<&'static str>,
         mark: bool,
+        hold: bool,
         library: bool,
         port_file: bool,
     }
@@ -1477,6 +1510,7 @@ mod tests {
             world,
             record: None,
             mark: false,
+            hold: false,
             library: false,
             port_file: false,
         }
@@ -1489,12 +1523,14 @@ mod tests {
         scenario("on", "alice", world)
     }
 
+    /// Again, after an off whose hand-back failed: the mark and the hold are there.
     fn on_repeat() -> Scenario {
         let mut world = world(&ALL_HAS, true);
         world.owner = ALICE.to_vec();
         Scenario {
             record: Some("alice"),
             mark: true,
+            hold: true,
             ..scenario("on", "alice", world)
         }
     }
@@ -1712,12 +1748,15 @@ mod tests {
 
     type Make = fn() -> Scenario;
 
-    /// What a switch left: its exit code, every call, root's files, and the supervisor.
+    /// What a switch left: its exit code, every call, root's files, the owner's contract, and
+    /// the supervisor.
     struct Ran {
         exit: u8,
         calls: Vec<String>,
         record: Option<String>,
         mark: bool,
+        hold: bool,
+        contract: bool,
         seats: bool,
         ports: Option<String>,
     }
@@ -1732,6 +1771,15 @@ mod tests {
         if scenario.mark {
             std::fs::write(state.join("door-on"), "").unwrap();
         }
+        if scenario.hold {
+            std::fs::write(state.join("door-hold"), "").unwrap();
+        }
+        let contract = dir
+            .path()
+            .join("run")
+            .join(format!("{}.env", scenario.user));
+        std::fs::create_dir(dir.path().join("run")).unwrap();
+        std::fs::write(&contract, "").unwrap();
         if scenario.library {
             std::fs::create_dir(state.join("library")).unwrap();
         }
@@ -1765,6 +1813,8 @@ mod tests {
             calls,
             record: read("owner").map(|r| r.trim_end().to_owned()),
             mark: state.join("door-on").exists(),
+            hold: state.join("door-hold").exists(),
+            contract: contract.exists(),
             seats: world.active.borrow().contains(SEATS_UNIT),
             ports: read("host.env"),
         }
@@ -1785,8 +1835,7 @@ mod tests {
             .collect()
     }
 
-    /// Each on, call for call as the helper ran it (recorded under stubs that answer as
-    /// [`World`] does).
+    /// Each on, call for call under stubs that answer as [`World`] does.
     #[test]
     fn the_door_s_on_runs_exactly_these() {
         let rows: [(&str, Make, &[&str], &str); 4] = [
@@ -1800,7 +1849,7 @@ mod tests {
             assert_eq!(ran.calls, recorded(want), "{row}");
             assert_eq!(ran.exit, 0, "{row}");
             assert_eq!(ran.record.as_deref(), Some(owner), "{row}");
-            assert!(ran.mark && ran.seats, "{row}");
+            assert!(ran.mark && ran.seats && !ran.hold, "{row}");
         }
     }
 
@@ -1816,8 +1865,8 @@ mod tests {
             assert_eq!(ran.calls, recorded(want), "{row}");
             assert_eq!(ran.exit, 0, "{row}");
             assert_eq!(
-                (ran.record, ran.mark, ran.seats),
-                (None, false, false),
+                (ran.record, ran.mark, ran.hold, ran.contract, ran.seats),
+                (None, false, false, false, false),
                 "{row}"
             );
         }
@@ -1861,8 +1910,8 @@ mod tests {
     /// Every call of a first on and of an off fails in turn. A hand-over's read that fails ends
     /// its step, and its move is a call of its own. A first on that fails before the door's
     /// ports move leaves no record or mark, asks the supervisor to release the owner's row and
-    /// leaves it as it was; an off whose hand-back fails keeps the record and the mark and
-    /// starts the door again.
+    /// leaves it as it was. An off whose hand-back fails ends as an off does, the door off and
+    /// the owner's host back, and keeps the record, the mark and the hold.
     #[test]
     fn a_failed_step_puts_the_box_back() {
         let rows: [(&str, Make, &[Fail]); 3] = [
@@ -1890,12 +1939,11 @@ mod tests {
                     let released = !asked(" adopt-owner alice") || asked(" release-owner");
                     assert!(released, "{row}: {failed}");
                 }
+                if make().verb == "off" {
+                    assert_eq!(ran.hold, record.is_some(), "{row}: {failed}");
+                }
                 if exit != 0 && mark && make().verb == "off" {
-                    assert_eq!(
-                        ran.calls.last().map(String::as_str),
-                        Some("systemctl start --no-block punktfunk-door.service punktfunk-web-door.service"),
-                        "{row}: {failed}"
-                    );
+                    assert!(ran.calls.ends_with(&stand_down()), "{row}: {failed}");
                 }
             }
         }
@@ -1969,8 +2017,16 @@ mod tests {
         );
     }
 
-    /// A give whose read fails in an off leaves the owner's file as it was, starts the door again
-    /// and keeps the record.
+    /// What an off runs once the files are home, a failed hand-back's too: the seats released,
+    /// the units off, the owner's host and console back.
+    fn stand_down() -> Vec<String> {
+        let all = recorded(OFF_OWNER);
+        let from = nth(&all, "systemctl is-active --quiet punktfunk-seats.service");
+        all[from - 1..].to_vec()
+    }
+
+    /// A give whose read fails in an off leaves the owner's file as it was, keeps the record, the
+    /// mark and the hold, and leaves the door off and the owner's host back.
     #[test]
     fn a_give_whose_read_fails_replaces_nothing() {
         let own = "/home/alice/.config/punktfunk/uniqueid";
@@ -1982,12 +2038,49 @@ mod tests {
         let moved = format!(r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh {own}"#);
         assert!(ran.calls.contains(&drop), "{:#?}", ran.calls);
         assert!(!ran.calls.contains(&moved), "{:#?}", ran.calls);
-        let start = "systemctl start --no-block punktfunk-door.service punktfunk-web-door.service";
-        assert_eq!(ran.calls.last().map(String::as_str), Some(start));
+        assert!(ran.calls.ends_with(&stand_down()), "{:#?}", ran.calls);
+        let starts = |c: &String| c.starts_with("systemctl start") && c.contains(DOOR_UNIT);
+        assert!(!ran.calls.iter().any(starts), "{:#?}", ran.calls);
         assert_eq!(
-            (ran.exit, ran.record.as_deref(), ran.mark),
-            (7, Some("alice"), true)
+            (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
+            (7, Some("alice"), true, true)
         );
+        assert!(!ran.contract && !ran.seats);
+    }
+
+    /// A first on gives the box this member's files alone: each one they lack, and every avatar,
+    /// goes from the box before theirs arrive. Over a gone owner, what they lack stays.
+    #[test]
+    fn a_first_on_drops_the_box_files_the_owner_lacks() {
+        let rm = |name: &str| format!("runuser -u punktfunk -- rm -f {BOX_DIR}/{name}");
+        let avatars = format!("runuser -u punktfunk -- rm -rf {BOX_DIR}/profiles");
+        let mut stale = on_fresh();
+        stale.world.door = vec![
+            ("punktfunk1-paired.json", "[\"carol's phone\"]"),
+            ("web-session-key", "carol"),
+            ("profiles/carol.png", "png-carol"),
+        ];
+        let ran = switch(stale);
+        assert_eq!(ran.exit, 0);
+        let lacks = [
+            "punktfunk1-paired.json",
+            "profiles.json",
+            "web-session-key",
+            "web-session-epoch",
+        ];
+        for name in FILES.into_iter().chain(["host-settings.json"]) {
+            let has = ALICE.iter().any(|(n, _)| *n == name);
+            assert_eq!(ran.calls.contains(&rm(name)), !has, "{name}");
+            assert_eq!(lacks.contains(&name), !has, "{name}");
+        }
+        let emptied = nth(&ran.calls, &avatars);
+        let made = format!("runuser -u punktfunk -- mkdir -p -m 0700 {BOX_DIR}/profiles");
+        assert!(emptied < nth(&ran.calls, &made), "{:#?}", ran.calls);
+
+        let over_gone = switch(on_takeover());
+        let removes = |c: &String| c.contains(" -- rm -f ") || c == &avatars;
+        let kept: Vec<&String> = over_gone.calls.iter().filter(|c| removes(c)).collect();
+        assert_eq!(kept, [&rm("door-on")], "a gone owner's files stay");
     }
 
     /// With no fake installed the hands run real programs, as the shell runs a pipeline without
@@ -2015,7 +2108,8 @@ mod tests {
     }
 
     // The calls `door-helper` made under recording stubs, in-process ones left out, each
-    // hand-over's write split into the write and its move.
+    // hand-over's write split into the write and its move. A first on also removes the box
+    // files the owner lacks, which the helper kept.
     const ON_FRESH: &[&str] = &[
         "systemctl is-active --quiet punktfunk-seats.service",
         "getent group punktfunk-door",
@@ -2046,18 +2140,23 @@ mod tests {
         r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/uniqueid"#,
         r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/punktfunk1-paired.json",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/profiles.json",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/profiles.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/web-password",
         r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/web-password"#,
         r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/web-password"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-session-key",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/web-session-key",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-session-epoch",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/host-settings.json",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/host-settings.json",
         r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/host-settings.json"#,
         r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/host-settings.json"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
+        "runuser -u punktfunk -- rm -rf /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- mkdir -p -m 0700 /var/lib/punktfunk/profiles",
         "runuser -u alice -- ls -1 -- /home/alice/.config/punktfunk/profiles",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/profiles/a",
@@ -2161,23 +2260,32 @@ mod tests {
         "getent passwd punktfunk",
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/native-cert.pem",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/native-cert.pem",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/native-key.pem",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/native-key.pem",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/uniqueid",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/uniqueid",
         r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/uniqueid"#,
         r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/uniqueid"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/punktfunk1-paired.json",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/profiles.json",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/profiles.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/web-password",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-session-key",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/web-session-key",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-session-epoch",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/host-settings.json",
+        "runuser -u punktfunk -- rm -f /var/lib/punktfunk/host-settings.json",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
         "runuser -u alice -- cat -- /home/alice/.config/punktfunk/web.env",
         "grep -E ^[[:space:]]*PUNKTFUNK_UI_PASSWORD(_HASH)?=|^[[:space:]]*PUNKTFUNK_UI_SECRET=",
         r#"runuser -u punktfunk -- sh -c umask 077; cat >"$1.tmp" sh /var/lib/punktfunk/web-password"#,
         r#"runuser -u punktfunk -- sh -c mv -f "$1.tmp" "$1" sh /var/lib/punktfunk/web-password"#,
+        "runuser -u punktfunk -- rm -rf /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- mkdir -p -m 0700 /var/lib/punktfunk/profiles",
         "runuser -u alice -- ls -1 -- /home/alice/.config/punktfunk/profiles",
         "systemctl enable punktfunk-seats.service",
@@ -2370,34 +2478,39 @@ mod tests {
         (27, 7, None, false, false),
         (28, 7, None, false, false),
         (29, 0, Some("alice"), true, true),
-        (30, 0, Some("alice"), true, true),
+        (30, 7, None, false, false),
         (31, 0, Some("alice"), true, true),
         (32, 7, None, false, false),
-        (33, 7, None, false, false),
+        (33, 0, Some("alice"), true, true),
         (34, 7, None, false, false),
-        (35, 0, Some("alice"), true, true),
-        (36, 0, Some("alice"), true, true),
+        (35, 7, None, false, false),
+        (36, 7, None, false, false),
         (37, 0, Some("alice"), true, true),
         (38, 7, None, false, false),
-        (39, 7, None, false, false),
+        (39, 0, Some("alice"), true, true),
         (40, 7, None, false, false),
         (41, 0, Some("alice"), true, true),
         (42, 7, None, false, false),
-        (43, 0, Some("alice"), true, true),
-        (44, 0, Some("alice"), true, true),
+        (43, 7, None, false, false),
+        (44, 7, None, false, false),
         (45, 0, Some("alice"), true, true),
-        (46, 0, Some("alice"), true, true),
+        (46, 7, None, false, false),
         (47, 7, None, false, false),
-        (48, 7, None, false, false),
-        (49, 7, None, false, false),
+        (48, 0, Some("alice"), true, true),
+        (49, 0, Some("alice"), true, true),
         (50, 0, Some("alice"), true, true),
-        (51, 7, None, false, false),
+        (51, 0, Some("alice"), true, true),
         (52, 7, None, false, false),
-        (53, 0, Some("alice"), true, true),
-        (54, 0, Some("alice"), true, true),
+        (53, 7, None, false, false),
+        (54, 7, None, false, false),
         (55, 0, Some("alice"), true, true),
-        (56, 0, Some("alice"), true, true),
-        (57, 7, Some("alice"), true, true),
+        (56, 7, None, false, false),
+        (57, 7, None, false, false),
+        (58, 0, Some("alice"), true, true),
+        (59, 0, Some("alice"), true, true),
+        (60, 0, Some("alice"), true, true),
+        (61, 0, Some("alice"), true, true),
+        (62, 7, Some("alice"), true, true),
     ];
 
     const ON_STEAMOS_FAILS: &[Fail] = &[
@@ -2415,33 +2528,42 @@ mod tests {
         (12, 0, Some("alice"), true, true),
         (13, 0, Some("alice"), true, true),
         (14, 0, Some("alice"), true, true),
-        (15, 0, Some("alice"), true, true),
+        (15, 7, None, false, true),
         (16, 0, Some("alice"), true, true),
         (17, 7, None, false, true),
-        (18, 7, None, false, true),
+        (18, 0, Some("alice"), true, true),
         (19, 7, None, false, true),
-        (20, 0, Some("alice"), true, true),
-        (21, 0, Some("alice"), true, true),
+        (20, 7, None, false, true),
+        (21, 7, None, false, true),
         (22, 0, Some("alice"), true, true),
-        (23, 0, Some("alice"), true, true),
+        (23, 7, None, false, true),
         (24, 0, Some("alice"), true, true),
-        (25, 0, Some("alice"), true, true),
+        (25, 7, None, false, true),
         (26, 0, Some("alice"), true, true),
-        (27, 0, Some("alice"), true, true),
-        (28, 7, None, false, true),
+        (27, 7, None, false, true),
+        (28, 0, Some("alice"), true, true),
         (29, 7, None, false, true),
-        (30, 7, None, false, true),
+        (30, 0, Some("alice"), true, true),
         (31, 7, None, false, true),
-        (32, 7, None, false, true),
-        (33, 0, Some("alice"), true, true),
+        (32, 0, Some("alice"), true, true),
+        (33, 7, None, false, true),
         (34, 0, Some("alice"), true, true),
-        (35, 7, None, false, true),
+        (35, 0, Some("alice"), true, true),
         (36, 7, None, false, true),
-        (37, 0, Some("alice"), true, true),
-        (38, 0, Some("alice"), true, true),
-        (39, 0, Some("alice"), true, true),
-        (40, 0, Some("alice"), true, true),
-        (41, 7, Some("alice"), true, true),
+        (37, 7, None, false, true),
+        (38, 7, None, false, true),
+        (39, 7, None, false, true),
+        (40, 7, None, false, true),
+        (41, 7, None, false, true),
+        (42, 0, Some("alice"), true, true),
+        (43, 0, Some("alice"), true, true),
+        (44, 7, None, false, true),
+        (45, 7, None, false, true),
+        (46, 0, Some("alice"), true, true),
+        (47, 0, Some("alice"), true, true),
+        (48, 0, Some("alice"), true, true),
+        (49, 0, Some("alice"), true, true),
+        (50, 7, Some("alice"), true, true),
     ];
 
     const OFF_OWNER_FAILS: &[Fail] = &[
@@ -2450,37 +2572,37 @@ mod tests {
         (3, 0, None, false, false),
         (4, 0, None, false, false),
         (5, 0, None, false, false),
-        (6, 7, Some("alice"), true, true),
-        (7, 7, Some("alice"), true, true),
-        (8, 7, Some("alice"), true, true),
+        (6, 7, Some("alice"), true, false),
+        (7, 7, Some("alice"), true, false),
+        (8, 7, Some("alice"), true, false),
         (9, 0, None, false, false),
-        (10, 7, Some("alice"), true, true),
-        (11, 7, Some("alice"), true, true),
-        (12, 7, Some("alice"), true, true),
+        (10, 7, Some("alice"), true, false),
+        (11, 7, Some("alice"), true, false),
+        (12, 7, Some("alice"), true, false),
         (13, 0, None, false, false),
-        (14, 7, Some("alice"), true, true),
-        (15, 7, Some("alice"), true, true),
-        (16, 7, Some("alice"), true, true),
+        (14, 7, Some("alice"), true, false),
+        (15, 7, Some("alice"), true, false),
+        (16, 7, Some("alice"), true, false),
         (17, 0, None, false, false),
-        (18, 7, Some("alice"), true, true),
-        (19, 7, Some("alice"), true, true),
-        (20, 7, Some("alice"), true, true),
+        (18, 7, Some("alice"), true, false),
+        (19, 7, Some("alice"), true, false),
+        (20, 7, Some("alice"), true, false),
         (21, 0, None, false, false),
         (22, 0, None, false, false),
         (23, 0, None, false, false),
-        (24, 7, Some("alice"), true, true),
-        (25, 7, Some("alice"), true, true),
-        (26, 7, Some("alice"), true, true),
+        (24, 7, Some("alice"), true, false),
+        (25, 7, Some("alice"), true, false),
+        (26, 7, Some("alice"), true, false),
         (27, 0, None, false, false),
         (28, 0, None, false, false),
-        (29, 7, Some("alice"), true, true),
-        (30, 7, Some("alice"), true, true),
-        (31, 7, Some("alice"), true, true),
+        (29, 7, Some("alice"), true, false),
+        (30, 7, Some("alice"), true, false),
+        (31, 7, Some("alice"), true, false),
         (32, 0, None, false, false),
         (33, 0, None, false, false),
-        (34, 7, Some("alice"), true, true),
-        (35, 7, Some("alice"), true, true),
-        (36, 7, Some("alice"), true, true),
+        (34, 7, Some("alice"), true, false),
+        (35, 7, Some("alice"), true, false),
+        (36, 7, Some("alice"), true, false),
         (37, 0, None, false, false),
         (38, 1, Some("alice"), false, false),
         (39, 1, Some("alice"), false, false),

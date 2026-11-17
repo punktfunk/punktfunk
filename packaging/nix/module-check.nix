@@ -531,16 +531,19 @@ let
     }
     {
       # The helper's `systemctl enable` has nowhere to write on NixOS, so the units are wired
-      # here. They start at boot only while the owner record exists: the door is off without it.
-      name = "the door's units start at boot once the owner record exists";
+      # here. They start at boot only while the owner record exists and no off holds them: a
+      # failed off can't disable them.
+      name = "the door's units start at boot with the owner record and no hold";
       ok =
         let
           wired =
             name: unit:
+            let
+              text = builtins.readFile unit;
+            in
             seats.systemd.services.${name}.wantedBy == [ "multi-user.target" ]
-            && lib.hasInfix "\nConditionPathExists=/var/lib/punktfunk-seats/owner\n" (
-              builtins.readFile unit
-            );
+            && lib.hasInfix "\nConditionPathExists=/var/lib/punktfunk-seats/owner\n" text
+            && lib.hasInfix "\nConditionPathExists=!/var/lib/punktfunk-seats/door-hold\n" text;
         in
         wired "punktfunk-door" ../linux/punktfunk-door.service
         && wired "punktfunk-web-door" ../linux/punktfunk-web-door.service;

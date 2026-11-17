@@ -1757,6 +1757,7 @@
 	"profiles_door_switching": "Switching…",
 	"profiles_door_failed": "Couldn't switch it. Check the host log.",
 	"profiles_door_slow": "Still switching. Reload this page in a minute.",
+	"profiles_door_unfinished": "Turning this off didn't finish, and this computer can't be reached without logging in right now. Turn it off again to finish.",
 	"profiles_outcome_door_off": "Turn on Reachable without logging in first",
 	"profiles_outcome_desktop_hint_linux": "A user of its own, with its own Steam, controllers and sign-ins.",
 	"profiles_remove_linux": "{name}'s user account and its files are removed too.",

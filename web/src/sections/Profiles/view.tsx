@@ -137,6 +137,8 @@ export type DoorControl = {
 	changing: boolean;
 	/** What stops turning it on here, the host's sentence. The switch waits until it's fixed. */
 	unavailable?: string | null;
+	/** An off stopped halfway: the door is down, and turning it off again finishes it. */
+	unfinished?: boolean;
 	/** Opens the confirmation. */
 	onChange: () => void;
 };
@@ -244,9 +246,14 @@ const DoorRow: FC<{ door: DoorControl }> = ({ door }) => (
 			<p className="text-sm text-muted-foreground">
 				{m.profiles_door_hint()} <DocsLink path="profiles#on-linux" />
 			</p>
-			{door.on && (
+			{door.on && !door.unfinished && (
 				<p className="text-sm text-muted-foreground">
 					{m.profiles_door_games()}
+				</p>
+			)}
+			{door.unfinished && (
+				<p className="text-sm text-amber-600 dark:text-amber-500">
+					{m.profiles_door_unfinished()}
 				</p>
 			)}
 			{!door.on && door.unavailable && (

@@ -1402,6 +1402,7 @@
 	"profiles_door_switching": "Shown with a spinner in place of the door switch while it changes.",
 	"profiles_door_failed": "Error line in the door password dialog, and a toast, when switching fails. The host log is a file on the host.",
 	"profiles_door_slow": "Error toast when the door switch takes over two minutes; the console restarts with the host.",
+	"profiles_door_unfinished": "Warning under the 'Reachable without logging in' switch, which still shows on after turning it off failed halfway. 'This' is that switch.",
 	"profiles_outcome_door_off": "Description on the disabled 'Own desktop' card on Linux; 'Reachable without logging in' is the switch above the cards.",
 	"profiles_outcome_desktop_hint_linux": "Description on the 'Own desktop' choice card on Linux with the door on.",
 	"profiles_remove_linux": "Sentence appended to the remove dialog's body after 'Sessions playing as {name} end now.', Linux. name: the profile's name.",
