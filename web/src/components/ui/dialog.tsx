@@ -34,7 +34,7 @@ const DialogContent = ({
 			)}
 			{...props}
 		>
-			{/* Here once rather than in each of the thirteen dialogs. `root`, because a dialog renders
+			{/* Here once rather than in each dialog. `root`, because a dialog renders
 			    through a portal — outside every page cascade, nothing above it drives `from → enter`.
 			    `contents` keeps each section a flex item of the surface, so its gap still spaces them. */}
 			<Stagger root gap={ROW_GAP} className="contents">

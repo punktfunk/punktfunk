@@ -49,7 +49,7 @@ object SessionFactory {
      * The session a dial opened, for the stream screen. [settings] is what the dial used. The
      * clipboard decision is [record]'s: a host never saved gets none until the user enables it.
      * The Welcome's management port is saved on [record]: it is the one source that needs no mDNS
-     * advert, so a host that moved off 47990 stays browsable over a VPN or when added by address.
+     * advert, so a host off DEFAULT_MGMT_PORT stays browsable over a VPN or when added by address.
      * `0` means not advertised and is ignored.
      */
     fun afterDial(
@@ -212,21 +212,16 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
     // "Automatic" resolves to a concrete pad type from the connected controller's VID/PID.
     val gamepadPref = Gamepad.resolvePref(settings.gamepad)
     // The requested audio format as the two Hello fields — `0`/`0` when the user chose Standard,
-    // which is what keeps the lossless capability bit OFF (see `audioFormatWire`).
-    //
-    // Sent at every channel count, including surround. This used to be clamped to Opus on 5.1/7.1
-    // because a lossless surround frame did not fit one QUIC datagram, but the frame ladder is
-    // channel-aware: a 5.1 session simply negotiates a shorter frame (and pays for it in packet
-    // rate) and 96/24 5.1 fits nothing and is declined. That is the host's decision to make with the
-    // connection's real datagram size in hand, not one to pre-empt from here with an MTU this side
-    // never measured.
+    // which keeps the lossless capability bit OFF (see `audioFormatWire`). Sent at every channel
+    // count: the host's frame ladder is channel-aware and decides with the connection's real
+    // datagram size in hand, so this side does not pre-empt it with an MTU it never measured.
     val (audioRateHz, audioBits) = settings.audioFormatWire()
     // NonCancellable: a cancelled withContext drops its result, and the dial cannot be
     // interrupted — the session would open with nobody to close it.
     return withContext(Dispatchers.IO + NonCancellable) {
         SessionGate.awaitClosed() // the last stream's close, which its screen handed off
-        // Transport-level half of "Low-latency mode (experimental)" (DSCP marking on the media
-        // sockets) — must be applied before connect, since sockets are tagged at creation.
+        // Transport-level half of "Low-latency mode" (DSCP marking on the media sockets) —
+        // must be applied before connect, since sockets are tagged at creation.
         NativeBridge.nativeSetLowLatencyMode(settings.lowLatencyMode)
         // A codec, and 10-bit, only where a hardware decoder takes them at this mode.
         val need = DecodeNeed(w, h, hz, hdrEnabled || tenBitSdr)
@@ -239,10 +234,10 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         val frameParts = settings.lowLatencyMode && partialFrame
         val decode = decoders.decode
         val codecBits = decode.codecBits
-        // Automatic codec: AV1 beat HEVC by ~1.2 ms end-to-end (NP3 ↔ RTX 4090), so "Automatic"
-        // prefers AV1 when its bit is set AND the device lacks FEATURE_PartialFrame — a
-        // partial-frame device keeps HEVC, whose slice overlap AV1 cannot ride. The host honors
-        // the preference only inside the shared codec set. An explicit user choice always wins.
+        // Automatic codec: "Automatic" prefers AV1 when its bit is set AND the device lacks
+        // FEATURE_PartialFrame — a partial-frame device keeps HEVC, whose slice overlap AV1
+        // cannot ride. The host honors the preference only inside the shared codec set. An
+        // explicit user choice always wins.
         val preferredCodec = settings.preferredCodec().takeIf { it != 0 }
             ?: if (codecBits and 4 != 0 && !partialFrame) 4 else 0
         // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline

@@ -56,8 +56,9 @@ pub(crate) const FLUSH_AFTER: Duration = Duration::from_millis(250);
 /// A clock-triggered jump that discarded fewer datagrams than this (and no queued
 /// AUs) found no local backlog. Flushing helps neither a wall-clock step (NTP
 /// shifts every future frame over-bound) nor an upstream queue (OWD already
-/// feeds ABR). At the 5 Mbps floor a genuine 400 ms backlog is ~170 datagrams,
-/// so 64 separates empty from real. See [`NOOP_CLOCK_FLUSHES_TO_DISARM`].
+/// feeds ABR). At the ABR floor (`abr::controller::FLOOR_KBPS`) a genuine 400 ms
+/// backlog is over 70 datagrams at the default 1408 B shard, so 64 separates empty from
+/// real. See [`NOOP_CLOCK_FLUSHES_TO_DISARM`].
 pub(crate) const NOOP_FLUSH_DATAGRAMS: u64 = 64;
 
 /// Consecutive no-op clock flushes (see [`NOOP_FLUSH_DATAGRAMS`]) before the
@@ -420,7 +421,7 @@ pub(crate) struct FrameChannel {
     inner: Mutex<FrameQueue>,
     ready: Condvar,
     /// Set by the first [`Self::pop`]. Until then no decoder exists (a console
-    /// launch hold keeps it away for up to 15 s) and the pump only [`Self::preroll`]s.
+    /// launch hold keeps it away) and the pump only [`Self::preroll`]s.
     consumer_seen: AtomicBool,
 }
 

@@ -64,8 +64,7 @@ data class Settings(
     val compositor: Int = 0,
     val gamepad: Int = 0,
     /**
-     * Forward this device's controllers to the host at all. Default on — that was the
-     * unconditional behaviour before this became a setting.
+     * Forward this device's controllers to the host at all. Default on.
      *
      * Off is for a couch whose controller reaches the host another way: a USB passthrough tool
      * (VirtualHere and friends), or a pad simply plugged into the host itself. Leaving it on
@@ -91,12 +90,12 @@ data class Settings(
     val audioChannels: Int = 2,
     /**
      * Requested audio format — the cross-client `audio_format` key: [AUDIO_FORMAT_OPUS] (the
-     * default, and byte-for-byte the session every build before the lossless plane ran) or one of
-     * the lossless rows in [AUDIO_FORMAT_OPTIONS], which span both rate families.
+     * default) or one of the lossless rows in [AUDIO_FORMAT_OPTIONS], which span both rate
+     * families.
      *
      * Off by default and deliberately: lossless takes 2.1–8.5 Mbps off the top of the link,
      * OUTSIDE the ABR loop that manages the video budget, against the ~256 kbps Opus it replaces —
-     * so a user has to pick it. Since 2026-08-17 this setting is the ONLY opt-in: the host's half
+     * so a user has to pick it. This setting is the ONLY opt-in: the host's half
      * (`PUNKTFUNK_AUDIO_HIRES`) defaults ON and is an opt-OUT (`=0`), so this choice is enough on
      * any host that has not deliberately turned the plane off.
      * A REQUEST, never a fact: the host runs its gate and may answer Opus anyway, and
@@ -130,8 +129,8 @@ data class Settings(
      * Ask the host to leave ITS OWN audio devices alone for this session
      * (`CLIENT_CAP_KEEP_HOST_AUDIO`): it captures whatever its default playback device already is,
      * so the speakers or headphones on the host PC keep playing while this device hears the same
-     * audio. Off — the default, and what every build before this did — has the host park playback
-     * on a silent endpoint, which is why the host goes quiet the moment a stream starts.
+     * audio. Off — the default — has the host park playback on a silent endpoint, which is why the
+     * host goes quiet the moment a stream starts.
      *
      * REQUEST-only: there is no host-cap echo, so an older host ignores the ask and re-routes as it
      * always did ("audio still works, the host went quiet"), never a broken session.
@@ -204,8 +203,8 @@ data class Settings(
     val reduceUiResolution: Boolean = false,
     /**
      * When [gamepadUiEnabled] actually takes over — the cross-client `gamepad_ui_mode` pair,
-     * mirroring the Apple client's `gamepadUIMode`: `"connected"` (default, and what the switch
-     * has always meant) waits for a controller; `"always"` keeps the console UI with no pad in
+     * mirroring the Apple client's `gamepadUIMode`: `"connected"` (default) waits for a
+     * controller; `"always"` keeps the console UI with no pad in
      * reach, for a phone or tablet that lives docked to a TV. Read only while [gamepadUiEnabled]
      * is on, which is why both settings screens hide the row when the switch is off. Anything
      * unrecognized resolves to `"connected"`. A TV ignores it — it is always in console mode.
@@ -219,10 +218,10 @@ data class Settings(
     val uiPalette: String = "violet",
     /**
      * "Low-latency mode" — the master switch over the fast pipeline: decoder ranking + per-SoC
-     * vendor keys, slice-progressive delivery, pipeline thread boosts + ADPF max-performance,
+     * vendor keys, slice-progressive delivery, pipeline thread boosts + ADPF power-saving off,
      * game-tagged AAudio, DSCP marking on the media sockets, HDMI ALLM, and the forced TV mode
      * switch. (The Wi-Fi locks are NOT part of this — both are always held while streaming; see
-     * StreamScreen.) Off keeps the same decode loop and presenter — so [presentPriority] applies
+     * StreamWindow.) Off keeps the same decode loop and presenter — so [presentPriority] applies
      * either way — with plain keys and no boosts: the per-device escape hatch.
      */
     val lowLatencyMode: Boolean = true,
@@ -249,9 +248,9 @@ data class Settings(
      */
     val autoWakeEnabled: Boolean = true,
     /**
-     * Keep a streaming session ALIVE when the app leaves the screen. Off by default, which is
-     * today's behaviour: backgrounding ends the session (non-deliberately, so the host lingers the
-     * display and coming straight back reconnects fast).
+     * Keep a streaming session ALIVE when the app leaves the screen. Off by default: backgrounding
+     * ends the session (non-deliberately, so the host lingers the display and coming straight back
+     * reconnects fast).
      *
      * On, the session holds instead: host audio keeps playing behind an ongoing notification,
      * video decode drops with the Surface it drew into, and [backgroundTimeoutMinutes] bounds the
@@ -262,7 +261,7 @@ data class Settings(
      * Minutes a backgrounded session runs before it disconnects itself — a battery, heat and
      * bandwidth backstop, since a host cannot tell a player who walked away from one who is
      * watching. The auto-disconnect is non-deliberate, so a late return still reconnects fast.
-     * Only read when [backgroundKeepAlive] is on; the UI offers 1/5/10/30.
+     * Only read when [backgroundKeepAlive] is on; the UI offers [BACKGROUND_TIMEOUT_OPTIONS].
      */
     val backgroundTimeoutMinutes: Int = 10,
     /** Off, the host's rumble never reaches a pad or this phone's motor. Read once per session. */
@@ -296,8 +295,9 @@ data class Settings(
      * Capture a USB-connected Sony controller (DualSense / DualSense Edge / DualShock 4) and
      * drive it directly: the app claims the pad's HID interface and renders the host's feedback
      * by writing USB output reports — rumble works on every phone (no kernel force-feedback
-     * driver needed), and adaptive triggers + lightbar + player LEDs work at all (Android has no
-     * platform API for any of them). ON by default — it engages only when such a pad is attached
+     * driver needed), adaptive triggers work at all (Android has no platform API for them), and
+     * lightbar + player LEDs work below API 33 too, where `GamepadFeedback`'s `LightsManager` path
+     * stops. ON by default — it engages only when such a pad is attached
      * over USB at stream start; uncaptured (toggle off / no permission / Bluetooth) the pad stays
      * on the ordinary InputDevice path. USB only: Android exposes no raw path to a Bluetooth
      * Classic pad, which is also why Sony's own Remote Play has no Android trigger support.
@@ -307,9 +307,9 @@ data class Settings(
     /**
      * Render the host's DualSense **voice-coil haptics** on a captured USB pad (tier A).
      *
-     * The pad's own 4-channel audio device carries them, driven directly over usbfs — Android's
-     * audio framework denylists that device by VID/PID, so there is no supported route to it. The
-     * two kinds are arbitrated rather than mixed, and on evidence: wire rumble is suppressed only
+     * The pad's own 4-channel audio device carries them, driven directly over usbfs: Android 14+
+     * refuses the DualSense (054C:0CE6, not the Edge) as an audio output by VID/PID. The two
+     * kinds are arbitrated rather than mixed, and on evidence: wire rumble is suppressed only
      * while haptics frames are actually arriving, so a title that drives classic rumble and sends
      * no haptics audio keeps rumbling. Off, or on an uncaptured/Bluetooth pad, the pad stays on
      * ordinary rumble (tier C), which on this client already drives the same actuators.
@@ -328,7 +328,8 @@ data class Settings(
      * How a physical mouse drives the host — the cross-client mouse model (see [MouseMode]).
      * [MouseMode.DESKTOP] (default here) points absolutely; [MouseMode.CAPTURE] locks the pointer
      * to the stream ([android.view.View.requestPointerCapture]) and forwards raw relative motion.
-     * Read once per session by StreamScreen; Ctrl+Alt+Shift+Q flips the capture live either way.
+     * Read once per session by StreamScreen; the Release input shortcut (Ctrl+Alt+Shift+Q by
+     * default, [Shortcuts.defaults]) flips the capture live either way.
      */
     val mouseMode: MouseMode = MouseMode.DESKTOP,
 
@@ -344,7 +345,7 @@ data class Settings(
     val overlayActions: String = "",
     /**
      * The in-stream shortcuts, one JSON blob parsed by [Shortcuts.parse]. Empty = Android's
-     * defaults ([shortcutBindings]), the chords every build before had.
+     * defaults ([shortcutBindings]).
      */
     val shortcuts: String = "",
     /**
@@ -368,8 +369,8 @@ data class Settings(
     val defaultHost: String? = null,
     // NOTE: clipboard sync is NOT here. It is a decision about a HOST, not about this device or
     // this stream (design/client-settings-profiles.md §3, tier H), so it lives on the host record
-    // — see `KnownHost.clipboardSync`. It used to be a global here; `KnownHostStore.migrate`
-    // copied that value onto every saved host and retired the key.
+    // — see `KnownHost.clipboardSync`. `KnownHostStore.migrate` copies a stored global
+    // `clipboard_sync` onto every saved host, and the store then deletes the key.
 )
 
 /** [Settings.touchMode] values; persisted by name. */
@@ -382,7 +383,7 @@ enum class TouchMode { TRACKPAD, POINTER, TOUCH, OFF }
  *   one you see. The game model, and the desktop clients' default.
  * - [DESKTOP] — uncaptured absolute pointing: the cursor enters and leaves the stream freely. The
  *   remote-desktop model, and Android's default (a phone/TV is far more often driven by touch or a
- *   pad than by a locked mouse, and this is what the platform did before the setting existed).
+ *   pad than by a locked mouse).
  */
 enum class MouseMode(val storedName: String, @StringRes val label: Int) {
     CAPTURE("capture", R.string.player_mouse_mode_capture),
@@ -541,7 +542,7 @@ const val SAFE_AREA_MODE = -2
  * (`LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`). Which pixels survive is decided by the mode's aspect:
  *
  *  * A 16:9 mode on a 20:9 phone pillarboxes, and those bars land on the unsafe regions — which is
- *    why the fixed presets have always "just worked", at 20 % of the width.
+ *    why the fixed presets clear the housing, at 20 % of the width.
  *  * The NATIVE mode has the panel's own aspect, so it fills every pixel, housing included.
  *
  * Asking the host for a mode narrower by the unsafe insets is the fix, and the stream screen places
@@ -550,7 +551,7 @@ const val SAFE_AREA_MODE = -2
  * rect from the live placement.
  */
 object SafeArea {
-    /** The host rejects odd dimensions and anything under 320 px wide (`validate_dimensions`). */
+    /** The host rejects odd dimensions (`validate_dimensions`); 320 px is [Resolutions.MIN_WIDTH]. */
     const val MIN_WIDTH = 320
 
     /**
@@ -564,7 +565,7 @@ object SafeArea {
     )
 
     /**
-     * [nativeWidth] less [inset], even-floored and clamped to the host's floor. Height is untouched —
+     * [nativeWidth] less [inset], even-floored and clamped to [MIN_WIDTH]. Height is untouched —
      * under aspect-fit only the horizontal axis binds on a landscape phone, so insetting it would
      * shrink the picture uncovering nothing.
      */
@@ -661,14 +662,12 @@ fun displayHdr(context: Context): DisplayHdr {
         return DisplayHdr.None
     }
     val types = buildSet {
-        // API 34+: the sanctioned per-mode query (Display.Mode.getSupportedHdrTypes). The
-        // deprecated Display-level hdrCapabilities can return EMPTY on Android 14+ devices
-        // (Pixel-class panels included), which would make a genuinely HDR display advertise
-        // no-HDR and pin the whole session to 8-bit SDR.
+        // API 34+: the per-mode query (Display.Mode.getSupportedHdrTypes). On AOSP 14+ the
+        // deprecated hdrCapabilities is this list minus the types the user disabled.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             display.mode.supportedHdrTypes.forEach { add(it) }
         }
-        // Union the legacy query defensively — the supported one on minSdk 31, and some vendors
+        // Union the legacy query defensively — the only one below API 34, and some vendors
         // populate only this on newer APIs.
         @Suppress("DEPRECATION")
         display.hdrCapabilities?.supportedHdrTypes?.forEach { add(it) }
@@ -844,7 +843,7 @@ object Resolutions {
         return ASPECTS.indexOfFirst { kotlin.math.abs(shape / it.shape - 1) < TOLERANCE }.takeIf { it >= 0 }
     }
 
-    /** Smallest stream mode the host accepts, per side. */
+    /** Smallest typed mode a client asks for, per side; the host's own floor is lower. */
     const val MIN_WIDTH = 320
     const val MIN_HEIGHT = 200
 
@@ -962,7 +961,7 @@ val AUDIO_CHANNEL_OPTIONS = listOf(
     8 to R.string.player_audio_channels_8,
 )
 
-/** Opus 48 kHz — the default, and byte-for-byte the session every earlier build ran. */
+/** Opus 48 kHz — the default. */
 const val AUDIO_FORMAT_OPUS = "opus"
 
 /**
@@ -989,14 +988,13 @@ const val AUDIO_FORMAT_LOSSLESS_96 = "lossless96"
 
 /**
  * Bit-exact PCM at 176.4 kHz / 24-bit — **8.5 Mbps**, and the one row far more likely to be
- * declined than granted. Three separate things have to go right: the host's bandwidth gate gives
- * audio at most a quarter of the video budget, so the session needs ~34 Mbps of video before it
- * will even consider it; a stereo frame only fits a QUIC datagram on the ladder's shortest rung
- * (1 ms — a thousand datagrams a second — at ~1 069 B, so the first connection with a smaller
- * datagram declines it), and a surround one fits no rung at all; and very few Android outputs will
- * open the rate, which the native probe settles before the handshake. Offered because it is
- * reachable, not because it is likely — the HUD's `audio lossless …` line is what says which
- * happened.
+ * declined than granted. Three separate things have to go right: the host's bandwidth gate caps
+ * audio at `HIRES_MAX_VIDEO_SHARE_PCT` of the video budget, so a stereo session needs ~34 Mbps of
+ * video before it will even consider it; a frame too big for one QUIC datagram leaves as parts
+ * only on a session that runs `FEATURE_PCM_PARTS`, else the host declines it; and very few
+ * Android outputs will open the rate, which the native probe settles before the handshake.
+ * Offered because it is reachable, not because it is likely — the HUD's `audio lossless …` line
+ * is what says which happened.
  */
 const val AUDIO_FORMAT_LOSSLESS_1764 = "lossless1764"
 
@@ -1011,15 +1009,8 @@ const val AUDIO_FORMAT_LOSSLESS_1764 = "lossless1764"
  * instead. The naming rule is the kHz figure with the decimal point dropped — `lossless48`,
  * `lossless96`, and for the 44.1 family `lossless441` / `lossless882` / `lossless1764`.
  *
- * **Both rate families are here now.** They were not: every buffer figure in the shared jitter
- * policy used to be `ms × perMs` with `perMs` an INTEGER number of samples per millisecond, which
- * made 44 100 → 44.1 truncate to 44 — a silent 2.3 % error in every target, every de-prime fuse
- * and every reported buffer depth, and the whole reason the 44.1 family was deferred rather than
- * refused (design/hi-res-audio.md §4.1). Core now multiplies before it divides, which is exact at
- * every rate, so the deferral is lifted.
- *
  * A row being offered is not a promise it can be delivered: the host's gate, this device's own
- * output, and the path MTU each get a veto, and the ones at the top of the list get vetoed often.
+ * output, and the path MTU each get a veto, and the highest rates get vetoed often.
  * What actually happened is on the HUD.
  *
  * Lossless at **16**-bit is deliberately absent at every rate: it spends ~1.4–1.5 Mbps to sound
@@ -1045,12 +1036,8 @@ val AUDIO_FORMAT_OPTIONS = listOf(
  * lossless rung as well as the legacy pair, so the other rule would make it the one rung nobody
  * could ask for. Sending `48000`/`16` for a user who chose Standard therefore advertises the
  * capability, and the host then hands that user 1.5 Mbps of lossless PCM instead of 256 kbps of
- * Opus. This returned that pair until all four clients were compared.
- *
- * ⚠⚠ **That bug got worse on 2026-08-17, when the host's `PUNKTFUNK_AUDIO_HIRES` gate went
- * default-ON.** It used to need a host whose operator had opted in — rare, so a slip here would
- * have been survivable and probably unnoticed. The blast radius is now every host that has not
- * deliberately opted out, i.e. all of them. The zeroes below are load-bearing.
+ * Opus. The host's `PUNKTFUNK_AUDIO_HIRES` gate is on by default, so that reaches every host that
+ * has not opted out. The zeroes below are load-bearing.
  *
  * The zeroes are also what keeps a default `Hello` byte-identical to a pre-lossless one — the wire
  * encodes an explicit 48 000/16 the same as absent, and the whole difference is the capability bit.
@@ -1103,8 +1090,8 @@ val CODEC_OPTIONS: List<Pair<String, OptionLabel>> = listOf(
  * always kept selectable so the selection can be rendered (the don't-clobber rule: a codec chosen
  * on another device, or by a newer build, must survive being looked at here).
  *
- * A kept row says why it is not in effect. Reading plain "AV1" while every session streams HEVC
- * is the whole of #1138: the picker is the only place that can say the Hello never asked for it.
+ * A kept row says why it is not in effect: the picker is the only place that can say the Hello
+ * never asked for it.
  */
 fun codecOptionsFor(
     stored: String,

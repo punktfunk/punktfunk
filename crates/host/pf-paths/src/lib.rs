@@ -1,6 +1,6 @@
 //! Host config-dir and owner-private file helpers.
 //!
-//! Leaf crate so `pf-media`, `pf-vdisplay`, and the orchestrator share these
+//! Leaf crate so `pf-vdisplay`, `pf-capture`, and the orchestrator share these
 //! without depending on `gamestream`. Std + `tracing`; on Windows, `pf-paths-win` for ACLs.
 //!
 //! [`config_dir`] is XDG / `%ProgramData%`, overridable with `PUNKTFUNK_CONFIG_DIR`.
@@ -65,9 +65,6 @@ pub fn seat_record(id: &str) -> PathBuf {
     seats_dir().join(format!("{id}.json"))
 }
 
-/// `$XDG_DATA_HOME/punktfunk`, else `~/.local/share/punktfunk`. Separate from
-/// [`config_dir`]: it holds installs (a seat's Steam, managed emulators), and the plugin
-/// runner shares nothing under the config dir.
 /// Whether this process's binary is no longer the file at its path: a package update swaps the
 /// inode, a sysext refresh swaps the mount, a deleted path is gone. NixOS never touches a store
 /// path, so there the system profile naming another build counts. Only a restart runs the new.
@@ -98,6 +95,9 @@ fn replaced_on_disk(path: &std::path::Path, running: &std::fs::Metadata) -> bool
         .is_ok_and(|now| (now.dev(), now.ino()) == (running.dev(), running.ino()))
 }
 
+/// `$XDG_DATA_HOME/punktfunk`, else `~/.local/share/punktfunk`. Separate from
+/// [`config_dir`]: it holds installs (a seat's Steam, managed emulators), and the plugin
+/// runner shares nothing under the config dir.
 #[cfg(not(target_os = "windows"))]
 pub fn data_dir() -> PathBuf {
     xdg_home("XDG_DATA_HOME", ".local/share").join("punktfunk")
@@ -195,7 +195,7 @@ pub mod env_file {
 
 /// The mode [`create_private_dir`] gives `dir`: 0700, except the door's box directory
 /// (`config`), which every seat user walks to its own entry below it. Its files are 0600 and
-/// its subdirectories 0700, so execute-only shows names and no more.
+/// its subdirectories 0700, so execute-only reaches an entry by name and lists none.
 #[cfg(unix)]
 fn private_dir_mode(door: bool, dir: &std::path::Path, config: &std::path::Path) -> u32 {
     if door && dir == config {

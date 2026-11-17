@@ -48,7 +48,7 @@ use crate::video_types::AnyPlanner;
 /// missing `video::native_evidence` ungeneratable.
 pub(crate) const DECODER_PIN: &str = "native-vaapi";
 
-// The libva runtime lives in `pf-vaapi` so the host encoder binds the same one.
+// The libva runtime lives in `pf-libva` so the host encoder binds the same one.
 use pf_libva::Display;
 use pf_libva::Libva;
 use pf_libva::VaBufferId;
@@ -210,8 +210,7 @@ impl Session {
         };
         d.require_entrypoint(profile.value)?;
 
-        // Named rather than default: on Main 10 the driver default is 8-bit, and
-        // writing 10-bit samples into an 8-bit surface is silent narrowing.
+        // Named so a driver that cannot decode into this format refuses the config here.
         let rt = VaConfigAttrib {
             kind: VA_CONFIG_ATTRIB_RT_FORMAT,
             value: rt_format,
@@ -284,7 +283,7 @@ impl Session {
 /// Carry-over bound: the DPB's own depth. A bump can leave at most that many
 /// frames behind the one that ships now. The queue inherits the DPB claim
 /// ([`settle`] then [`ship`]), so it costs the pool at most one surface — unlike
-/// Vulkan's `MAX_DELIVERABLE = 1`, where a delivered frame is extra residency.
+/// Vulkan's `MAX_DELIVERABLE`, where a delivered frame is extra residency.
 /// Unbounded, a two-shown-per-AU stream grows until the pool is exhausted and
 /// demotes the rung. H.264/H.265 decode one picture per AU so the bound is
 /// defence; AV1 temporal units may decode several. Hosts emit zero-reorder, so
@@ -715,7 +714,7 @@ impl NativeVaapiDecoder {
         )?;
         // Per-frame render size, clamped to the coded picture: 5.9.6 has no upper
         // bound, and an unclamped crop would exceed the surface. Crop, not SAR —
-        // same as the other native rungs, unlike libavcodec.
+        // same as the other native rungs.
         let facts = PictureFacts {
             keyframe: plan.picture.is_key,
             references_clean: plan.picture.references_clean,
@@ -1294,9 +1293,9 @@ fn sync_mode() -> u8 {
 }
 
 /// Export, then hand out the decode's write fence as sync_files (one per object).
-/// The pump never waits: the presenter waits them on the GPU. Without the ioctl the
-/// old CPU wait runs here and `sync_fds` is empty. Fds are owned from success so
-/// later refusals close them. One fd per object, even when planes share it.
+/// The pump never waits: the presenter waits them on the GPU. Without the ioctl
+/// `vaSyncSurface` waits here on the CPU and `sync_fds` is empty. Fds are owned from
+/// success so later refusals close them. One fd per object, even when planes share it.
 fn export(
     d: &Display,
     surface: VaSurfaceId,
@@ -3587,7 +3586,8 @@ mod parity {
         );
     }
 
-    /// P010 is two bytes per sample; HEVC pads 240 to 256, so chroma is not at display height.
+    /// P010 is two bytes per sample; a driver that pads the 240-line surface puts chroma
+    /// below display height.
     #[test]
     #[ignore = "needs a machine with a libva runtime and an HEVC Main 10 VLD entry point"]
     fn main10_every_frame_hashes_bit_identical_to_libavcodec() {

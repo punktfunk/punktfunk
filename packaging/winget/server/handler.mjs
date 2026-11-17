@@ -1,9 +1,9 @@
 // Punktfunk's winget REST source — the read path only.
 //
-// The winget client consumes exactly three endpoints. `microsoft/winget-cli-restsource`'s other 20
-// (`/packages/**` CRUD) are that reference implementation's ADMIN API for mutating a CosmosDB —
-// they are not part of what a client calls, and a source whose data is generated at release time
-// has nothing to mutate. So this serves:
+// The winget client consumes exactly three endpoints. `microsoft/winget-cli-restsource`'s other 23
+// (`/packages/**` CRUD and the manifest writes) are that reference implementation's ADMIN API for
+// mutating a CosmosDB — they are not part of what a client calls, and a source whose data is
+// generated at release time has nothing to mutate. So this serves:
 //
 //   GET  /information                        server identity + declared capabilities
 //   POST /manifestSearch                     search; 204 when nothing matches
@@ -108,7 +108,7 @@ function search(data, body) {
   let hits = data.packages.filter((pkg) => {
     if (FetchAllManifests) return true;
     if (!matchesQuery(pkg, Query)) return false;
-    // Inclusions widen (OR); an empty/absent list imposes nothing.
+    // Inclusions: any one may match (OR); an empty/absent list imposes nothing.
     if (Array.isArray(Inclusions) && Inclusions.length > 0) {
       if (!Inclusions.some((i) => matchesOne(pkg, i))) return false;
     }
@@ -127,7 +127,7 @@ function search(data, body) {
 
 async function handle(request, data) {
   const url = new URL(request.url);
-  // Tolerate a mount under a sub-path (e.g. /winget/information) so the same Worker can sit behind
+  // Tolerate a mount under a sub-path (e.g. /winget/information) so the same handler can sit behind
   // a reverse proxy that does not strip a prefix.
   const path = url.pathname.replace(/\/+$/, "");
   const tail = (name) => path === `/${name}` || path.endsWith(`/${name}`);

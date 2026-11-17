@@ -1,8 +1,8 @@
 //! A Linux seat's own "Return to Gaming Mode" and "Switch to Desktop", without ending the stream.
 //!
-//! SteamOS, Bazzite and CachyOS send both through steamos-manager's `SessionManagement1` on the
-//! session bus, and Steam calls it directly wherever the name exists. On a seat that service
-//! would rewrite the box's own login. A seat host owns the name on the seat's bus instead; the
+//! SteamOS and Bazzite send both through steamos-manager's `SessionManagement1` on the session
+//! bus, and Steam calls it directly wherever the name exists. On a seat that service would
+//! rewrite the box's own login. A seat host owns the name on the seat's bus instead; the
 //! runner's `steamos-session-select` calls it too. The desktop keeps running in Game Mode, so a
 //! switch only moves each of the seat's live sessions between its KWin output and a gamescope of
 //! its own, in place. That gamescope outlives a disconnect, as the box's Game Mode keeps Steam.

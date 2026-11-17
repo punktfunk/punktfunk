@@ -13,8 +13,9 @@ pub(crate) struct HostKnobs {
     /// headless box with the management API can prove a client end to end. Anything else is the
     /// display.
     pub(crate) source: Punktfunk1Source,
-    /// `PUNKTFUNK_IDLE_TIMEOUT_MS`; `None` (unset/invalid/zero) = core default (8 s). Clamped
-    /// downstream to ≥1 s with a keep-alive that scales, so a live session never false-closes.
+    /// `PUNKTFUNK_IDLE_TIMEOUT_MS`; `None` (unset/invalid/zero) = `endpoint::DEFAULT_IDLE_TIMEOUT`.
+    /// Clamped downstream to ≥1 s with a keep-alive that scales, so a live session never
+    /// false-closes.
     pub(crate) idle_timeout: Option<Duration>,
     /// `PUNKTFUNK_ACKED_REFS`: `on` holds confirmed references all session, `off` never takes
     /// them, `None` follows the link.

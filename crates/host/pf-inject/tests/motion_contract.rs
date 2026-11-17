@@ -153,7 +153,7 @@ fn rescaling_backends_convert_the_wire_into_their_native_units() {
     let wire_gyro = (100 * MOTION_GYRO_LSB_PER_DEG_S) as i16;
     let wire_accel = MOTION_ACCEL_LSB_PER_G as i16;
 
-    // hid-steam: STEAM_DECK_GYRO_RES_PER_DPS = 16, ACCEL_RES_PER_G = 16384.
+    // hid-steam (6.12–7.2): STEAM_DECK_GYRO_RES_PER_DPS = 16, STEAM_DECK_ACCEL_RES_PER_G = 16384.
     // Units only: the Deck's raw Y is the wire's −Z.
     let (gyro, accel) = motion_wire_to_deck([wire_gyro; 3], [wire_accel; 3]);
     assert_eq!(
@@ -167,7 +167,8 @@ fn rescaling_backends_convert_the_wire_into_their_native_units() {
         "Deck accel: 1 g at 16384 LSB/g"
     );
 
-    // hid-nintendo: JC_IMU_GYRO_RES_PER_DPS = 14.247, ACCEL_RES_PER_G = 4096.
+    // hid-nintendo: 14.247 LSB/°·s (JC_IMU_GYRO_RES_PER_DPS = 14247, scaled ×1000),
+    // JC_IMU_ACCEL_RES_PER_G = 4096.
     // Identity factory-calibration blob, so report is 1:1. 100 °/s × 14.247 = 1424.7, truncated.
     // Signs are the codec tests' job: the pad's axes are SDL's permutation of the wire's.
     let mut st = SwitchState::neutral();

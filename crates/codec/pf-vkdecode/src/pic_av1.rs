@@ -172,8 +172,9 @@ fn std_frame_type(frame_type: pf_bitstream::av1::FrameType) -> hh::StdVideoAV1Fr
 /// Convert one planned AV1 frame: `refs` and `picture_info` build the
 /// sections, then the slot commit.
 ///
-/// `slots` is untouched until every fallible step has passed. A half-applied
-/// DPB update is a corrupt reference.
+/// `slots` is untouched until every conversion has passed; only the final
+/// setup assign can still fail ([`SlotError::Full`]). A half-applied DPB
+/// update is a corrupt reference.
 pub fn plan_to_vk_av1(
     plan: &AuPlan,
     slots: &mut SlotMap,
@@ -368,10 +369,10 @@ fn tiles(
     sequence: &pf_bitstream::av1::ParsedSequenceHeader,
 ) -> Result<(hh::StdVideoAV1TileInfo, TileArrays), PlanToVkAv1Error> {
     let tile = &p.tile_info;
-    // `pMiColStarts`/`pMiRowStarts` take SUPERBLOCK starts, not the 4x4 units their
-    // names read as; libavcodec writes `tile_start_col_sb`/`tile_start_row_sb` there.
-    // The parser holds MI, so shift. Only entry 0 is common to both readings, which
-    // is why a one-tile frame survives either way and a tiled one does not.
+    // The spec defines `pMiColStarts`/`pMiRowStarts` in 4x4 MI units, but AMD's Windows
+    // driver reads superblock starts there, as libavcodec wrote them through n8.0. The parser
+    // holds MI, so shift. Only entry 0 is common to both readings, which is why a one-tile
+    // frame survives either way and a tiled one does not.
     let sb_shift = if sequence.use_128x128_superblock {
         5
     } else {
@@ -1294,7 +1295,7 @@ mod tests {
 
         let starts = |pic: &OwnedStdAv1PictureInfo| {
             // SAFETY: both point at boxed arrays `pic` owns, alive for this call;
-            // the row array is `MAX_TILE_ROWS + 1` long, the column one one shorter.
+            // each is `MAX_TILE_ROWS + 1` / `MAX_TILE_COLS + 1` long, past the 3 and 2 read.
             unsafe {
                 let info = &*pic.std().pTileInfo;
                 (

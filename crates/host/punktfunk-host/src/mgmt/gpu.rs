@@ -36,7 +36,8 @@ pub(crate) struct ApiActiveGpu {
     name: String,
     /// `nvidia` | `amd` | `intel` | `other`.
     vendor: String,
-    /// `nvenc` | `amf` | `qsv` | `mf` | `vaapi` | `software`.
+    /// Label of the encode branch that opened, e.g. `nvenc`, `vaapi-native`, `vulkan`,
+    /// `software`, `driver-amf`.
     backend: String,
     sessions: u32,
 }
@@ -51,7 +52,8 @@ pub(crate) struct GpuState {
     /// Label for the stored pick, kept even when that GPU is absent.
     preferred_name: Option<String>,
     preferred_available: bool,
-    /// `PUNKTFUNK_RENDER_ADAPTER` when set. Honoured in `auto`; a manual pick overrides it.
+    /// `PUNKTFUNK_RENDER_ADAPTER` when set. Windows honours it in `auto`; a manual pick
+    /// overrides it.
     env_override: Option<String>,
     /// `PUNKTFUNK_ENCODER` when pinned (`qsv` / `nvenc` / …, not `auto`). A vendor mismatch is
     /// overridden at session open (adapter wins); the console uses this to flag a stale pin.
@@ -62,7 +64,8 @@ pub(crate) struct GpuState {
 
 #[derive(Deserialize, ToSchema)]
 pub(crate) struct SetGpuPreference {
-    /// `auto` (env pin, else max dedicated VRAM) or `manual`.
+    /// `auto` (Windows: env pin, else max dedicated VRAM; Linux: NVIDIA when present, else the
+    /// encode render node) or `manual`.
     #[schema(example = "manual")]
     mode: String,
     /// Required for `manual`: a currently listed GPU `id`.
@@ -175,7 +178,8 @@ pub(crate) async fn list_gpus() -> Json<GpuState> {
 
 /// Set the GPU preference
 ///
-/// `auto` = env pin else max VRAM; `manual` pins capture+encode. Applies to the next session.
+/// `auto` = env pin else max VRAM on Windows, NVIDIA else the encode render node on Linux;
+/// `manual` pins capture+encode. Applies to the next session.
 /// An absent preferred GPU falls back to auto rather than failing the session.
 #[utoipa::path(
     put,

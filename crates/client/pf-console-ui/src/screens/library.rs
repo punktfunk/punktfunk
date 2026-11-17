@@ -80,7 +80,7 @@ const ROW_STEPS: usize = 3;
 const PLATE_AIR: f64 = 32.0;
 /// Air under the sort/view row before the next line.
 const BAR_AIR: f64 = 4.0;
-/// The shelf's group heading, and the air round its covers (the Apple strip's 44).
+/// The shelf's group heading, and the vertical air round its covers.
 const SHELF_HEAD: f64 = 26.0;
 const SHELF_AIR: f64 = 44.0;
 /// The state card's height among the tab's rows.
@@ -170,7 +170,7 @@ pub(crate) struct LibraryScreen {
     bump: Spring,
     view_mode: LibraryView,
     /// The sort/view pills' sliding capsules. Boxed: `Screen` moves by value and this
-    /// variant is already the largest.
+    /// variant is among its larger ones.
     bar: Box<bar::Bar>,
     /// Seat scroll and capsules next frame: a new arrangement does not glide from the old.
     snap_scroll: bool,
@@ -193,11 +193,13 @@ pub(crate) struct LibraryScreen {
     decoder: ArtDecoder,
     /// Covers decoded and waiting to join `art`, [`ADOPT_PER_FRAME`] at a time.
     arriving: std::collections::VecDeque<(String, Image)>,
-    /// Decode scale. This screen does not republish `k`; a grow cannot re-decode.
+    /// Decode scale: `draw` sets it from `k` each frame. A cover keeps the scale it was
+    /// decoded at.
     art_k: f64,
     /// This device's, from the last render.
     art_budget: ArtBudget,
-    /// Last-draw frame per id. Grid pages the whole library; unstamped covers stay forever.
+    /// Last-draw frame per id: eviction drops the longest unseen first, and a cover never
+    /// drawn (stamp 0) before any other.
     art_seen: HashMap<String, u64>,
     frame: u64,
     /// Armed after neighbourhood art or 400 ms. Unarmed, nothing draws.
@@ -272,7 +274,7 @@ impl LibraryScreen {
             art_failed: std::collections::HashSet::new(),
             decoder: ArtDecoder::default(),
             arriving: std::collections::VecDeque::new(),
-            // Design scale. Decode runs at this `k` for the life of the screen.
+            // Design scale until the first `draw` sets `k`.
             art_k: 1.0,
             art_budget: ArtBudget::DESKTOP,
             art_seen: HashMap::new(),
@@ -799,8 +801,8 @@ impl LibraryScreen {
         }
     }
 
-    /// The desktop tile's caption: the host's desk, or the game it already has up. Same
-    /// `/status` field the Options screen's Connect row reads, so the two cannot disagree.
+    /// The desktop tile's caption: the host's desk, or the game it already has up. Reads
+    /// `HostRow::running`, as the Desktops tile does, so the two cannot disagree.
     pub(crate) fn desktop_caption(&self) -> String {
         if self.host.running.is_empty() {
             pf_l10n::client::lib_desktop().into()
@@ -821,13 +823,13 @@ impl LibraryScreen {
         ConnectIntent::to_host(&self.host, Some((&g.id, &g.title)))
     }
 
-    /// The button the state card offers: Retry after a failure that can retry, the desk
-    /// when the host has no titles.
     /// A search that found nothing: the shelf says so instead of standing empty.
     pub(crate) fn no_match(&self) -> bool {
         self.query.is_some() && self.len() == 0 && matches!(self.phase, LibraryPhase::Ready)
     }
 
+    /// The button the state card offers: Retry after a failure that can retry, the desk
+    /// when the host has no titles.
     fn state_action(&self) -> Option<StateAction> {
         match self.phase {
             LibraryPhase::Error {
@@ -2062,7 +2064,7 @@ impl ScreenView for LibraryScreen {
         if !matches!(self.phase, LibraryPhase::Ready) || self.focused().is_none() {
             return vec![Hint::new(HintKey::Back, pf_l10n::common::common_back())];
         }
-        // The legend shows a pad's Y, never its A: the one press that brings a title back.
+        // Confirm and Secondary both bring a title back, so the legend lists each.
         if let Some(h) = &self.hidden {
             let show = pf_l10n::client::lib_show_for(&h.name);
             return vec![
@@ -2137,8 +2139,7 @@ struct FieldGeom {
 
 /// Where a scroll standing at `stood` goes to show an item at `top`, `h` tall, with `breath`
 /// round it, in a view `usable` tall: only as far as it takes, and a line taller than the
-/// view shows its top. Never centred: on a phone that walked the first row up over the
-/// host's verbs.
+/// view shows its top. Never centred.
 fn reveal(stood: f64, top: f64, h: f64, usable: f64, breath: f64) -> f64 {
     let mut want = stood;
     if top + h + breath > want + usable {

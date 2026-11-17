@@ -1,7 +1,9 @@
 //! Gate probes for `design/intel-windows-zero-copy-conversion.md` §4, run by hand on an Intel
-//! box: `enc-tests.exe --ignored gate_ --nocapture --test-threads 1`. They print what the
-//! hardware did and write streams the rig decodes (`qsv-levels.py`). The two `qsv_live_` tests
-//! hold what passed: profile, chroma, depth, signalling, and that the texture is read in place.
+//! box. They print what the hardware did and write streams the rig decodes (`qsv-levels.py`).
+//! The two `qsv_live_` tests hold what passed: profile, chroma, depth, signalling, and that the
+//! texture is read in place.
+//!
+//! `cargo test -p pf-encode-win --features qsv -- --ignored gate_ --nocapture --test-threads 1`
 //!
 //! The picture: eight bars in the top half, the same bars reversed below, a black band in the
 //! last 16 rows. Bar 7 is a grey that steps per frame, so the decoded order shows; the seam
@@ -269,7 +271,7 @@ fn picture(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Feed {
-    /// Today's path: a copy into one of the runtime's surfaces.
+    /// A copy into one of the runtime's surfaces, the path when our allocator is refused.
     Runtime,
     /// Our allocator, a copy into our ring at the coded size.
     Copy,

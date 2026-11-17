@@ -20,8 +20,8 @@ pub(super) fn steam_runtime_dir(inst: u64) -> std::path::PathBuf {
     std::path::Path::new(&base).join(format!("punktfunk-steam-{inst}"))
 }
 
-/// Nested refresh: client's rate, capped by `PUNKTFUNK_MAX_FPS` (off by default). This is the
-/// game's clamp, not the session — encode still repeats the held frame at the client's rate.
+/// Nested refresh: client's rate, capped by `PUNKTFUNK_MAX_FPS` (`HostConfig::game_fps`). This is
+/// the game's clamp, not the session — encode still repeats the held frame at the client's rate.
 pub(super) fn game_hz(session_hz: u32) -> u32 {
     pf_host_config::config().game_fps(session_hz).max(1)
 }
@@ -139,9 +139,9 @@ fn mangoapp_config(
     (mangoapp && !steam_mode && box_config.is_none_or(str::is_empty)).then_some(MANGOAPP_HIDDEN)
 }
 
-/// Paint-on-commit + `--framerate-limit` at the same rate as `-r`. The two travel together: VRR
-/// stops pacing to the refresh grid, so a FIFO game would otherwise run unbounded. Gated on the
-/// probe so argv means what it says. `PUNKTFUNK_GAMESCOPE_VRR=0` opts out.
+/// Paint-on-commit + `--framerate-limit` at [`game_hz`], the whole-hertz form of `-r`. The two
+/// travel together: VRR stops pacing to the refresh grid, so a FIFO game would otherwise run
+/// unbounded. Gated on the probe so argv means what it says. `PUNKTFUNK_GAMESCOPE_VRR=0` opts out.
 fn adaptive_sync_args(game_hz: u32) -> Vec<String> {
     if !pf_host_config::config().gamescope_vrr || !gamescope_paints_on_commit() {
         return Vec::new();

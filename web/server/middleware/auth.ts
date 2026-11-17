@@ -50,7 +50,7 @@ export default defineEventHandler(async (event) => {
 	const listener = listenerOf(event);
 	const isPluginPath = isPluginUiPath(pathname);
 
-	// ── the origin split (2026-08-05 review H-3) ────────────────────────────────────────────────
+	// ── the origin split ────────────────────────────────────────────────
 	//
 	// Plugin UIs live on their own origin (see nitro-entry/bun-https.mjs). Enforcing that is two
 	// refusals, and BOTH are load-bearing:
@@ -121,8 +121,8 @@ export default defineEventHandler(async (event) => {
 	if (person !== undefined) return person === PASS ? undefined : person;
 
 	// A signed-in visitor on the login page is sent on to `next`. This is also what makes a login
-	// land when the browser lost the client's redirect: Firefox aborts in-flight chunk imports on
-	// navigation, and the stale-chunk recovery then reloads /login over the target.
+	// land when the browser lost the client's redirect: in Firefox a navigation can abort in-flight
+	// chunk imports, and the stale-chunk recovery then reloads /login over the target.
 	//
 	// Gated on the cookie EXISTING, not just on the path: `useSession` issues a sealed one when it
 	// finds none, and the login page is the one place a visitor with no session is expected.
@@ -248,12 +248,11 @@ function pluginGate(event: H3Event, pathname: string, method: string) {
  * hostname — so the policy matches their address bar), plus the console's port and scheme.
  *
  * ⚠ The scheme must NOT come from the request. `getRequestURL` reports `http:` on an HTTPS listener
- * here — Nitro hands the app a synthetic request with no TLS socket — so this named
- * `http://host:47992` as the only permitted ancestor of a console the operator was reading over
- * HTTPS, and every plugin UI came up as an empty panel with `ERR_BLOCKED_BY_RESPONSE`. It is taken
- * from the listener's own TLS state instead (`consoleOriginScheme`), with `x-forwarded-proto`
- * winning when something in front terminated TLS for us — that is the one case where the browser's
- * scheme differs from this process's.
+ * here — Nitro hands the app a synthetic request with no TLS socket — and a source with the wrong
+ * scheme leaves every plugin UI an empty panel (`ERR_BLOCKED_BY_RESPONSE`). It is taken from the
+ * listener's own TLS state instead (`consoleOriginScheme`), with `x-forwarded-proto` winning when
+ * something in front terminated TLS for us — that is the one case where the browser's scheme
+ * differs from this process's.
  *
  * Falls back to `'none'` rather than `'self'` or `*` when the console port is unknown: an unframable
  * plugin page is a visible, harmless failure, and the alternatives are a policy that either does

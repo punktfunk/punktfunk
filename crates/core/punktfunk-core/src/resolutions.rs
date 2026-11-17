@@ -191,7 +191,8 @@ pub fn nearest_in(family: &Family, h: u32) -> (u32, u32) {
         .expect("every family lists a size")
 }
 
-/// Smallest stream mode the host accepts, per side.
+/// Smallest mode a client asks for, per side. The host's own limits are pf-encode-core's
+/// `validate_dimensions`.
 pub const MIN_WIDTH: u32 = 320;
 pub const MIN_HEIGHT: u32 = 200;
 

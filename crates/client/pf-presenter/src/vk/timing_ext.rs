@@ -5,7 +5,7 @@
 //! the engine's. Values are the registry's (`vk.xml`, extension 209).
 //!
 //! Results are polled, never waited: the present-wait2 waiter asks after each wait
-//! completes, under the swapchain lock it already holds. The swapchain keeps a fixed
+//! completes, taking the swapchain lock for the call. The swapchain keeps a fixed
 //! queue of pending results, and a present that asks for a stamp into a full queue
 //! fails outright, so [`Engine::may_ask`] stops asking two short of [`QUEUE`].
 //!
@@ -317,7 +317,7 @@ fn domain_rank(domain: vk::TimeDomainKHR) -> u8 {
 }
 
 impl Engine {
-    /// Load the entry points from `device`. `None` when the driver exports none of them.
+    /// Load the entry points from `device`. `None` when the driver lacks any of them.
     ///
     /// # Safety
     /// `device` is live, with the extension and `VK_KHR_calibrated_timestamps` enabled.
@@ -502,8 +502,8 @@ impl Engine {
         Some(i128::from(session) - i128::from(engine))
     }
 
-    /// Read every finished result, as session-clock stamps. Empty when nothing finished
-    /// or the driver refused the call.
+    /// Read up to `BATCH` finished results, as session-clock stamps. Empty when nothing
+    /// finished or the driver refused the call.
     ///
     /// # Safety
     /// `swapchain` is live and host-synchronised by the caller.

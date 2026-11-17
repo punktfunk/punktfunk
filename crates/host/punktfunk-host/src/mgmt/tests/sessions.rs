@@ -92,8 +92,8 @@ async fn the_last_session_route_answers_before_and_after_a_session() {
     assert!(mine.get("frames_sent").is_none(), "{mine}");
 }
 
-/// The point of the whole issue: with two clients on one host, stopping one must leave the
-/// other streaming — and the id-less `DELETE /session` must still take both.
+/// With two clients on one host, stopping one leaves the other streaming, and the id-less
+/// `DELETE /session` takes both.
 #[tokio::test]
 async fn a_per_session_stop_drops_only_that_session() {
     let _serial = crate::session_status::tests::REGISTRY.lock().await;
@@ -119,7 +119,7 @@ async fn a_per_session_stop_drops_only_that_session() {
     assert!(idr1.load(Ordering::Relaxed));
     assert!(!idr2.load(Ordering::Relaxed));
 
-    // The id-less form is unchanged: every live session, as every existing caller expects.
+    // The id-less form stops every live session.
     let all = axum::http::Request::delete("/api/v1/session")
         .body(Body::empty())
         .unwrap();
@@ -396,7 +396,7 @@ async fn local_summary_takes_the_tray_token_from_loopback_only_and_is_non_sensit
     let (status, _) = send(&app, summary_req_from("[::1]:40000")).await;
     assert_eq!(status, StatusCode::OK, "::1 is a loopback peer");
 
-    // Loopback with no bearer at all: a `send` without one is the bare tray of an older build.
+    // Loopback with a wrong bearer: `send` adds the admin one to a request that has none.
     let mut bare = get_req("/api/v1/local/summary");
     bare.extensions_mut()
         .insert(PeerAddr("127.0.0.1:40000".parse().unwrap()));

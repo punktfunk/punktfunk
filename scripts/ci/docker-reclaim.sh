@@ -2,15 +2,11 @@
 # Reclaim the disk that Gitea act_runner leaks on this host.
 #
 # Why this exists: act_runner creates a per-job network and a pair of named volumes, and leaks both
-# when a job is killed or the runner restarts. By 2026-07-25 that had accumulated 252 unused volumes
-# (11.7 GB) and 94 stale networks — some dating to task 5626 while current tasks were ~25233 — and
-# concurrent builds then exhausted the disk, failing CI with "No space left on device" at both the
-# cargo and the Docker/overlayfs layer. The stale networks are also what once broke the docs deploy
-# by exhausting Docker's default address pool and swallowing the DMZ 192.168.50.0/24 range.
+# when a job is killed or the runner restarts. Left alone they exhaust the disk, failing CI with
+# "No space left on device" at both the cargo and the Docker/overlayfs layer, and the stale
+# networks exhaust Docker's default address pool.
 #
-# This ran on home-runner-1 only, hand-installed; home-runner-2 went without it and by 2026-08-07
-# had re-accumulated 176 leaked volumes (~60 GB) + 22 GB build cache and spent two days failing
-# jobs at ENOSPC. Hence checked in: BOTH runner hosts install it, from here.
+# Install it on every runner host, from here.
 #
 # Install on a runner host (root):
 #   install -m755 scripts/ci/docker-reclaim.sh /usr/local/sbin/ci-docker-reclaim.sh

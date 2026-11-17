@@ -1,6 +1,6 @@
-//! Protocol v7: the driver encodes, and the host reads access units instead of pixels.
+//! The video transport: the driver encodes, and the host reads access units instead of pixels.
 //!
-//! It replaced the pixel ring rather than joining it — one transport, as
+//! No pixel ring runs beside it — one transport, as
 //! `design/windows-video-plane-overhaul.md` §1.1 decided. The host still owns the memory: it
 //! creates an unnamed section plus a ready event, duplicates both into WUDFHost and delivers the
 //! values over [`IOCTL_SET_ENCODE`], which also carries codec, mode, bitrate, HDR metadata and an
@@ -55,24 +55,23 @@ impl FrameToken {
     }
 }
 
-/// [`au::AuHeader::driver_status`] values. UMDF hides `OutputDebugString` and the restricted
-/// token blocks file writes, so this word is how a driver with no debugger reports state.
+/// [`au::AuHeader::driver_status`] values. UMDF hides `OutputDebugString`, so this word is how
+/// a driver with no debugger reports state.
 pub const DRV_STATUS_NONE: u32 = 0;
 /// An encoder is open on this section.
 pub const DRV_STATUS_OPENED: u32 = 1;
 
 /// Open the encoder for one monitor and adopt its AU section + ready event. Input
 /// [`SetEncodeRequest`], output [`SetEncodeReply`]. A resolution, codec or HDR change is a new
-/// SET_ENCODE — the same tear-down-and-rebuild the host does today.
+/// SET_ENCODE.
 pub const IOCTL_SET_ENCODE: u32 = ctl_code(0x90C);
 /// One-shot control on the live encoder. Input [`EncodeCtlRequest`], no output.
 pub const IOCTL_ENCODE_CTL: u32 = ctl_code(0x90D);
 
 /// [`IOCTL_SET_ENCODE`] input. `section` and `event` are handle VALUES already duplicated into
-/// WUDFHost, adopt-on-success-only exactly as
-/// [`SetFrameChannelRequest`](crate::control::SetFrameChannelRequest): the driver owns and
-/// closes them IFF the IOCTL succeeds, and the host reaps with `DUPLICATE_CLOSE_SOURCE` on any
-/// error. Closing on error double-closes a possibly-reused handle value.
+/// WUDFHost and adopted on success only: the driver owns and closes them IFF the IOCTL
+/// succeeds, and the host reaps with `DUPLICATE_CLOSE_SOURCE` on any error. Closing on error
+/// double-closes a possibly-reused handle value.
 ///
 /// Everything the backend needs to open travels in one request, so opening is not a
 /// negotiation: the driver walks `backends` in order and reports what took.
@@ -118,7 +117,7 @@ pub struct SetEncodeRequest {
     pub slices: u32,
     /// Encoder knobs from the host's `host.env`. Prefix-compatible after
     /// [`SET_ENCODE_REQUEST_LEGACY_SIZE`]: an old host sends none and the driver zero-fills,
-    /// which is every backend's default; an old driver reads the prefix and ignores them.
+    /// which is every backend's default.
     pub knobs: EncodeKnobs,
     /// The size the stream is encoded at when it is not the surface's; zero is the surface's
     /// own. Protocol v10, after [`SET_ENCODE_REQUEST_V9_SIZE`]: `width` and `height` stay the
@@ -180,8 +179,9 @@ impl SetEncodeRequest {
 }
 
 /// [`SetEncodeRequest::flags`]: the display composes FP16 scRGB under SDR wide colour, and the
-/// stream is BT.709 SDR. Sent only to a driver that declared wide colour, so an older one, which
-/// would read BGRA from an FP16 surface, never sees it.
+/// stream is BT.709 SDR. Set only while the display composes that, which needs a driver
+/// reporting `IDDCX_TARGET_CAPS_WIDE_COLOR_SPACE`; an older driver, which would read BGRA from
+/// an FP16 surface, never sees it.
 pub const SET_ENCODE_FLAG_SDR_FP16: u32 = 1;
 
 /// [`SetEncodeRequest::flags`]: encode and signal studio range, because the host advertised
@@ -190,7 +190,7 @@ pub const SET_ENCODE_FLAG_SDR_FP16: u32 = 1;
 pub const SET_ENCODE_FLAG_STUDIO_RANGE: u32 = 2;
 
 /// Bytes of [`SetEncodeRequest`] before [`SetEncodeRequest::knobs`]: what a host older than
-/// the knobs sends, and what a driver older than them reads.
+/// the knobs sends.
 pub const SET_ENCODE_REQUEST_LEGACY_SIZE: usize = 120;
 
 /// Encoder tuning the host resolves once from `host.env` and hands to the driver in the
@@ -201,8 +201,8 @@ pub const SET_ENCODE_REQUEST_LEGACY_SIZE: usize = 120;
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, Default, PartialEq, Eq)]
 pub struct EncodeKnobs {
-    /// `PUNKTFUNK_IR_PERIOD_FRAMES`: intra-refresh wave length in frames, `>= 2`; `0` = half
-    /// a second of frames.
+    /// `PUNKTFUNK_IR_PERIOD_FRAMES`: intra-refresh wave length in frames, `>= 2`; `0` = the
+    /// default `pf_encode_core::policy::intra_refresh_period` picks.
     pub ir_period_frames: u16,
     /// `PUNKTFUNK_LTR_INTERVAL_FRAMES`: frames between LTR marks; `0` = the backend's tuning.
     pub ltr_interval_frames: u16,
@@ -214,13 +214,15 @@ pub struct EncodeKnobs {
     /// `PUNKTFUNK_NVENC_ASYNC`: `1` = the two-thread retrieve, `2` = never pipelined (a falsy
     /// value), `0` = unset: the Linux backend escalates on demand.
     pub nvenc_async: u8,
-    /// `PUNKTFUNK_NVENC_ASYNC_DEPTH`: in-flight encodes in async mode; `0` = 4.
+    /// `PUNKTFUNK_NVENC_ASYNC_DEPTH`: in-flight encodes in async mode; `0` = the default
+    /// `pf_encode_core::nvenc_session::async_inflight_cap` picks.
     pub nvenc_async_depth: u8,
     /// `PUNKTFUNK_NVENC_SLICES`: H.264/HEVC slices, `1..=32`; `0` = the session's default.
     pub nvenc_slices: u8,
     /// `PUNKTFUNK_NVENC_SUBFRAME`: `0` = the GPU's cap decides, `1` = never, `2` = force.
     pub nvenc_subframe: u8,
-    /// `PUNKTFUNK_NVENC_MAX_SESSIONS`: concurrent-session budget; `0` = 8.
+    /// `PUNKTFUNK_NVENC_MAX_SESSIONS`: concurrent-session budget; `0` = the default the
+    /// Windows NVENC backend's `session_cap` picks.
     pub nvenc_max_sessions: u8,
     /// `PUNKTFUNK_NVENC_SPLIT_ARBITRATE`: `1` = arm the live split experiment.
     pub nvenc_split_arbitrate: u8,
@@ -238,7 +240,8 @@ pub struct EncodeKnobs {
     pub vbv_tenths: u8,
     /// `PUNKTFUNK_PYROWAVE_STREAMED_AU`: `1` = arm streamed PyroWave AUs.
     pub pyrowave_streamed_au: u8,
-    /// `PUNKTFUNK_PYROWAVE_CHUNK_KIB` / 64: streamed-AU chunk target; `0` = 256 KiB.
+    /// `PUNKTFUNK_PYROWAVE_CHUNK_KIB` / 64: streamed-AU chunk target; `0` =
+    /// `pf_encode_core::pyrowave_wire::STREAM_CHUNK_TARGET_BYTES`.
     pub pyrowave_chunk_64kib: u8,
     /// `PUNKTFUNK_NVENC_PRESET`: `1..=7` = P1..P7; `0` = P1.
     pub nvenc_preset: u8,
@@ -279,8 +282,8 @@ impl EncodeKnobs {
         "PUNKTFUNK_NVENC_PRESET",
     ];
 
-    /// Set the knob `name` names from its environment spelling. Unparseable values leave
-    /// the field alone, as the encoders always did. `false` = not a knob name.
+    /// Set the knob `name` names from its environment spelling. An unparseable value leaves a
+    /// numeric or named knob alone and sets any other to `0`. `false` = not a knob name.
     pub fn apply_env(&mut self, name: &str, value: &str) -> bool {
         let v = value.trim();
         let num = |lo: u32, hi: u32| v.parse::<u32>().ok().filter(|n| (lo..=hi).contains(n));
@@ -562,17 +565,21 @@ pub struct EncoderCapsWire {
 
 /// [`SetEncodeReply::status`]: an encoder is open.
 pub const SET_ENCODE_OK: u32 = 0;
-/// No arrived monitor has the request's `target_id`.
+/// The monitor went away while the encoder opened, or the capture worker has no source yet. A
+/// `target_id` the caller does not hold fails the IOCTL with `STATUS_NOT_FOUND` instead.
 pub const SET_ENCODE_NO_MONITOR: u32 = 1;
-/// The section did not pass [`au::au_readable`], or is smaller than its header claims.
+/// The capture worker refused the request or its section: malformed, not mappable, failing
+/// [`au::au_readable`], or smaller than its header claims. The driver fails the IOCTL with
+/// `STATUS_INVALID_PARAMETER` for these instead.
 pub const SET_ENCODE_BAD_SECTION: u32 = 2;
-/// The monitor has no render device yet: no swap-chain has been assigned since arrival.
+/// The monitor has no usable render device: no swap-chain has been assigned since arrival, or
+/// the device behind it could not be opened.
 pub const SET_ENCODE_NO_DEVICE: u32 = 3;
 /// Every backend in the list refused; `error` and `name` are the last one's.
 pub const SET_ENCODE_NO_BACKEND: u32 = 4;
 /// The pool or its converters could not be built on the render device.
 pub const SET_ENCODE_POOL: u32 = 5;
-/// The encode thread could not be started.
+/// The encode thread could not be started, or exited before its open replied.
 pub const SET_ENCODE_THREAD: u32 = 6;
 /// The open did not finish within the driver's bound; the thread was abandoned.
 pub const SET_ENCODE_TIMEOUT: u32 = 7;
@@ -652,10 +659,9 @@ impl core::error::Error for ReplyTooShort {}
 
 /// Whether a session's encoder reads the acquired surface itself instead of a copy of it.
 /// Only a `composed` input ([`EncodeInput::composed`]) at the surface's own size can: every
-/// other kind needs its converter, and a [`Framing`] that scales needs the scale pass. On by default for AMF, QSV and NVENC: the copy runs on the 3D engine a game
-/// renders on, and on an RTX 4090 at 4K120 under full load it held the frame 2.7 ms longer
-/// before the encoder saw it. `knob` is `PFVD_POOL_BYPASS`: `0` turns it off, any other
-/// value turns it on for every backend.
+/// other kind needs its converter, and a [`Framing`] that scales needs the scale pass. On by
+/// default for AMF, QSV and NVENC: the copy runs on the 3D engine a game renders on. `knob` is
+/// `PFVD_POOL_BYPASS`: `0` turns it off, any other value turns it on for every backend.
 ///
 /// The driver's pool is Windows-only; the rule lives here so it is covered everywhere.
 #[must_use]
@@ -680,10 +686,9 @@ pub struct EncodeCtlRequest {
     pub target_id: u32,
     /// One `ENCODE_CTL_*` op.
     pub op: u32,
-    /// First argument: reference-range start, bitrate kbps, or new `wire_seq_base`.
+    /// First argument; each `ENCODE_CTL_*` op says what it carries.
     pub arg0: u32,
-    /// Second argument: reference-range end (inclusive) for
-    /// [`ENCODE_CTL_INVALIDATE_REF_FRAMES`].
+    /// Second argument; each `ENCODE_CTL_*` op says what it carries.
     pub arg1: u32,
     /// [`ENCODE_CTL_SET_HDR_META`] payload: 28 `pf_frame::HdrMeta` bytes.
     pub payload: [u8; 28],
@@ -783,7 +788,7 @@ mod tests {
 
     #[test]
     fn frame_token_packing_matches_legacy_layout() {
-        // Packing was `(gen<<40)|(seq<<8)|slot` by hand; lock the bit positions.
+        // Lock the bit positions: `(gen<<40)|(seq<<8)|slot`.
         let t = FrameToken {
             generation: 7,
             seq: 42,
@@ -887,8 +892,7 @@ mod tests {
 
     /// A `SET_ENCODE` reply may promise only the chroma its chosen input can carry. The two
     /// backends the host ever negotiates 4:4:4 for must therefore land on a full-chroma input at
-    /// both depths: HDR once picked P010 here, so the encoder emitted 4:2:0 while the reply — and
-    /// the client's Welcome — still said 4:4:4.
+    /// both depths.
     #[test]
     fn a_444_request_picks_a_full_chroma_input() {
         use super::EncodeInput::{Bgra, Fp16, Nv12, P010Sdr, Planar, Rgb10, P010};
@@ -971,7 +975,7 @@ mod tests {
     }
 
     /// Only AMF's RGB inputs have a second one: the YUV the converter kinds deliver. QSV never
-    /// opens on BGRA now.
+    /// opens on BGRA.
     #[test]
     fn only_amf_rgb_inputs_fall_back() {
         use super::EncodeInput::{Bgra, Fp16, Nv12, P010Sdr, P010};

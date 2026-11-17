@@ -5,7 +5,7 @@
 //! A line of focus targets in the screen's own tree, so the plate walks onto it from the
 //! line below: Left and Right move between pills and OK applies the focused one. Each
 //! group's accent capsule slides to the pill it applies. The settings are the state, so
-//! this row and Settings never disagree. Collections draws the SORT group alone.
+//! this row and Settings never disagree.
 
 use crate::anim::Spring;
 use crate::collate::SortKey;

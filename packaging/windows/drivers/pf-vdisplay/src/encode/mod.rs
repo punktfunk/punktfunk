@@ -54,7 +54,8 @@ fn wait_render_luid(monitor: &Monitor) -> Option<windows::Win32::Foundation::LUI
     }
 }
 
-/// Backend names in the order the addresses below pin them, for the load-time log.
+/// Names of the backends this build links, for the load-time log: the x86-64 build adds NVENC,
+/// QSV and PyroWave to AMF and Media Foundation.
 pub fn backends_linked() -> &'static [&'static str] {
     #[cfg(target_arch = "x86_64")]
     return &["nvenc", "amf", "qsv", "pyrowave", "mf", "convert"];

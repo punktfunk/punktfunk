@@ -2,9 +2,9 @@
 // parameter block a game wrote to its virtual DualSense (output report 0x02, bytes 11–21
 // for R2 / 22–32 for L2: one mode byte + 10 parameter bytes). The mode values and layouts
 // follow the community-established conventions (Nielk1's TriggerEffectGenerator, ds5w,
-// inputtino) — Sony has never documented them. Parsing is TOTAL: any unknown or short
-// block degrades to `.off`, never traps, so a game using an exotic raw mode can't break
-// the session.
+// inputtino) — Sony has never documented them. Parsing is TOTAL: an unknown mode or an empty
+// block degrades to `.off`, a short block is zero-padded, and nothing traps, so a game using
+// an exotic raw mode can't break the session.
 //
 // `parse` is a pure function (unit-tested without a controller); `apply(to:)` maps the
 // result onto Apple's GCDualSenseAdaptiveTrigger — exact for the 10-zone positional modes
@@ -60,8 +60,8 @@ public enum DualSenseTriggerEffect: Equatable, Sendable {
 
         switch mode {
         case 0x00, 0x05, 0xF0...0xFF:
-            // 0x00/0x05 are the documented off/reset modes; 0xFC/0xFB/0xFA show up from
-            // calibration-adjacent writes — all render as off.
+            // 0x00/0x05 are the conventional off/reset modes; 0xFC–0xFE are firmware
+            // debug/calibration modes — all render as off.
             return .off
 
         case 0x01:

@@ -69,7 +69,7 @@ fun posterLoader(context: Context, id: ClientIdentity, address: String, fpHex: S
 /**
  * Poster bytes by URL, one cache for the process: two must not share a directory. It sits above
  * the transport because a poster the stream port served never passes OkHttp's own cache. The
- * first open deletes `art-http`, the HTTP cache it replaced, and Coil's `image_cache`.
+ * first open deletes `art-http`, the old HTTP cache, and Coil's `image_cache`.
  */
 private object PosterCache {
     private var cache: DiskCache? = null

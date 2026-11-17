@@ -3,9 +3,9 @@
 //! Video datagrams are sealed at a per-session `shard_payload` sized for a
 //! 1500-byte MTU. A smaller hop still carries QUIC control while every video
 //! datagram dies to fragmentation or `WSAEMSGSIZE`; the client reports
-//! `loss_ppm=0`. Control discovery probes up to
-//! [`video_datagram_udp_ceiling`], so a settled MTU below that is the path
-//! verdict.
+//! `loss_ppm=0`. Control discovery probes to at least [`video_datagram_udp_ceiling`]
+//! (to the sealed jumbo datagram unless jumbo is off), so a settled MTU below that is
+//! the path verdict.
 //!
 //! Pin with `PUNKTFUNK_WIRE_MTU=<bytes>`. Watch records a below-ceiling
 //! settle; the next handshake clamps. Jumbo follows this host's adapter toward
@@ -27,16 +27,16 @@ use punktfunk_core::config::{
 use punktfunk_core::packet::WIRE_OVERHEAD;
 use punktfunk_core::quic::PATH_SHRANK_CLOSE_CODE;
 
-/// Mid-session re-key driver. `None` at [`spawn_watch`] observes and learns,
-/// and ends a session a move left too big. Built only when the client advertised per-frame geometry and the
-/// wire is not chunk-aligned — PyroWave pins `Welcome` once over the C ABI,
-/// so a mid-stream re-key would corrupt its parse.
+/// Mid-session re-key driver. `None` at [`spawn_watch`] observes and learns, and ends a
+/// session whose video does not fit the path. Built only when `Hello::max_shard_payload` is
+/// non-zero, the codec is not PyroWave (it pins the `Welcome` shard for the session), and the
+/// data plane is the shared UDP one, not a browser's WebTransport.
 pub(super) struct ShardReneg {
     /// Sole writer of the control stream: `ShardPayloadChanged{n}`.
     pub change_tx: tokio::sync::mpsc::UnboundedSender<u16>,
     /// Client `ShardPayloadAck`s — the grow does not apply until one matches.
     pub ack_rx: tokio::sync::mpsc::Receiver<u16>,
-    /// Encode loop: [`Session::set_shard_payload`] between AUs, next to `bitrate_rx`.
+    /// Send thread: [`punktfunk_core::Session::set_shard_payload`] between AUs.
     pub apply_tx: std::sync::mpsc::Sender<usize>,
 }
 

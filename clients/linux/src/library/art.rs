@@ -10,7 +10,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-/// Decoded posters kept, in bytes. About 700 tiles at 1x, 180 at 2x.
+/// Decoded posters kept, in bytes. A full `DECODE_W` × `DECODE_H` poster costs 4 bytes a
+/// pixel (`Lru::put`): about 330 at 1x, 80 at 2x.
 const BUDGET: usize = 192 << 20;
 
 /// The size a poster decodes to, in logical pixels: a grid tile's width before a column is

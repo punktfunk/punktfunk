@@ -21,9 +21,8 @@ use std::time::{Duration, Instant};
 /// Ceiling of the wait between `try_wait`s ([`nap_after`]); not a busy loop.
 const POLL: Duration = Duration::from_millis(20);
 
-/// The wait after the n-th empty `try_wait`: 1 ms, doubling to [`POLL`]. `hyprctl` and
-/// `swaymsg` answer in a few milliseconds; a fixed 20 ms slice cost every call that much,
-/// and a connect makes dozens.
+/// The wait after the n-th empty `try_wait`: 1 ms, doubling to [`POLL`]. A fixed 20 ms slice
+/// would cost every short `hyprctl` or `swaymsg` call that much, and a connect makes dozens.
 fn nap_after(polls: u32) -> Duration {
     Duration::from_millis(1u64 << polls.min(5)).min(POLL)
 }
@@ -42,9 +41,8 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 ///
 /// `read_to_end` is unbounded, and a reader that outlived its call (see [`DRAIN_GRACE`])
 /// has nobody left to stop it. Closing the read end at this cap also gives the escaped
-/// writer an EPIPE. 16 MiB is an order of magnitude above the largest `pw-dump` a populated
-/// PipeWire graph produces; hitting it means a helper that ran away, logged rather than
-/// returned as quietly short output.
+/// writer an EPIPE. 16 MiB is meant to sit far above any `pw-dump`; hitting it means a
+/// helper that ran away, logged rather than returned as quietly short output.
 const DRAIN_CAP: u64 = 16 * 1024 * 1024;
 
 /// Stdout/stderr stay as the caller configured them (inherited by default). Use
@@ -452,8 +450,8 @@ fn undecorate(name: &str) -> &str {
 /// Ending the *tree* the helper started, not just the process we spawned.
 ///
 /// [`std::process::Child::kill`] is one `TerminateProcess`: the process we launched.
-/// On Windows every helper is reached through a shell (`cmd /c …`), so the process
-/// that hangs is a **grandchild**. Killing the shell leaves it holding our stdio and
+/// A helper that starts children (a shell such as `cmd /c …`) can hang in a
+/// **grandchild**. Killing the launched process leaves it holding our stdio and
 /// working directory — the budget has not bounded anything.
 ///
 /// A Job object is the mechanism: membership is inherited across `CreateProcess`, so
@@ -1009,9 +1007,8 @@ mod tests_windows {
 
     /// The budget must end the whole tree, not just the process we spawned.
     ///
-    /// Every Windows helper is reached through a shell, so the process that hangs is a
-    /// grandchild `Child::kill` cannot see. Left alive it keeps our stdio handles and
-    /// working directory.
+    /// A helper reached through a shell can hang in a grandchild `Child::kill` cannot see.
+    /// Left alive it keeps our stdio handles and working directory.
     #[test]
     fn the_budget_ends_the_whole_tree_not_just_the_child() {
         let scratch = Scratch::new();

@@ -52,8 +52,8 @@ vec3 withCursor(ivec2 p, vec3 col) {
     return mix(col, c.rgb, c.a);
 }
 
-// Source may be SMALLER than the coded (16-aligned) Y plane — clamp every fetch to the source
-// edge so the alignment-padding rows duplicate the last real row (see the 4:2:0 siblings).
+// Clamp every fetch to the source edge, as the 4:2:0 siblings do. The planes here are the
+// session size, with no alignment padding.
 void main() {
     ivec2 sz = imageSize(yImg);
     ivec2 rmax = textureSize(rgb, 0) - 1;

@@ -131,8 +131,8 @@ pub(in crate::linux) enum ImportOutcome {
 
 /// Why a raw-dmabuf passthrough frame fell through to the next lane.
 ///
-/// Each variant is a different diagnosis. Without this, the `if` fell out silently and a
-/// zero-copy session could pay CPU on every frame while logging a healthy open.
+/// Each variant is a different diagnosis, so a zero-copy session that pays CPU on every frame
+/// says why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::linux) enum PassthroughFallback {
     /// No format yet — transient around renegotiation.

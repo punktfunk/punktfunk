@@ -1,5 +1,5 @@
-//! Live (`#[ignore]`-style, hardware-skipping) tests that pair a `pf_encode_win`
-//! backend with the real `HdrP010Converter` output for the QSV ingest path.
+//! Live tests (not `#[ignore]`d; each returns early without its hardware) that pair a
+//! `pf_encode_win` backend with the real `HdrP010Converter` output for the QSV ingest path.
 
 #![allow(dead_code)]
 

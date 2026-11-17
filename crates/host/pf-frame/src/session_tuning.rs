@@ -1,4 +1,5 @@
-//! Windows host-process session tuning, matching Apollo/Sunshine `streaming_will_start`.
+//! Windows host-process session tuning: the HIGH class, DWM MMCSS and finer timer of
+//! Apollo/Sunshine `streaming_will_start`, with the timer at 1 ms where theirs tries 0.5 ms first.
 //!
 //! Default Windows process: NORMAL class, ~15.6 ms timer, GPU/display may idle.
 //! A GPU-saturating game then starves capture/encode/send, and the coarse timer
@@ -70,8 +71,8 @@ mod imp {
     /// visible in `powercfg /requests`).
     ///
     /// Object-lifetime, unlike the thread-bound `ES_*` flags in [`on_hot_thread`]
-    /// (OS reverts those at thread exit). Prevention only: no power request
-    /// turns an already-off display back on — that wake is the virtual-mouse kick.
+    /// (OS reverts those at thread exit). Prevention only: no power request turns an
+    /// already-off display back on — that wake is `pf_win_display::console_display::ensure_on`.
     pub struct DisplayWakeRequest(Handle);
 
     // SAFETY: the wrapped power-request HANDLE is a kernel object handle — a plain opaque value
@@ -240,7 +241,7 @@ mod imp {
 #[cfg(target_os = "windows")]
 pub use imp::{on_hot_thread, DisplayWakeRequest, SystemWakeRequest};
 
-/// No-op on non-Windows (Linux uses `setpriority` nice + CUDA stream priority —
-/// see `native::boost_thread_priority` and `zerocopy::cuda`).
+/// No-op on non-Windows (Linux uses `setpriority` nice + CUDA stream priority — see
+/// [`crate::thread_qos::boost_thread_priority`] and `pf-zerocopy`'s `cuda` module).
 #[cfg(not(target_os = "windows"))]
 pub fn on_hot_thread() {}

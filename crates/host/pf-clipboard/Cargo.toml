@@ -1,10 +1,10 @@
-# Shared clipboard (plan §W6 shape, design/clipboard-and-file-transfer.md §4): the host-side
-# session-clipboard backends — `ext-data-control-v1` (KWin/wlroots/Sway/Hyprland) and Mutter's
-# *direct* `org.gnome.Mutter.RemoteDesktop.Session` clipboard on Linux, the Win32 clipboard
-# (delayed rendering) on Windows — behind one `HostClipboard`, plus the backend-agnostic session
-# coordinator bridging it to the QUIC clipboard plane. The wire protocol and the client half live
-# in `punktfunk-core`; the orchestrator consumes only the portable facade (policy / `ClipCoordCmd` /
-# `start`), so it stays free of platform cfg.
+# Shared clipboard (design/clipboard-and-file-transfer.md §4): the host-side session-clipboard
+# backends — `ext-data-control-v1` (KWin/wlroots/Sway/Hyprland), Mutter's *direct*
+# `org.gnome.Mutter.RemoteDesktop.Session` clipboard and gamescope's Xwayland selections on
+# Linux, the Win32 clipboard (delayed rendering) on Windows — behind one `HostClipboard`, plus the
+# backend-agnostic session coordinator bridging it to the QUIC clipboard plane. The wire protocol
+# and the client half live in `punktfunk-core`; the orchestrator consumes only the portable
+# facade in `src/lib.rs`, so it stays free of platform cfg.
 [package]
 name = "pf-clipboard"
 version.workspace = true
@@ -24,7 +24,7 @@ tracing = "0.1"
 quinn = { workspace = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
 # CF_DIB <-> PNG conversion (winfmt) - most Windows apps paste bitmaps, not the "PNG" format.
-# Unconditional (not windows-gated) so winfmt's pure-conversion unit tests run on every host.
+# Unconditional (not windows-gated) so winfmt's pure-conversion unit tests also run on Linux.
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -35,8 +35,8 @@ ashpd = "0.13"
 # `session_bus`: the live session's bus, by the address the host detected.
 pf-portal = { path = "../pf-portal" }
 futures-util = "0.3"
-# Raw fd plumbing on the paste pipes: `pipe2(O_CLOEXEC)` + `poll` on the data-control receive
-# side, `fcntl` un-nonblocking on Mutter's transfer fd.
+# Raw fd plumbing: `poll` on the Wayland and X sockets and on host selection reads, `fcntl`
+# un-nonblocking on Mutter's transfer fds.
 libc = "0.2"
 wayland-client = "0.31"
 # `staging`: `ext_data_control_v1` (the session-clipboard protocol) ships in the staging set.
@@ -45,13 +45,12 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 x11rb = { version = "0.14", default-features = false, features = ["xfixes"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# The Win32 clipboard on a hidden message-loop window: `WM_CLIPBOARDUPDATE` listener + OLE
-# delayed rendering (`WM_RENDERFORMAT`) for text / CF_HTML / RTF / PNG.
+# The Win32 clipboard on a hidden message-loop window: `WM_CLIPBOARDUPDATE` listener + delayed
+# rendering (`WM_RENDERFORMAT`) for text / CF_HTML / RTF / images.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
-    # WNDCLASSW/RegisterClassW reference HBRUSH/HICON/HCURSOR, so windows-rs only generates
-    # them with the Gdi feature on. The host build got it via workspace feature-unification;
-    # a standalone `cargo check -p pf-clipboard` didn't (E0432) — declare it honestly.
+    # `WNDCLASSW` / `RegisterClassW` exist only with the Gdi feature (`hbrBackground` is an
+    # `HBRUSH`). Declared here so a standalone `cargo check -p pf-clipboard` builds.
     "Win32_Graphics_Gdi",
     "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",

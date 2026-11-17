@@ -7,10 +7,9 @@ package io.unom.punktfunk.kit
  * [DsCapture] reads a captured Sony pad's calibration feature report **off** the claiming thread —
  * it is a blocking EP0 control transfer and the claim runs on the UI's thread — so the value lands
  * a moment after the capture goes live. Reports in that gap are scaled by
- * [DsDevice.MotionCal.NOMINAL] and forwarded like any other ([effective]): for about a millisecond
- * the pad behaves exactly as it did before the calibration read existed — acceleration a little
- * short, gyro unscaled — which nobody can feel, whereas a pad that ignores its buttons until an
- * EP0 read comes back is very obvious.
+ * [DsDevice.MotionCal.NOMINAL] and forwarded like any other ([effective]): gyro unscaled,
+ * acceleration on the nominal range, which nobody can feel, whereas a pad that ignores its
+ * buttons until an EP0 read comes back is very obvious.
  *
  * What the hand-off is actually for is the two things that gap must NOT do, neither of which a
  * plain field gives:
@@ -23,8 +22,8 @@ package io.unom.punktfunk.kit
  *    re-claim can all land while a read is in flight; [publish] only accepts a value whose token is
  *    still the live claim's, so a straggler can never scale a pad it never read.
  *
- * Thread-safe: claimed and ended by the claiming thread, published by the reading thread, read by
- * the link thread.
+ * Thread-safe: [begin] by the claiming thread, [end] by it or the link's close handler, [publish]
+ * by the reading thread, [effective] by the link thread.
  */
 internal class MotionCalHandoff {
     /** Handed out by [begin] and burned by [end] — never reused, so a straggler can't match. */

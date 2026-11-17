@@ -96,7 +96,7 @@ fn axis_x(v: i16) -> u16 {
     (v as i32 + 32768) as u16
 }
 
-/// Wire +y is UP; HID `Y`/`Ry` grow down. Invert, or the look stick aims the wrong way.
+/// Wire +y is UP; HID `Y`/`Rz` grow down. Invert, or the look stick aims the wrong way.
 ///
 /// Signed i16 has no exact midpoint: `axis_x(0)` is 32768 and `axis_y(0)` is 32767. Endpoints
 /// stay exact (full up → 0, full down → 65535). Do not recentre on 32768 — that costs an endpoint.
@@ -104,7 +104,8 @@ fn axis_y(v: i16) -> u16 {
     65535 - axis_x(v)
 }
 
-/// 0..255 → 0..1023, rounded (`+ 127`) so a fully-held trigger is exactly full scale, not 1020.
+/// 0..255 → 0..1023, rounded to nearest (`+ 127`). A fully-held trigger is exactly full scale;
+/// `v << 2` would stop at 1020.
 fn trigger(v: u8) -> u16 {
     ((v as u32 * TRIGGER_MAX + 127) / 255) as u16
 }
@@ -266,7 +267,7 @@ mod tests {
         u16::from_le_bytes([b[0], b[1]])
     }
 
-    /// Offsets `XBOX_RDESC` declares. Fail means one side moved.
+    /// Offsets `SERIES_RDESC` declares. Fail means one side moved.
     #[test]
     fn the_report_matches_the_descriptor_layout() {
         let s = XboxState::from_gamepad(0, 0, 0, 0, 0, 0, 0);
@@ -306,7 +307,7 @@ mod tests {
         assert_eq!(le(&r[7..9]), STICK_CENTRE - 1, "RY (inverted)");
     }
 
-    /// Truncating division stops at 1020; games with a "fully pressed" threshold then never fire.
+    /// A scale that stops at 1020 (`v << 2`) never fires a game's "fully pressed" threshold.
     #[test]
     fn triggers_scale_to_full_ten_bit_range() {
         let none = serialize_xbox_state(&XboxState::default());

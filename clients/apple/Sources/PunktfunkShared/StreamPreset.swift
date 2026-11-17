@@ -1,7 +1,7 @@
 // Client settings presets — named bundles of setting overrides applied on top of the global
 // defaults (design/client-settings-profiles.md §4). The Swift half of the model whose Rust
-// original is `crates/client/pf-client-core/src/presets.rs`; the two are mirrored field for field so a
-// future export/import has one shape to speak.
+// original is `crates/client/pf-client-core/src/presets.rs`; the two are mirrored field for field,
+// bar `modifier_layout`, so a future export/import has one shape to speak.
 //
 // A preset overrides only the fields the user touched; everything else keeps following the
 // global defaults *live*, so fixing a global once fixes it everywhere. That is why an overlay is
@@ -86,8 +86,8 @@ private struct AnyKey: CodingKey {
 ///
 /// Tier-H fields (host properties like the per-host clipboard toggle) and tier-G ones (this
 /// device's hardware and audio endpoints) are deliberately absent — see the design's §3 curation.
-/// The last seven are the Apple-only additions §3 lists: presentation and modifier choices that
-/// are host-OS- and display-specific by nature.
+/// The last seven are presentation, video-format and modifier choices, host-OS- and
+/// display-specific by nature. The Rust overlay carries all of them but `modifier_layout`.
 ///
 /// The coding keys are the Rust overlay's serialized names. Two of them carry a different
 /// REPRESENTATION here — `compositor` and `gamepad` are the wire enum's ordinals on Apple and
@@ -117,9 +117,8 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
     /// lossless; a phone on cellular cannot), not about this device's hardware.
     ///
     /// The Rust overlay (`pf-client-core::presets`) carries the same `audio_format` key with the
-    /// same spellings, but its table stops at `opus`/`lossless48`/`lossless96`. A preset written
-    /// here as `lossless441` or `lossless882` round-trips there intact and plays as Opus, since an
-    /// unrecognized value falls back to the default rather than failing the connect.
+    /// same spellings (`AUDIO_FORMATS`); a value it does not recognise plays as Opus rather than
+    /// failing the connect.
     public var audioFormat: String?
     public var micEnabled: Bool?
     public var echoCancel: Bool?
@@ -141,7 +140,7 @@ public struct SettingsOverlay: Codable, Equatable, Sendable {
     /// PunktfunkKit, which this module must not depend on.
     public var statsVerbosity: String?
     public var fullscreenWhileStreaming: Bool?
-    // Apple-only additions (design §3).
+    // Presentation, video-format and modifier fields (design §3).
     public var enable444: Bool?
     public var tenBitSdr: Bool?
     public var presentPriority: String?
@@ -427,8 +426,7 @@ public struct StreamPreset: Codable, Equatable, Identifiable, Sendable {
     /// User-facing and editable; unique case-insensitively (menus are ambiguous otherwise —
     /// enforced by the editing UIs via `PresetCatalog.nameTaken`).
     public var name: String
-    /// `#RRGGBB` chip color. The UI may ignore it; the schema reserves it (pinned cards use it
-    /// to tint their subtitle).
+    /// `#RRGGBB` chip color (`PresetAccent`); nil takes the brand tint (`accentColor`).
     public var accent: String?
     public var overrides: SettingsOverlay
     /// Preset keys a newer build wrote — preserved across a load→save round-trip.

@@ -3,7 +3,7 @@
 //! Games, phase, incoming art, generation and the fetch they answer live in [`LibraryShared`].
 //! Fetch threads write; the renderer drains per frame. The sections and favorites
 //! settings helpers sit alongside. Cursor maths is [`crate::grid`], the card transform
-//! [`crate::coverflow`], the palettes [`crate::palette`]. Rendering is `skia_overlay`.
+//! [`crate::coverflow`], the palettes [`crate::palette`]. Rendering is `screens::library`.
 
 use crate::model::RequestKey;
 use skia_safe::{ConditionallySend, Image};
@@ -70,7 +70,7 @@ pub struct LibraryGame {
     pub platform: Option<String>,
     /// What the launch hold says about a title beyond its name. The shelf draws none of it —
     /// a tile is a poster — so all three default, and a host or a bridge that says nothing
-    /// leaves the hold with the title and the store, which is what it showed before.
+    /// leaves the hold with the title and the store.
     #[serde(default)]
     pub developer: Option<String>,
     #[serde(default)]
@@ -529,10 +529,9 @@ impl LibraryShared {
 
     /// A poster a host already decoded, off the thread that draws.
     ///
-    /// The reason this exists: on a 2020 TV one full-size PNG cover costs ~90 ms, which is five
-    /// frames. Decoded here it is a move and a hash insert, so a shelf fills without the frame
-    /// loop stopping for each cover. [`Self::push_art`] stays for hosts with nowhere else to
-    /// decode — they get the old behaviour, budgeted per frame.
+    /// Taking one is a move and a hash insert, and it skips the screen's own decode queue.
+    /// [`Self::push_art`] stays for hosts with nowhere else to decode: the screen's worker
+    /// decodes those, a few at a time.
     pub fn push_decoded(&self, id: String, poster: DecodedPoster) {
         self.0.lock().unwrap().decoded_in.push_back((id, poster));
     }
@@ -548,8 +547,8 @@ impl LibraryShared {
         self.0.lock().unwrap().art_scale = Some(k);
     }
 
-    /// Every poster decoded since the last call. Unbounded on purpose: adopting one is a move,
-    /// so there is no frame budget to spend and holding them back only delays the picture.
+    /// Every poster decoded since the last call. Unbounded on purpose: the screen queues them
+    /// and budgets their adoption itself, and holding them back only delays the picture.
     pub(crate) fn drain_decoded(&self) -> Vec<(String, DecodedPoster)> {
         self.0.lock().unwrap().decoded_in.drain(..).collect()
     }
@@ -602,8 +601,8 @@ fn order(games: &mut [LibraryGame]) {
     games.sort_by_key(|g| (g.id != DESKTOP_ID, !g.launcher, !g.running));
 }
 
-/// The desktop tile's id and mark, and the store→label table. All live in `pf-client-core`
-/// now, so the GTK and WinUI dialogs read the same ones; re-exported because the screens name
+/// The desktop tile's id and mark, and the store→label table. All live in `pf-client-core`,
+/// so the GTK and WinUI dialogs read the same ones; re-exported because the screens name
 /// them through this module.
 pub use pf_client_core::library::{initials, store_label, DESKTOP_ICON, DESKTOP_ID};
 
@@ -690,7 +689,7 @@ mod tests {
         );
     }
 
-    /// Persisted view name is a file format. Unknown → shelf.
+    /// Persisted view name is a file format. Unknown → grid.
     #[test]
     fn library_view_parses_leniently() {
         assert_eq!(LibraryView::parse("grid"), LibraryView::Grid);
@@ -703,7 +702,7 @@ mod tests {
         }
     }
 
-    /// Launchers lead; host title order survives within each group. `launcher_count()` is prefix `0..n`.
+    /// Launchers lead; host title order survives within each group. The lead band is prefix `0..n`.
     #[test]
     fn set_games_groups_launchers_first_and_keeps_title_order() {
         let g = |title: &str, launcher: bool| LibraryGame {

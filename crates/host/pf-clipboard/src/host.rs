@@ -19,7 +19,7 @@ mod wayland;
 #[cfg(target_os = "windows")]
 mod windows;
 /// Win32 clipboard ↔ wire bytes (CF_HTML offsets, UTF-16, RTF NULs). No Win32
-/// crate, so tests run on every host; [`windows`] is the only production caller.
+/// crate, so its tests also run on Linux; [`windows`] is the only production caller.
 #[cfg(any(target_os = "windows", test))]
 mod winfmt;
 
@@ -55,7 +55,8 @@ pub enum PasteResponder {
     /// Compositor `send` pipe; write bytes and close (EOF finishes the paste).
     #[cfg(target_os = "linux")]
     Fd(OwnedFd),
-    /// Mutter actor owns the `SelectionWrite` fd and the required `SelectionWriteDone`.
+    /// The backend writes the bytes itself: Mutter's actor owns the `SelectionWrite` fd and the
+    /// required `SelectionWriteDone`; gamescope's thread sets the requestor's X property.
     #[cfg(target_os = "linux")]
     Channel(tokio::sync::oneshot::Sender<Vec<u8>>),
     /// `WM_RENDERFORMAT` handler blocks the message-loop thread; `std::sync::mpsc`.
@@ -132,7 +133,7 @@ impl<R: std::io::Read + AsFd> std::io::Read for Patient<R> {
 }
 
 /// Blocking; reads a host selection transfer to EOF. A selection over [`CLIP_FETCH_CAP`] fails
-/// the read: its first 64 MiB is a broken file, not a smaller one. A source silent for
+/// the read: its truncated prefix is a broken file, not a smaller one. A source silent for
 /// [`READ_TIMEOUT`] fails it too.
 #[cfg(target_os = "linux")]
 fn read_capped(r: impl std::io::Read + AsFd) -> anyhow::Result<Vec<u8>> {

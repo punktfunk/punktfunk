@@ -1,8 +1,7 @@
-// Session state for the app shell: owns the connection, the input capture, the trust
-// handshake phase, and the pump-thread → main-actor stats relay.
+// Session state for the app shell: owns the connection, the parts a streaming session starts
+// (`resources`), the trust handshake phase, and the pump-thread → main-actor stats relay.
 
-// AVFoundation: AVCaptureDevice.authorizationStatus (the mic TCC grant behind `micAvailable`)
-// and, on tvOS, AVPlayer.eligibleForHDRPlayback (the TV-capability HDR gate).
+// AVFoundation: AVCaptureDevice.authorizationStatus (the mic TCC grant behind `micAvailable`).
 import AVFoundation
 import Foundation
 import GameController
@@ -17,13 +16,11 @@ import SwiftUI
 #endif
 
 /// 1 Hz latency-stage line mirrored to the unified log so the stages can be read WITHOUT the
-/// on-screen HUD (Console.app, wirelessly on an iPad/Apple TV). The HUD is not a neutral
-/// instrument: any visible overlay forces the metal layer through the compositor, which costs a
-/// refresh period on the vsync-latched platforms — this is how to measure with it off.
+/// on-screen HUD (Console.app, wirelessly on an iPad; tvOS has `statsToStdout`). The HUD is not a
+/// neutral instrument: any visible overlay forces the metal layer through the compositor, which
+/// costs a refresh period on the vsync-latched platforms — this is how to measure with it off.
 private let statsLog = ClientLog(category: "stats")
-/// The session's lifecycle — connect asked/landed/refused, how it ended. Until this existed a
-/// client log bundle had a 1 Hz stats line and no sentence saying which host it was streaming
-/// from, with what, or why it stopped; the host's own log has always said all three.
+/// The session's lifecycle — connect asked/landed/refused, how it ended.
 private let sessionLog = ClientLog(category: "session")
 /// Mirror the 1 Hz vitals line to STDOUT as well as the unified log.
 ///
@@ -140,8 +137,8 @@ final class SessionModel: ObservableObject {
     #endif
     /// The launched title whose game is not up yet: its cover flies out of the shelf tile at the
     /// tap and holds the screen — through the dial, and then over the stream — until the host's
-    /// `/status` says the game left `launching` (`punktfunk-host::gamelease`), or the player asks
-    /// to see. nil for a desktop connect, a launcher tile, and once revealed.
+    /// `/status` says the game left `launching` (`punktfunk-host::game::gamelease`), or the
+    /// player asks to see. nil for a desktop connect, a launcher tile, and once revealed.
     ///
     /// Raised at `connect`, not at first frame: the shelf is still on screen at the tap, which is
     /// the only moment the cover has somewhere to fly FROM, and holding from there means one
@@ -231,11 +228,10 @@ final class SessionModel: ObservableObject {
     private(set) var micMuted: Bool { get { ui.micMuted } set { ui.micMuted = newValue } }
     /// The stream's hints, notices and access chip.
     private(set) var notices: SessionNotices { get { ui.notices } set { ui.notices = newValue } }
-    /// Resize overlay (design/midstream-resolution-resize.md — client resize UX): true from the
-    /// instant a Match-window resize starts steering toward a new size until a frame at that size
-    /// decodes (or a safety timeout). Drives the blur+spinner so the unavoidable host-rebuild delay
-    /// reads as a deliberate, acknowledged transition instead of a stutter. Pure state lives in
-    /// `ResizeIndicator`; this mirrors its `active` for SwiftUI.
+    /// Resize overlay: true from the instant a Match-window resize starts steering toward a new
+    /// size until a frame at that size decodes (or a safety timeout). Drives the blur+spinner so
+    /// the unavoidable host-rebuild delay reads as a deliberate, acknowledged transition instead
+    /// of a stutter. Pure state lives in `ResizeIndicator`; this mirrors its `active` for SwiftUI.
     private(set) var resizing: Bool { get { ui.resizing } set { ui.resizing = newValue } }
     /// START = follower steering (main actor), END = a new-mode IDR's coded dims (decode pump,
     /// hopped to main), TIMEOUT = safety net for a rejected/capped switch that never yields a
@@ -264,8 +260,8 @@ final class SessionModel: ObservableObject {
     /// The in-stream ring's remote path (design/touch-client-overlay.md §2.6): the Siri Remote's
     /// short Back. Wired by the view once per session.
     var onRingChord: ((UInt32?) -> Void)?
-    /// A pad or Steam Controller shortcut the session runs (design/client-shortcuts.md): the
-    /// action, its phase and the wire pad that fired it, `nil` for a captured Steam Controller.
+    /// A pad or Steam Controller shortcut the session runs (`Shortcuts`): the action, its
+    /// phase and the wire pad that fired it, `nil` for a captured Steam Controller.
     var onShortcut: ((Shortcuts.Action, Shortcuts.Phase, UInt32?) -> Void)?
     var onRingNav: ((RingNav) -> Void)?
     /// A connect the host parked for its operator: the view shows the approval wait.
@@ -359,8 +355,6 @@ final class SessionModel: ObservableObject {
     /// Whether clipboard sync is live (host-acked `ClipState.enabled`) — drives the Stream menu
     /// item's title and the settings footnote. Always false on tvOS, which has no pasteboard.
     private(set) var clipboardEnabled: Bool { get { ui.clipboardEnabled } set { ui.clipboardEnabled = newValue } }
-    /// The host's last `ClipState.reason` (`CLIP_REASON_*`) — why an enable was refused
-    /// (backend unavailable / policy disabled / …); 0 = OK.
 
     #if os(tvOS)
     /// Siri Remote → host pointer while streaming (touch surface moves, press = left click,
@@ -843,8 +837,9 @@ final class SessionModel: ObservableObject {
     /// called by the 1 Hz stats tick, which is also what makes a mid-session `AccessUpdate`
     /// (a console edit) reach the chip and the capture gates within a second. Every write is
     /// guarded: `notices` publishes on any assignment, and a full-and-permanent session (every
-    /// old host) must publish nothing. The capture release and the T−5 m / T−1 m toasts (§7)
-    /// are `AccessWarning`'s; engaging a capture is gated at the stream views.
+    /// old host) must publish nothing. The capture release and the T−5 m / T−1 m toasts
+    /// (design/per-client-access.md §7) are `AccessWarning`'s; engaging a capture is gated at
+    /// the stream views.
     private func updateAccessState() {
         guard let conn = connection else { return }
         let grants = conn.accessGrants
@@ -1234,7 +1229,7 @@ final class SessionModel: ObservableObject {
             echoCancel: settings.echoCancel,
             spatialAudio: settings.spatialAudio,
             // The A/V sync reference: the presenter's own capture→on-glass meter. The stage-1
-            // fallback stamps nothing, so the loop then declines to correct.
+            // pump stamps capture→enqueue into it instead.
             videoLatency: endToEnd)
         resources.add(audio, join: { audio.stop() })
         #if os(tvOS)

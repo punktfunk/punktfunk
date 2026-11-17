@@ -7,8 +7,8 @@
 //! platforms. The pin needs elevation or the "allow non-admin DSCP" policy;
 //! otherwise the traffic-type default stands (still WMM-mapped).
 //!
-//! Same contract as [`super::qos`]: opt-in (`dscp_enabled`), every step
-//! debug-logs and continues.
+//! Same contract as [`super::qos`]: called only where `dscp_enabled_for` marks, every
+//! step debug-logs and continues.
 
 // Crate-wide deny(unsafe_code) carve-out (lib.rs): platform syscall glue —
 // qWAVE FFI moves flow handles, never network bytes. Proofs at each site.

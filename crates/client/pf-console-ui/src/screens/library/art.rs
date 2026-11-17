@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Covers a screen keeps decoded, and how many places past the first drawn one it decodes.
-/// At [`ART_CACHE_W`] each raster is ~0.7 MB of RAM, plus ~1.3 MB uploaded.
+/// At [`ART_CACHE_W`] each raster with its mips is ~0.7 MB of RAM, and its texture as much
+/// again; ~1.3 MB each at a 1080p TV's k = 1.35.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ArtBudget {
     pub(super) held: usize,
@@ -18,7 +19,7 @@ pub(super) struct ArtBudget {
 }
 
 impl ArtBudget {
-    /// ~nine grid rows.
+    /// At 8 columns, about 20 grid rows held and 6 decoded ahead.
     pub(super) const DESKTOP: Self = Self {
         held: 160,
         ahead: 48,
@@ -127,7 +128,7 @@ type ArtDone = (String, Option<crate::library::DecodedPoster>);
 pub(super) const DECODE_QUEUE: usize = 16;
 
 /// A screen's covers decoded off the thread that draws: one worker, started on first use and
-/// stopped with the screen. A TV spends 15–90 ms on one cover, a dropped frame each on the
+/// stopped with the screen. A TV can spend ~90 ms on one cover, a dropped frame each on the
 /// render thread, and a screen that only has a cover's bytes must decode it itself.
 #[derive(Default)]
 pub(crate) struct ArtDecoder {
@@ -215,7 +216,7 @@ pub(super) fn decode_poster(bytes: &[u8], k: f64) -> Option<Image> {
     let scaled = if want == (img.width(), img.height()) {
         None
     } else {
-        // Overlay targets are `new_n32_premul` with no colour space (`ensure_slot`).
+        // Overlay targets are premultiplied with no colour space (`ensure_slot`), as is this.
         let info = skia_safe::ImageInfo::new_n32_premul(want, None);
         img.make_scaled(&info, art_sampling())
     };
@@ -231,8 +232,7 @@ pub(super) fn decode_poster(bytes: &[u8], k: f64) -> Option<Image> {
 ///
 /// A JPEG scales in the DCT — 1/2, 3/8, 1/4 and so on come out of the decoder for a fraction
 /// of the work a full decode costs, and a 600×900 cover into a 300×450 cache is exactly the
-/// 1/2 case. The full-size decode this replaces threw most of those pixels away in the resample
-/// on the very next line.
+/// 1/2 case. A full decode would throw most of those pixels away in the resample.
 ///
 /// `None` when the codec cannot help — an unsupported format, or art already small enough to
 /// keep whole — and the caller falls back to decoding it in full.
@@ -248,8 +248,8 @@ fn decode_near_cache_size(data: &Data, k: f64) -> Option<Image> {
     let native = codec.get_scaled_dimensions(desired);
     // A codec that only offers the original size has nothing to give here — and one that
     // UNDERSHOOTS is refused rather than accepted: `get_scaled_dimensions` approximates, and a
-    // decode below the cache size would quietly make every cover softer than the resample it
-    // replaced. Both cases fall back to the full decode.
+    // decode below the cache size would quietly make every cover softer than the full decode
+    // and resample. Both cases fall back to the full decode.
     if native == src || native.width < want.0 || native.height < want.1 {
         return None;
     }

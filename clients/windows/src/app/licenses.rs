@@ -17,8 +17,7 @@ const APP_LICENSE: &str = concat!(
 /// the MSIX ships the same file under licenses/).
 ///
 /// Deliberately the client-scoped file and not the workspace-wide one at the repo root: the
-/// root file covers the whole workspace, so it would attribute crates this app never bundles
-/// — a false statement to the user's face, three lines under a card saying otherwise.
+/// root file covers the whole workspace, so it would attribute crates this app never bundles.
 const THIRD_PARTY_NOTICES: &str = include_str!("../../THIRD-PARTY-NOTICES.txt");
 
 pub(crate) fn licenses_page(pal: &Palette) -> View {

@@ -76,7 +76,7 @@ impl XusbWinPad {
         let shm = channel.data();
         shm.store_u32(OFF_PAD_INDEX, index.into(), Ordering::Relaxed);
         shm.store_u32(OFF_MAGIC, SHM_MAGIC, Ordering::Relaxed);
-        // `?` so PadSlots retries; a swallowed failure latched a phantom pad for the session.
+        // `?` so PadSlots retries; a swallowed failure would latch a phantom pad for the session.
         let hwid = xusb_hwid();
         let (sw, instance_id) = create_swdevice(&SwDeviceProfile {
             instance: &format!("pf_xusb_{index}"),
@@ -92,7 +92,8 @@ impl XusbWinPad {
             property: None,
         })?;
         channel.bind_devnode(index as u32, instance_id.clone(), ProofTransport::XusbIoctl);
-        // 1500 ms: EvtDeviceAdd publishes the pid immediately; miss and `service` keeps pumping.
+        // 1500 ms: the proof asks the XUSB interface `EvtDeviceAdd` registers; a miss leaves
+        // delivery to `service`.
         channel.deliver_eager(Duration::from_millis(1500));
         verify_fence(instance_id.as_deref(), FenceAt::Parent)?;
         Ok(XusbWinPad {

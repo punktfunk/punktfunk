@@ -417,7 +417,7 @@ async fn plugin_lane_cannot_set_command_execution_fields() {
     );
 
     // Refusals happen before the catalog is touched. Operator-lane converse:
-    // `library::tests::privileged_field_is_command_execution_only`.
+    // `library::custom::tests::privileged_field_is_command_execution_only`.
     assert!(
         crate::mgmt::auth::AuthLane::Admin.may_set_privileged_fields(),
         "the operator's token is the lane these fields belong to"

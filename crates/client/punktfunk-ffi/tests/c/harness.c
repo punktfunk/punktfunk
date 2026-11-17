@@ -1,5 +1,5 @@
 /*
- * punktfunk C ABI harness — M1 acceptance.
+ * punktfunk C ABI harness.
  *
  * Proves the C ABI links from C and round-trips encoded access units through the full
  * packetize -> FEC -> in-process loopback (with deterministic packet loss) -> FEC
@@ -31,10 +31,11 @@ static PunktfunkConfig make_config(uint32_t role, uint32_t drop_period) {
 int main(void) {
     printf("punktfunk C ABI harness (abi_version=%u)\n", punktfunk_abi_version());
 
-    /* PunktfunkConnectOpts: the C compiler agrees with Rust's const-asserted layout, 216 bytes on
-     * 64-bit and 152 on 32-bit with no tail padding, so an appended field never lands in bytes an
+    /* PunktfunkConnectOpts: the C compiler agrees with Rust's const-asserted layout, 224 bytes on
+     * 64-bit and 160 on 32-bit with no tail padding, so an appended field never lands in bytes an
      * older caller's sizeof covered. The size-prefix guard rejects an undersized struct as a
-     * status, not a read. The staticlib this links always carries quic. */
+     * status, not a read. Only the `cargo test --test c_abi` build defines
+     * PUNKTFUNK_FEATURE_QUIC; run.sh builds default features and skips this block. */
 #ifdef PUNKTFUNK_FEATURE_QUIC
     if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 224u : 160u)
         || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)
@@ -139,7 +140,7 @@ int main(void) {
         PunktfunkConnectOpts o;
         int32_t st = 0;
         memset(&o, 0, sizeof(o));
-        o.struct_size = 4; /* an impossible, pre-v26 size */
+        o.struct_size = 4; /* below the frozen minimum size */
         if (punktfunk_connect_opts(&o, NULL, &st) != NULL || st != PUNKTFUNK_STATUS_INVALID_ARG) {
             fprintf(stderr, "FAIL: undersized connect opts accepted (st=%d)\n", (int)st);
             return 1;

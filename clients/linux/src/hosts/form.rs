@@ -1,4 +1,4 @@
-//! The Add and Edit forms' connection rows: address, port and Wake-on-LAN MACs.
+//! The Add form's connection rows: address, port and Wake-on-LAN MACs.
 
 use super::*;
 use crate::trust::HostField;

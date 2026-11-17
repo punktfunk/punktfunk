@@ -1,7 +1,6 @@
 //! What this host launched, for whom, and when.
 //!
-//! A reconnecting client re-sends `Hello::launch` verbatim. Linux gamescope
-//! reuse keys on that command, so dropping it orphans the game. The host
+//! A reconnecting client re-sends `Hello::launch` verbatim. The host
 //! must notice: `gog:`/`custom:` would spawn a second copy, and a fresh
 //! [`crate::gamelease::launch_clock`] would put the original process outside
 //! [`crate::procscan::START_SLACK_SECS`], so the session never sees the exit.
@@ -947,8 +946,7 @@ mod tests {
     }
 
     /// A launch that died on the spot must not be adopted by the retry that
-    /// follows it seconds later — that is the whole in-flight window, and the
-    /// reason the player used to need a host restart.
+    /// follows it seconds later — that is the whole in-flight window.
     #[test]
     fn a_launch_that_died_on_the_spot_is_started_again_not_adopted() {
         let (fp, app) = (Some("fp-early"), Some("custom:early"));

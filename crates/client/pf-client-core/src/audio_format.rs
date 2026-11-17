@@ -14,8 +14,8 @@ pub const AUDIO_FORMAT_LOSSLESS_48: &str = "lossless48";
 /// PCM 88.2 kHz / 24-bit (~4.2 Mbps).
 pub const AUDIO_FORMAT_LOSSLESS_882: &str = "lossless882";
 
-/// PCM 96 kHz / 24-bit (~4.6 Mbps). The host declines if capture is not 96 kHz; it does
-/// not upsample.
+/// PCM 96 kHz / 24-bit (~4.6 Mbps). The host falls back to Opus unless its capture runs at
+/// 96 kHz or above; it does not upsample.
 pub const AUDIO_FORMAT_LOSSLESS_96: &str = "lossless96";
 
 /// PCM 176.4 kHz / 24-bit (~8.5 Mbps).
@@ -25,7 +25,7 @@ pub const AUDIO_FORMAT_LOSSLESS_1764: &str = "lossless1764";
 /// `clients/shared/settings-catalog.json`. The label is read when the row is drawn.
 ///
 /// Values are shared verbatim with Apple `AudioFormatChoice` and Android `AUDIO_FORMAT_*`.
-/// A preset round-trips through all four clients (`presets.rs`); a spelling mismatch is
+/// A preset round-trips between the clients (`presets.rs`); a spelling mismatch is
 /// stored as-is and silently falls back to the global default. Change in lockstep with
 /// `clients/apple/Sources/PunktfunkShared/EffectiveSettings.swift` and
 /// `clients/android/app/src/main/kotlin/io/unom/punktfunk/Settings.kt`.

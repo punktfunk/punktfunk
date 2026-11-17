@@ -487,7 +487,7 @@ pub static SETTINGS: &[Setting] = &[
     // 0 is the host's pick per compositor (`HostConfig::vdisplay_hz_mult_for`); 1 is off.
     row("vdisplay_hz_mult", "PUNKTFUNK_VDISPLAY_HZ_MULT", Kind::Int { min: 0, max: 4, unit: "×" }, D::Int(0), Video, NextSession, "Display refresh multiple", "configuration").advanced().only(LINUX_WINDOWS),
     // `WIDTHxHEIGHT` sizes the virtual display offers beside the stream's own. The driver skips
-    // any larger than the stream; ADD carries the first 16.
+    // any larger than the stream, and a seat takes none; ADD carries the first 16.
     row("vdisplay_resolutions", "PUNKTFUNK_VDISPLAY_RESOLUTIONS", Kind::List, D::List(VDISPLAY_RESOLUTIONS), Video, NextSession, "Extra resolutions", "configuration").advanced().only(WINDOWS),
     row("portal_cursor_mode", "PUNKTFUNK_PORTAL_CURSOR_MODE", Kind::Enum(&["auto", "embedded", "metadata", "hidden"]), D::Str("auto"), Video, NextSession, "Cursor capture", "configuration")
         .advanced()
@@ -707,8 +707,8 @@ mod tests {
         );
     }
 
-    /// Every Seat default is one group the console shows only while seats are on, and none of
-    /// them caps or stops anything until an operator asks.
+    /// Every Seat default is in one group, which the console shows only while seats are on. No
+    /// mode cap is set by default, and `0` turns the idle stop off.
     #[test]
     fn the_seat_defaults_share_one_group() {
         for id in [

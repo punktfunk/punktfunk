@@ -9,11 +9,12 @@ import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 
 /**
- * The Home LAYOUT — three sections, one question: what needs attention? The live page
- * (`index.tsx`) and the stories fill the same slots.
+ * The Home LAYOUT — one question: what needs attention? The live page (`index.tsx`) and the
+ * stories fill the same slots.
  *
  * `attention` sits above the status query on purpose: a host whose `/status` fails is exactly
- * when its health checks are worth reading. With nothing live, *Now* says so; the past sessions are a card of their own.
+ * when its health checks are worth reading. With nothing live, *Now* says so; the past sessions
+ * are a card of their own.
  */
 export const HomeView: FC<{
 	attention?: ReactNode;

@@ -71,29 +71,20 @@ private val SYSTEM_KEYS = intArrayOf(
 )
 
 /**
- * Keeps ONE window-insets reader alive for as long as the app's UI exists — the fix for the menus
- * coming back from a stream laid out against the WRONG safe area.
+ * Keeps ONE window-insets reader alive for as long as the app's UI exists, so the menus coming
+ * back from a stream are laid out against the current safe area.
  *
  * Compose attaches its `OnApplyWindowInsets` and `WindowInsetsAnimation` callbacks when the first
  * composable reads an inset, and removes them again when the last reader goes away
  * (`WindowInsetsHolder.increment/decrementAccessors`). [StreamScreen] reads no insets outside the
  * safe-area mode — it's a bare full-screen surface — so a stream drops the reader count to zero.
  *
- * That alone is survivable; what isn't is a session that ends while the app is BACKGROUNDED, which
- * is the common case (leaving the app ends the session — see StreamScreen's ON_STOP observer). The
- * whole window restore — `show(systemBars())`, releasing the landscape lock — then runs on a stopped
- * activity, and the corrected insets that follow arrive while Compose has no listener attached. When
- * the menus recompose, `incrementAccessors` re-attaches and asks for a fresh pass, but a stopped
- * window produces no dispatch, and on resume nothing has *changed* any more, so none ever comes.
- * Compose keeps serving what it last saw: the landscape, bars-hidden values.
- *
- * That's exactly what the reporter's phone showed (on-glass 2026-07-29, verified by dump): the
- * platform reported `bars=[0,162,0,72] cutout=[0,162,0,0]` for the window while the layout was still
- * using the landscape immersive set — cutout `left=162` (Material3 lays out against
- * `systemBars.union(displayCutout)`), bars all zero. Content shoved right by the landscape cutout,
- * nothing kept clear of the status bar or the gesture pill, and no rotation or IME animation could
- * shake it loose. A/B'd over eight runs of the real teardown sequence: 3 of 4 wrong without this,
- * 4 of 4 correct with it.
+ * A session that ends while the app is BACKGROUNDED (leaving the app ends it unless the keep-alive
+ * holds it — see the ON_STOP observer in StreamEffects) restores the window — `show(systemBars())`,
+ * releasing the landscape lock — on a stopped activity, while Compose has no listener attached.
+ * When the menus recompose, `incrementAccessors` re-attaches and calls `requestApplyInsets`, but
+ * no fresh dispatch reaches it after resume, so Compose keeps serving what it last saw: the
+ * landscape, bars-hidden values.
  *
  * Reading an inset here holds the count above zero for the activity's whole life, so the listeners
  * survive the stream and every dispatch lands. It subscribes to no inset VALUE (only the holder
@@ -179,18 +170,19 @@ class MainActivity : FragmentActivity() {
     /**
      * One screen's claim on the pad while not streaming: its key/motion observers, consulted for
      * every event before the focus-navigation fallbacks below; a `true` return consumes the event.
-     * Holders are the Skia console shell and the Controllers screen's input test.
+     * Holders are the Skia console shell, the Controllers screen's input test and the Shortcuts
+     * screen's chord capture.
      */
     class PadProbes(val key: (KeyEvent) -> Boolean, val motion: (MotionEvent) -> Boolean)
 
     /**
      * The pad-probe claims, a STACK — only the top entry sees events. A single last-writer-wins
-     * slot is how the console shell used to lose the pad for good: a screen composed over it
-     * (Controllers/Licenses) overwrote the slot, then nulled it on its way out, and the shell —
-     * whose install effect had no reason to re-run — never got it back. Pushing on install and
-     * removing BY IDENTITY on dispose survives every ordering Compose produces (cross-fades
-     * compose both screens at once, and dispose is not always LIFO): whatever leaves takes only
-     * its own entry, and whatever is left on top resumes seeing the pad.
+     * slot loses the pad for good: a screen composed over the console shell (Controllers,
+     * Shortcuts) would overwrite it, then null it on its way out, and the shell — whose install
+     * effect has no reason to re-run — never gets it back. Pushing on install and removing BY
+     * IDENTITY on dispose survives every ordering Compose produces (cross-fades compose both
+     * screens at once, and dispose is not always LIFO): whatever leaves takes only its own entry,
+     * and whatever is left on top resumes seeing the pad.
      */
     private val padProbes = mutableListOf<PadProbes>()
 
@@ -261,7 +253,7 @@ class MainActivity : FragmentActivity() {
     var recaptureUsbPads: (() -> Unit)? = null
 
     /**
-     * Set by [StreamScreen] to its disconnect action. The emergency-exit chord (below) invokes it so a
+     * Set by [StreamScreen] to its disconnect action. The pad router's exit chord invokes it so a
      * couch user with no keyboard/Back can always leave a stream.
      */
     var requestStreamExit: (() -> Unit)? = null
@@ -324,8 +316,7 @@ class MainActivity : FragmentActivity() {
      * synthetic KeyEvent dispatched from OUTSIDE the real input pipeline never reaches
      * ViewRootImpl's focus-navigation stage — the one that grants initial focus for a real
      * pad's first D-pad press — so on a phone in touch mode it lands on a focus-less window
-     * and does nothing (first on-glass run: only B worked, since it bypasses key events
-     * entirely). `FocusManager.moveFocus` is the public API for exactly this.
+     * and does nothing. `FocusManager.moveFocus` is the public API for exactly this.
      */
     private var sc2MoveFocus: ((androidx.compose.ui.focus.FocusDirection) -> Boolean)? = null
 
@@ -361,7 +352,7 @@ class MainActivity : FragmentActivity() {
         setConsoleHighRefreshRate(true) // the console UI wants max refresh; streaming manages its own
         // Dark, transparent system bars regardless of the system theme — our UI is always dark, so
         // the status/nav bars blend with our surface and get light icons. (The no-arg edge-to-edge
-        // picks the *system* light/dark, which left a black status bar over our dark background.)
+        // picks the *system* light/dark.)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -426,7 +417,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Keep `getIntent()` truthful for anything that reads it later (the gamepad-UI dev flag).
+        // `getIntent()` stays the intent this instance last received.
         setIntent(intent)
         deepLinkFrom(intent)?.let { pendingDeepLink = it }
     }
@@ -510,7 +501,7 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * Engage the menu-time SC2 capture if possible: setting on, not streaming, and a wired/Puck
+     * Engage the menu-time SC2 capture if possible: not streaming, and a wired/Puck
      * pad attached (asking for USB permission at most once per attach — [forceAsk] re-arms the
      * dialog, for the Controllers screen's explicit grant button) — else an already-paired BLE
      * controller, asking for Bluetooth access once if one appears to be attached
@@ -559,11 +550,9 @@ class MainActivity : FragmentActivity() {
      * Ask for Bluetooth access when a BLE-paired SC2 looks like it is attached and we cannot see
      * it — once per process, and never on a device that shows no sign of owning one.
      *
-     * The permission is the whole reason a Bluetooth SC2 used to go unnoticed: the bonded list and
-     * `connectGatt` both need it from API 31, nothing in the client had ever requested it, and the
-     * bonded-list call answers an empty list rather than an error when it is missing — so the
-     * capture stood down silently and the console UI never flipped to its controller layout, while
-     * the same pad over USB worked (field report, 2026-08-15). Asking is gated on
+     * The bonded-device list and `connectGatt` both need the permission from API 31
+     * ([Sc2BleLink.CONNECT_PERMISSION]). Without it the bonded list comes back empty, not as an
+     * error, so the capture stands down silently. Asking is gated on
      * [Gamepad.sc2InputDevicePresent] because an uncaptured SC2 sits in lizard mode as a
      * keyboard/mouse [android.view.InputDevice] — visible without any permission at all — so the
      * prompt reaches the people who have the hardware and nobody else.
@@ -714,10 +703,10 @@ class MainActivity : FragmentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
 
     /**
-     * Opt the CONSOLE UI into the panel's highest refresh mode. Some OEMs (Nothing OS among them) pin
-     * third-party apps to 60Hz unless they explicitly ask for more, which halves the smoothness of the
-     * UI's scrolling/animation on a 120/144Hz panel. [StreamScreen] replaces this with
-     * [setStreamDisplayMode] while streaming (matched to the video, not to the panel maximum).
+     * Opt the CONSOLE UI into the panel's highest refresh mode. Left alone, a panel may run a
+     * third-party app at 60 Hz, which halves the smoothness of the UI's scrolling/animation on a
+     * 120/144Hz panel. [StreamScreen] replaces this with [setStreamDisplayMode] while streaming
+     * (matched to the video, not to the panel maximum).
      */
     fun setConsoleHighRefreshRate(high: Boolean) {
         if (highRefreshModeId == 0) return
@@ -744,12 +733,12 @@ class MainActivity : FragmentActivity() {
     /**
      * Pin the panel to a display mode matching the STREAM's refresh for the session's duration
      * ([streamModeFor]). The window-level mode pin is the belt to the decoder's
-     * `ANativeWindow_setFrameRate` braces: the surface hint alone is advisory, and several OEM
-     * refresh governors (Nothing OS's LTPO logic among them) ignore it entirely for third-party
-     * apps — leaving a 120 Hz session presenting on a 60/90 Hz panel, which reads as judder + a
-     * refresh of extra latency. The preferredDisplayModeId is the one signal they all honor. A
-     * stream of the panel's own [size] also takes the panel to that size; [setConsoleHighRefreshRate]
-     * puts the user's resolution back. [hz] ≤ 0 falls back to releasing the pin.
+     * `ANativeWindow_setFrameRate` braces: the surface hint alone is advisory, and refresh
+     * governors may ignore it — leaving a 120 Hz session presenting on a 60/90 Hz panel, which
+     * reads as judder + a refresh of extra latency. The preferredDisplayModeId is the one signal
+     * they all honor. A stream of the panel's own [size] also takes the panel to that size;
+     * [setConsoleHighRefreshRate] puts the user's resolution back. [hz] ≤ 0 falls back to
+     * releasing the pin.
      */
     fun setStreamDisplayMode(hz: Float, size: Pair<Int, Int>? = null) {
         if (hz <= 0) {

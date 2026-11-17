@@ -240,7 +240,8 @@ impl RemoteImporter {
         // for this synchronous call; the `BorrowedFd` never outlives it (the key and the `send`).
         let fd = unsafe { BorrowedFd::borrow_raw(plane.fd) };
         let key = dmabuf_key(fd)?;
-        // One retry: NeedFd (worker evicted this key) clears sent_keys so the resend carries the fd.
+        // One retry: NeedFd (worker evicted this key) drops it from sent_keys so the resend
+        // carries the fd.
         let mut attempts = 0;
         let reply = loop {
             attempts += 1;
@@ -340,10 +341,6 @@ impl RemoteImporter {
         }
     }
 
-    /// Stream renegotiated: drop fd-cache keys and retire this generation's CUDA
-    /// IPC mappings. The worker replaces its pool; live host mappings would pin
-    /// VA to peer memory already freed. Unreferenced close now; in-flight wait
-    /// for release.
     /// Send one request and wait for its reply; a transport failure marks the worker dead.
     fn call(&mut self, req: &Request, fd: Option<BorrowedFd>) -> Result<Reply> {
         self.call_fd(req, fd).map(|(reply, _)| reply)
@@ -471,6 +468,10 @@ impl RemoteImporter {
         }
     }
 
+    /// Stream renegotiated: drop fd-cache keys and retire this generation's CUDA
+    /// IPC mappings. The worker replaces its pool; live host mappings would pin
+    /// VA to peer memory already freed. Unreferenced close now; in-flight wait
+    /// for release.
     pub fn clear_cache(&mut self) {
         self.sent_keys.clear();
         {

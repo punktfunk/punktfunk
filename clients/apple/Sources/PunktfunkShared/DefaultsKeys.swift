@@ -12,23 +12,24 @@ public enum DefaultsKey {
     public static let streamWidth = "punktfunk.width"
     public static let streamHeight = "punktfunk.height"
     public static let streamHz = "punktfunk.hz"
-    /// Match-window resolution policy (design/midstream-resolution-resize.md D1/D2): when on, the
-    /// stream mode FOLLOWS the session view — the connect asks for the view's pixel size and a
-    /// mid-session resize (a windowed macOS window, an iPad Stage Manager / Split View scene)
-    /// renegotiates the host's virtual display + encoder (`PunktfunkConnection.requestMode`), so a
-    /// windowed session streams native-resolution pixels instead of scaling. Off (default): the
-    /// explicit `streamWidth`/`streamHeight` are used and never auto-resized (a fullscreen session
-    /// is native either way, so this degenerates to Auto-native there). Read per session by the
+    /// Match-window resolution policy: when on, the stream mode FOLLOWS the session view — the
+    /// connect asks for the view's pixel size and a mid-session resize (a windowed macOS window,
+    /// an iPad Stage Manager / Split View scene) renegotiates the host's virtual display +
+    /// encoder (`PunktfunkConnection.requestMode`), so a windowed session streams
+    /// native-resolution pixels instead of scaling. Off (default): the explicit
+    /// `streamWidth`/`streamHeight` are used and never auto-resized (a fullscreen session is
+    /// native either way, so this degenerates to Auto-native there). Read per session by the
     /// stream views' `MatchWindowFollower`.
     public static let matchWindow = "punktfunk.matchWindow"
     /// Render-resolution multiplier (a `RenderScale` value, default 1.0): the client asks the host
     /// to render/encode at `chosen resolution × scale`, then the presenter downscales the larger
-    /// decoded frame to this display in one Catmull-Rom pass. > 1 supersamples (sharper, at the cost
-    /// of more bandwidth AND client decode — both grow ∝ scale²); < 1 renders below native for a
-    /// weak host GPU / constrained link (the presenter upscales). The host sees a larger or smaller
-    /// `Mode`, and Automatic bitrate scales with it; above 1x the connect also names the 1x view,
-    /// and a host that reads it scales down before encoding (`RenderScale`). Clamped even + to the
-    /// codec's max dimension at connect. Applies to the fixed mode and the match-window path.
+    /// decoded frame to this display, luma through a Lanczos pass (`lumaForTarget`). > 1
+    /// supersamples (sharper, at the cost of more bandwidth AND client decode — both grow ∝
+    /// scale²); < 1 renders below native for a weak host GPU / constrained link (the presenter
+    /// upscales). The host sees a larger or smaller `Mode`, and Automatic bitrate scales with
+    /// it; above 1x the connect also names the 1x view, and a host that reads it scales down
+    /// before encoding (`RenderScale`). Clamped even + to the codec's max dimension at connect.
+    /// Applies to the fixed mode and the match-window path.
     public static let renderScale = "punktfunk.renderScale"
     /// How a frame whose shape differs from the view fills it: a `VideoFit` raw value, `"fit"`
     /// (default, bars), `"crop"` or `"stretch"`. The cross-client `video_fit` key.
@@ -47,27 +48,28 @@ public enum DefaultsKey {
     /// Forward this device's controllers to the host at all (default true). Off is for a
     /// couch whose controller reaches the host another way — USB passthrough such as
     /// VirtualHere, or a pad plugged into the host — where forwarding as well would give the
-    /// host two pads for one pair of hands. Read at connect: `SessionModel` then never starts
-    /// `GamepadCapture`, so no slot opens, no arrival is sent and no virtual pad is built.
+    /// host two pads for one pair of hands. Read at connect: `GamepadCapture` still runs, for the
+    /// shortcuts and the escape chord, but sends nothing, so no arrival reaches the host and no
+    /// virtual pad is built.
     public static let gamepadForwarding = "punktfunk.gamepadForwarding"
     /// Steam Controller 2 as-is passthrough: capture of a real SC2 → the host's virtual
     /// 28DE:1302, which the host's Steam drives directly. Two transports — CoreBluetooth against
     /// a paired pad's vendor GATT service (every platform), and raw USB HID against a wired pad
     /// or a Puck dongle (macOS only, `Sc2UsbLink`; apps elsewhere get no IOKit HID).
-    /// This client's own key, NOT a shared one: nothing writes an unprefixed `sc2_capture`, and
-    /// Android files the same decision under `android.sc2_capture`. Same gate as its
-    /// `settings.sc2Capture` though, read at
-    /// connect beside `gamepadForwarding`: both must be on for `SessionModel` to build an
-    /// `Sc2Capture`. On iOS it is ALSO read app-lifetime, by `GamepadManager`: the same pad
+    /// Apple-only: the catalogue's `sc2_capture` names `apple`, and the console document files
+    /// it as `android.sc2_capture` (`ConsoleSettings`). Read at connect, as `settings.sc2Capture`,
+    /// beside `gamepadForwarding`: both must be on for `SessionModel` to build an `Sc2Capture`.
+    /// On iOS and visionOS it is ALSO read app-lifetime, by `GamepadManager`: the same pad
     /// navigates the gamepad UI through `Sc2MenuPad` (`gamepadUIEnabled` gates that half).
     ///
-    /// ⚠ The DEFAULT deliberately differs from Android's, which is ON: engaging this on Apple
-    /// costs a permission question. iOS asks for CoreBluetooth at launch, now that the menu pad
-    /// acquires there. The Mac is no cheaper — `Sc2Capture` takes USB only when a pad is attached
-    /// right now, so a padless Mac falls back to the radio and is asked for Bluetooth, and the
-    /// USB path asks for Input Monitoring (the controller interface carries the lizard keyboard
-    /// collection). Android needs no prompt for an already-attached pad, so it can default on and
-    /// cost nothing when none is present. Do not align the platforms without moving the prompt.
+    /// ⚠ The DEFAULT is off, unlike Android, which captures whenever pad forwarding is on and a
+    /// pad is present: engaging this on Apple costs a permission question. While it is on, iOS
+    /// asks for CoreBluetooth at launch, where the menu pad acquires. The Mac is no cheaper —
+    /// `Sc2Capture` takes USB only when a pad is attached right now, so a padless Mac falls back
+    /// to the radio and is asked for Bluetooth, and the USB path asks for Input Monitoring (the
+    /// controller interface carries the lizard keyboard collection). Android asks only when a
+    /// pad is present, so it can capture by default and cost nothing without one. Do not align
+    /// the platforms without moving the prompt.
     public static let sc2Capture = "punktfunk.sc2Capture"
     /// Where a controller's SYSTEM buttons (guide + the share/QAM misc) land while streaming:
     /// `"auto"` | `"forward"` | `"local"` — the cross-client `system_buttons` key. Auto
@@ -83,24 +85,23 @@ public enum DefaultsKey {
     /// Requested audio channel count: 2 (stereo), 6 (5.1) or 8 (7.1). The host clamps to what it
     /// can capture; the resolved count drives the in-core decode + AVAudioEngine layout.
     public static let audioChannels = "punktfunk.audioChannels"
-    /// Requested audio format — `AudioFormatChoice`'s raw value: `"opus"` (the default, and every
-    /// session before the lossless plane existed), or one of the lossless rows,
-    /// `"lossless441"` / `"lossless48"` / `"lossless882"` / `"lossless96"` / `"lossless1764"`.
+    /// Requested audio format — `AudioFormatChoice`'s raw value: `"opus"` (the default), or one
+    /// of the lossless rows, `"lossless441"` / `"lossless48"` / `"lossless882"` /
+    /// `"lossless96"` / `"lossless1764"`.
     ///
     /// Off by default and deliberately: lossless takes 2.1–8.5 Mbps off the top of the link for
     /// stereo (three times that for 5.1, four for 7.1), OUTSIDE the ABR loop that manages the video
     /// budget, against the ~256 kbps Opus it replaces — so a user has to pick it. This row is the
     /// ONLY opt-in: the host's half (`PUNKTFUNK_AUDIO_HIRES`) defaults ON and is an
     /// opt-OUT (`=0`), so picking a lossless row here is enough on any host that has not
-    /// deliberately turned the plane off. A REQUEST: the host's
-    /// five-condition gate may resolve the session back to Opus, and
-    /// `PunktfunkConnection.resolvedAudioRateHz`/`resolvedAudioBits`/`resolvedAudioChannels` are
-    /// what actually happened.
+    /// deliberately turned the plane off. A REQUEST: the host's `resolve_audio_plane` gate may
+    /// resolve the session back to Opus, and `PunktfunkConnection.resolvedAudioRateHz`/
+    /// `resolvedAudioBits`/`resolvedAudioChannels` are what actually happened.
     public static let audioFormat = "punktfunk.audioFormat"
     /// Preferred video codec: `"auto"` (host decides), `"hevc"`, `"h264"`, `"av1"`, or
-    /// `"pyrowave"` (the opt-in wired-LAN wavelet codec — picking it advertises AND prefers it,
-    /// and forces the session SDR). A soft preference — the host emits it when it can, else
-    /// falls back. Drives the decoder via `Welcome.codec`.
+    /// `"pyrowave"` (the opt-in wired-LAN wavelet codec — picking it advertises AND prefers it).
+    /// A soft preference — the host emits it when it can, else falls back. Drives the decoder
+    /// via `Welcome.codec`.
     public static let codec = "punktfunk.codec"
     /// PyroWave quality, bits per pixel from 0.5 to 2 (default 1.6): the most a PyroWave session
     /// sends. The row shows it as the rate it needs, never as bits per pixel.
@@ -121,7 +122,7 @@ public enum DefaultsKey {
     /// Ask the host to leave ITS OWN audio devices alone for this session
     /// (`PUNKTFUNK_CLIENT_CAP_KEEP_HOST_AUDIO`): it captures whatever its default playback
     /// device already is, so the speakers/headphones on the host PC keep playing while this
-    /// device hears the same audio. Off (the default) is today's behaviour — the host parks
+    /// device hears the same audio. Off (the default): the host parks
     /// playback on a silent endpoint and goes quiet for the session. Best-effort: an older
     /// host ignores the ask and re-routes as it always did.
     public static let keepHostAudio = "punktfunk.keepHostAudio"
@@ -138,7 +139,8 @@ public enum DefaultsKey {
     /// jitter buffer evens the cadence at the cost of added, visible display latency).
     /// Resolved once per session by SessionPresenter — see PresentPriority.
     public static let presentPriority = "punktfunk.presentPriority"
-    /// Smoothness's jitter-buffer capacity in frames: 0 = Automatic (currently 2), or 1…3.
+    /// Smoothness's jitter-buffer capacity in frames: 0 = Automatic (`PresentPriority.resolve`),
+    /// or 1…3.
     /// Each buffered frame adds ~one refresh interval of display latency and absorbs ~one
     /// interval of arrival jitter. Only meaningful when `presentPriority` is "smooth".
     public static let smoothBuffer = "punktfunk.smoothBuffer"
@@ -202,8 +204,8 @@ public enum DefaultsKey {
     /// Option and Command keys — preserving side (L/R) — so the key nearest the space bar acts as
     /// Alt and the next one as the Windows key, matching a Windows keyboard's `Ctrl / ⊞ / Alt` row.
     /// Only what's FORWARDED changes; client-local shortcuts (⌘⎋ &co.) stay on the physical ⌘ key.
-    /// Read live at the wire boundary by `InputCapture`. Control/Shift never move (same position on
-    /// both keyboards).
+    /// Read per key event, from the session's settings, at the wire boundary (`InputCapture`).
+    /// Control/Shift never move (same position on both keyboards).
     public static let modifierLayout = "punktfunk.modifierLayout"
     /// Send system chords to the host while input is captured — the cross-client
     /// `inhibit_shortcuts`, ON by default. On the SDL clients it is SDL's keyboard grab (Alt+Tab,
@@ -211,7 +213,8 @@ public enum DefaultsKey {
     /// monitor implements it by taking every ⌘ chord off AppKit before a menu key equivalent can
     /// fire and forwarding it instead — which is what makes ⌘Q reach the host's compositor rather
     /// than quitting the client. Off keeps the chords local (the second-screen/work preset).
-    /// ⌘⎋ and the ⌃⌥⇧ chords are never forwarded either way; ⌃⌘F is forwarded only with it on.
+    /// ⌘⎋ and any chord bound to a shortcut (by default the ⌃⌥⇧ letters) stay with the client
+    /// either way; ⌃⌘F is forwarded only with it on.
     /// It applies under both mouse models, as on the SDL clients. macOS-only today; nothing reads
     /// it on iOS/tvOS.
     public static let inhibitShortcuts = "punktfunk.inhibitShortcuts"
@@ -225,7 +228,7 @@ public enum DefaultsKey {
     /// "trackpad" (default: relative cursor with tap-click / two-finger-scroll gestures),
     /// "pointer" (the cursor jumps to the finger), "touch" (real multi-touch passthrough), or
     /// "off" (fingers reach the host as nothing).
-    /// Read live per gesture by `StreamLayerUIView`.
+    /// Read at each gesture's start by `StreamLayerUIView` (`TouchInputMode.current`).
     public static let touchMode = "punktfunk.touchMode"
     // RETIRED: `punktfunk.libraryEnabled`, the "Show game library" switch. Pairing is the only
     // gate now — the fetch authenticates with the pinned identity, so an unpaired host could
@@ -272,13 +275,13 @@ public enum DefaultsKey {
     /// of a stream preset.
     public static let fullscreenAlways = "punktfunk.fullscreenAlways"
     /// LEGACY (pre-tiered overlay): the old boolean stats-overlay toggle. Kept ONLY as the
-    /// migration fallback `StatsVerbosity.current` reads when `statsVerbosity` was never
-    /// written (absent-or-true → .normal, explicit false → .off). Never written anymore.
+    /// migration fallback `EffectiveSettings.storedStatsVerbosity` reads when `statsVerbosity` was
+    /// never written (absent-or-true → .normal, explicit false → .off). Never written anymore.
     public static let hudEnabled = "punktfunk.hudEnabled"
     /// The statistics overlay tier — a `StatsVerbosity` raw value ("off"/"compact"/"normal"/
-    /// "detailed"). Absent → migrated from the legacy `hudEnabled` bool (see above). Cycle it
-    /// while streaming with ⌃⌥⇧S (the cross-client Ctrl+Alt+Shift+S; macOS / hardware
-    /// keyboard) or a three-finger tap (touch), matching the Android client.
+    /// "detailed"). Absent → migrated from the legacy `hudEnabled` bool (see above). The tier a
+    /// session starts at: ⌃⌥⇧S (the cross-client Ctrl+Alt+Shift+S; macOS / hardware keyboard)
+    /// or a three-finger tap (touch) cycles the running session only (`StatsVerbosity.next`).
     public static let statsVerbosity = "punktfunk.statsVerbosity"
     /// Which corner the statistics overlay sits in — a `HUDPlacement` raw value
     /// ("topLeading"/"topTrailing"/"bottomLeading"/"bottomTrailing"). Default top-trailing.
@@ -301,7 +304,7 @@ public enum DefaultsKey {
     /// On by default; WHEN it takes over is `gamepadUIMode`. See `GamepadUIEnvironment.isActive`.
     public static let gamepadUIEnabled = "punktfunk.gamepadUIEnabled"
     /// When `gamepadUIEnabled` actually takes over: `"connected"` (the default — only while a
-    /// usable controller is attached, the behaviour this switch has always had) or `"always"`,
+    /// usable controller is attached) or `"always"`,
     /// for someone who prefers the console layout with no pad in reach (a TV-connected iPad, a
     /// Mac driven from the couch). Read only while `gamepadUIEnabled` is on, which is why the
     /// settings rows hide it when the switch is off. Anything unrecognized reads as
@@ -343,7 +346,7 @@ public enum DefaultsKey {
     /// The explicit "Wake Host" action stays available regardless. Read through `@AutoWake`.
     public static let autoWake = "punktfunk.autoWake"
     /// iOS/iPadOS: keep a streaming session ALIVE when the app is backgrounded (audio background
-    /// mode). Off by default (today's freeze-on-background is the default). When on, backgrounding a
+    /// mode). Off by default: the stream freezes in the background. When on, backgrounding a
     /// live session keeps audio playing and the QUIC/pump live while DROPPING video decode, and a
     /// bounded timer (`backgroundTimeoutMinutes`) auto-disconnects if the user doesn't return. Read
     /// by ContentView's scenePhase driver. Hidden on tvOS/macOS.

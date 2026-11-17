@@ -1,6 +1,7 @@
 //! AU memory the embedder lends ([`punktfunk_connection_set_au_memory`]): the core assembles
-//! each access unit straight into a buffer the embedder's decoder reads, so no byte is
-//! copied after decrypt ([`punktfunk_core::au`]).
+//! each access unit in a buffer the embedder's decoder reads. A data shard whose frame is
+//! already in flight decrypts straight into it; any other is copied in once
+//! ([`punktfunk_core::au`]).
 
 #[cfg(feature = "quic")]
 use crate::*;

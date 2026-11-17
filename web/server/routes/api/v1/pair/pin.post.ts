@@ -18,8 +18,7 @@ export default defineEventHandler(async (event) => {
 	await confirmPassword(event, body?.password);
 	// Rebuild from exactly the fields the host takes, so the password cannot leak upstream.
 	// uniqueid/fingerprint address the PIN to one parked ceremony — the one the operator SAW in
-	// the pairing status — instead of whichever handshake is parked at delivery time
-	// (security-review 2026-08-31 H-4).
+	// the pairing status — instead of whichever handshake is parked at delivery time.
 	// `label` names the device being paired; the host scrubs it and stores it on success.
 	return forwardJson(event, "/api/v1/pair/pin", "POST", {
 		pin: String(body?.pin ?? ""),

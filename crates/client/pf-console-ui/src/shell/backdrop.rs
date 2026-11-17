@@ -9,8 +9,8 @@ use std::cell::RefCell;
 
 /// Long edge of the backdrop's offscreen, px. The field is a pure function of `xy/u_res`
 /// and soft, so a small buffer blitted up holds the same picture at any glass size — its
-/// per-pixel noise never scales with a 4K surface. The reduced interface takes a quarter of
-/// 384's pixels: on a 2025 LG TV the noise costs ~29 ms of GPU at 384 and ~8 ms at 192.
+/// per-pixel noise never scales with a 4K surface. The reduced interface takes the smaller
+/// edge: the shader's work grows with the buffer's pixels.
 const FIELD_EDGE: f64 = 512.0;
 const FIELD_EDGE_REDUCED: f64 = 192.0;
 /// Seconds between backdrop re-renders (~25 Hz). The field morphs slowly, so the step is
@@ -190,7 +190,7 @@ impl Backdrop {
                 }
                 // A rejected shader keeps whatever the cache held: a stale field beats black.
             } else {
-                // No offscreen (context teardown): a full-surface draw is the fallback,
+                // No offscreen, not even a raster one: a full-surface draw is the fallback,
                 // never a black frame.
                 match self.paint(w, h, t, calm, passes) {
                     Some(paint) => {
@@ -225,11 +225,11 @@ impl Backdrop {
     }
 }
 
-/// The reduced backdrop's retained pass: the offscreen and the inputs it was rendered
+/// The backdrop's retained pass: the offscreen and the inputs it was rendered
 /// from — anything that moves one of them is what a re-render keys on.
 pub(super) struct FieldCache {
     surface: Surface,
-    /// The offscreen's pixel size (`FIELD_EDGE`-scaled from the surface it blits to).
+    /// The offscreen's pixel size (the surface it blits to, scaled to the edge `draw` picked).
     pub(super) size: (i32, i32),
     /// Clock and calm mix baked into the current contents.
     pub(super) t: f64,
@@ -239,16 +239,14 @@ pub(super) struct FieldCache {
     mesh: (String, Option<u64>),
 }
 
-/// The reduced backdrop's offscreen, on `canvas`'s own backend ([`crate::blur::offscreen`]).
+/// The backdrop's offscreen, on `canvas`'s own backend ([`crate::blur::offscreen`]).
 /// A raster offscreen under a GPU canvas runs the field's SkSL on the CPU, several frames'
 /// worth on a TV.
 fn field_surface(canvas: &Canvas, size: (i32, i32)) -> Option<Surface> {
     crate::blur::offscreen(canvas, size.0, size.1)
 }
 
-/// Compile the mesh for a palette and the lift, scrim, and ink it decides.
-/// `uniform_size` is checked: [`Backdrop::paint`] hand-packs the buffer
-/// and a silent layout change would feed the field garbage.
+/// A compiled mesh and the lift, scrim, and ink its palette decides.
 type MeshLook = (RuntimeEffect, [f32; 3], [f32; 4], crate::theme::Ink);
 
 fn build_mesh(palette_id: &str) -> Result<MeshLook> {
@@ -276,6 +274,9 @@ pub(super) fn build_mesh_os(t: &crate::os_theme::OsTheme) -> Result<MeshLook> {
     compile_mesh(&stops.map(rgb), crate::theme::Ink::of_os(t), rgb(bg))
 }
 
+/// Compile the field shader for `stops` over `ground`. `uniform_size` is checked:
+/// [`Backdrop::paint`] hand-packs the buffer and a silent layout change would feed the
+/// field garbage.
 fn compile_mesh(
     stops: &[(f64, f64, f64)],
     ink: crate::theme::Ink,

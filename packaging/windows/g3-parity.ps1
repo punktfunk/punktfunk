@@ -19,8 +19,8 @@
        artefact before the run, and hashes are compared when one exists.
 
   What this cannot cover is printed at the end: no instrument reaches the driver's
-  own 4:4:4 or 10-bit input modes, and HDR with 4:4:4 has no driver input kind at
-  all. Read that section - it is the honest bound on the result.
+  own 4:4:4 or 10-bit input modes. Read that section - it is the honest bound on
+  the result.
 
 .PARAMETER Tag     Log suffix. Writes C:\Users\Public\live-<Tag>.log. Default g3.
 .PARAMETER Vendor  Adapter for the selftest: nvidia, amd, intel, or any to leave
@@ -47,8 +47,8 @@ $outDir = 'C:\Users\Public\parity-post'
 $probeDir = 'C:\Users\Public'
 $log = Join-Path 'C:\Users\Public' "live-$Tag.log"
 
-# The staged build first, then an installed host. ffprobe below still comes from the
-# runner's FFmpeg tree, which is a test tool here, not a dependency of the host.
+# Each directory that exists is prepended, so an installed host is searched first, then
+# FFmpeg, then the stage. ffprobe is a test tool here, not a dependency of the host.
 foreach ($d in @($stage, 'C:\Users\Public\ffmpeg\bin', 'C:\Program Files\Punktfunk')) {
     if (Test-Path $d) { $env:PATH = "$d;$env:PATH" }
 }
@@ -68,7 +68,8 @@ $ref = [ordered]@{
     'white4.0' = @(614, 512, 512)
     'amber2.0' = @(493, 419, 537)
 }
-# Kept as strings: these boxes run a comma-decimal locale, where [double]'1.03' is 103.
+# Kept as strings: the selftest prints a '.' decimal, and under a comma-decimal locale
+# [double]::Parse('1.03') is 103 and a double prints as 1,03.
 $refErr = @('1.03', '0.82', '0.75')
 
 Set-Content -Path $log -Value "=== g3-parity $Tag $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="

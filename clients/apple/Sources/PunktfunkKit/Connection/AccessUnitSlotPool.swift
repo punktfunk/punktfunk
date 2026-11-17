@@ -1,4 +1,4 @@
-// Access-unit memory for the VideoToolbox pumps: page-aligned slots the core assembles AUs in,
+// Access-unit memory for the VideoToolbox pumps: 4 KiB-aligned slots the core assembles AUs in,
 // which a sample buffer then wraps as its own block (SamplePack), so an AU is copied neither at
 // the pull nor into the sample. A slot is free once the core released it and no sample holds it.
 

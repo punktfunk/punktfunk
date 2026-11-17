@@ -6,8 +6,8 @@
 //! dragged onto another swaps the two, and the picker offers the same swap for a keyboard.
 //! Under the ring the shortcuts sit as rows; a row opens the shortcut editor — a name, the four
 //! modifiers, the key on a keyboard-shaped grid or pressed on the real keyboard — as subpages
-//! of the preferences dialog. The blob lives in the dialog's state and is written with the other
-//! rows when the dialog closes; the model (catalogue, geometry, chords, icons) is
+//! of the preferences dialog. The blob lives in the dialog's state and the binder writes it on
+//! every edit, like any other row; the model (catalogue, geometry, chords, icons) is
 //! `pf_client_core`'s.
 
 use adw::prelude::*;
@@ -36,7 +36,7 @@ type ChangedFns = Rc<RefCell<Vec<Box<dyn Fn()>>>>;
 /// The editor page's "draw it all again from the blob", handed to every control that edits.
 type Rebuild = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
-/// The editor's state, shared by the row, the subpages and the dialog's close handler.
+/// The editor's state, shared by the row, the subpages and the binder.
 #[derive(Clone)]
 struct Shared {
     dialog: glib::WeakRef<adw::PreferencesDialog>,
@@ -177,8 +177,8 @@ pub(super) fn key_name(key: gdk::Key) -> Option<&'static str> {
 }
 
 /// The name of the key at this physical position with NOTHING held, for a chord whose
-/// shifted symbol the grid cannot name — `Shift+1` arrives as `!` on a US layout, and the
-/// whole chord used to be dropped instead of read as Shift plus `1`.
+/// shifted symbol the grid cannot name — `Shift+1` arrives as `!` on a US layout, and is read
+/// as Shift plus `1`.
 pub(super) fn unshifted_key_name(keycode: u32) -> Option<&'static str> {
     let entries = gdk::Display::default()?.map_keycode(keycode)?;
     entries
@@ -1050,8 +1050,8 @@ fn shortcut_page(
 mod tests {
     use super::*;
 
-    /// Every GDK key the grid lists maps to its own name, a letter maps whatever its case,
-    /// and a key the wire does not carry maps to nothing.
+    /// GDK keys map to the chord's names, a letter whatever its case and the keypad Enter as
+    /// Enter; a modifier and a key the wire does not carry map to nothing.
     #[test]
     fn gdk_keys_map_to_the_chord_names() {
         assert_eq!(key_name(gdk::Key::Escape), Some("escape"));

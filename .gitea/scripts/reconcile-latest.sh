@@ -4,18 +4,18 @@
 #
 # This is what we do instead of pinning consumers by @sha256: digest
 # (security-review-2026-08-05, H-6 — see the reasoning at the top of docker.yml). The
-# content key is a hash of the ci/ tree, so "which image should :latest be?" has an
-# answer derivable from the commit alone. Checking it on every run turns :latest from a
-# tag someone remembered to move into a function of the tree.
+# content key is a hash of the ci/ tree (the cross image also folds in
+# rust-toolchain.toml), so "which image should :latest be?" has an answer derivable
+# from the commit alone. Checking it on every run turns :latest from a tag someone
+# remembered to move into a function of the tree.
 #
 # Two different things make them diverge and neither is distinguishable from here:
 #
-#   - Someone overwrote :latest out of band. Post-fix that needs the push credential,
-#     but it is exactly the H-6 attack and it must not pass silently.
+#   - Someone overwrote :latest out of band. That needs the push credential, but it
+#     is exactly the H-6 attack and it must not pass silently.
 #   - ci/ was reverted. The older key is already a cache hit, so nothing rebuilds and
 #     nothing re-points :latest — it stays on the newer build forever while every
-#     consumer pulls a builder that does not match the tree it is building. That bug
-#     predates this script.
+#     consumer pulls a builder that does not match the tree it is building.
 #
 # Both are repaired identically, so: repair, and shout. Failing the build instead would
 # turn a legitimate revert into a red main with no way forward.

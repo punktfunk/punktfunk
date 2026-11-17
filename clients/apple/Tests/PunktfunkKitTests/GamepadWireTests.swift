@@ -45,7 +45,7 @@ final class GamepadWireTests: XCTestCase {
         XCTAssertEqual(axis.code, GamepadWire.axisRT)
         XCTAssertEqual(axis.x, 200)
         XCTAssertEqual(axis.flags, 5)
-        // Single-controller path stays byte-identical: pad 0 ⇒ flags 0, exactly as before.
+        // Pad 0 ⇒ flags 0: a single controller's events leave `flags` clear.
         XCTAssertEqual(PunktfunkInputEvent.gamepadButton(GamepadWire.a, down: false, pad: 0).flags, 0)
         XCTAssertEqual(PunktfunkInputEvent.gamepadAxis(GamepadWire.axisLSX, value: 0, pad: 0).flags, 0)
     }
@@ -71,9 +71,9 @@ final class GamepadWireTests: XCTestCase {
     }
 
     func testAnExplicitControllerTypeIsWhatEveryPadDeclares() {
-        // The regression this pins: the "Controller type" setting reached the Hello only, and each
-        // pad's arrival then re-declared the DETECTED kind — which the host honors over the
-        // session default, so "emulate my DualSense as a DualShock 4" produced a DualSense.
+        // Every pad's arrival declares the explicit "Controller type", not the DETECTED kind: the
+        // host honors an arrival's kind over the session default, so "emulate my DualSense as a
+        // DualShock 4" would otherwise produce a DualSense.
         // (pf-client-core's `declared_kind` test is the same table.)
         XCTAssertEqual(
             GamepadManager.declaredKind(setting: .dualShock4, detected: .dualSense), .dualShock4)

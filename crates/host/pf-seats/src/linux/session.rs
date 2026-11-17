@@ -26,8 +26,8 @@ pub(super) const DROPIN_ROOT: &str = "/run/systemd/system";
 pub(super) const PRIVATE_DIRS: [&str; 3] = ["compatdata", "shadercache", "downloading"];
 
 /// What a seat's Steam runs in place of [`UPDATE_HELPERS`]. They escalate through pkexec, which
-/// a seat's session is refused, and Steam's first-run setup stops on that failure. A seat never
-/// updates the box, so each answers "nothing to do": 7 from `steamos-update`, else 0.
+/// fails (exit 127) in a seat's session, and Steam's first-run setup stops on that failure. A seat
+/// never updates the box, so each answers "nothing to do": 7 from `steamos-update`, else 0.
 pub(super) const NO_UPDATE: &str = "/run/punktfunk/seat-no-update";
 const NO_UPDATE_SCRIPT: &str = "#!/bin/sh\n\
 # A punktfunk seat never updates the box's OS or firmware.\n\
@@ -254,8 +254,9 @@ pub(super) fn render_manager(dropins: &[&str]) -> String {
 }
 
 /// The drop-in of the owner's row: a `background` session, so the owner's login at the monitor
-/// stays the one logind and polkit treat as the owner's display. Another person's row keeps the
-/// unit's `user` class: a shutdown at the machine counts it as another user's session.
+/// stays the one logind and polkit treat as the owner's display (systemd 259). Another person's
+/// row keeps the unit's `user` class: a shutdown at the machine counts it as another user's
+/// session.
 pub(super) fn render_class() -> &'static str {
     "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }
@@ -263,9 +264,9 @@ pub(super) fn render_class() -> &'static str {
 /// The drop-in of a start through the login helper (`super::login`): the unit's main process is
 /// `helper login <account>`, run as root by `!`, which skips only the switch to `User=`. So
 /// systemd opens no PAM session of its own, the runtime directory stays the person's and a stop
-/// runs as today's. In SELinux `context` when there is one; a helper that ends ends the start,
-/// and the journal keeps the seat's own tag. `None` for a path a unit file can't hold verbatim;
-/// `context` is the caller's to check.
+/// runs as it does for the plain unit. In SELinux `context` when there is one; a helper that
+/// ends ends the start, and the journal keeps the seat's own tag. `None` for a path a unit file
+/// can't hold verbatim; `context` is the caller's to check.
 pub(super) fn render_login(helper: &Path, context: Option<&str>) -> Option<String> {
     let path = helper.to_str()?;
     let plain = path.starts_with('/')
@@ -799,7 +800,7 @@ mod tests {
         assert!(!text.contains("/home/jdoe") && !text.contains("SEAT_OWNER"));
     }
 
-    /// The whole seat contract, in the order the doc lists it, with each path under its seat.
+    /// The whole seat contract, with each path under its seat.
     #[test]
     fn the_env_file_carries_the_seat_contract() {
         let text = render_env(

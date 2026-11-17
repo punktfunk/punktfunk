@@ -4,11 +4,14 @@
 //
 //   • REQUEST ACCESS (default) — no PIN. Save the host with the fingerprint it ADVERTISED,
 //     then ask. The host parks the request until its operator approves this Deck in the
-//     console or web UI; the Deck is then paired, and the next Connect streams.
+//     console or web UI; the Deck is then paired, and the next Connect streams. A host that
+//     advertises `pair=optional` needs no approval: Connect takes this button's place, pins
+//     and streams at once.
 //   • USE A PIN INSTEAD — the existing gamepad-navigable keypad (pair.tsx).
 //
 // NO FINGERPRINT, NO REQUEST ACCESS. The request pins the advertised fingerprint, and that pin
-// is the only thing standing between a 185 s wait and an impostor answering for the host. A host typed in by address advertises nothing, so it gets the PIN path only — and is
+// is the only thing standing between the wait for approval and an impostor answering for the
+// host. A host typed in by address advertises nothing, so it gets the PIN path only — and is
 // told why, rather than being shown a button that could only fail. Under no circumstances does
 // this sheet trust-on-first-use its way past a missing fingerprint.
 import { DialogButton, Focusable, ModalRoot, Spinner, showModal } from "@decky/ui";
@@ -64,8 +67,7 @@ export const TrustSheet: FC<{
 
   // ⚠ This sheet is a `showModal` PORTAL: it captures its callbacks ONCE and never re-renders
   // from panel state. Anything it needs to act on later must be read through a ref, not out of
-  // a captured value — reading a captured array is exactly what made pinning a second game
-  // compute from a stale base and clobber the first.
+  // a captured value, which is a stale snapshot by then.
   const props = useRef({ host, onStream, onChanged });
   props.current = { host, onStream, onChanged };
 
@@ -83,7 +85,7 @@ export const TrustSheet: FC<{
   /**
    * Pin the advertised identity, then get in.
    *
-   * `approval` waits ~185 s for an operator and ends paired, with no stream. Without it the host
+   * `approval` waits for an operator and ends paired, with no stream. Without it the host
    * takes new devices, so the stream starts at once and the record stays trusted.
    */
   const letIn = async (approval: boolean) => {

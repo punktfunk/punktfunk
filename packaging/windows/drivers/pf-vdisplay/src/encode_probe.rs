@@ -44,9 +44,9 @@ const ST_RUNNING: u32 = 2;
 const ST_DONE: u32 = 3;
 const ST_FAILED: u32 = 4;
 
-/// Three slots so the drain worker can bank two frames while one encodes (host OUT_RING).
+/// Three slots so the drain worker can bank two frames while one encodes, as in the pool.
 const SLOTS: usize = 3;
-/// Submits allowed ahead of the oldest AU — the host's pipeline depth.
+/// Submits allowed ahead of the oldest AU, as in the session loop (`drive::MAX_INFLIGHT`).
 const MAX_INFLIGHT: usize = 2;
 use pf_driver_proto::encode::backend::NAMES as BACKENDS;
 use pf_driver_proto::encode::codec::NAMES as CODECS;
@@ -272,8 +272,8 @@ fn run(stop: HANDLE, req: EncodeProbeRequest, shared: Arc<Shared>) {
 }
 
 /// The chosen input paired with the chroma the opened encoder reports, as the reply's tag:
-/// `Rgb10+444` is the HDR full-chroma pairing, `P010+444` would be the reply outrunning the
-/// encoder again. Readable from the test's output, so a run needs no driver log.
+/// `Rgb10+444` is the HDR full-chroma pairing, `P010+444` would be a 4:2:0 input reporting
+/// 4:4:4. Readable from the test's output, so a run needs no driver log.
 fn outcome_tag(kind: InputKind, chroma444: bool) -> [u8; 32] {
     let k = match kind {
         InputKind::Bgra => "Bgra",
@@ -564,7 +564,8 @@ fn wait(
     Ok(())
 }
 
-/// One BGRA ring slot on the pooled 0.58 device: the hook's copy target, the thread's source.
+/// One ring slot in the desktop's `format` on the pooled 0.58 device: the hook's copy target,
+/// the thread's source.
 fn make_slot(
     dev: &Direct3DDevice,
     w: u32,

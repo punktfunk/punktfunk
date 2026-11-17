@@ -1,6 +1,6 @@
 //! Linux (and every non-Windows) launch: the host runs a resolved shell command, nested in
-//! gamescope or into the live session. [`command_for`] is the pure `LaunchSpec` → command map;
-//! [`launch_session_command`] is the spawn.
+//! gamescope or into the live session. [`command_for`] is the `LaunchSpec` → command map, which
+//! spawns nothing; [`launch_session_command`] is the spawn.
 
 use super::*;
 
@@ -76,8 +76,8 @@ pub fn launch_is_resolvable(id: &str) -> bool {
     command_for(spec).is_some()
 }
 
-/// Pure map from [`LaunchSpec`] to a shell command. `exec` is absent: it is built from the
-/// publishing plugin's manifest by [`exec_recipe`] first.
+/// Map from [`LaunchSpec`] to a shell command; it spawns nothing. `exec` and `emulator` are
+/// absent: [`exec_recipe`] builds them first.
 fn command_for(spec: &LaunchSpec) -> Option<String> {
     match spec.kind.as_str() {
         "steam_appid" => valid_steam_appid(&spec.value)

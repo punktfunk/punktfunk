@@ -1,8 +1,8 @@
 //! One [`GameEntry`] grid over every source of titles on this host.
 //!
 //! Every source is a plugin. Plugins reconcile titles into the stored catalog over the
-//! provider API, each claiming its store so entries keep stable `<store>:<external_id>`
-//! ids (`custom.rs`, design D2). The operator-typed **custom** store lives in the same
+//! provider API; one that claims its store keeps stable `<store>:<external_id>` ids
+//! (`custom.rs`, design D2). The operator-typed **custom** store lives in the same
 //! catalog and is not a plugin.
 //!
 //! A plugin publishes a validated [`LaunchSpec`]; the host builds the command
@@ -61,25 +61,26 @@ pub struct Artwork {
     pub header: Option<String>,
 }
 
-/// How the host launches a title. Open-ended so new stores slot in:
-/// `steam_appid` → `steam steam://rungameid/<value>`; `command` → run `<value>`
-/// nested in a gamescope session.
+/// How the host launches a title. Open-ended so new stores slot in: the host builds each
+/// kind's command (`steam_appid` → `steam://rungameid/<value>`); `command` runs `<value>`
+/// through `sh -c` or `cmd.exe /c`.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct LaunchSpec {
-    /// `"steam_appid"` or `"command"`.
+    /// The launch kind (`"steam_appid"`, `"command"`, `"exec"`, …); `launch.rs` resolves each.
     #[schema(example = "steam_appid")]
     pub kind: String,
     /// Appid for `steam_appid`, the shell command for `command`, or — for `exec` — the name of a
     /// template in the publishing plugin's manifest.
     pub value: String,
-    /// Values for an `exec` template's parameters. Each is checked against the character class
-    /// the manifest declares for it, and a path must sit inside the paths that manifest names.
+    /// Values for an `exec` template's parameters, or an `emulator` entry's `platform`, `file`
+    /// and `core`. Each is checked against its character class, and a path must sit inside the
+    /// paths the publishing plugin's manifest names.
     /// A list rather than a map: a map of strings generates as an untyped object in the SDK.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<LaunchArg>>,
 }
 
-/// One `{param}` value for an `exec` template.
+/// One named value: an `exec` template's `{param}`, or an `emulator` argument.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct LaunchArg {
     /// The parameter's name in the template.
@@ -239,10 +240,12 @@ impl OnWindow {
 /// One title in the unified library, regardless of store.
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct GameEntry {
-    /// Stable, store-qualified id: `steam:<appid>` or `custom:<id>`.
+    /// Stable, store-qualified id (`steam:570`, `custom:<id>`); `library_id_for` mints a
+    /// stored row's.
     #[schema(example = "steam:570")]
     pub id: String,
-    /// Which store surfaced it: `"steam"` or `"custom"`.
+    /// Which store surfaced it: the claimed store (`"steam"`), `"custom"` for a row with no
+    /// claim, `"host"` for the host's own Game Mode tile.
     #[schema(example = "steam")]
     pub store: String,
     pub title: String,
@@ -258,7 +261,8 @@ pub struct GameEntry {
     pub icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch: Option<LaunchSpec>,
-    /// Plugin that owns this entry. `None` only for operator-typed custom entries.
+    /// Plugin that owns this entry; `None` when no plugin on this host does: an operator's row,
+    /// the Game Mode tile, a seat's own title as the box lists it.
     /// `GET /library?provider=` filters on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -369,7 +373,7 @@ pub fn all_games() -> Vec<GameEntry> {
 /// clients, `/applist`, and launch resolution — the plugin may keep reconciling.
 /// Per-entry hides (`hidden.rs`), the box's and the profile's, apply here so every surface
 /// agrees; [`all_games_for_operator`] is the one exception. Operator-typed custom entries
-/// carry no source and always contribute.
+/// carry no source, so no toggle hides them; `source_off` can still leave one out on a seat.
 pub fn all_games_for(view: &View) -> Vec<GameEntry> {
     let (by_box, by_profile) = hidden_layers(view);
     sorted_games_for(view)
@@ -419,9 +423,10 @@ pub(crate) fn listed_entries(
 /// The library in `view` including hidden titles, each flagged.
 ///
 /// Only the console list on the operator lane calls this: a hidden entry has to
-/// be visible somewhere or it could never be brought back. Paired clients,
-/// the GameStream app list, and launch resolution use [`all_games`]. With a profile in view the
-/// flag is the profile's, and a title the box hides is left out: only the box brings it back.
+/// be visible somewhere or it could never be brought back. Paired clients, the GameStream app
+/// list, and launch resolution use [`all_games_for`] and [`find_game_for`], which omit hidden
+/// titles. With a profile in view the flag is the profile's, and a title the box hides is left
+/// out: only the box brings it back.
 pub fn all_games_for_operator(view: &View) -> Vec<OperatorGameEntry> {
     let (by_box, by_profile) = hidden_layers(view);
     let own = OwnValues::load(view);
@@ -539,7 +544,7 @@ fn collect_games(view: &View) -> Vec<GameEntry> {
     let stats = game_stats();
     let overrides = Overrides::load(view);
     let fills = Fills::load(view);
-    // Manual entries always contribute; a provider's follow its toggle and [`source_off`]. The
+    // Every row of the box's passes [`source_off`]: its source's toggle and the seat rules. The
     // profile's own titles are its account's: no rule for the box's rows applies to them.
     let mut games: Vec<GameEntry> = load_custom()
         .into_iter()
@@ -561,7 +566,8 @@ fn collect_games(view: &View) -> Vec<GameEntry> {
 }
 
 /// The library id of the host's Game Mode tile: Steam's gamepad UI in the box's own gamescope
-/// session. The handshake routes its connect to gamescope ([`game_mode_entry`]).
+/// session. The handshake routes its connect to gamescope (`game_mode_pref` in
+/// `native/handshake.rs`).
 pub(crate) const GAME_MODE_ID: &str = "host:gamemode";
 
 /// The [`GAME_MODE_ID`] launcher, on a box that runs a gamescope session (SteamOS,

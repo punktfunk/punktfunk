@@ -27,7 +27,7 @@ const SLOTS: usize = 3;
 pub(crate) const KEY_PICTURES: u64 = 1 << 63;
 /// Bit 62 marks an overlay ring's key.
 pub(crate) const KEY_OVERLAY: u64 = 1 << 62;
-/// A copy of a 4K picture takes well under a millisecond; this bounds a wedged queue.
+/// Far longer than any 4K copy takes; this bounds a wedged queue.
 const COPY_WAIT_NS: u64 = 100_000_000;
 
 /// DRM fourcc and Vulkan format of a picture the ring can copy.
@@ -777,7 +777,8 @@ impl ExportRing {
     }
 
     /// Copy the overlay image (Skia's, left in SHADER_READ_ONLY_OPTIMAL on this queue) into
-    /// `slot` and wait for the copy; the image returns to that layout. Results as [`Self::copy`].
+    /// `slot`; the image returns to that layout. The copy is waited unless the slot has
+    /// explicit sync. Results as [`Self::copy`].
     ///
     /// # Safety
     ///

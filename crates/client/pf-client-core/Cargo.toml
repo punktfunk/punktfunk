@@ -8,14 +8,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# Linux + Windows: the Vulkan session client builds on both; `cargo build --workspace`
-# stays green on macOS (the Mac client lives in clients/apple) — there this crate is
-# `wol` plus stubs-free emptiness. `wol` is pure std and stays cross-platform, matching
-# the old main.rs. Audio is the one per-OS swap: PipeWire on Linux, WASAPI on Windows
-# (same public surface — see lib.rs).
+# Linux + Windows: the Vulkan session client builds on both. Apple targets (the Mac client
+# lives in clients/apple) build the portable modules and `wol`, which is pure std. Audio is
+# the one per-OS swap: PipeWire on Linux, WASAPI on Windows (same public surface — see lib.rs).
 #
 # Android (design/android-skia-console-port.md, WP1): the Skia console shell
-# (`pf-console-ui`) now runs inside the Android client too, and everything IT needs from
+# (`pf-console-ui`) runs inside the Android client too, and everything IT needs from
 # this crate is data — `trust::Settings`, the menu-event vocabulary + synthesizer, the
 # library model, the deep-link grammar, the overlay action/session-phase types. Those
 # modules are gated `cfg(portable)` in lib.rs (build.rs); the session pump, decoders,
@@ -37,13 +35,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 tracing = "0.1"
-# `profiles` mints profile ids.
+# `presets` mints preset ids and host-record uuids.
 rand = "0.10"
 
 # The web client (design/web-client-implementation-plan.md WP0.1), `wasm32-unknown-emscripten`.
 # The same portable subset Android takes, minus `quic`: WebTransport IS the QUIC layer there, so
-# quinn/tokio/aws-lc-rs never build for this target and `trust`'s three identity/pair/probe
-# entry points are `cfg`'d out with them.
+# quinn/tokio/aws-lc-rs never build for this target and `trust`'s `identity` (identity, pairing)
+# and `probe` modules are `cfg`'d out with them.
 [target.'cfg(target_family = "wasm")'.dependencies]
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["serde", "l10n"] }
 serde = { version = "1", features = ["derive"] }
@@ -60,15 +58,13 @@ pf-client-video = { path = "../pf-client-video", default-features = false, optio
 # SIGTERM for the session child (`orchestrate`) and thread priority (`audio_rt`).
 libc = { version = "0.2", optional = true }
 
-# Opus for the audio planes. The VIDEO side has no FFmpeg at all since M10: every decode
-# rung is native (pf-vkdecode / pf-dxvadec / pf-vaapi / openh264+rav1d) and the codec
-# vocabulary is `punktfunk_core::quic`'s own `CODEC_*` wire bits. The HOST still encodes
-# with libavcodec (`pf-encode`); nothing in this crate does.
+# Opus for the audio planes. The video side has no FFmpeg: every decode rung is native
+# (pf-client-video) and the codec vocabulary is `punktfunk_core::quic`'s own `CODEC_*` wire bits.
 opus = { version = "0.4", optional = true }
 
 # Game-library fetch from the host's management API over mTLS + fingerprint pinning.
 # `ureq` is small + sync (the host uses it too) and its rustls unifies with the
-# workspace's (quinn's) 0.23; the pinning verifier mirrors core's private `PinVerify`.
+# workspace's (quinn's) 0.23; the pinning verifier is core's `tls::PinVerify` (`library::agent`).
 ureq = { workspace = true, optional = true, features = ["gzip"] }
 # Signed update-manifest fetch/verify + the install-kind ladder, shared with the host so one
 # trust rule serves both (crates/core/pf-update-check).
@@ -88,8 +84,8 @@ tracing = "0.1"
 # the desktop target block.
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 tracing-log = { version = "0.2", optional = true }
-# Stable ids for profiles and host records (profiles.rs) — the OS RNG only. No uuid crate: the
-# v4 layout is four lines.
+# Stable ids for presets and host records (presets.rs) — the OS RNG only. No uuid crate: the
+# v4 layout is two bit-twiddles.
 rand = "0.10"
 
 # Gamepads: capture + feedback (full DualSense fidelity — touchpad/motion/triggers/LEDs
@@ -98,8 +94,8 @@ rand = "0.10"
 [target.'cfg(target_os = "linux")'.dependencies]
 # `v0_3_49` for `Buffer::requested` — the graph's per-cycle frame ask, without which the
 # playback callback can only size writes from the buffer CEILING (quantum-limit, ~170 ms).
-# Pure cfg gate; needs libpipewire ≥ 0.3.49 (2022-03) at runtime, which every ship target
-# (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
+# Pure cfg gate; `pw_buffer.requested` needs libpipewire ≥ 0.3.50 (2022-04) at runtime, which
+# every ship target (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
 pipewire = { version = "0.10", features = ["v0_3_49"], optional = true }
 sdl3 = { version = "0.20", features = ["hidapi"], optional = true }
 # Audio-thread priority (`audio_rt`): one blocking D-Bus call per boosted thread — the Realtime
@@ -123,17 +119,17 @@ socket2 = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 wasapi = { version = "0.25", optional = true }
-# Pad-audio correlation (pad_audio.rs): the HID devnode's ContainerID and a render endpoint's
-# stamped PKEY_Device_ContainerId both live in the registry — read-only, which sidesteps COM
-# property stores entirely (the same version the host pins).
+# Pad-audio correlation (pad_audio/wasapi.rs): the HID devnode's ContainerID and a render
+# endpoint's stamped PKEY_Device_ContainerId both live in the registry — read-only, which
+# sidesteps COM property stores entirely (the same version the host pins).
 winreg = { version = "0.56", optional = true }
 sdl3 = { version = "0.20", features = ["hidapi", "build-from-source"], optional = true }
 # The OS-clipboard bridge (clipboard.rs) and the reduce-motion query (os_prefs.rs), on the
 # workspace entry's pinned rev. `wasapi` pulls the crates.io copy too;
 # clients/windows/Cargo.toml says why it stays.
 windows = { workspace = true, optional = true, features = [
-    # Features are header-named since windows-rs generates from the SDK headers directly
-    # (#4689) — one feature per header, replacing the old `Win32_*` namespace features.
+    # Features are header-named: windows-rs generates from the SDK headers directly, one
+    # feature per header.
     # Open/Get/SetClipboardData, the sequence number, SystemParametersInfoW.
     "winuser",
     # The GlobalAlloc block the clipboard takes ownership of, its HGLOBAL and HANDLE.
@@ -166,15 +162,14 @@ async-channel = { version = "2", optional = true }
 # (settings, menu events, the library model, deep links, the log ring). ON by default, so every
 # desktop consumer is unchanged; `--no-default-features` yields the portable half.
 #
-# 🛑 The split cannot be spelled `cfg(target_os)`, which is what it used to be: webOS is
-# `target_os = "linux"` and so resolved the desktop block — Vulkan video, PipeWire, SDL3,
-# openh264, rav1d — none of which exist on a TV. Android escaped that only because it has an OS
-# name of its own to test (design/webos-skia-console-port.md §2.1).
+# 🛑 The split cannot be spelled `cfg(target_os)`: webOS is `target_os = "linux"` and so would
+# resolve the desktop block — Vulkan video, PipeWire, SDL3, openh264, rav1d — none of which
+# exist on a TV. Android has an OS name of its own to test (design/webos-skia-console-port.md
+# §2.1).
 #
-# Consumers that take `default-features = false` AND want the desktop half must now say
-# `features = ["desktop"]`: clients/cli, clients/windows, clients/session, crates/client/pf-presenter.
-# The two that want the portable half — crates/client/pf-console-ui, clients/android/native — say
-# nothing, which is the point.
+# A consumer that takes `default-features = false` AND wants the desktop half says
+# `features = ["desktop"]` (clients/cli, clients/linux, clients/session, clients/windows,
+# crates/client/pf-presenter). One that wants the portable half does not name `desktop`.
 default = ["desktop", "pyrowave"]
 desktop = [
     "punktfunk-core/ureq-tls",

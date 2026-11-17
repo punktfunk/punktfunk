@@ -15,7 +15,7 @@ import org.json.JSONObject
  * stored under. Everything that needs to point AT a host (a settings-preset binding, a pinned
  * card, a `punktfunk://` link) points at the id, so renaming a host or moving it to a new address
  * doesn't strand those references. Mirrors the Apple client's `StoredHost.id` and the Rust
- * `KnownHost.id`; the shape is a lowercase UUID v4, one grammar on every platform.
+ * `KnownHost.id`: a UUID v4, written lowercase here and by Rust, upper case by Apple.
  */
 data class KnownHost(
     val address: String,
@@ -37,10 +37,10 @@ data class KnownHost(
     /**
      * The host's management-API port (mDNS `mgmt` TXT), where the game library is served — NOT
      * [port], which is the native QUIC plane. Learned while online and kept for the same reason as
-     * [mac] and [os], except this one is load-bearing: a host that moved its mgmt port off 47990
-     * (the supported way to share a machine with a Sunshine fork, whose web UI owns that port)
-     * served its library only while mDNS was reachable, because the advert was the sole place the
-     * real port ever existed. `null` until learned — resolve with [effectiveMgmtPort].
+     * [mac] and [os], except this one is load-bearing: a host that moved its mgmt port off the
+     * default (the supported way to share a machine with a Sunshine fork, whose web UI owns that
+     * port) can serve its library without mDNS only through the saved value. `null` until
+     * learned — resolve with [effectiveMgmtPort].
      * Mirrors the Apple client's `StoredHost.mgmtPort` and the Rust `KnownHost.mgmt_port`.
      */
     val mgmtPort: Int? = null,
@@ -55,13 +55,13 @@ data class KnownHost(
      *
      * Off until the user enables it for THIS host: a newly paired or TOFU-trusted machine must
      * not read the clipboard by default, and every absent-value fallback matches (Rust and Apple
-     * already defaulted off; security-review 2026-08-31 M-8).
+     * default off too).
      */
     val clipboardSync: Boolean = false,
     /**
      * The settings preset a plain tap on this host connects with — `null` (or an id whose preset
-     * was deleted) means the global defaults, i.e. today's behaviour. A dangling id is never an
-     * error and never blocks a connect.
+     * was deleted) means the global defaults. A dangling id is never an error and never blocks a
+     * connect.
      */
     val presetId: String? = null,
     /**
@@ -119,7 +119,8 @@ data class KnownHost(
     }
 
     /**
-     * Where this host's management API actually is: the port learned from its advert, else 47990.
+     * Where this host's management API actually is: the port learned from its advert, else
+     * [io.unom.punktfunk.kit.library.DEFAULT_MGMT_PORT].
      * The twin of the Apple client's `StoredHost.effectiveMgmtPort` and the Rust
      * `KnownHost::effective_mgmt_port`. Resolve through this — the constant is the FALLBACK, not
      * the answer.
@@ -133,10 +134,9 @@ data class KnownHost(
  * [KnownHost.id]. Plain `SharedPreferences` in app-private storage: pinned fingerprints are public
  * host identities, not secrets; the property we need is integrity, which app sandboxing provides.
  *
- * Records used to be keyed by `"address:port"`, which meant editing a host's address had to
- * re-key its record (delete + write) or leave a ghost behind, and meant nothing could hold a
- * durable reference to a host. Keying by the minted stable id retires both. [migrate] moves an
- * existing store over in one pass — see its doc for what else rides along.
+ * Records are keyed by the minted stable id, not by `"address:port"`: editing a host's address
+ * re-keys nothing, and a durable reference can point at a host. [migrate] moves a store keyed
+ * the old way over in one pass — see its doc for what else rides along.
  */
 class KnownHostStore(context: Context) {
     private val prefs =
@@ -186,7 +186,7 @@ class KnownHostStore(context: Context) {
 
     /**
      * Pin (or update) a trusted host — upsert by [KnownHost.id]. An edit that moves the address or
-     * port is a plain save now: the key is the identity, not the address.
+     * port is a plain save: the key is the identity, not the address.
      */
     fun save(host: KnownHost) {
         prefs.edit().putString(host.id, encode(host)).apply()
@@ -235,8 +235,7 @@ class KnownHostStore(context: Context) {
      * prefs on every discovery tick.
      *
      * Keyed by the record the caller matched, re-read by its id: an address names more than one
-     * record once a dual-boot box has both its OS installs saved, and the advert of one used to
-     * teach whichever of them the address answered with.
+     * record once a dual-boot box has both its OS installs saved.
      */
     fun learnMac(host: KnownHost, mac: List<String>) {
         if (mac.isEmpty()) return
@@ -249,7 +248,7 @@ class KnownHostStore(context: Context) {
      * Learn/refresh [host]'s OS-identity chain from its live advert — same contract as
      * [learnMac]: no-op when the record is gone, empty, or unchanged. Keyed by the record for
      * the same reason, and it matters most here: the chain draws the card's OS mark, so the
-     * wrong record took the neighbouring OS's icon.
+     * wrong record would take the neighbouring OS's icon.
      */
     fun learnOs(host: KnownHost, os: String) {
         if (os.isEmpty()) return
@@ -322,9 +321,9 @@ class KnownHostStore(context: Context) {
         if (prefs.getInt(K_SCHEMA, 0) >= SCHEMA_VERSION) return
         val settings =
             context.applicationContext.getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
-        // Fallback false: an install that never wrote the global gets the secure default, not
-        // the old implicit on (security-review 2026-08-31 M-8). A global the user DID set — either
-        // way — still lands on every host, which is the behaviour-preserving half below.
+        // Fallback false: an install that never wrote the global gets the secure default, not an
+        // implicit on. A global the user DID set — either way — still lands on every host,
+        // which is the behaviour-preserving half below.
         val result = migrate(prefs.all, settings.getBoolean(K_GLOBAL_CLIPBOARD_SYNC, false))
         // `commit`, not `apply`: the re-keyed records and the schema flag are one atomic write to
         // disk, and the global below is only retired once that write has landed. With `apply` a
@@ -351,7 +350,7 @@ class KnownHostStore(context: Context) {
 
         /**
          * The global clipboard-sync key this migration retires. Clipboard sync is a decision about
-         * a HOST (design §3, tier H), so it lives on the record now; the global is read once, to
+         * a HOST (design §3, tier H), so it lives on the record; the global is read once, to
          * seed every host, and then deleted.
          */
         private const val K_GLOBAL_CLIPBOARD_SYNC = "clipboard_sync"
@@ -447,11 +446,11 @@ class KnownHostStore(context: Context) {
                 mac = j.optString("mac", "").split(",").map { it.trim() }.filter { it.isNotEmpty() },
                 os = j.optString("os", ""),
                 // 0 (or absent) = never learned. `optInt` cannot express "missing", hence the sentinel
-                // rather than a bare default — a record written before this field existed must decode
-                // to null and fall back to 47990, not to port 0.
+                // rather than a bare default — a record without this field must decode to null and
+                // take the default port in [effectiveMgmtPort], not port 0.
                 mgmtPort = j.optInt("mgmt", 0).takeIf { it > 0 },
-                // A record without an id can only be one this build wrote before the migration ran, or
-                // a hand-edited file; minting here keeps the parse total rather than dropping a host.
+                // A record without an id (hand-edited, or from the schema [migrate] upgrades) gets
+                // one here: minting keeps the parse total rather than dropping a host.
                 id = j.optString("id", "").ifEmpty { newRecordId() },
                 clipboardSync = j.optBoolean("clip", false),
                 // `profile` and `game_profiles` are the pre-rename keys, read when the new key is absent.
@@ -488,9 +487,9 @@ class KnownHostStore(context: Context) {
 }
 
 /**
- * A fresh stable record identity: a lowercase UUID v4, the shape the Apple client's `StoredHost.id`
- * and the Rust `KnownHost.id` already use, so a `punktfunk://` host reference is one grammar
- * everywhere.
+ * A fresh stable record identity: a lowercase UUID v4, the shape the Apple client's
+ * `StoredHost.id` (printed upper case) and the Rust `KnownHost.id` use, so a `punktfunk://` host
+ * reference is one grammar everywhere.
  */
 fun newRecordId(): String = UUID.randomUUID().toString()
 

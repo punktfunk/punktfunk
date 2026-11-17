@@ -67,13 +67,13 @@ const STAMP_ATTEMPTS: usize = 5;
 const STAMP_SETTLE: Duration = Duration::from_millis(1200);
 
 /// One provisioned pad-audio endpoint. Persistent across host restarts;
-/// [`remove`] is tests and the `pad-endpoint remove` hatch only.
+/// [`remove`] runs only for a re-mint and the `pad-endpoint remove` hatch.
 #[derive(Debug, Clone)]
 pub struct PadEndpoint {
     /// WASAPI id. Empty from [`find`] when the devnode exists but the endpoint never registered.
     pub endpoint_id: String,
     pub device_instance: String,
-    /// Byte 23 of the stamped container GUID.
+    /// Last byte of the stamped container GUID (byte 23 of its registry blob).
     pub pad_index: u8,
     /// Stamp stored but not served: AudioEndpointBuilder + Audiosrv must restart.
     /// Startup may do one restart; nobody else acts on this mid-flight.
@@ -687,8 +687,7 @@ fn registry_stamp(endpoint_id: &str, stamps: &[&Stamp]) -> Result<()> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
     let guid = endpoint_guid_part(endpoint_id)?;
-    // Hive follows direction. Hardcoding Render made the minted mic's capture
-    // fallback stamp a non-existent `…\Render\{capture-guid}\Properties`.
+    // Hive follows direction: a capture id has no `…\Render\{capture-guid}\Properties`.
     let path = format!(r"{}\{guid}\Properties", mmdev_path_for(endpoint_id));
     grant_system_full_control(&path)
         .with_context(|| format!("make {path} writable (registry stamp route)"))?;
@@ -798,7 +797,7 @@ pub fn ensure(pad_index: u8) -> Result<PadEndpoint> {
     })
 }
 
-/// Best-effort teardown (`pnputil /remove-device`). Tests and the
+/// Best-effort teardown (`pnputil /remove-device`). A re-mint and the
 /// `pad-endpoint remove` hatch only; endpoints are persistent.
 pub fn remove(pe: &PadEndpoint) {
     match pf_paths::remove_device(&pe.device_instance) {
@@ -1231,8 +1230,8 @@ pub fn provision_at_startup(startup: bool) {
             // comes back hidden: a visible idle DualSense-named speaker makes libScePad
             // titles stall on an unserviced endpoint.
             let eps: Vec<PadEndpoint> = eps.into_iter().map(|pe| validate(pe, true)).collect();
-            // Latch only if something provisioned. Storing an empty vec on the
-            // first error made OnceLock disable pad audio for the process life.
+            // Latch only if something provisioned: an empty vec in the OnceLock would
+            // disable pad audio for the process life.
             if eps.is_empty() {
                 tracing::warn!(
                     "pad-audio provisioning produced no endpoints — leaving it unlatched so the \

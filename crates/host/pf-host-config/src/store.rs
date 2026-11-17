@@ -150,8 +150,9 @@ pub(crate) fn row_tri_in(rows: &[Resolved], env: &str) -> Option<bool> {
 }
 
 /// A raw `PUNKTFUNK_*` read that also sees the console, for numeric, text and enum rows: the
-/// env value when env set the row, else the console's value spelled as the env var would be,
-/// else `None`, so the reader keeps its own default. Any other name reads the environment.
+/// env value when env set the row, else a console value that differs from the row default,
+/// spelled as the env var would be, else `None`, so the reader keeps its own default. Any other
+/// name reads the environment.
 /// Bool and tri-state rows read through [`row_bool`] and [`row_tri`].
 pub fn knob(name: &str) -> Option<String> {
     knob_in(&snapshot().settings, name)

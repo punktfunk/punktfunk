@@ -85,7 +85,7 @@ pub fn drain(cap: usize) -> Vec<u8> {
 
 /// The bring-up file log. Off in release builds unless the `PFVD_DEBUG_LOG` knob is set; the
 /// gate is [`knob`], not plain `std::env`, so a `setx /M` takes effect on a device restart. The
-/// path and the sink live in [`pf_umdf_util::log`], one copy for all four drivers.
+/// path and the sink live in [`pf_umdf_util::log`], one copy for every driver.
 static FILE_LOG: pf_umdf_util::log::FileLog =
     pf_umdf_util::log::FileLog::new("pfvd-driver.log", || {
         cfg!(debug_assertions) || knob("PFVD_DEBUG_LOG").is_some()
@@ -99,7 +99,7 @@ pub(crate) fn file_log_enabled() -> bool {
 
 /// A driver knob: the process environment first, then the MACHINE environment in the registry
 /// (where `setx /M` writes). WUDFHost inherits its environment from the SCM at boot and the SCM
-/// never refreshes it, so a `setx /M` set today is invisible to `std::env` until a reboot; the
+/// never refreshes it, so a `setx /M` after boot is invisible to `std::env` until a reboot; the
 /// registry read makes a device restart enough. An empty value is no value: `setx /M NAME ""`
 /// leaves one behind, and a knob read as present turns on.
 pub(crate) fn knob(name: &str) -> Option<String> {

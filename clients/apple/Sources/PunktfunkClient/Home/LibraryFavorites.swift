@@ -1,6 +1,6 @@
 // Titles marked as favorites, per host, on this device (design/apple-touch-ui-overhaul.md §2.5).
-// Favorites belong to a person, and until user presets exist this device is the nearest thing
-// to one. One UserDefaults key per host, the `LibraryScrollMemory` pattern; removing a host
+// Favorites belong to a person, and no host profile stores them, so this device is the nearest
+// thing to one. One UserDefaults key per host, the `LibraryScrollMemory` pattern; removing a host
 // forgets them.
 
 import Foundation

@@ -35,11 +35,13 @@ use punktfunk_core::input::{InputEvent, InputKind, PRECISE_PX_PER_DETENT, SCROLL
 pub const MOMENTUM_GRACE: Duration = Duration::from_millis(50);
 
 /// DIP a gesture travels on an axis before that axis scrolls; less is the
-/// fingers landing. libinput's `scroll.threshold`, in its 1000-dpi units.
+/// fingers landing. libinput 1.32's default `scroll.threshold` (5.0 in its
+/// 1000-dpi units; its touchpads set 0), taken as DIP.
 pub const SCROLL_START_DIP: f64 = 5.0;
 
 /// DIP one delta must move on the other axis of a scrolling gesture for that
-/// axis to scroll too; less is drift. libinput's `direction_lock_threshold`.
+/// axis to scroll too; less is drift. libinput 1.32's `direction_lock_threshold`
+/// (5.0, touchpads included), taken as DIP.
 pub const DIRECTION_LOCK_DIP: f64 = 5.0;
 
 /// Where the client's finger stands on one axis of a [`Gesture`].
@@ -259,8 +261,9 @@ pub fn from_legacy(ev: &InputEvent) -> Option<InputEvent> {
     )
 }
 
-/// Wire delta in the source's own unit — v120 for Wheel/Unknown, DIP for the
-/// rest (same number, different meaning; [`ScrollEvent::units`] picks the rate).
+/// Wire delta in the source's own unit — v120 for Wheel/Unknown, else DIP, or compositor axis
+/// units when `axis_units` is set (same number, different meaning; [`ScrollEvent::units`]
+/// picks the rate).
 fn delta_units(se: &ScrollEvent) -> f64 {
     f64::from(se.delta) / SCROLL_SCALE
 }
@@ -419,8 +422,9 @@ impl ScrollMapper {
 
     /// An open interaction belongs to one source: a different source's
     /// movement — wheel clicks included — or an explicit `Begin` first cancels
-    /// it, in its own frame. ei and wl both forbid a stop sharing a frame with
-    /// a nonzero delta on the axis.
+    /// it, in its own frame. ei forbids a stop sharing a frame with a nonzero delta
+    /// on the axis; wlroots' virtual pointer holds one axis event per axis until the
+    /// frame, so the later of the two replaces the other.
     fn cancel_open(&mut self, a: usize, se: &ScrollEvent) -> Vec<ScrollOp> {
         match self.ongoing[a] {
             Some(open) if open != se.source || se.phase == ScrollPhase::Begin => {

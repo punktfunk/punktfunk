@@ -2,11 +2,8 @@
 # What a sandboxed plugin can actually reach — driven through the REAL runner, against a real
 # kernel, rather than asserted.
 #
-# This script used to re-declare bwrap's flags by hand. A flag the copy omitted was a flag no
-# check ever ran, which is how `--disable-userns` shipped needing an `--unshare-user` nothing
-# supplied (bwrap refused every plugin), and how `--clearenv` shipped discarding the whole
-# environment the plugin needs. So: no copy. It builds the runner, installs a probe plugin, and
-# reads what that plugin reports from inside its own sandbox.
+# It holds no copy of bwrap's flags: a flag a copy omits is a flag no check runs. It builds the
+# runner, installs a probe plugin, and reads what that plugin reports from inside its own sandbox.
 #
 #   docker run --rm --privileged -v "$PWD":/w -v "$PWD/scripts":/s oven/bun:1 \
 #     bash /s/check-plugin-sandbox.sh

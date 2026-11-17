@@ -4,8 +4,8 @@
 // so a console anywhere else costs it nothing — closing the stream is what turns the tap off.
 //
 // Two rates, on purpose. The drawing is repainted once per animation frame, because a stick
-// sweep arrives at up to ~250 Hz and a screen is not that fast. The log is derived from EVERY
-// frame as it lands, so a tap between two paints is still recorded.
+// sweep sends a frame per axis change, which can outpace the screen. The log is derived from
+// EVERY frame as it lands, so a tap between two paints is still recorded.
 
 import { useEffect, useRef, useState } from "react";
 import { seatUrl } from "@/api/fetcher";

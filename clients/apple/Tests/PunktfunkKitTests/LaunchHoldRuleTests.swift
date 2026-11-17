@@ -48,7 +48,7 @@ final class LaunchHoldRuleTests: XCTestCase {
         XCTAssertEqual(step(nil, after: 15), .reveal)
     }
 
-    /// D3: a read the host didn't answer is not an answer that lists nothing. The hold, what it
+    /// A read the host didn't answer is not an answer that lists nothing. The hold, what it
     /// shows and its clock stand; only the long cap still lifts it.
     func testAMissIsNotAnEmptyAnswer() {
         let miss = { LaunchHoldRule.step(nil, elapsed: $0, cap: self.cap, noLease: self.noLease) }

@@ -7,7 +7,7 @@
 # which only attaches to reaper's descendants — see gamescope#484). So the Decky plugin
 # launches THIS script through SteamClient.Apps.RunGame; the script then runs the client,
 # which inherits the shortcut's AppID and is focused. Launching the client directly from the
-# (root) Decky backend produces an unfocused, invisible window.
+# Decky backend produces an unfocused, invisible window.
 #
 # Per-session parameters arrive as environment variables, set as the shortcut's Steam launch
 # options by the plugin (SteamClient.Apps.SetAppLaunchOptions), so ONE generic shortcut serves
@@ -33,9 +33,10 @@
 # WAYLAND_DISPLAY / XDG_RUNTIME_DIR are already correct for gamescope.
 #
 # NO EXEC BIT REQUIRED: the Steam shortcut's exe is `/bin/sh` and this script rides behind
-# `%command%` as an argument (see src/steam.ts). Decky extracts plugin zips without preserving
-# permission bits and ~/homebrew/plugins is root-owned (the unprivileged plugin backend can't
-# chmod), so the launch path must never depend on +x. Keep this script POSIX-sh clean.
+# `%command%` as an argument (see src/steam/shortcuts.ts). Decky extracts plugin zips without
+# preserving permission bits and ~/homebrew/plugins is root-owned (the unprivileged plugin
+# backend can't chmod), so the launch path must never depend on +x. Keep this script POSIX-sh
+# clean.
 set -u
 
 APPID="${PF_APPID:-io.unom.punktfunk}"
@@ -95,8 +96,8 @@ run_session() {
 CLIENT_LABEL="${PF_CLIENT_BIN:-$APPID}"
 
 # The console home: the client's own gamepad UI (host picker, pairing, add-host by address, the
-# library browser and the full settings screen). UNCHANGED from before this rework — the shell
-# binary already execs the session for `--browse`, so there is nothing to repoint here.
+# library browser and the full settings screen). The shell binary execs the session for
+# `--browse`.
 if [ -n "${PF_BROWSE:-}" ]; then
     echo "punktfunkrun: gamepad UI $CLIENT_LABEL --browse (console home)" >&2
     run_session --browse --fullscreen

@@ -36,7 +36,7 @@ const LIST_MIN: f64 = 140.0;
 /// Horizontal fit: in-stream ring width plus 24 px of pad.
 const RING_W: f64 = 2.0 * RING_ABOVE + 24.0;
 
-/// Same platform mapping the in-stream ring uses to pick a default blob.
+/// The default ring a console platform starts from: touch or desktop.
 pub(crate) fn ring_platform(platform: crate::platform::Platform) -> RingPlatform {
     match platform {
         crate::platform::Platform::Desktop

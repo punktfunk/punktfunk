@@ -158,8 +158,8 @@ impl EntryJson {
 }
 
 /// The connected controllers: `{"label": "DualSense", "pref": 1, "pads": [{name, key, pref,
-/// steam_virtual, battery: {percent, charging} | null, detail, forwarded, rumble}], "others":
-/// [{name, kind, detail}]}`.
+/// steam_virtual, battery: {percent, charging} | null, detail, forwarded, rumble, audio}],
+/// "others": [{name, kind, detail}]}`.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct PadsJson {
     #[serde(default)]
@@ -282,7 +282,8 @@ pub enum Event {
 
 impl Event {
     /// `{"action": <OverlayAction>}`, `{"pulse": "move"|"confirm"|"boundary"}`,
-    /// `{"editing": bool}`, `{"announce": "…"}` or `{"settings": <Settings>}`.
+    /// `{"editing": bool}`, `{"edit_text": <EditField>}`, `{"announce": "…"}` or
+    /// `{"settings": <Settings>}`.
     pub fn to_json(&self) -> String {
         match self {
             Event::Action(a) => format!(

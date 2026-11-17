@@ -488,10 +488,11 @@ type SeatAccount = "new" | "existing";
 
 /**
  * **Add profile**: the picture beside a name and a colour, then one question answered as
- * outcomes. The home follows the answer on the host. A desktop of its own on Windows or a
- * Linux door asks a second: a new account, or an existing one with its password. Windows picks
- * from a list and keeps the password, sealed; Linux types the user name, since a directory's
- * accounts don't enumerate and the console doesn't list the box's users, and keeps no password.
+ * outcomes. The answer sets where the profile plays; its home defaults to the desktop. A desktop
+ * of its own on Windows or a Linux door asks a second: a new account, or an existing one with its
+ * password. Windows picks from a list and keeps the password, sealed; Linux types the user name,
+ * since a directory's accounts don't enumerate and the console doesn't list the box's users, and
+ * keeps no password.
  */
 export const AddProfileDialog: FC<{
 	open: boolean;

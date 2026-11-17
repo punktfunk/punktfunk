@@ -154,7 +154,7 @@ pub(crate) enum ToWorker {
         proto: u32,
         workspace_version: String,
         /// Host `PUNKTFUNK_RENDER_NODE` (`None` = unset). Log-only: device
-        /// selection ignores every node anchor (`pyrowave.rs::select_physical_device`).
+        /// selection ignores every node anchor (`vk_util.rs::select_physical_device`).
         drm_node: Option<String>,
         width: u32,
         height: u32,
@@ -248,7 +248,7 @@ pub(crate) enum FromWorker {
 /// [`ipc::recv_fds`] that survives a signal.
 ///
 /// A timeout-armed socket returns **EINTR**, not `ERESTARTSYS`; `SA_RESTART`
-/// does not apply. pf-zerocopy maps any recv error to "the worker died", so
+/// does not apply. `pyrowave_remote` maps any recv error to `Fail::Dead`, so
 /// one signal would drop a healthy session. Retry on the remaining budget —
 /// resetting the full timeout would let a periodic signal hang forever.
 /// `budget = None` blocks until the host speaks or closes.
@@ -305,10 +305,10 @@ pub(crate) fn cursor_upload(rgba: &[u8]) -> io::Result<(File, usize)> {
 }
 
 pub fn run_from_args(args: &[String]) -> Result<()> {
-    // Core dumps ON, and first: the kernel clears `PR_SET_DUMPABLE` when a process
-    // gains a file capability. This process fronts nothing, so a GPU-driver crash
-    // is exactly what we want a core for. Dumpable is not the KWin identifiability
-    // gate; the PERMITTED set is, and this process never speaks Wayland.
+    // Core dumps ON, and first: the kernel clears `PR_SET_DUMPABLE` when a process gains a file
+    // capability (prctl(2), man-pages 6.19). This process fronts nothing, so a GPU-driver crash
+    // is exactly what we want a core for. Dumpable is not the KWin identifiability gate; the
+    // PERMITTED set is, and this process never speaks Wayland.
 
     // SAFETY: `prctl(PR_SET_DUMPABLE, 1)` takes integers by value, touches no Rust memory and
     // affects only this process.
@@ -763,7 +763,7 @@ mod tests {
     /// `MAX_MSG`, and serde_json renders a byte as up to four characters.
     #[test]
     fn an_inline_au_would_not_fit_a_message() {
-        // 1080p60 at 40 Mb/s — smallest AU the encoder will actually produce.
+        // 1080p60 at 40 Mb/s: about 83 kB a frame.
         let au = vec![0xABu8; 40_000_000 / (8 * 60)];
         let body = serde_json::to_vec(&au).unwrap();
         assert!(

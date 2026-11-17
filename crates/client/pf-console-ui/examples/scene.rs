@@ -1,4 +1,4 @@
-//! The console shell in an SDL window on a Mac, with a scripted scene: one host, eight pads
+//! The console shell in an SDL window on a Mac, with a scripted scene: one host, nine pads
 //! and a TV remote. For looking at a screen without a device.
 //!
 //! `cargo run --release -p pf-console-ui --example scene --no-default-features --features metal`

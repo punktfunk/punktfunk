@@ -466,7 +466,7 @@ mod tests {
         frames
     }
 
-    /// The order AMF and QSV follow today: an IDR, then a queued force, then the newest
+    /// The order AMF and QSV follow: an IDR, then a queued force, then the newest
     /// confirmed slot, then the chain.
     #[test]
     fn ltr_recovery_order() {

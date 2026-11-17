@@ -16,9 +16,8 @@ fn main() {
         winresource::WindowsResource::new()
             // Ordinal 1 — pf-presenter's win32.rs loads it by this id for WM_SETICON.
             .set_icon_with_id(icon, "1")
-            // The version-info strings Windows surfaces for the bare exe — UAC prompts,
-            // Task Manager and Properties→Details all show FileDescription (without one
-            // the exe appears as its raw filename).
+            // The version-info strings Windows shows for the bare exe (Properties→Details
+            // lists FileDescription).
             .set("FileDescription", "Punktfunk Session")
             .set("ProductName", "Punktfunk")
             .set("CompanyName", "unom")

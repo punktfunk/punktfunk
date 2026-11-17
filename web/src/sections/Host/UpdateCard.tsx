@@ -29,8 +29,8 @@ import {
 } from "./updateView";
 
 /**
- * The host update: check everywhere (U0), one-click apply where the host reports `apply: "full"`
- * (U1 — Windows installer). The apply flow survives the console's own backends dying: once an
+ * The host update: check everywhere, one-click apply where the host reports `apply` as `full`
+ * or `staged`. The apply flow survives the console's own backends dying: once an
  * apply is accepted, the card renders from the LAST status snapshot (React Query keeps data
  * across failed polls) and treats poll errors as "the host is restarting", until the target
  * version answers or a timeout. A host job this page did not start (after a reload) times out
@@ -49,9 +49,9 @@ export function useUpdate() {
 
 	const s = status.data;
 	// The apply resolved: either the host answers with the target version (reconcile wrote
-	// last_result across the restart), or ANY apply outcome newer than our start arrived —
-	// which covers failure, "staged, reboot to finish", and "your package source had nothing
-	// newer yet" (where the version deliberately doesn't change).
+	// last_result across the restart), or ANY apply outcome finished since 60 s before our
+	// start — which covers failure, "staged, reboot to finish", and "your package source had
+	// nothing newer yet" (where the version deliberately doesn't change).
 	if (applying && s) {
 		if (
 			s.current_version === applying.target ||
@@ -70,8 +70,8 @@ export function useUpdate() {
 			onSuccess: (fresh) => {
 				qc.setQueryData(getGetUpdateStatusQueryKey(), fresh);
 			},
-			// The host throttles repeat checks (429). Swallowing it made a second click within the
-			// window look like a dead button; say the check was skipped and why.
+			// The host throttles repeat checks (429); say the check was skipped and why, or the
+			// click looks dead.
 			onError: (e) =>
 				toast.error(
 					e instanceof ApiError && e.status === 429
@@ -100,7 +100,7 @@ export type Update = ReturnType<typeof useUpdate>;
 
 /**
  * Whether the update needs more than the Host strip's line: one exists or is running, the
- * check failed, or the last one did not simply succeed.
+ * check failed, the manifest is stale, or the last one did not simply succeed.
  */
 export function updateNeedsCard(u: Update): boolean {
 	const s = u.state.data;
@@ -404,8 +404,8 @@ const ApplyProgress: FC<{
 			{timedOut && (!job || snapshotStale) && (
 				<div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
 					<p>{m.update_apply_timeout()}</p>
-					{/* Without this the card sits in "applying" forever and the operator cannot even
-					    re-check — the state was only ever cleared by a status that never arrives. */}
+					{/* Without this the card stays in "applying" until a status that may never
+					    arrive, and the operator cannot re-check. */}
 					<Button variant="outline" size="sm" onClick={onGiveUp}>
 						{m.update_apply_give_up()}
 					</Button>

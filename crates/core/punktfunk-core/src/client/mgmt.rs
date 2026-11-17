@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 /// A reply is a poster at most, and every shell refuses art over 16 MiB.
 const MAX_REPLY: usize = 16 << 20;
-/// A request is answered within this or not at all, the ceiling the HTTPS agents hold.
+/// A request is answered within this or not at all, the ceiling pf-client-core's HTTPS agents
+/// hold.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// A dial that failed is not retried for this long, so a port that does not answer costs one
 /// wait rather than one per request.

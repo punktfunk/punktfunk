@@ -148,7 +148,8 @@ impl Track {
 impl Drop for Track {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        // `stop()` interrupts a blocking `write`, and writes after it return at once.
+        // `stop()` interrupts a blocking `write`; a later 5 ms write waits only until the stopped
+        // track drains a chunk.
         let _ = self
             .vm
             .attach_current_thread(|env| void(env, &self.track, jni_str!("stop")));

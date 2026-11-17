@@ -1,8 +1,8 @@
 //! Hand-declared libva H.264 decode-buffer layouts, plus the `VAImage` pair
 //! the test-only surface readback needs.
 //!
-//! No libva binding in this workspace: the crate must compile where the
-//! headers do not exist. Same contract as `pf-dxvadec`'s `dxva` module.
+//! No libva binding in this crate: it must compile where the headers do not
+//! exist. Same contract as `pf-dxvadec`'s `dxva` module.
 //! Pinning is `layout-probe.c` against libva 2.23.0; sizes, offsets, and
 //! LSB-first bit-field words are `const` assertions below.
 //!

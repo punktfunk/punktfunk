@@ -9,10 +9,10 @@
 //! - **Preference** ([`prefs`]): auto/manual in `<config>/gpu-settings.json`.
 //!   Manual is stored by stable identity (PCI vendor:device + occurrence +
 //!   name), not LUID (reassigned every boot) or adapter index.
-//! - **Selection** ([`selected_gpu`] / [`pick`]): inventory + preference +
-//!   `PUNKTFUNK_RENDER_ADAPTER` → render/encode GPU. Precedence: **manual >
-//!   env substring > auto (max dedicated VRAM)**. A vanished preferred GPU
-//!   logs and auto-selects so the host keeps streaming.
+//! - **Selection** ([`selected_gpu`] / [`pick`]): inventory + preference → render/encode GPU.
+//!   Windows: **manual > `PUNKTFUNK_RENDER_ADAPTER` substring > auto (max dedicated VRAM)**.
+//!   Linux: manual > NVIDIA present > the node `linux_render_node` names. A vanished
+//!   preferred GPU auto-selects (`PickSource::PreferenceMissing`) so the host keeps streaming.
 //!
 //! A preference change applies to the **next session**. [`session_begin`] /
 //! [`active`] record which GPU a live session encodes on.
@@ -27,8 +27,8 @@ pub const VENDOR_NVIDIA: u32 = 0x10DE;
 pub const VENDOR_AMD: u32 = 0x1002;
 pub const VENDOR_INTEL: u32 = 0x8086;
 /// Adreno, which DXGI reports as the FourCC `"QCOM"` rather than a PCI id; `0x5143` is
-/// the PCI-SIG assignment the same driver uses elsewhere. Both mean Media Foundation is
-/// the only hardware encoder on the adapter.
+/// the id the same driver reports through Vulkan. Both mean Media Foundation is the only
+/// hardware encoder on the adapter.
 pub const VENDOR_QUALCOMM: u32 = 0x4D4F_4351;
 pub const VENDOR_QUALCOMM_PCI: u32 = 0x5143;
 
@@ -317,7 +317,7 @@ pub fn enumerate() -> Vec<GpuInfo> {
 
 // --- Persisted preference ---
 
-/// Auto: env substring, else max VRAM. Manual: GPU chosen in the web console.
+/// Auto: [`selected_gpu`] decides per platform. Manual: GPU chosen in the web console.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GpuMode {
@@ -349,7 +349,7 @@ pub struct GpuPreference {
 }
 
 /// Preference store: in-memory value + JSON file. Private dir, temp write +
-/// atomic rename; in-memory rollback if the disk write fails.
+/// atomic rename; the in-memory value is untouched if the disk write fails.
 pub struct GpuPrefStore {
     path: PathBuf,
     cur: Mutex<GpuPreference>,
@@ -579,7 +579,8 @@ pub fn render_node_env() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Live env read of `PUNKTFUNK_RENDER_NODE` after manual preference (see `config.rs`).
+/// The manual preference's render node, else the live [`render_node_env`] read, else
+/// `/dev/dri/renderD128`.
 #[cfg(target_os = "linux")]
 pub fn linux_render_node() -> PathBuf {
     if let Some(g) = manual_selection()
@@ -597,7 +598,7 @@ pub fn nvidia_present() -> bool {
     std::path::Path::new("/dev/nvidiactl").exists() || std::path::Path::new("/dev/nvidia0").exists()
 }
 
-/// Cache key for per-GPU probe caches (`can_encode_444`, `windows_codec_support`).
+/// Cache key for pf-encode's per-GPU probes (`Resolved::can_encode_444`, `Resolved::advertised`).
 /// Changes when the *selection* changes, preference edits included.
 pub fn selection_key() -> String {
     match selected_gpu() {

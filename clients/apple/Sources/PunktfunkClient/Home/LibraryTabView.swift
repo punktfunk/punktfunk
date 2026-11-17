@@ -21,7 +21,7 @@ enum TouchTab: Hashable {
 #if os(tvOS)
 extension TouchTab {
     /// The Hosts tab's label. Its symbol draws in one layer: in its preferred two, the focused
-    /// tab's white pill left it white.
+    /// tab's white pill leaves it white.
     static var hostsLabel: some View {
         Label {
             Text(L10n.hostsTab)
@@ -109,8 +109,7 @@ struct LibraryTabView: View {
     }
 }
 
-/// The Library's host filter: one chip per shelf, the current one filled. It took over from a title
-/// menu that hid the choice.
+/// The Library's host filter: one chip per shelf, the current one filled.
 private struct ShelfFilter: View {
     let shelves: [LibraryTarget]
     let current: String
@@ -182,7 +181,7 @@ private struct ShelfFilter: View {
         }
         .buttonStyle(.plain)
         #if os(visionOS)
-        // Inside the chip: the system's larger platter got cut by the row's scroll view.
+        // Inside the chip: the system's larger platter is cut by the row's scroll view.
         .cardHover(Capsule())
         #endif
         .accessibilityAddTraits(on ? .isSelected : [])

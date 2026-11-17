@@ -4,18 +4,16 @@
 #   usr/bin/punktfunk-host           MUST carry no capability, ever.   -> hard fail
 #   usr/bin/punktfunk-encode-worker  MUST carry exactly cap_sys_nice=ep -> hard fail
 #
-# WHY THIS EXISTS. 0.26.0-1 shipped `cap_sys_nice=ep` on the host binary through five packaging
-# channels at once. KWin identifies a Wayland client by resolving its /proc/<pid>/exe and matching
+# WHY THIS EXISTS. KWin identifies a Wayland client by resolving its /proc/<pid>/exe and matching
 # it against an installed .desktop's Exec=, and the kernel refuses that readlink to any reader
 # whose effective set is not a superset of the target's PERMITTED set (cap_ptrace_access_check).
 # KWin holds no capabilities, so a capability-carrying host is unidentifiable, the restricted
 # globals are never advertised, and EVERY KDE desktop session dies — presenting as a missing or
 # wrong .desktop file. A merged sysext cannot even be repaired on the box (read-only /usr).
 #
-# Every board in that release was green. The lesson recorded at the time was "verify the PACKAGE,
-# never the board"; this script is that, mechanized. It reads what the artifact will actually do on
-# a user's machine — the pacman scriptlet, the dpkg postinst, rpm's file-capability metadata, the
-# xattrs inside the squashfs — and refuses the release if the matrix is wrong in either direction.
+# So the PACKAGE is verified, not the source tree. The script reads what the artifact will
+# actually do on a user's machine — the pacman scriptlet, the dpkg postinst, rpm's file-capability
+# metadata, the xattrs inside the squashfs — and fails if the matrix is wrong in either direction.
 #
 # Usage:
 #   scripts/ci/assert-cap-matrix.sh <artifact> [<artifact> ...]
@@ -85,7 +83,7 @@ assert_matrix() {
 }
 
 # Canonicalize a capability string. getcap has printed two forms over its life
-# ("path cap_sys_nice=ep" since libcap ~2.36, "path = cap_sys_nice+ep" before) and rpm renders
+# ("path cap_sys_nice=ep" since libcap 2.41, "path = cap_sys_nice+ep" before) and rpm renders
 # "(none)" for a file with no capability. Everything downstream compares canonical strings.
 caps_norm() {
   local s="${1:-}"
@@ -128,8 +126,8 @@ scriptlet_worker_grant() {
 
 # payload_listing <artifact>: the payload's paths, one per line, relative to / ("usr/bin/…"), for
 # every format above. Empty when it cannot be read. assert-payload-parity.sh reads through it too.
-# A .deb without dpkg-deb is an `ar` of two tarballs that libarchive reads; Apple's `ar` rewrites
-# the archive and loses members, so it is never used.
+# A .deb without dpkg-deb is an `ar` of two tarballs that libarchive reads; Apple's `ar x`
+# extracts no GNU-style `name/` member yet exits 0 (Xcode 27.1), so it is never used.
 payload_listing() {
   case "$1" in
     *.pkg.tar.zst|*.pkg.tar.xz) bsdtar -tf "$1" 2>/dev/null || tar -tf "$1" 2>/dev/null ;;
@@ -276,7 +274,7 @@ check_sysext_raw() {
 
 # --- self-test ---------------------------------------------------------------------------------
 # Red-teams the assertions themselves: every row states the verdict it MUST produce, and the row
-# that matters most is the 0.26.0-1 one — a capped host has to come out RED. Pure bash, so it runs
+# that matters most is the capped host, which has to come out RED. Pure bash, so it runs
 # anywhere (macOS included) with no setcap, rpm or dpkg in sight.
 self_test() {
   local failures=0
@@ -310,7 +308,7 @@ self_test() {
     if [ "$got" = "$2" ]; then printf '  ok    %-42s -> %s\n' "${1:-<empty>}" "${got:-<empty>}"
     else printf '  FAIL  %-42s -> %s (wanted %s)\n' "${1:-<empty>}" "${got:-<empty>}" "$2"; failures=$((failures + 1)); fi
   }
-  _norm 'cap_sys_nice=ep'   'cap_sys_nice=ep'    # libcap >= ~2.36
+  _norm 'cap_sys_nice=ep'   'cap_sys_nice=ep'    # libcap >= 2.41
   _norm '= cap_sys_nice+ep' 'cap_sys_nice=ep'    # older libcap
   _norm '(none)'            ''                   # rpm, no %caps
   _norm ''                  ''
@@ -372,9 +370,8 @@ main() {
 }
 
 # Sourceable: `source scripts/ci/assert-cap-matrix.sh` defines the readers and `assert_matrix`
-# without running anything, so they can be driven from a test harness on a box that has none of
-# the packaging tools (this is how the scriptlet reader is exercised against the real
-# packaging/arch/punktfunk-host.install and the real dpkg postinst).
+# without running anything; packaging/linux/sysext-lib.sh, assert-payload-parity.sh and
+# scripts/validate-encode-worker.sh source it.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   main "$@"
   exit $?

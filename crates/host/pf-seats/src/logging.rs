@@ -1,8 +1,8 @@
 //! Where the supervisor's own diagnostics go: stderr. Nothing here may record a credential:
-//! seat passwords, the DPAPI blob and the control bearer never reach a `tracing` field.
+//! seat passwords and the DPAPI blob never reach a `tracing` field.
 
-/// Operator commands report through stderr so stdout stays the machine-readable
-/// channel `--json` promises.
+/// Logs to stderr so stdout stays free for a command's own output, such as the code
+/// `pam-check` prints.
 pub fn to_stderr() {
     let _ = tracing_subscriber::fmt()
         .with_ansi(false)

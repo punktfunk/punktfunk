@@ -1,7 +1,7 @@
 // The library-provider client, owned by the kit so plugins stop hand-copying host calls.
 // The wire SCHEMAS live in ./wire.ts (browser-safe — plugin contracts re-use them); the
 // transport here stays the SDK's untyped `pf.request` seam (version-skew-safe under the
-// runner-bundled SDK — design D7).
+// runner-bundled SDK — plugin-ui-surface.md D7).
 import { Context, Effect, Layer } from "effect";
 import type { HostRequestError } from "./errors.js";
 import { HostClient } from "./host-client.js";
@@ -12,7 +12,8 @@ export * from "./wire.js";
 /**
  * The host's liveness-report TTL, in seconds, when it does not say.
  *
- * Only a fallback for parsing an unexpected answer — the authority is the `ttlS` the host returns.
+ * Only a fallback for parsing an unexpected answer — the authority is the `ttlS` the host returns,
+ * from `REPORT_TTL` in the host's game/runstate.rs.
  * A reporter should refresh at a fraction of this, so one missed call is not a lapse.
  */
 export const DEFAULT_RUNNING_TTL_S = 90;
@@ -57,7 +58,7 @@ export interface ProviderClientService {
 	 * **Send the complete set, not a delta.** Anything absent is reported stopped, so a missed
 	 * event, a plugin restart or an install mid-game all self-correct on the next call.
 	 *
-	 * **The host expires a report** (`ttlS` in the answer, 90s at the time of writing) unless it is
+	 * **The host expires a report** (`ttlS` in the answer) unless it is
 	 * restated — which is what makes it safe for the host to keep a session open for a game it
 	 * cannot see. Call this on every change **and** on a timer well inside that window while
 	 * anything is running; a plugin that stops reporting simply hands tracking back to the host's
@@ -75,7 +76,7 @@ export interface ProviderClientService {
 	) => Effect.Effect<RunningAccepted, HostRequestError>;
 	/**
 	 * Remove every entry this provider owns **and release its store claim** (the explicit-uninstall
-	 * path). Releasing is what brings the host's built-in scanner back.
+	 * path). Releasing brings back a host's built-in scanner for the store, where one exists.
 	 */
 	readonly remove: (
 		providerId: string,

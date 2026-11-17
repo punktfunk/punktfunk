@@ -1,9 +1,9 @@
-# Frame capture (plan §7 / §W6): the Linux xdg-ScreenCast/PipeWire portal capturer and the Windows
-# IDD direct-push capturer, plus the synthetic sources + the Capturer trait, extracted into a
-# subsystem crate. Depends on the shared frame vocabulary (pf-frame), the zero-copy plumbing
-# (pf-zerocopy), and the display leaves (pf-win-display) — never on pf-encode: the encode-backend
-# facts arrive pre-resolved (ZeroCopyPolicy) and the sealed-section delivery as a closure
-# (SetEncodeSender), so the capture→encode edge is one-way (plan §2.4).
+# Frame capture: the Linux PipeWire and direct Wayland capturers, the Windows IDD direct-push and
+# WGC sources, the synthetic sources and the Capturer trait. Depends on the shared frame
+# vocabulary (pf-frame), the zero-copy plumbing (pf-zerocopy), and the display leaves
+# (pf-win-display) — never on pf-encode: the encode-backend facts arrive pre-resolved
+# (ZeroCopyPolicy) and the sealed-section delivery as a closure (SetEncodeSender), so the
+# capture→encode edge is one-way.
 [package]
 name = "pf-capture"
 version.workspace = true
@@ -19,7 +19,7 @@ pf-zerocopy = { path = "../pf-zerocopy" }
 pf-win-display = { path = "../pf-win-display" }
 pf-gpu = { path = "../pf-gpu" }
 pf-host-config = { path = "../pf-host-config" }
-# The host<->driver wire contract: control IOCTL structs and the v7 AU section. Every target:
+# The host<->driver wire contract: control IOCTL structs and the AU section. Every target:
 # the AU reader's pure half is unit-tested off Windows.
 pf-driver-proto = { path = "../pf-driver-proto" }
 # The `Encoder` contract the driver-encode proxy implements, and the `AuChunk`/`EncodedFrame`
@@ -42,8 +42,7 @@ pf-dmabuf = { path = "../../core/pf-dmabuf" }
 # The shared, never-dropped portal runtime, the bounded handshake steps and the cursor negotiation.
 pf-portal = { path = "../pf-portal" }
 # ashpd 0.13 uses the tokio runtime for the one-time portal handshake (control plane).
-# `sync` is for the `tokio::sync::oneshot` quit channels in the portal/linux capture paths. It used
-# to be absent and compile anyway, borrowed from ashpd→zbus via feature unification.
+# `sync` is for the `tokio::sync::oneshot` quit channels in the portal/linux capture paths.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "sync"] }
 # XFixes cursor source for gamescope (remote-desktop-sweep Phase C): gamescope paints no
 # `SPA_META_Cursor`, so the pointer never reaches the PipeWire node. We read the shape/hotspot/

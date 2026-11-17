@@ -6,14 +6,14 @@ import android.content.Context
 // The Android mirror of the Apple client's `LibraryScrollMemory`.
 //
 // Leaving a stream re-composes the library screen from scratch — new `remember`s, a new
-// `LazyGridState`, a new `PagerState` — so a library of any size came back at the top every time.
-// For the loop this screen exists to serve (browse → play → quit → browse), that means
-// re-scrolling to the same place on every lap.
+// `LazyGridState` — so a library of any size would return at the top. For the loop this screen
+// exists to serve (browse → play → quit → browse), that means re-scrolling to the same place on
+// every lap.
 //
 // The position is remembered as the ID OF THE TITLE the player last opened, not as a scroll offset
 // or an index. An offset is meaningless across the things that legitimately change between visits —
 // a rotation, a window resize, a foldable unfolding, a host that gained or lost titles, or the
-// running-first ordering this screen now applies. A title id survives all of them, and the grid
+// running-first ordering this screen applies. A title id survives all of them, and the grid
 // turns it back into a position at whatever the current layout is.
 
 /**

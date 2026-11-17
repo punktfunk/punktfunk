@@ -341,15 +341,15 @@ pub fn dualsense_windows_test(args: &[String]) -> Result<()> {
 
 /// Audio-substrate toolbox (`windows-audio-endpoints-and-vbcable.md`).
 ///
-/// `audio-probe ssm|sink|sss-primary|mint|plan|cleanup [--keep]`. `ssm` mints a second
-/// Steam Streaming Microphone and proves render→capture; `sink` parks default on a minted
-/// Speakers and loopback-measures; `sss-primary` re-measures the primary Speakers;
-/// `mint` runs the provider; `plan` prints one wiring pass and its readiness verdict.
+/// `audio-probe <verb> [--keep]`; the usage line in `audio_probe::run` lists every verb.
+/// `ssm` mints a second Steam Streaming Microphone and proves render→capture; `sink` parks
+/// default on a minted Speakers and loopback-measures; `sss-primary` re-measures the primary
+/// Speakers; `mint` runs the provider; `plan` prints one wiring pass and its readiness verdict.
 pub fn audio_probe(args: &[String]) -> Result<()> {
     crate::audio::audio_probe::run(args)
 }
 
-/// Pad-audio endpoint: `ensure|remove|status|tone|capture|show|hide [--index N]`.
+/// Pad-audio endpoint: `ensure|remove|status|repair|reshape|tone|capture|show|hide [--index N]`.
 ///
 /// `ensure` is the startup path (reuse-or-create, bind Steam Streaming Speakers, stamp
 /// DualSense 4ch/48k). `remove` is the pnputil escape hatch — endpoints persist.

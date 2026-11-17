@@ -5,15 +5,15 @@
 //! Service ops (`enable`/`disable`/`status`) run here — `systemctl --user` or the
 //! `PunktfunkScripting` scheduled task — so they work without the runner package.
 //!
-//! Windows: both halves need elevation (`%ProgramData%\punktfunk` is ACL'd;
-//! the task is admin-owned). Refuse unelevated rather than a bare EACCES from `bun add`.
+//! Windows: `add`, `remove`, `enable` and `disable` need elevation (`%ProgramData%\punktfunk`
+//! is ACL'd; the task is admin-owned). Refuse unelevated rather than a bare EACCES from `bun add`.
 //!
 //! The task runs as `NT AUTHORITY\LocalService`, not SYSTEM. `enable` converges the
 //! principal and grants LocalService read on `plugin-token` plus the TLS-pin cert
 //! (`native-cert.pem` or legacy `cert.pem`) — never `mgmt-token`. A Windows seat's runner is no
 //! task: its host starts it as the seat's account ([`seat_runner`]).
 //!
-//! Runner discovery is pinned in this module's tests.
+//! POSIX runner discovery is pinned by `posix::tests::runner_resolution_table`.
 
 use anyhow::{bail, Context, Result};
 use std::process::Command;

@@ -1,5 +1,5 @@
-//! Persistent workers beside the send thread. The seal lane AES-GCM-seals the back half of
-//! a large frame, or each chunk of a pipelined one, while the send thread seals the front;
+//! Persistent workers beside the send thread. The seal lane seals the back half of a large
+//! frame, or each chunk of a pipelined one, while the send thread seals the front;
 //! the parity lane computes a pipelined frame's parity while its data streams. This module
 //! owns both lanes, the split ([`seal_staged`]) and [`seal_wire_slice`]. Byte-identical to
 //! a sequential pass; pinned by `zero_copy_seal_matches_one_by_one_path` and
@@ -114,8 +114,9 @@ impl ParityLane {
 
 /// Runs `data_pass` here while the lane computes `frame`'s parity into `recovery`, and
 /// returns its result beside the lane's `(ns, result)`. `None`: the worker is gone, and
-/// `recovery` with it. The nanoseconds are the coder's, counted only when `timed`. The lane is
-/// borrowed exclusively, so `data_pass` can't put a second job on it.
+/// `recovery` with it unless the job never reached it. The nanoseconds are the coder's,
+/// counted only when `timed`. The lane is borrowed exclusively, so `data_pass` can't put a
+/// second job on it.
 #[allow(unsafe_code)]
 pub(super) fn parity_beside<R>(
     lane: &mut ParityLane,
@@ -210,8 +211,8 @@ pub(super) fn hand_chunk(
 }
 
 /// Buffer `i` is packet `seq_base + i`, sealed in place: the header's clear prefix is the
-/// associated data and the rest is sealed. Same layout and nonce order as the fused
-/// single-lane path.
+/// associated data and the rest is sealed. The seal lane and the send thread both seal through
+/// here.
 pub(super) fn seal_wire_slice(
     c: &SessionCrypto,
     wires: &mut [Vec<u8>],

@@ -152,7 +152,7 @@ export const NoMatches: Story = {
 	),
 };
 
-/** Launcher entries (design D4) get their own rail above the grid. */
+/** Launcher entries (`design/library-scanner-plugins.md` D4) get their own rail above the grid. */
 export const WithLaunchers: Story = {
 	render: () => <LibraryGrid {...gridArgs} launchers={[LAUNCHER]} />,
 };
@@ -310,7 +310,7 @@ const steamAccess = (write = false): PluginAccessSnapshot[] => [
 	},
 ];
 
-/** The bridge-release shape: built-in scanners only, one turned off. */
+/** Built-in scanners only, one turned off. */
 export const Sources: Story = {
 	render: () => (
 		<SourcesCard
@@ -390,7 +390,7 @@ export const SourcePendingWriteAccess: Story = {
 	),
 };
 
-/** A fresh host after extraction: nothing installed, two launchers detected on this box. */
+/** Nothing installed, two launchers detected on this box. */
 export const SourcesEmptyWithDetected: Story = {
 	render: () => (
 		<SourcesCard
@@ -413,7 +413,7 @@ export const SourcesEmptyWithDetected: Story = {
 	),
 };
 
-/** The bridge-release nudge — one button per still-built-in scanner, never an auto-install. */
+/** The migration nudge — one button per still-built-in scanner, never an auto-install. */
 export const Migration: Story = {
 	render: () => (
 		<MigrationBanner

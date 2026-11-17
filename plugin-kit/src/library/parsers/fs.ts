@@ -1,5 +1,5 @@
-// Bounded filesystem reads and path confinement — the posture the in-host scanners established,
-// ported so a library plugin inherits it instead of re-deriving it.
+// Bounded filesystem reads and path confinement, so a library plugin inherits one posture
+// instead of re-deriving it.
 //
 // The rules here exist because a plugin reads files it does not own: a launcher's manifests, a
 // catalog cache, a `goggame-*.info` a user could have edited. None of that is hostile in the normal
@@ -7,14 +7,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-/** A launcher manifest / `.acf` / `.info`: text, small. Matches `epic.rs`'s posture. */
+/** A launcher manifest / `.acf` / `.info`: text, small. */
 export const MAX_MANIFEST_BYTES = 1024 * 1024;
 /** A binary catalog cache (Epic's `catcache.bin`, a `shortcuts.vdf`): larger, still bounded. */
 export const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 
 /**
- * Read a file as UTF-8, refusing anything over `max`. `undefined` on any error, a non-regular file,
- * or an over-cap file — a plugin scanning a directory must never die on one odd entry.
+ * Read a file as UTF-8, refusing anything over `max`. `undefined` on any error, a non-regular,
+ * empty or over-cap file — a plugin scanning a directory must never die on one odd entry.
  *
  * The size is checked by `stat` BEFORE the read, so an enormous file costs a stat, not the memory.
  */
@@ -104,9 +104,8 @@ export const isDir = (p: string): boolean => dirAccess(p) === "ok";
 export const isFile = (p: string): boolean => fileAccess(p) === "ok";
 
 /**
- * Join `rel` onto `base` **only if it cannot escape** — the port of the host's `confined_join`
- * (gog.rs), which exists because a crafted `goggame-<id>.info` could otherwise point a play task's
- * exe at an arbitrary program (security-review 2026-07-17).
+ * Join `rel` onto `base` **only if it cannot escape**: a crafted `goggame-<id>.info` could
+ * otherwise point a play task's exe at an arbitrary program.
  *
  * Refuses any relative path carrying a drive prefix (`C:`), a root (`/` or `\`), or a `..`
  * component — each of which `path.join` would let REPLACE or climb out of `base`. `undefined` ⇒

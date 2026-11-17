@@ -16,7 +16,7 @@ const KEEP = 5_000; // accumulated entries (client memory bound)
 /**
  * The host log poll, lifted out of the viewer card.
  *
- * It lives at page level because two things now read it: the viewer, and the page's "export
+ * It lives at page level because two things read it: the viewer, and the page's "export
  * everything" action. A second copy of this hook would mean a second cursor and a second poll
  * racing the first over the same ring, so there is exactly one and the page passes it down.
  *
@@ -37,10 +37,8 @@ export const useHostLog = () => {
 		{
 			query: {
 				refetchInterval: follow ? 2_000 : false,
-				// Pausing must actually pause. Stopping only the interval left React Query's default
-				// focus/reconnect refetches landing, and the append effect consumed them
-				// unconditionally — so tabbing away and back evicted the lines the operator had
-				// paused on, from behind the pause button.
+				// Pausing must actually pause: the append effect consumes every page, so a focus or
+				// reconnect refetch would evict the lines the operator paused on.
 				refetchOnWindowFocus: follow,
 				refetchOnReconnect: follow,
 			},
@@ -52,8 +50,7 @@ export const useHostLog = () => {
 	// The host's log ring restarts at seq 1 on every restart, while our cursor stays wherever it
 	// got to. `GET /logs?after=8000` against a fresh ring is not an error — it is a permanently
 	// EMPTY page (`next` echoes `after`), so the page would poll forever showing stale lines with
-	// no error, no dropped badge and no way back short of a full reload. The console's own update
-	// flow restarts the host, so this was reachable from two clicks away.
+	// no error, no dropped badge and no way back short of a full reload.
 	//
 	// A restart always breaks the poll first, so a failed query is the trigger: on the next success
 	// we re-read from the start of the ring once and let the effect below decide whether the

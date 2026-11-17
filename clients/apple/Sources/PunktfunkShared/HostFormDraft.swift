@@ -1,8 +1,8 @@
 // What a user typed into an add-or-edit-host form, and the one set of rules for turning it into a
 // stored record.
 //
-// The pointer sheet, the gamepad screen and the tvOS commit path all take their answers from here,
-// so the same typed text saves the same record on each, and the rules test without a view.
+// The add-host sheet and the host page's fields take their answers from here, on every Apple
+// platform: the same typed text saves the same record on each, and the rules test without a view.
 
 import Foundation
 
@@ -42,10 +42,10 @@ public struct HostFormDraft: Equatable, Sendable {
 
     /// The address with surrounding whitespace gone and any `:port` suffix split off — a user who
     /// pastes what the cards RENDER (`192.168.1.5:9777`) typed a valid thing, and storing it whole
-    /// makes the core build `[192.168.1.5:9777]:9777`, which never resolves and fails every dial
-    /// with a generic "could not connect". An IPv6 literal keeps its colons and loses its
-    /// brackets (`[fd7a::1]:9777` stores `fd7a::1`): a stored address is bare, and a deep link
-    /// puts the brackets back itself.
+    /// makes the core build `[192.168.1.5:9777]:9777` (`join_host_port`), which never resolves,
+    /// so every dial fails. An IPv6 literal keeps its colons and loses its brackets
+    /// (`[fd7a::1]:9777` stores `fd7a::1`): a stored address is bare, and a deep link puts the
+    /// brackets back itself.
     public var trimmedAddress: String { Self.split(address).host }
 
     /// The resolved port: the address's suffix if it carried one, else the typed field, else the

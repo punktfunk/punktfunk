@@ -41,7 +41,7 @@ final class OverlayConfigEditTests: XCTestCase {
         return (cfg, bindings)
     }
 
-    /// R7-1: a binding left on a removed shortcut's id never fires the next new one.
+    /// A binding left on a removed shortcut's id never fires the next new one.
     func testANewShortcutSkipsAnIdABindingStillNames() {
         var (cfg, bindings) = threeShortcuts()
         XCTAssertEqual(cfg.shortcuts.map(\.id), ["s1", "s2", "s3"])
@@ -55,7 +55,7 @@ final class OverlayConfigEditTests: XCTestCase {
         XCTAssertEqual(cfg.nextShortcutID(bindings: bindings), "s10")
     }
 
-    /// R7-1: with both blobs in one layer, removing a shortcut takes the bindings that send it.
+    /// With both blobs in one layer, removing a shortcut takes the bindings that send it.
     func testRemovingAShortcutDropsTheBindingsThatSendIt() {
         var (cfg, bindings) = threeShortcuts()
         cfg.removeShortcut("s3", bindings: &bindings)
@@ -68,7 +68,7 @@ final class OverlayConfigEditTests: XCTestCase {
         XCTAssertEqual(bindings, before, "no binding sent s1")
     }
 
-    /// R7-6: a stored opacity or scale outside the sliders' ranges reads clamped into them, so
+    /// A stored opacity or scale outside the sliders' ranges reads clamped into them, so
     /// the slider's percentage never meets an infinity.
     func testParseClampsThePadSlidersToTheirRanges() {
         func pad(_ opacity: String, _ scale: String) -> PadConfig {

@@ -1,6 +1,6 @@
-//! The chrome every destination shares (design §2.1): a header whose title is the Hosts ·
-//! Library switcher, the same switcher as a bottom bar once the window is narrow, and the
-//! primary menu.
+//! The chrome every destination shares: a header whose title is the Hosts · Library
+//! switcher, the same switcher as a bottom bar once the window is narrow, and the primary
+//! menu.
 
 use adw::prelude::*;
 use gtk::gio;

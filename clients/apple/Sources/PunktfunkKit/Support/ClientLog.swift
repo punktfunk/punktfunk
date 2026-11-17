@@ -3,13 +3,13 @@
 // `pf_client_core::logring` and its `RingLayer`.
 //
 // WHY A RING AND NOT `OSLogStore`. The unified log already holds everything these loggers write,
-// and `OSLogStore(scope: .currentProcessIdentifier)` can read it back — but only the levels the
-// system PERSISTS (`.notice`/`.error`/`.fault`). `.info` is memory-only and purged under pressure,
-// and `.info` is exactly where the lines a field report needs live: the 1 Hz stats line, the
-// decoder/presenter setup, the audio underrun notes. On an Apple TV there is no Console.app to
-// read any of it on either. So every `ClientLog` call goes to os_log AND into this
-// process-global ring, and an explicit user action posts the ring to the PAIRED host, where the
-// web console shows it next to the host's own log.
+// and `OSLogStore(scope: .currentProcessIdentifier)` can read it back — but only `.notice`/
+// `.error`/`.fault` are persisted. `.info` lives in memory only, so the store returns it only
+// while it is still there, and `.info` is exactly where the lines a field report needs live:
+// the 1 Hz stats line, the decoder/presenter setup, the audio underrun notes. On an Apple TV
+// there is no Console.app to read any of it on either. So every `ClientLog` call goes to os_log
+// AND into this process-global ring, and an explicit user action posts the ring to the PAIRED
+// host, where the web console shows it next to the host's own log.
 //
 // Bounded by lines AND bytes so a log-storm can't grow memory; the byte budget stays under the
 // host's 1 MiB upload cap so a full ring always uploads whole. `.debug` skips the ring: it is

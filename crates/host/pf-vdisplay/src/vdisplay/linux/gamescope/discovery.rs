@@ -58,10 +58,10 @@ pub(crate) fn steam_appid_from_launch(cmd: &str) -> Option<u32> {
 }
 
 /// [`SteamGameWatch::Exited`] only after the game was seen on screen; a cold Steam boot is
-/// [`Cancelled`]. Both edges come from gamescope's own root atoms, never from process shape:
-/// Steam wraps its pre-launch work (shader precompile, the install-script evaluator) in the same
-/// `reaper SteamLaunch AppId=` the game gets, so a `/proc` match adopts a tree that was never the
-/// game and reads its exit as the game exiting.
+/// [`SteamGameWatch::Cancelled`]. Both edges come from gamescope's own root atoms, never from
+/// process shape: Steam wraps its pre-launch work (shader precompile, the install-script
+/// evaluator) in the same `reaper SteamLaunch AppId=` the game gets, so a `/proc` match adopts a
+/// tree that was never the game and reads its exit as the game exiting.
 pub(crate) fn wait_for_steam_game_exit(
     appid: u32,
     seat: Option<&str>,
@@ -159,8 +159,8 @@ fn focused_app(display: &str) -> Option<u32> {
 }
 
 /// Is `appid` in `GAMESCOPECTRL_BASELAYER_APPID`? Steam adds it as the launch starts and removes
-/// it within a second of the game process going (measured on .21). The list also carries ids no
-/// game is running, so this only decides *going away* for an appid already seen focused.
+/// it within a second of the game process going. The list also carries ids no game is running,
+/// so this only decides *going away* for an appid already seen focused.
 fn baselayer_has(display: &str, appid: u32) -> bool {
     root_cardinals(display, b"GAMESCOPECTRL_BASELAYER_APPID").is_some_and(|v| v.contains(&appid))
 }
@@ -258,8 +258,8 @@ pub(super) fn poll_managed_node(unit: &str) -> Option<ManagedNode> {
 }
 
 /// Log line first: `node.name=gamescope` sits on both the adapter and the stream.
-/// `&mut Child` so a `vkCreateDevice` death (under a second) returns `None` now;
-/// polling the corpse for the full timeout blamed the GPU.
+/// `&mut Child` so a gamescope that dies before publishing (a `vkCreateDevice` failure) ends
+/// the wait at once instead of polling the corpse for the full `timeout`.
 pub(super) fn wait_for_node(
     timeout: Duration,
     log: &std::path::Path,
@@ -317,9 +317,10 @@ fn node_from_log(log: &std::path::Path) -> Option<u32> {
 }
 
 /// This instance's `GAMESCOPE_WAYLAND_DISPLAY` name, from `Running compositor on wayland
-/// display 'gamescope-N'`. It is the seat key: every discovery below filters on it, because a
-/// concurrent seat's gamescope is equally discoverable and taking the first match delivers one
-/// seat's launch (and cursor) to another's screen.
+/// display 'gamescope-N'`. It is the seat key: [`xwayland_cursor_targets`] and
+/// [`discover_session_display_env`] filter on it, because a concurrent seat's gamescope is
+/// equally discoverable and taking the first match delivers one seat's launch (and cursor) to
+/// another's screen.
 pub(super) fn wayland_name_from_log(log: &std::path::Path) -> Option<String> {
     const MARK: &str = "Running compositor on wayland display ";
     let text = String::from_utf8_lossy(&std::fs::read(log).ok()?).into_owned();
@@ -564,9 +565,10 @@ pub(crate) fn is_available() -> bool {
     .unwrap_or(false)
 }
 
-/// Absolute path: the session-plus wrapper and the SteamOS PATH shim run outside this `PATH`.
-/// Rungs: `PUNKTFUNK_GAMESCOPE_BIN` → `punktfunk-gamescope` on `PATH`, then beside the host →
-/// stock `gamescope`. A SteamOS seat's host finds the owner's build only beside itself.
+/// An absolute path when one resolves, since the session-plus wrapper and the SteamOS PATH shim
+/// run outside this `PATH`. Rungs: `PUNKTFUNK_GAMESCOPE_BIN` (taken as given) →
+/// `punktfunk-gamescope` on `PATH`, then beside the host → stock `gamescope` on `PATH`, else the
+/// bare name. A SteamOS seat's host finds the owner's build only beside itself.
 pub(crate) fn gamescope_bin() -> &'static str {
     static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     BIN.get_or_init(|| {
@@ -644,9 +646,8 @@ fn which_in(dirs: &str, name: &str) -> Option<String> {
 }
 
 /// A probe's answer, kept for the process once it answered. A probe that could not run
-/// (its budget passed, no binary) returns `miss` and is asked again next time. Keeping a
-/// miss turned one slow `gamescope --version` at boot into a host with no HDR, no in-node
-/// cursor and no custom refresh until a restart.
+/// (its budget passed, no binary) returns `miss` and is asked again next time. A kept miss
+/// would leave the host with no HDR, no in-node cursor and no custom refresh until a restart.
 pub(super) fn remember_once<T: Copy>(
     cell: &std::sync::OnceLock<T>,
     probe: impl FnOnce() -> Option<T>,
@@ -663,8 +664,8 @@ pub(super) fn remember_once<T: Copy>(
 
 /// Process-cached `+pfhdr<N>` (`packaging/gamescope/README.md`). `0` is stock.
 /// Bit depth and cursor compositing are locked before the display exists, so this
-/// is asked once it answers ([`remember_once`]). Monotonic: 1 HDR, 2 cursor,
-/// 3 custom refresh, 4 overlay, 8 XKB on the seat, 9 paint-on-commit.
+/// is asked once it answers ([`remember_once`]). Monotonic: each capability below names its
+/// floor, and `packaging/gamescope/README.md` has the full level table.
 fn gamescope_patch_level() -> u32 {
     static LEVEL: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     remember_once(
@@ -695,7 +696,7 @@ fn gamescope_patch_level() -> u32 {
                      cursor composited into the capture stream"
                 );
             } else {
-                // INFO, matching the capable branch. A DEBUG miss hid why `capture_supports_hdr` was false.
+                // INFO, matching the capable branch: it says why `capture_supports_hdr` is false.
                 tracing::info!(
                     bin = %gamescope_bin(),
                     "gamescope has no {PFHDR_MARKER} marker — sessions on this backend stay 8-bit SDR \
@@ -899,7 +900,7 @@ const MIN_GAMESCOPE: (u32, u32, u32) = (3, 16, 22);
 const MIN_GAMESCOPE_OVERLAY: (u32, u32, u32) = (3, 16, 23);
 
 /// Warn below [`MIN_GAMESCOPE`] / [`MIN_GAMESCOPE_OVERLAY`], once per host: the binary does
-/// not change under a running host, and the exec sat on every bare-spawn connect.
+/// not change under a running host, and the exec would otherwise run on every bare-spawn connect.
 pub(super) fn check_gamescope_version() -> Option<(u32, u32, u32)> {
     static CHECKED: std::sync::OnceLock<Option<(u32, u32, u32)>> = std::sync::OnceLock::new();
     *CHECKED.get_or_init(check_gamescope_version_now)
@@ -1049,8 +1050,9 @@ fn refresh_envs<'a>(
 }
 
 /// `(DISPLAY, WAYLAND_DISPLAY, XAUTHORITY)` from a same-uid process on `seat` — matched by its
-/// `GAMESCOPE_WAYLAND_DISPLAY`. Any one can be absent. Without the key this took the first
-/// gamescope in `/proc`, which on a multi-seat host launches into somebody else's session.
+/// `GAMESCOPE_WAYLAND_DISPLAY`. `DISPLAY` and `XAUTHORITY` can be absent. With `seat` `None` it
+/// takes the first gamescope in `/proc`, which on a multi-seat host launches into somebody else's
+/// session.
 pub(super) fn discover_session_display_env(
     seat: Option<&str>,
 ) -> Option<(Option<String>, Option<String>, Option<String>)> {

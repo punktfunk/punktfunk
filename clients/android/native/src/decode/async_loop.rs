@@ -10,7 +10,7 @@ use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::reanchor::{self, AnchorEvidence, DecoderClass, LocalRecovery};
 use punktfunk_core::session::Frame;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, io};
@@ -30,10 +30,10 @@ use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
 use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
-use crate::codec_format::{codec_mime, is_realtek, take_by_pts, take_flags};
+use crate::codec_format::{codec_mime, has_spare_capacity, is_realtek, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
-use crate::hold::{Learnt, Tail, Trial};
+use crate::hold::{Tail, Trial};
 use crate::input_stall::{
     rung_after_failure, InputStall, OutputSilence, RungFloor, INPUT_STALL_PATIENCE, SETTLED_FRAMES,
 };
@@ -326,7 +326,7 @@ pub(super) fn run_async(
                         stepped_down: false,
                     } => {}
                 }
-                // Moonlight saw MediaTek HEVC decoders hang right after an RFI (GE8xxx GPUs).
+                // MediaTek HEVC decoders on GE8100/8300/8320 GPUs are reported to hang under RFI.
                 // The 5 s window is a reading aid for the report, not a verdict.
                 rebuilds += 1;
                 let gap_age_ms = match last_gap_ns.load(Ordering::Relaxed) {
@@ -403,8 +403,8 @@ fn run_codec(
 
     // Skew-corrected latency stats (spec: design/stats-unification.md). Receipt stamps (keyed by the
     // pts we queue) live in a shared map: the feeder writes them at receipt, this loop pairs decoded
-    // output back to them. Behind a `Mutex` since two threads touch it — only ever locked while the
-    // HUD is visible.
+    // output back to them. Behind a `Mutex` since two threads touch it; the feeder writes it only
+    // while the HUD is visible or ABR measures decode.
     let clock_offset = client.clock_offset_shared();
     let video_e2e = client.video_e2e_shared();
     let measure_decode = client.wants_decode_latency();
@@ -478,6 +478,7 @@ fn run_codec(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
     );
+    state.pixel_rate = opts.pixel_rate;
     if await_keyframe {
         client.recovery_lost();
     }
@@ -555,11 +556,11 @@ fn run_codec(
             "decode: the run ended under a {} tail — not fed again",
             tail.label()
         );
-        learnt().block(tail);
+        TAILS_BLOCKED.fetch_or(tail.bit(), Ordering::Relaxed);
     }
     let end = teardown(state, ctx, aux, render_cb, feeder, shutdown, stale);
     // The codec and its feeder are gone, so nothing reports: with the freeze left up, core
-    // would ask for a keyframe every half second of a rebuild or a keep-alive drain.
+    // would re-ask for a keyframe every `REANCHOR_FREEZE_MAX` through a rebuild or a drain.
     client.recovery_reset();
     end
 }
@@ -757,9 +758,9 @@ fn teardown(
 }
 
 /// The bring-up ladder for this stream ([`bring_up_rungs`]), with the backend pick
-/// ([`asc_backend_selected`]) and the layer's colour tag it follows. The tag is `None` on
-/// Android 10 and 11 for a studio-range session, which then presents through the SurfaceView
-/// (its decoder tags its own buffers).
+/// ([`asc_backend_selected`]) and the layer's colour tag it follows. Below Android 12 the tag
+/// is `None` for any colour but sRGB and full-range PQ ([`layer_dataspace`]), and that session
+/// presents through the SurfaceView (its decoder tags its own buffers).
 fn ladder_for(client: &NativeClient, opts: &DecodeOptions) -> (Vec<Rung>, bool, Option<i32>) {
     let dataspace = layer_dataspace(&client.video_format().color, crate::sys::sdk_int());
     let selected = asc_backend_selected(opts.chromeos);
@@ -935,6 +936,13 @@ fn bring_up(
             mode.height,
             keys_label(keys)
         );
+        // A configured format lists the vendor keys the decoder declares, with their values.
+        log::info!("decode: input format: {}", codec.input_format());
+        if is_realtek(&codec_name) {
+            for line in realtek::census() {
+                log::info!("decode: Realtek census — {line}");
+            }
+        }
         let backends: Vec<Option<bool>> = rungs.iter().map(|r| r.0).collect();
         let lower_rung = rung_after_failure(&backends, rung, asc.is_some());
         return Some(Started {
@@ -947,7 +955,7 @@ fn bring_up(
     }
     // Every rung refused. Say so loudly and in the shape the next reporter can act on: the
     // session stays up (audio/input/library all still work), so without this line the only
-    // symptom is a black screen and a keyframe request every 2 s that blames the network.
+    // symptom is a black screen.
     log::error!(
         "decode: the {mime} decoder refused EVERY configuration — this session has no video. \
          Audio and input keep working, so the stream will look alive while the screen stays \
@@ -958,9 +966,9 @@ fn bring_up(
     None
 }
 
-/// The ADPF hint session, created on the first presented frame. The pump/audio priority boost is
-/// part of the experimental low-latency stack; the session itself predates it and always runs
-/// (max-performance bias gated inside).
+/// The ADPF hint session, created on the first presented frame. It runs whenever ADPF exists
+/// (API 33+); `low_latency_mode` adds the hot-thread priority boost and the session's
+/// performance bias ([`crate::adpf::HintSession::create`]).
 pub(crate) fn start_hint(
     client: &NativeClient,
     refresh_hz: u32,
@@ -1053,6 +1061,8 @@ struct State {
     conceal: Option<Concealer>,
     /// The tail each whole AU is fed with, and the trial that picks it ([`hold_trial`]).
     trial: Trial,
+    /// The most pixels a second the decoder declares ([`DecodeOptions::pixel_rate`]).
+    pixel_rate: u64,
     /// When the last output's AU entered the codec: the gap between AUs, for the trial.
     last_queued: Option<i128>,
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
@@ -1063,7 +1073,7 @@ struct State {
     discarded: u64,
     /// AUs larger than the codec input buffer, dropped whole (see `feed`).
     oversized_dropped: u64,
-    /// pts → realtime ns at the AU's LAST piece entering the codec — the P3 decode-split ledger
+    /// pts → realtime ns at the AU's LAST piece entering the codec — the decode-split ledger
     /// (`feed` = received→queued, `codec` = queued→decoded). Always on; consumed by `present`.
     queued_stamps: VecDeque<(u64, i128)>,
     /// Core's freeze arm count at the last cadence re-anchor ([`NativeClient::recovery_arms`]).
@@ -1157,10 +1167,10 @@ impl DecodeTally {
     }
 }
 
-/// The receiver rule's decoder class for this session ([`Intake`]): AV1 only, strict on the
-/// Tensor G5 and Realtek decoders, lenient on the rest. Realtek's hangs on the first wave frame
-/// after a loss. `debug.punktfunk.au_admission` = `strict` /
-/// `lenient` / `off` overrides the pick.
+/// The receiver rule's decoder class for this session ([`Intake`]): AV1 only, strict on
+/// `c2.google.av1.decoder` (every Tensor) and Realtek's, lenient on the rest. Realtek's hangs on
+/// the first wave frame after a loss. `debug.punktfunk.au_admission` = `strict` / `lenient` /
+/// `off` overrides the pick.
 fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
     if codec != punktfunk_core::quic::CODEC_AV1 {
         return None;
@@ -1182,19 +1192,12 @@ fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
     Some(class)
 }
 
-/// The tails this process's runs hung under, and the one a trial kept.
-static TAILS: Mutex<Learnt> = Mutex::new(Learnt::new());
+/// Tails a decoder hung or failed under in this process ([`Tail::bit`]).
+static TAILS_BLOCKED: AtomicU8 = AtomicU8::new(0);
 
-fn learnt() -> std::sync::MutexGuard<'static, Learnt> {
-    TAILS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// The tail trial for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names the
-/// tail; `trial` runs the trial on any decoder. Unset, a Realtek decoder runs it on H.264 and
-/// HEVC: it returns each picture when the next AU is fed, and the trial reads whether a tail
-/// ends that. A tail an earlier trial kept for this decoder and codec runs with no trial. The
+/// The tail for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names it; `trial`
+/// reads the delimiter on any decoder. Unset, a Realtek decoder gets the delimiter on H.264 and
+/// HEVC, read once against none: it returns each picture when the next AU is fed. The
 /// `pf.decode` line's `held` counts the outputs that waited either way.
 fn hold_trial(codec: u8, decoder: &str) -> Trial {
     let prop = sysprop(c"debug.punktfunk.au_tail");
@@ -1202,17 +1205,10 @@ fn hold_trial(codec: u8, decoder: &str) -> Trial {
         log::info!("decode: each AU is fed with tail {}", tail.label());
         return Trial::fixed(tail);
     }
-    let tails = !Tail::Fill.bytes(codec).is_empty();
+    let tails = !Tail::Aud.bytes(codec).is_empty();
     if tails && (prop.as_deref() == Some("trial") || is_realtek(decoder)) {
-        let learnt = learnt();
-        match learnt.kept(codec, decoder) {
-            Some(tail) => log::info!(
-                "decode: each AU is fed with tail {}, which a trial kept",
-                tail.label()
-            ),
-            None => log::info!("decode: hold trial on {decoder}"),
-        }
-        return learnt.trial(codec, decoder);
+        log::info!("decode: hold trial on {decoder}");
+        return Trial::new(TAILS_BLOCKED.load(Ordering::Relaxed));
     }
     Trial::fixed(Tail::None)
 }
@@ -1316,6 +1312,7 @@ impl State {
             widen: None,
             conceal: None,
             trial: Trial::fixed(Tail::None),
+            pixel_rate: 0,
             last_queued: None,
             inputs: Feed::default(),
             ready: Vec::new(),
@@ -1450,6 +1447,7 @@ impl State {
             self.sink.on_vsync(ctx);
         }
         if pass.fmt_dirty {
+            log::info!("decode: output format: {}", ctx.codec.output_format());
             // Only the ASurfaceControl sink crops; the SurfaceView shows what the codec hands it.
             let picture =
                 super::display::picture_size(&ctx.codec).map(|(w, h)| match self.av1_render {
@@ -1459,6 +1457,18 @@ impl State {
             if let Some((w, h)) = picture {
                 ctx.decoded_size
                     .store(crate::session::pack_surface_size(w, h), Ordering::Relaxed);
+                // The picture is the size the host encodes, which a mirror's asked mode is not.
+                let spare = has_spare_capacity(
+                    &ctx.codec.name().unwrap_or_default(),
+                    self.pixel_rate,
+                    (w.max(0) as u32, h.max(0) as u32),
+                    ctx.client.mode().refresh_hz,
+                );
+                log::info!(
+                    "decode: {w}x{h} against {} declared pixels a second — spare capacity: {spare}",
+                    self.pixel_rate
+                );
+                ctx.client.report_decoder_spare(spare);
             }
             self.sink
                 .on_format_changed(ctx, picture, self.stream_colour);
@@ -1664,7 +1674,7 @@ impl State {
         }
         self.unclean |= self.loss_open;
         // `fed` counts ACCESS UNITS toward the HUD's fed/decoded balance, so the closing piece
-        // (or a whole AU) bumps it. The queued stamp marks the same instant: the P3 decode split
+        // (or a whole AU) bumps it. The queued stamp marks the same instant: the decode split
         // measures `codec` from here, so a slice-progressive head start shows as codec-pure shrink.
         if piece.last {
             self.fed += 1;
@@ -1678,7 +1688,7 @@ impl State {
     }
 
     /// Pair each ready output's decode stage: the ABR decode signal + the HUD histogram consume
-    /// the receipt map; the P3 split's codec-pure half needs only the queued stamp, so it records
+    /// the receipt map; the split's codec-pure half needs only the queued stamp, so it records
     /// even with both off (that keeps the 1 Hz pf.present line HUD-off readable). Every sink's
     /// line drains the split from `ctx.meter`.
     fn note_decode_stage(&mut self, ctx: &Ctx) {
@@ -1717,18 +1727,16 @@ impl State {
             {
                 log::info!(
                     "decode: hold trial — tail {}: codec {:.1} ms with, {:.1} ms without, AUs \
-                     {:.1} ms apart; tail {} {}",
+                     {:.1} ms apart; tail {} from here",
                     r.tail.label(),
                     r.with_us as f64 / 1000.0,
                     r.without_us as f64 / 1000.0,
                     r.gap_us as f64 / 1000.0,
                     r.next.label(),
-                    if r.done { "from here" } else { "next" }
                 );
-                if r.done && r.next != Tail::None {
-                    let decoder = ctx.codec.name().unwrap_or_default();
-                    learnt().keep(ctx.client.video_format().codec, &decoder, r.next);
-                }
+                // The reading fed its blocks two ways: the delay the cadence loop measured
+                // across them is neither's.
+                self.sink.reset_cadence();
             }
             let feed_us = match (queued, received_ns) {
                 (Some(q), Some(r)) => Some(((q - r).max(0) / 1000) as u64),

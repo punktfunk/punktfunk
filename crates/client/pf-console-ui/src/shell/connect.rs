@@ -191,8 +191,8 @@ pub(super) struct LaunchHost {
 /// holds — through the dial, then over the stream — until the game is up.
 ///
 /// Every launch begins with the launcher's own window (Steam booting, a
-/// desktop) — the first thing a player used to see of a game. The host tells
-/// `launching` from `running` per lease (`punktfunk-host::gamelease`), and a
+/// desktop) — the first thing a player would otherwise see of a game. The host tells
+/// `launching` from `running` per lease (`punktfunk-host`'s `game::gamelease`), and a
 /// paired client may read it, so the hold polls that until it changes.
 ///
 /// Raised at the press rather than at the first frame, because the shelf is
@@ -259,12 +259,12 @@ pub(super) fn launch_gave_up(title: &str, state: Option<&str>, elapsed: f64) -> 
 pub(super) const LAUNCH_POLL: f64 = 1.0;
 pub(super) const LAUNCH_POLL_STALL: f64 = 5.0;
 /// The host lists nothing for the title: the launch did not resolve
-/// (no recipe, launcher missing). The host logs it and streams on; so do we.
+/// (no recipe, launcher missing). The hold says so and waits for the player's press.
 /// Three [`LAUNCH_POLL_STALL`] retries, so a lost answer or two cannot end the hold.
 pub(super) const LAUNCH_NO_LEASE: f64 = 15.0;
 /// A game still `launching`, or `running` without its window, this long is one
 /// the player wants to see for themselves — a cold Steam boot with shader work
-/// runs to minutes, and the host waits five for it.
+/// runs to minutes, and the host waits `START_GRACE` (`game::gamelease`) for it.
 pub(super) const LAUNCH_HOLD_MAX: f64 = 120.0;
 
 impl Shell {
@@ -549,7 +549,8 @@ impl Shell {
         self.in_stream = false;
         self.connect.end_dial();
         self.connect.show_card(Connecting {
-            // `None` only if the shell never raised the connect (`--connect` has no console).
+            // The last connect card's title: `None` before the first, and an older connect's
+            // after a launch that took the hold, which raises no card. `--connect` has no console.
             title: self.last_connect_title.clone(),
             appear: 1.0,
             request_access: false,

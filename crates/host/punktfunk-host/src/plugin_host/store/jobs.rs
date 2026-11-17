@@ -49,7 +49,7 @@ pub(crate) struct Job {
     pub started_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
-    /// The folder a running job is opening for its plugin right now.
+    /// The oldest folder whose access is changing while the job runs, whoever it is for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub walk: Option<crate::plugins::walks::AccessWalk>,
 }

@@ -47,7 +47,7 @@ enum RumbleTuning {
     static func amplitude(_ wire: UInt16) -> Float { Float(wire) / 65535 }
     /// Wire amplitude → DualSense HID motor byte, floored at 1 for a nonzero command: the top
     /// byte of a level below 0x0100 is 0, and a weak rumble must still move. Android's
-    /// `toAmplitude` floors the same way.
+    /// `wireAmplitudeToByte` floors the same way.
     static func hidByte(_ wire: UInt16) -> UInt8 {
         let b = UInt8(wire >> 8)
         return wire != 0 && b == 0 ? 1 : b
@@ -73,8 +73,8 @@ enum RumbleTuning {
 ///  1. **No infinite events.** A motor plays finite `segmentSeconds` segments; while the level
 ///     holds, the successor is scheduled on the engine timeline to start exactly when the
 ///     current segment expires. A leaked player therefore self-silences in ≤ `segmentSeconds`.
-///  2. **Idempotent targets.** An update equal to the current target (the host re-sends rumble
-///     state every 500 ms) is a liveness stamp, never a player rebuild.
+///  2. **Idempotent targets.** An update equal to the current target (the host's `RumbleLeases`
+///     renews an active level inside its TTL) is a liveness stamp, never a player rebuild.
 ///  3. **Zero is immediate, ramps are throttled.** (0,0) stops players the moment it lands;
 ///     nonzero→nonzero changes rebuild at most every `minRebakeSeconds` per motor.
 ///  4. **Escalating stop.** A throwing `player.stop` stops the whole engine, which is rebuilt
@@ -129,9 +129,9 @@ final class RumbleRenderer: @unchecked Sendable {
     private var high: Motor?
     /// The two Xbox impulse-trigger motors, when the pad offers
     /// `GCHapticsLocality.leftTrigger`/`.rightTrigger`. **Nil is the normal case** — every pad but
-    /// an Xbox One/Series/Elite has no such actuator, and the tree has already observed Xbox pads
-    /// on Apple exposing no haptics engine at all — so their absence is never logged and never
-    /// counts as a setup failure. Independent of the handle split: a pad may offer trigger
+    /// an Xbox One/Series/Elite has no such actuator, and an Xbox pad can expose no haptics
+    /// engine at all (see `broken`) — so their absence is never logged and never counts as a
+    /// setup failure. Independent of the handle split: a pad may offer trigger
     /// localities with or without split handles, and losing one does not implicate the other.
     private var leftTrigger: Motor?
     private var rightTrigger: Motor?
@@ -562,12 +562,10 @@ final class RumbleRenderer: @unchecked Sendable {
         // letting a haptics-only engine join it is a needless coupling that can get its
         // gamecontrollerd XPC connection interrupted (the repeated -4811 server-connection breaks).
         engine.playsHapticsOnly = true
-        // The haptic server can stop or reset the engine out from under us — app backgrounding, an
-        // audio-session interruption (a call, Siri, another audio app), or a server crash. Left
-        // unhandled the players go dead and every later rumble throws, latching rumble off for the
-        // rest of the session (the "rumble worked, then went spotty" failure). Tear down on the
-        // serial queue; the ticker (or the next wire update) lazily rebuilds the engine and
-        // re-renders the still-current target.
+        // The haptic server can stop or reset the engine out from under us (backgrounding, an
+        // audio-session interruption, a server crash); left unhandled, every later rumble throws.
+        // Tear down on the serial queue; the ticker (or the next wire update) lazily rebuilds
+        // the engine and re-renders the still-current target.
         engine.stoppedHandler = { [weak self] reason in
             log.info("rumble: haptic engine stopped (reason \(reason.rawValue, privacy: .public)) — will rebuild")
             self?.queue.async { self?.teardown() }
@@ -639,8 +637,8 @@ final class RumbleRenderer: @unchecked Sendable {
     ///
     /// GameController exposes no location id, so there is no direct mapping. What it does expose is
     /// a stable per-controller ordering, and IOKit's location ids are stable per port: pairing the
-    /// two by rank makes each renderer pick a *distinct* device, which is the property that was
-    /// missing. With one pad attached this is the same device it always was.
+    /// two by rank makes each renderer pick a *distinct* device. With one pad attached, that
+    /// pad's id is the answer.
     static func hidLocationID(for c: GCController) -> UInt32? {
         let ids = DualSenseHID.attachedLocationIDs()
         guard ids.count > 1 else { return ids.first }

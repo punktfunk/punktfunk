@@ -306,9 +306,8 @@ mod tests {
         );
     }
 
-    /// The issue-912 field question: a 30 s window short of its frame count is
-    /// either a producer skipping ticks or one running slow, and the median
-    /// period cannot tell them apart. `skipped` must.
+    /// A 30 s window short of its frame count is either a producer skipping ticks or
+    /// one running slow, and the median period cannot tell them apart. `skipped` must.
     #[test]
     fn a_skipping_producer_is_separable_from_a_slow_one() {
         let mut skip = PtsProvenance::new();

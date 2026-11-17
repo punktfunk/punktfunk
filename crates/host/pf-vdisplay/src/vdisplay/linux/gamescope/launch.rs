@@ -101,7 +101,7 @@ mod tests {
     }
 
     /// Each row names what it pins. A restart that is not done is never polled for 30 s; the
-    /// previous session's node never latches the host's flags off (G-1).
+    /// previous session's node never latches the host's flags off.
     #[test]
     fn the_restart_follows_its_table() {
         use {Flags::*, Node as N, Verb as V, Verdict::*, Why as W};

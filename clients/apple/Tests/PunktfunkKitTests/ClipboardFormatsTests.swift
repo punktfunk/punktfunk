@@ -1,6 +1,6 @@
 // The shared clipboard's format decisions — what a given pasteboard gets announced as, and what a
-// host offer gets placed as. Pure functions, and the half of the sync that macOS and iOS now
-// genuinely share, so a change that suits one platform and breaks the other fails here.
+// host offer gets placed as. Pure functions, and the half of the sync that macOS and iOS
+// share, so a change that suits one platform and breaks the other fails here.
 
 import XCTest
 

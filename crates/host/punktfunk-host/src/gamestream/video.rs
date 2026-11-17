@@ -118,7 +118,8 @@ impl VideoPacketizer {
         self.fec_percentage = pct as usize;
     }
 
-    /// The paced sender calls this after each frame (`spawn_sender` / `spawn_packetizer`).
+    /// The packetizer thread calls this with each batch the paced sender hands back
+    /// (`spawn_packetizer` / `spawn_sender`).
     pub fn recycle(&mut self, spent: &mut Vec<Vec<u8>>) {
         let room = POOL_MAX.saturating_sub(self.pool.len());
         self.pool.extend(spent.drain(..).take(room));

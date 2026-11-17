@@ -14,21 +14,20 @@
 # image as /usr/bin/punktfunk-gamescope — what lets the gamescope backend stream 10-bit BT.2020 PQ
 # instead of 8-bit SDR (the host prefers that name on PATH and attempts HDR by default). Mirrors
 # the Bazzite image's fold-in, including the honesty check: the binary is verified by executing
-# its `+pfhdr` banner, never trusted by filename. Omit it and the image is exactly what it was —
+# its `+pfhdr` banner, never trusted by filename. Omit it and the image carries no HDR gamescope —
 # the host then stays SDR on that backend, by design.
 #
 # Capabilities in the image: NEVER on usr/bin/punktfunk-host, `cap_sys_nice=ep` on
 # usr/bin/punktfunk-encode-worker (best-effort), and none on punktfunk-gamescope.
 #
-# ⚠ Capabilities are NOT lost on the way in — that was this comment's earlier claim and it is
-# false: mksquashfs records security.capability, and the published Bazzite 0.26.0-1 image really
-# did carry `cap_sys_nice=ep` on usr/bin/punktfunk-host. The host is left uncapped on purpose. A
-# capability on the HOST binary makes it unidentifiable to KWin (which resolves a client's
-# /proc/<pid>/exe to match it against a .desktop, and cannot read it for a capability-carrying
-# process) and kills every Desktop-mode session.
+# ⚠ mksquashfs records security.capability, so a capability on the staging tree reaches the
+# image. The host is left uncapped on purpose. A capability on the HOST binary makes it
+# unidentifiable to KWin (which resolves a client's /proc/<pid>/exe to match it against a
+# .desktop, and cannot read it for a capability-carrying process) and kills every Desktop-mode
+# session.
 #
-# ⚠ And it is NOT enough to leave it out here: pacman scriptlets never run for a sysext, so the
-# `setcap` in punktfunk-host.install cannot reach this image either way. The encode worker is
+# ⚠ Nothing else grants the worker its capability: pacman scriptlets never run for a sysext, so
+# the `setcap` in punktfunk-host.install cannot reach this image. The encode worker is
 # therefore capped on the staging tree below — this is the only place a sysext can acquire it — and
 # both halves of the matrix are asserted before mksquashfs by packaging/linux/sysext-lib.sh, which
 # the Bazzite image shares. `punktfunk-gamescope` is a compositor, not a KWin client,
@@ -42,7 +41,7 @@ if [ "${1:-}" = "--gamescope" ]; then
   GAMESCOPE="${2:?--gamescope needs a punktfunk-gamescope package}"; shift 2
 fi
 # No braces in the message: a literal `}` inside ${1:?...} terminates the expansion early and
-# corrupts $PKG (the tail of the message gets appended to the value — a real field bug).
+# corrupts $PKG (the tail of the message gets appended to the value).
 PKG="${1:?usage: build-sysext.sh [--gamescope <pkg>] <punktfunk-host|client pkg.tar.zst>}"
 [ -f "$PKG" ] || { echo "no such package: $PKG" >&2; exit 1; }
 # Derive the package name from the file (pkgname is everything before the -<version>).

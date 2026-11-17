@@ -122,7 +122,7 @@ pub struct DecodedVkFrame {
 pub enum VkDecodeError {
     Plan(PlanError),
     /// H.265 plan failure. `h265::PlanError::RaslSkipped` is not this: the
-    /// decoder answers `Ok(None)` for a RASL after an open-GOP join.
+    /// decoder answers `Ok` for a RASL after an open-GOP join.
     PlanH265(pf_bitstream::h265::PlanError),
     /// Parameter set has no Std representation (stream-integrity failure).
     Params(ParamsError),

@@ -195,8 +195,8 @@ impl Shell {
                 "slot margin widened (missed or replaced latches)"
             );
         }
-        // The 1 Hz presenter line, always: the field bundle's only record of where a
-        // frame went after decode and how evenly the glass stepped.
+        // The 1 Hz presenter line at any HUD tier: the field bundle's only record of where
+        // a frame went after decode and how evenly the glass stepped.
         if self.pacing_active {
             let cadence_health = st.pacer.health();
             let shown: u32 = st.win.steps.iter().sum();
@@ -312,7 +312,7 @@ impl StreamState {
                 );
             }
             // Latch miss: the frame landed past the slot it was aimed at (half a period
-            // of stamp slack). Smoothing without an aim: past one period plus the lead from
+            // of stamp slack). Smoothing without an aim: past one period plus the margin from
             // submit. Store evictions happen whenever the stream out-runs the panel and say
             // nothing about the latch.
             let target_ns = self
@@ -643,8 +643,8 @@ pub(super) struct PresentWindow {
     present_us: Vec<u32>,
     /// The overlay window (`NativeClient::hud`) closes here once a second.
     start: Instant,
-    /// This window's latch misses (glass later than one panel period past submit plus
-    /// the applied lead). Adaptive margin's error signal.
+    /// This window's latch misses, as `fold_glass` counts them. Adaptive margin's error
+    /// signal.
     misses: u32,
     /// This window's frames shown before the latch they were aimed at.
     early: u32,
@@ -1031,7 +1031,7 @@ pub(super) struct PresentCounters {
     /// Wake-forwarder displacements: the loop stalled two frame intervals.
     pub(super) forwarded: u32,
     /// (flipped without a copy, shown) this window, by the compositor's own word; `None`
-    /// where it never says (KWin before 6.8, Windows, macOS).
+    /// where it never says (KWin before 6.8 once the native lane retires, Windows, macOS).
     pub(super) scanout: Option<(u32, u32)>,
 }
 
@@ -1090,8 +1090,8 @@ pub(super) fn render_osd(st: &mut StreamState, tier: StatsVerbosity) {
     };
 }
 
-/// How the stream reaches the screen. No present arm sets `untonemapped` today; the tag
-/// stays so a lane that bypasses CSC can say so rather than claim a tone-map.
+/// How the stream reaches the screen. No present arm sets `untonemapped`; the tag stays
+/// so a lane that bypasses CSC can say so rather than claim a tone-map.
 pub(super) fn hdr_shown(stream_hdr: bool, display_hdr: bool, untonemapped: bool) -> hud::Hdr {
     match (stream_hdr, display_hdr, untonemapped) {
         (false, ..) => hud::Hdr::Sdr,

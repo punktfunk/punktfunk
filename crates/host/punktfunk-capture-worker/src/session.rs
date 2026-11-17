@@ -46,7 +46,7 @@ pub struct EncodeThread {
 
 impl EncodeThread {
     /// How long a stop waits. A healthy thread is between two backend calls within one frame;
-    /// 250 ms is ten of them at 60 Hz.
+    /// 250 ms is 15 frames at 60 Hz.
     const STOP_BOUND: Duration = Duration::from_millis(250);
 
     /// Start the thread. `None` when the OS refused a thread or an event.

@@ -225,8 +225,8 @@ impl DisplaySnapshot {
         })
     }
 
-    /// External standby sinks and the laptop panel Exclusive isolate deactivated. Both get the same
-    /// ~2 s driver-level probe. Virtual/indirect targets stay out.
+    /// External standby sinks and the laptop panel Exclusive isolate deactivated: the suspects
+    /// when capture stalls repeat on a timer. Virtual/indirect targets stay out.
     pub fn connected_inactive_physicals(&self) -> Vec<String> {
         self.targets
             .iter()

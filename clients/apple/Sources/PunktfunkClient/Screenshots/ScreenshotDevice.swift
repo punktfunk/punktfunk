@@ -1,10 +1,11 @@
 // App Store screenshot harness — device catalog.
 //
-// The harness captures the REAL running UI (not an offscreen ImageRenderer snapshot, which can't
-// rasterize NavigationStack / Form / Liquid-Glass — they come out black). The app is launched in
-// "shot mode" (PUNKTFUNK_SHOT_SCENE=<name>, see ScreenshotHost) showing one mock-populated scene
-// full-bleed, and the OS screenshots it: `xcrun simctl io booted screenshot` on the iOS/tvOS
-// simulators (native pixels = the exact App Store size), `screencapture` for the mac window.
+// The harness captures the REAL running UI (not an offscreen ImageRenderer snapshot, which draws
+// a placeholder for views Core Animation composites: NavigationStack, Form, Liquid Glass). The app
+// is launched in "shot mode" (PUNKTFUNK_SHOT_SCENE=<name>, see ScreenshotHost) showing one
+// mock-populated scene full-bleed, and the OS screenshots it: `xcrun simctl io booted screenshot` on the iOS/tvOS
+// simulators (native pixels = the exact App Store size). On the Mac the app captures its own
+// windows (`MacSelfCapture`).
 // tools/screenshots.sh drives it. DEBUG-only — none of this ships in Release.
 //
 // This catalog records the target App Store sizes; on Apple platforms only the mac size is read

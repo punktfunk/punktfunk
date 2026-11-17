@@ -56,8 +56,7 @@ final class ColorBarDecodeTests: XCTestCase {
         }
     }
 
-    /// BT.601 (BT.470BG) limited — what a Linux host's RGB-input NVENC signals. The fixture that
-    /// catches a hardcoded-BT.709 shader.
+    /// BT.601 (BT.470BG) limited. The fixture that catches a hardcoded-BT.709 shader.
     func testGolden601LimitedBars() throws {
         try assertBars(
             "601-limited", au: ColorBarFixtures.bars601Limited,
@@ -65,7 +64,7 @@ final class ColorBarDecodeTests: XCTestCase {
             expected: .init(matrix: 5, fullRange: false))
     }
 
-    /// BT.709 limited — the hosts' explicit SDR signaling.
+    /// BT.709 limited — the hosts' SDR signaling when the client asks for studio range.
     func testGolden709LimitedBars() throws {
         try assertBars(
             "709-limited", au: ColorBarFixtures.bars709Limited,
@@ -73,8 +72,8 @@ final class ColorBarDecodeTests: XCTestCase {
             expected: .init(matrix: 1, fullRange: false))
     }
 
-    /// BT.709 full range — the PUNKTFUNK_444_FULLRANGE experiment's signaling (requesting the
-    /// full-range sibling keeps VT from range-converting, so the full-range rows are exercised).
+    /// BT.709 full range — requesting the full-range sibling keeps VT from range-converting,
+    /// so the full-range rows are exercised.
     func testGolden709FullBars() throws {
         try assertBars(
             "709-full", au: ColorBarFixtures.bars709Full,

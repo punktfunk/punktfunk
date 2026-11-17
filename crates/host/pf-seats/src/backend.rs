@@ -3,9 +3,9 @@
 //! The portable core allocates and persists seat identity and resources, then
 //! asks this trait to provision, start, stop, remove, and inspect them. Methods
 //! receive complete validated seat records; platform secrets never enter the
-//! ledger or control responses. Windows supplies the production implementation.
-//! Tests use an in-memory fake, while other targets return a stable unsupported
-//! diagnostic without pretending that a seat is running.
+//! ledger or control responses. `WindowsBackend` and `LinuxBackend` are the production
+//! implementations. Tests use an in-memory fake, and `UnsupportedBackend` returns a stable
+//! unsupported diagnostic without pretending that a seat is running.
 
 use crate::ipc::{Diagnostic, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};

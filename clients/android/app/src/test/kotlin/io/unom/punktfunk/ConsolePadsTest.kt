@@ -10,7 +10,7 @@ import org.junit.Test
 
 /**
  * A captured or ungranted Steam Controller 2 has no `InputDevice`, so `Gamepad.pads()` cannot
- * see it and the console's chip fell back to "TV remote". The extras list is its only way in.
+ * see it and the console's chip falls back to "TV remote". The extras list is its only way in.
  */
 class ConsolePadsTest {
     @Test

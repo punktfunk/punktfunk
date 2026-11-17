@@ -974,7 +974,7 @@ impl PlatformBackend for SlowStart {
     }
 }
 
-/// A backend whose provision, remove, enable and disable park while the gate is shut.
+/// A backend whose provision, remove, enable and Flatpak install park while the gate is shut.
 #[derive(Clone)]
 struct SlowWork {
     inner: FakeBackend,

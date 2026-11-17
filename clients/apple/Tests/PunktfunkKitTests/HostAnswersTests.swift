@@ -1,4 +1,4 @@
-// `/actions` and `/display/targets` as an answer or a miss (R3-5): a miss is never "nothing".
+// `/actions` and `/display/targets` as an answer or a miss: a miss is never "nothing".
 
 import XCTest
 

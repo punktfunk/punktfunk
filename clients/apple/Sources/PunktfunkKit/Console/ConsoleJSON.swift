@@ -378,7 +378,8 @@ public enum ConsoleJSON {
 
     // MARK: - wake and pair
 
-    /// The `Wake`'s `req`; epoch 0 for a wake this app started on its own.
+    /// The `req` for work the console did not ask for, and a command's fallback when it carried
+    /// none. Epoch 0 is no request.
     public static let unasked: [String: Any] = ["host": "", "epoch": 0]
 
     public static func wake(

@@ -38,7 +38,7 @@ use wtransport::{Connection, VarInt};
 /// A request head: the JSON a page writes after the length prefix.
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct Head {
-    /// Method: `GET`, `POST` or `DELETE`.
+    /// Method; [`dispatch`] names the ones the tunnel carries.
     pub(crate) m: String,
     /// Path and query as `fetch` would send them: `/api/v1/library/page?limit=50`.
     pub(crate) p: String,
@@ -56,9 +56,11 @@ struct Reply {
 
 /// A head is a bearer and a path; 16 KiB is a hundred of them.
 const MAX_HEAD: usize = 16 * 1024;
-/// A log upload is the largest body the paired lane takes, and the store caps it under this.
+/// A log upload is the largest body the paired lane takes; its endpoint caps it at this same
+/// size (`client_logs::MAX_BUNDLE_BYTES`).
 const MAX_BODY: usize = 1024 * 1024;
-/// Requests in flight on one tunnel. HTTP/2 gives a page 32; a library's covers queue behind it.
+/// Requests in flight on one tunnel. The HTTPS lane gives a page 32 (`https::MAX_H2_STREAMS`);
+/// a library's covers queue behind it.
 const MAX_STREAMS: usize = 16;
 /// Tunnels one address may hold open. A page needs one.
 const MAX_SESSIONS_PER_IP: usize = 4;
@@ -299,10 +301,11 @@ async fn read_request<R: AsyncRead + Unpin>(rx: &mut R) -> Result<(Head, Vec<u8>
 ///
 /// Refused here, before the router: a method the API doesn't route, a path outside `/api/v1/`
 /// or under `/api/v1/local/` (the position-authenticated lane, which a LAN peer must never
-/// reach), and any header a browser's `fetch` could not have sent. What passes is stamped like a
-/// request off the HTTPS listener — the peer, the bound address, and the client certificate its
-/// connection proved (`fingerprint`, hex), never one a request could name — so `require_auth`
-/// judges it as that request, `PUT` and `PATCH` as over HTTPS.
+/// reach), and a malformed header name or [`PASSED`] header value. Other headers are dropped.
+/// What passes is stamped like a request off the HTTPS listener — the peer, the bound
+/// address, and the client certificate its connection proved (`fingerprint`, hex), never one a
+/// request could name — so `require_auth` judges it as that request, `PUT` and `PATCH` as over
+/// HTTPS.
 pub(crate) async fn dispatch(
     router: &Router,
     peer: SocketAddr,

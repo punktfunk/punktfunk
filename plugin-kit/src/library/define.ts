@@ -1,8 +1,9 @@
-// `defineLibraryPlugin` — the shared framework behind every library-scanner plugin (design D10).
+// `defineLibraryPlugin` — the shared framework behind every library-scanner plugin
+// (library-scanner-plugins.md D10).
 //
 // The point of this module is that a first-party scanner should be **its parsers and a scan
-// function**, ~200–400 lines, and nothing else. Everything a scanner needs beyond that is identical
-// across all six of them and lives here: claiming the store, reconciling through the sync engine,
+// function** and nothing else. Everything a scanner needs beyond that is identical across
+// scanners and lives here: claiming the store, reconciling through the sync engine,
 // appending launcher entries, serving `__config` so the console renders settings without the plugin
 // shipping an SPA, registering under `category: "library"` so it stays out of the nav, and the
 // standard CLI verbs.
@@ -103,12 +104,12 @@ export interface LibraryPluginDef<S extends Schema.Top> {
 	 * Floor between two filesystem-triggered syncs, on top of the debounce: a debounce collapses a
 	 * burst, this caps the rate under sustained churn (a launcher writing to its dirs while a game
 	 * runs). Changes inside the interval coalesce into one trailing sync. Default
-	 * `Duration.seconds(30)`.
+	 * `DEFAULT_FS_CHANGE_MIN_INTERVAL`.
 	 */
 	readonly minInterval?: Duration.Duration;
 	/** Display title (the console's sources row falls back to the scanner label). Defaults to `name`. */
 	readonly title?: string;
-	/** Extra CLI verbs beyond the standard `detect` / `scan` / `uninstall` set. */
+	/** Extra CLI verbs beyond the standard `detect` / `scan` / `parity` / `uninstall` set. */
 	readonly commands?: Record<string, CliCommand<never>>;
 	/**
 	 * Work before the host starts one of this plugin's titles, like fetching its files. It fires for
@@ -122,7 +123,10 @@ export interface LibraryPluginDef<S extends Schema.Top> {
 			event: EventOf<"game.launching">,
 		) => Effect.Effect<void, unknown>;
 	};
-	/** How long the host waits for a hold, 1–120 000 ms. Default 30 000. */
+	/**
+	 * How long the host waits for a hold. The bounds and the default are `HOLD_MAX_MS` and
+	 * `HOLD_DEFAULT_MS` in the host's `plugin_host/registry.rs`.
+	 */
 	readonly holdTimeoutMs?: number;
 	/** The host's install asks for this plugin's titles, each with the config. See `serveUi`. */
 	readonly install?: LibraryInstall<S["Type"]>;
@@ -277,10 +281,11 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 	 * Push one entry set to the host under the store claim, warning **once** if the host is too old
 	 * to honour it.
 	 *
-	 * This degradation is worth the code: a pre-M2 host ignores `?store=` silently, and the only
-	 * symptom would be this plugin's titles appearing as unbadged `custom:` entries *beside* the
-	 * built-in scanner's identical ones — a confusing double-listing with no error anywhere.
-	 * Checking the echoed entries turns that into one actionable log line.
+	 * This degradation is worth the code: a host without store claims ignores `?store=`
+	 * silently, and the only symptom would be this plugin's titles appearing as unbadged
+	 * `custom:` entries *beside* the built-in scanner's identical ones — a confusing
+	 * double-listing with no error anywhere. Checking the echoed entries turns that into one
+	 * actionable log line.
 	 */
 	const applyEntries =
 		(provider: ProviderClientService, state: { warned: boolean }) =>
@@ -318,15 +323,13 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 			compute,
 			apply: applyEntries(provider, state),
 			// The host IS the state: a full-replace reconcile is idempotent, so there is nothing to
-			// persist between runs. Reporting no previous fingerprint means the first sync after a
-			// restart always pushes, which is exactly what we want (the host may have been reinstalled
-			// underneath us).
+			// persist between runs. No fingerprint is ever remembered, so every sync pushes — which
+			// also covers a host reinstalled underneath us.
 			lastSync: { get: Effect.succeed(undefined), set: () => Effect.void },
 			settings: cfgService.load.pipe(
 				Effect.map((cfg) => def.watchDirs?.(cfg) ?? []),
 				// A config file that won't decode must not stop the poll loop: fall back to no watch
-				// dirs, keep syncing on the timer, and let the operator see the parse error in the
-				// settings drawer (`GET /__config` reports it).
+				// dirs and keep the timer running.
 				Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)),
 				Effect.map((watchDirs) => ({
 					pollInterval: poll,
@@ -338,9 +341,9 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 			),
 		});
 
-		// The UI server serves `__config` (and the SDK's `__health`), plus `__hold` when the scanner
-		// holds a stage: no `staticDir`, no API. The `library` category keeps installed scanners out
-		// of the console's sidebar.
+		// The UI server serves `__config` (and the SDK's `__health`), plus `__hold` and `__install`
+		// when the scanner holds a stage or installs titles: no `staticDir`, no API. The `library`
+		// category keeps installed scanners out of the console's sidebar.
 		const launching = def.holds?.["game.launching"];
 		yield* serveUi({
 			title: def.title ?? def.name,
@@ -425,9 +428,8 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 		parity: {
 			summary:
 				"prove this plugin reproduces the built-in scanner (--snapshot <f> | --compare <f>)",
-			// `--compare` is offline (it runs THIS plugin's scan); `--snapshot` needs the host. The
-			// dispatcher decides per invocation below, so the verb is registered as online and the
-			// snapshot path is the one that actually uses the client.
+			// `--compare` runs THIS plugin's scan and reads no host library; `--snapshot` does. The
+			// verb is registered online (no `offline`), so both flags connect to the host first.
 			run: (argv) =>
 				Effect.gen(function* () {
 					const snapshot = flagValue(argv, "--snapshot");
@@ -441,8 +443,9 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 						return;
 					}
 					if (snapshot) {
-						// The baseline: what the host reports for THIS store while its built-in scanner
-						// is still the thing producing it. Capture before installing the plugin.
+						// The baseline: what the host reports for THIS store. Capture it from a
+						// host whose built-in scanner still serves the store, before installing
+						// the plugin.
 						const host = yield* HostClient;
 						const body = yield* host.request("GET", "/library");
 						const mine = (Array.isArray(body) ? (body as HostGameEntry[]) : [])
@@ -482,8 +485,8 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 			run: () =>
 				Effect.gen(function* () {
 					const provider = yield* ProviderClient;
-					// The empty reconcile clears the entries; DELETE is what releases the CLAIM — and
-					// releasing is what brings the host's own built-in scanner straight back.
+					// The empty reconcile clears the entries; DELETE is what releases the CLAIM, which
+					// brings back a host's built-in scanner for the store, where one exists.
 					yield* provider.reconcile(def.name, [], undefined);
 					yield* provider.remove(def.name);
 					console.log(`${def.name}: entries removed, store claim released`);

@@ -1,28 +1,28 @@
 /*
- * Layout probe for the hand-declared libva structures in `src/va.rs`,
- * `src/va_h265.rs` and `src/va_av1.rs`.
+ * Layout probe for the hand-declared libva structures in `src/va.rs`, `src/va_h265.rs`,
+ * `src/va_av1.rs`, `src/drm.rs` and `src/vpp.rs`, the rolling-intra-refresh buffer in
+ * `src/enc_h264.rs`, and the attribute structs in `pf-libva/src/lib.rs`.
  *
- * Those modules declare VAAPI's decode buffers as `#[repr(C)]` Rust structs, because
- * this crate must build on macOS and in the Linux container where libva headers need
- * not exist. This file is how those declarations were CHECKED rather than eyeballed,
- * and it is committed so the check is reproducible instead of a claim in a commit
- * message.
+ * Those modules declare VAAPI's buffers as `#[repr(C)]` Rust structs, because this
+ * crate must build on macOS and in the Linux container where libva headers need not
+ * exist. This file prints what the real headers say, so the declarations are checked
+ * rather than eyeballed.
  *
  * Run it against real headers (no Linux box required):
  *
  *   docker run --rm --platform linux/amd64 -v "$PWD/crates/codec/pf-vaapi:/w" -w /w \
- *     pf-lxcheck2 bash -lc 'apt-get update -qq && apt-get install -y -qq libva-dev \
+ *     ubuntu:26.04 bash -lc 'apt-get update -qq && apt-get install -y -qq gcc libva-dev \
  *       && gcc -w -O0 layout-probe.c -o /tmp/probe && /tmp/probe'
  *
- * Every number it prints is pinned as a `const` assertion at the bottom of
- * `src/va.rs`, so a transcription mistake is a compile error. The bit-field section
- * exists because C bit-field allocation order is ABI-defined, not standardised:
- * it PROVES least-significant-bit-first on this ABI rather than assuming it.
+ * Its sizes, offsets and bit positions are pinned as `const` assertions in the modules
+ * above, so a transcription mistake is a compile error. The bit-field section exists
+ * because C bit-field allocation order is ABI-defined, not standardised: it PROVES
+ * least-significant-bit-first on this ABI rather than assuming it.
  *
- * Or on a box with libva-dev (`.50`): `gcc -w -O0 layout-probe.c -o probe && ./probe`.
+ * Or on any Linux box with libva-dev: `gcc -w -O0 layout-probe.c -o probe && ./probe`.
  *
  * Last run against libva 2.23.0-1ubuntu1, x86_64-linux-gnu; the VideoProc section
- * (`src/vpp.rs`) against libva 2.22 on `.50`.
+ * (`src/vpp.rs`) against libva 2.22.
  */
 #include <stdio.h>
 #include <stddef.h>
@@ -234,7 +234,7 @@ int main(void) {
      * therefore padding nothing in the field list suggests; two bit-field unions
      * that are NOT 32 bits wide (`loop_filter_info_fields` is a uint8_t,
      * `qmatrix_fields` and `loop_restoration_fields` are uint16_t), so a u32 `pack`
-     * would write over the neighbouring field; and three nested structs whose own
+     * would write past the field; and three nested structs whose own
      * VA_PADDING_LOW tails sit inside the picture-parameter buffer.
      */
     S(VASegmentationStructAV1);
@@ -452,8 +452,7 @@ int main(void) {
      * The export descriptor. This one is not a buffer we FILL — it is a struct the
      * driver WRITES, so a wrong layout is read as plausible garbage (an fd from the
      * middle of a pitch, a plane count from a modifier's high word) rather than
-     * refused. It carries fixed-size arrays whose bounds the flattening walk trusts,
-     * which is exactly the shape that turned into the green-screen bug once already.
+     * refused. It carries fixed-size arrays whose bounds the flattening walk trusts.
      */
     S(VADRMPRIMESurfaceDescriptor);
     O(VADRMPRIMESurfaceDescriptor, fourcc);
@@ -475,8 +474,7 @@ int main(void) {
 
     /*
      * The enumerators the runtime calls pass by value. Printed rather than
-     * transcribed because two of them are the exact pair this program has already
-     * been warned about: VASliceParameterBufferType and VASliceDataBufferType are
+     * transcribed because VASliceParameterBufferType and VASliceDataBufferType are
      * 4 and 5, not the 3 and 4 that counting the enum from the top suggests.
      */
     printf("enum VAEntrypointVLD                        %d\n", VAEntrypointVLD);

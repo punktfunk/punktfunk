@@ -1,25 +1,26 @@
 # Build the punktfunk Windows HOST as a signed punktfunk-setup-win installer and publish it to Gitea's
 # generic package registry, so a Windows GPU box can install the streaming host (SYSTEM service + bundled
 # pf-vdisplay virtual-display driver + the web management console + the opt-in plugin/script runner,
-# run by scheduled tasks on a bundled bun) from one signed setup.exe. Runs on a self-hosted
+# both on a bundled bun) from one signed setup.exe. Runs on a self-hosted
 # windows-amd64 runner
 # (host mode; same MSVC/Windows-SDK/LLVM env as windows-client.yml — generic from unom/infra's
 # windows-runner/; the WDK and the ARM64 target self-provision via the "Ensure Windows toolchain"
 # step below).
 #
-# Why an installer and not MSIX (like the client): the host installs a LocalSystem SCM service that
-# CreateProcessAsUserW's into the interactive session for secure-desktop capture, and bundles a
-# kernel/IDD driver — neither is expressible in MSIX's sandbox. The real install logic already lives
-# in `punktfunk-host service install` (crates/host/punktfunk-host/src/service.rs); the installer just lays
-# the exe down and calls it elevated. Packaging internals: packaging/windows/README.md.
+# Why an installer and not MSIX: the host installs a LocalSystem SCM service that
+# CreateProcessAsUserW's into the interactive session for secure-desktop capture, and bundles
+# UMDF drivers — neither is expressible in MSIX's sandbox. The real install logic already lives
+# in `punktfunk-host service install` (crates/host/punktfunk-host/src/windows/service/setup.rs);
+# the installer just lays the exe down and calls it elevated. Packaging internals:
+# packaging/windows/README.md.
 #
 # Registry (public reads, unom org): https://git.unom.io/unom/-/packages  (generic group)
 #
 # Versioning (free-form; not MSIX's 4-part rule) — single project version:
 #   vX.Y.Z tag -> X.Y.Z   (THE release; published + stable `latest/` alias + attached to the
 #                          unified Gitea Release).
-#   main push / dispatch -> <next-minor>.<run_number>  (canary; `canary/` alias; base one minor
-#                          ahead of the latest stable tag via scripts/ci/pf-version.ps1, run climbs).
+#   main push / dispatch -> <major>.<next-minor>.<run_number>  (canary; `canary/` alias; base one
+#                          minor ahead of the latest stable tag via scripts/ci/pf-version.ps1).
 #
 # Signing goes through Azure Artifact Signing (account `unomsigning`, profile `unom-io`) — a publicly
 # trusted CA, so there is no .cer for users to import and no SmartScreen "unknown publisher" prompt.
@@ -49,14 +50,14 @@
 # carries the ARM64 cross compiler and aarch64-pc-windows-msvc has host tools. The arm64 leg builds
 # `--no-default-features --features gamestream` — NVENC (cudarc), QSV (Intel dispatcher) and
 # PyroWave (Granite has no MSVC-ARM64 SIMD path) do not exist there, and
-# Media Foundation, which needs no feature, is its only encoder. Tests, the silent dry-run and
-# winget stay x64: the arm64 binaries cannot run on this runner, and the arm64
-# installer ships to the `canary/` alias only until it has run on a Snapdragon box.
+# Media Foundation, which needs no feature, is the only hardware encoder on Adreno. Tests and the
+# silent dry-run stay x64: the arm64 binaries cannot run on this runner. Winget stays x64 and the
+# arm64 leg is continue-on-error until it has run on a Snapdragon box.
 name: windows-host
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -212,8 +213,8 @@ jobs:
           & "$env:RUNNER_TEMP\src-mtimes.exe" $env:CARGO_TARGET_DIR; if ($LASTEXITCODE) { throw "src-mtimes" }
 
       - name: sccache preflight (a dead cache costs a cold build, not the leg)
-        # Verbatim from the package job: storage.unom.io has answered the daemon's startup check
-        # with a 401, which kills cargo at `rustc -vV` before a line compiles.
+        # Verbatim from the package job: a 401 from storage.unom.io on the daemon's startup check
+        # kills cargo at `rustc -vV` before a line compiles.
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $stats = & sccache --show-stats 2>&1
@@ -246,17 +247,16 @@ jobs:
           cargo fmt --manifest-path crates/host/pf-seat-keeper/Cargo.toml --check; if ($LASTEXITCODE) { throw "seat keeper fmt" }
 
       - name: Test (subsystem crates, Windows)
-        # The crates whose Windows test binaries link against nothing this runner lacks —
-        # settled empirically when the package job's equivalents were added. The host and
-        # pf-encode stay clippy-only: nvidia-video-codec-sdk cannot link on MSVC. pf-encode-win
+        # The crates whose Windows test binaries link against nothing this runner lacks. The host
+        # and pf-encode stay clippy-only: nvidia-video-codec-sdk cannot link on MSVC. pf-encode-win
         # runs featureless, so no encoder SDK is in its graph.
         #
         # pf-win-display joins them for the same reason as pf-capture: its manifest is
-        # punktfunk-core (default-features off), pf-paths, tracing and windows — no encoder in
-        # the tree, so the link objection does not apply. Its 29 tests are the CCD path/mode
-        # array transforms (keep_only_supplied, remap_mode_idx, anchor_kept_sources_at_origin,
-        # prune_saved_config_for_targets) — pure code that decides what the operator's desktop
-        # looks like, compiled by clippy here and executed nowhere until now.
+        # punktfunk-core (default-features off), pf-paths, anyhow, tracing, serde_json and
+        # windows — no encoder in the tree, so the link objection does not apply. Its tests
+        # include the CCD path/mode array transforms (keep_only_supplied, remap_mode_idx,
+        # anchor_kept_sources_at_origin, prune_saved_config_for_targets) — pure code that decides
+        # what the operator's desktop looks like.
         run: |
           cargo test --release --locked -p pf-capture --target x86_64-pc-windows-msvc; if ($LASTEXITCODE) { throw "pf-capture tests" }
           cargo test --release --locked -p pf-vdisplay --target x86_64-pc-windows-msvc; if ($LASTEXITCODE) { throw "pf-vdisplay tests" }
@@ -322,11 +322,10 @@ jobs:
 
       - name: Locale-safety gate (installer-run scripts must be ASCII)
         shell: pwsh
-        # The installer runs these via powershell.exe (Windows PowerShell 5.1) and cmd.exe on the END
-        # USER's box. PS 5.1 reads a BOM-less script in the active ANSI codepage, so on a non-UTF-8 locale
-        # (e.g. German Windows-1252) a stray em-dash mis-decodes into a curly quote and the script aborts
-        # with "unterminated string" - exactly how the pf-vdisplay driver install silently failed in the
-        # field. Keep every installer-run script pure ASCII (matches install-gamepad-drivers.ps1).
+        # Scripts an installer or operator runs on Windows (scripting-run.cmd through cmd.exe; any
+        # .ps1 through Windows PowerShell 5.1) stay pure ASCII. PS 5.1 reads a script without a
+        # UTF-8 BOM in the active ANSI codepage, so on a non-UTF-8 locale (e.g. German
+        # Windows-1252) a stray em-dash mis-decodes into a curly quote and the script aborts.
         run: |
           $bad = Get-ChildItem packaging/windows/*.ps1, scripts/windows/*.ps1, scripts/windows/*.cmd -ErrorAction SilentlyContinue |
             Where-Object { [IO.File]::ReadAllText($_.FullName) -match '[^\x00-\x7F]' }
@@ -343,8 +342,7 @@ jobs:
           # opus) the host pulls; via GITHUB_ENV (pwsh Out-File utf8 = no BOM, unlike Windows
           # PowerShell 5.1 — keeps the first line clean).
           "CARGO_TARGET_DIR=${{ matrix.td }}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          # No FFMPEG_DIR: neither the host nor the client links libav* any more. A runner
-          # provisioned before that still has the tree and the daemon env var; both are inert.
+          # No FFMPEG_DIR: neither the host nor the client links libav*.
           # LIBCLANG_PATH is in the runner daemon env.
           $pf = & "$env:GITHUB_WORKSPACE/scripts/ci/pf-version.ps1"   # single source of truth: base is one minor ahead of the latest stable tag
           $v = if ($env:GITHUB_REF -like 'refs/tags/v*') {
@@ -378,16 +376,15 @@ jobs:
 
       - name: sccache preflight (a dead cache costs a cold build, not the leg)
         shell: pwsh
-        # storage.unom.io has answered the daemon's startup check with a 401 (2026-09-04), which
-        # kills cargo at `rustc -vV` before a line compiles. A job that finds a daemon already
-        # running never re-runs that check, so one leg can pass while the next dies. Probe once
-        # here; when the daemon cannot start, drop the wrapper for the rest of the job, the way
-        # the Linux lanes fall back to a passthrough shim without cache secrets.
+        # A 401 from storage.unom.io on the daemon's startup check kills cargo at `rustc -vV`
+        # before a line compiles. A job that finds a daemon already running never re-runs that
+        # check, so one leg can pass while the next dies. Probe once here; when the daemon cannot
+        # start, drop the wrapper for the rest of the job, the way the Linux lanes fall back to a
+        # passthrough shim without cache secrets.
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           # Capture before truncating: piping a native command into `Select-Object -First`
-          # stops it early, so $LASTEXITCODE stays unset and $null -ne 0 reads as a failure -
-          # which dropped the cache on a daemon that had just answered.
+          # stops it early, so $LASTEXITCODE stays unset and $null -ne 0 reads as a failure.
           $stats = & sccache --show-stats 2>&1
           $code = $LASTEXITCODE
           $stats | Select-Object -First 12 | Write-Output
@@ -426,12 +423,13 @@ jobs:
 
       - name: Clippy (host + tray, Windows)
         shell: pwsh
-        # --release reuses the tree the Build steps made. A debug clippy builds a second one, and
-        # its second openh264 C++ build tips this runner into C1069 (disk/temp exhaustion).
+        # --release reuses the tree the Build steps made. A debug clippy builds a second one, which
+        # tips this runner into C1069 (disk/temp exhaustion).
         # The subsystem crates take --all-targets so their Windows `#[cfg(test)]` modules are
         # type-checked; `-p punktfunk-host` builds them only as dependencies. The host and
         # pf-encode stay lint-only: with `nvenc` a test binary cannot link on MSVC.
-        # Two runs, not eight: every extra feature set re-checks the crates the runs share.
+        # Three runs in the main workspace: every extra feature set re-checks the crates the
+        # runs share.
         run: |
           $t = '${{ matrix.target }}'
           cargo clippy --release --locked -p punktfunk-host -p punktfunk-tray ${{ matrix.host_flags }} --target $t -- -D warnings; if ($LASTEXITCODE) { throw "host clippy" }
@@ -442,26 +440,19 @@ jobs:
       - name: Test (subsystem crates, Windows)
         if: matrix.arch == 'x64'
         shell: pwsh
-        # pf-capture's `#[cfg(target_os = "windows")]`
-        # test modules cover code no Linux job compiles, let alone executes: 6 declared, all 6
-        # execute here — the CCD key packing (idd/mod.rs), the cursor section's publish and bounds
-        # (idd/cursor.rs, over a pagefile section) and the ETW flow windows (idd/dxgkrnl_etw.rs).
-        # None needs a device or a desktop. The `f32_to_f16` tests and the `#[ignore]`d
-        # `hdr_p010_selftest_intel_1080_live` live in pf-encode-win/src/convert/selftest.rs and
-        # run in the pf-encode-win test step above. Until this step the whole set was
-        # type-checked by the clippy line above and nothing more.
+        # pf-capture's `#[cfg(target_os = "windows")]` test modules cover code no Linux job
+        # compiles, let alone executes — among them the CCD key packing (idd/mod.rs), the cursor
+        # section's publish and bounds (idd/cursor.rs, over a pagefile section) and the ETW flow
+        # windows (idd/dxgkrnl_etw.rs). None of those needs a device or a desktop. The
+        # `f32_to_f16` tests and the `#[ignore]`d `hdr_p010_selftest_intel_1080_live` live in
+        # pf-encode-win/src/convert/selftest.rs and run in the pr-lint job's pf-encode-win step.
         #
         # --release for the same reason as the clippy step: it reuses C:\t\release instead of
         # spawning a second debug dep tree (the C1069 disk-exhaustion trigger). If this step ever
         # starts tripping C1069 anyway, record THAT here rather than quietly dropping the step.
-        #
-        # The link question this step turns on was settled empirically before it was added: the same
-        # command was run on a Windows dev box against a workspace checkout and linked + executed
-        # cleanly, building in ~51 s off an existing release target dir.
         run: |
           cargo test --release --locked -p pf-capture --target ${{ matrix.target }}; if ($LASTEXITCODE) { throw "pf-capture tests" }
-          # Same argument, same tree shape: pf-win-display has no encoder dependency either, and
-          # its 29 CCD path/mode transform tests were compiled by clippy and run nowhere.
+          # Same argument, same tree shape: pf-win-display has no encoder dependency either.
           cargo test --release --locked -p pf-win-display --target ${{ matrix.target }}; if ($LASTEXITCODE) { throw "pf-win-display tests" }
           cargo test --release --locked -p pf-seats --target ${{ matrix.target }}; if ($LASTEXITCODE) { throw "pf-seats tests" }
           # Same tree shape: pf-encode-session takes pf-encode-win featureless, so no encoder
@@ -473,23 +464,14 @@ jobs:
       - name: Test (pf-vdisplay, Windows)
         if: matrix.arch == 'x64'
         shell: pwsh
-        # pf-vdisplay's Windows half is ~3,400 lines (manager.rs, pf_vdisplay.rs, ddc.rs, the three
-        # manager/ submodules) that NO other job compiles — the host lint above builds the crate as
-        # a dependency, so its test targets were reaching no compiler anywhere. Worse, the only two
-        # Windows `#[test]`s were `if env::var("PUNKTFUNK_PF_VDISPLAY_LIVE").is_err() { return; }`
-        # early-returns, so an unrun hardware test reported `ok`. They are `#[ignore]`d now and this
-        # step reports them as `ignored`, which is the truth.
+        # pf-vdisplay's Windows half (vdisplay/windows/) has test modules no other step in this
+        # job executes; the clippy step above only type-checks them. Its hardware tests are
+        # `#[ignore]`d with their reason, so this step reports them as `ignored`.
         #
-        # The link objection recorded for the host and pf-encode above does NOT apply here, for the
-        # same reason it does not apply to pf-capture: `pf-encode` is `default = []`, and nothing in
-        # `-p pf-vdisplay`'s graph turns on `nvenc`/`qsv`, so no nvidia/libvpl
-        # import libs are ever asked for. Settled empirically before this step was added, to the
-        # same standard as pf-capture's: the exact two commands were run on this runner against a
-        # checkout at C:\temp\pf-vd-check — clippy clean, then 46 passed / 2 ignored in 0.19 s.
+        # The link objection recorded for the host and pf-encode above does NOT apply here: no
+        # pf-encode is in `-p pf-vdisplay`'s graph, so no nvidia/libvpl import libs are asked for.
         #
         # --release to reuse C:\t\release rather than spawning a debug tree (the C1069 trigger).
-        # Note this DOES build a second, featureless pf-encode; it is small precisely because none
-        # of the encoder features are on.
         run: |
           cargo test --release --locked -p pf-vdisplay --target ${{ matrix.target }}; if ($LASTEXITCODE) { throw "pf-vdisplay tests" }
 
@@ -507,9 +489,8 @@ jobs:
 
       # The console output is fully self-contained (Nitro noExternals) and most pushes
       # don't touch web/, sdk/ or l10n/messages/ — restore it from the central cache and
-      # skip the ~2.5 min bun build+smoke entirely on a hit. First workflow on this runner to use the
-      # actions cache at all (the runner's config.yaml needed cache.external_server —
-      # see unom/infra runners/ci-core/README.md).
+      # skip the ~2.5 min bun build+smoke entirely on a hit. The runner's config.yaml needs
+      # cache.external_server for actions/cache (see unom/infra runners/ci-core/README.md).
       - name: Cache web console output
         id: webconsole
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -522,15 +503,16 @@ jobs:
         run: |
           # ONE pinned bun version. The x64 binary BUILDS the console on this runner (BUN_EXE); the
           # one the installer ships to RUN it (BUN_SHIP_EXE) is the matrix asset of the same release:
-          # x64 ships `-baseline`, which starts on CPUs without AVX2 (the plain build exits 255). The .output is self-contained (Nitro
-          # noExternals — deps bundled + tree-shaken, no node_modules), so the installer ships just
-          # bun + a ~75-file .output instead of node + a node_modules forest.
+          # x64 ships `-baseline`, bun's nehalem build, which starts on CPUs without AVX. The
+          # .output is self-contained (Nitro noExternals — deps bundled + tree-shaken, no
+          # node_modules), so the installer ships just bun + a ~75-file .output instead of node +
+          # a node_modules forest.
           $ver = 'bun-v1.4.4'
           # SHA-256 of each exact asset, pinned. GitHub release assets are MUTABLE at a fixed URL, so
           # the tag alone vouches for nothing — this binary is Authenticode-signed into our installer
           # and its hash published in the Ed25519 update manifest, i.e. our signature vouches for bytes
           # we downloaded. Verify them. On a bun bump, update $ver, this hash AND the matrix's
-          # bun_ship_sha pair (from the release's SHASUMS256.txt). security-review 2026-08-15 finding 12.
+          # bun_ship_sha pair (from the release's SHASUMS256.txt).
           $sha = 'cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5'
           $td = '${{ matrix.td }}'
           New-Item -ItemType Directory -Force -Path $td | Out-Null
@@ -572,20 +554,20 @@ jobs:
           }
           Push-Location web
           # `--ignore-scripts` like every other web install in CI (ci.yml, web-screenshots.yml,
-          # sdk/plugin-kit-publish, and the SDK install further down this same file). This step was
-          # the one site that ran lifecycle scripts, and web's `postinstall` is `bun2nix -o bun.nix`
-          # — a NIX codegen step that shells out to `bun` on PATH. CI runs a fetched PORTABLE bun by
-          # absolute path (`$env:BUN_EXE`), so PATH has none, and bun2nix aborted the install:
-          #   error: bun is not installed in %PATH% ... postinstall script exited with 255
-          # Nothing here needs those scripts — `build` re-runs its own `prebuild` codegen — and
-          # bun.nix is a Nix artifact this job neither consumes nor commits.
+          # sdk/plugin-kit-publish, and the SDK install further down this same file). Web's
+          # `postinstall` is `bun2nix -o bun.nix` — a NIX codegen step that shells out to `bun` on
+          # PATH. CI runs a fetched PORTABLE bun by absolute path (`$env:BUN_EXE`), so PATH has
+          # none and the install would abort. Nothing here needs those scripts — `build` re-runs
+          # its own `prebuild` codegen — and bun.nix is a Nix artifact this job neither consumes
+          # nor commits.
           & $bun install --frozen-lockfile --ignore-scripts; if ($LASTEXITCODE) { throw "bun install failed ($LASTEXITCODE)" }
           & $bun run build; if ($LASTEXITCODE) { throw "web build failed ($LASTEXITCODE)" }
           if (-not (Select-String -Path .output\server\index.mjs -Pattern 'Bun\.serve' -Quiet)) {
             throw "web build is not a bun bundle - need the 'bun' preset + custom entry"
           }
           Pop-Location
-          # Gate the installer on a real boot under the BUNDLED bun (the runtime it ships), serving /login.
+          # Gate the installer on a real boot under the pinned bun (the release it ships), serving
+          # /login.
           $env:PORT = '3009'; $env:HOST = '127.0.0.1'; $env:PUNKTFUNK_UI_PASSWORD = 'ci'
           $server = (Resolve-Path 'web\.output\server\index.mjs').Path
           $p = Start-Process -FilePath $bun -ArgumentList $server -PassThru -WindowStyle Hidden
@@ -595,14 +577,10 @@ jobs:
           Write-Output "web console smoke (bun): /login -> $code"
           if ($code -ne 200) { throw "web console failed to boot under bun" }
 
-      # WEB_OUTPUT_DIR has to be exported whether or not the step above ran. It used to be that step's
-      # last line, so a CACHE HIT skipped it and left the variable unset — and pack-host-installer.ps1
-      # treats an unset WEB_OUTPUT_DIR as "don't bundle the console", silently ("installer built
-      # WITHOUT the web console"). That shipped in 0.22.1 and 0.22.2: no {app}\web, so no web-run.cmd,
-      # so `web setup` bails, so no PunktfunkWeb task and no console at all. It also removed the only
-      # thing that stopped bun before the copy (StopBunRuntimes was #ifdef WithWeb), while bun.exe kept
-      # shipping under WithScripting — which is the "DeleteFile failed; code 5" modal on bun.exe.
-      # The throw is the point: never silently ship a console-less installer again.
+      # WEB_OUTPUT_DIR has to be exported whether or not the build step above ran: on a CACHE HIT
+      # that step is skipped, and pack-host-installer.ps1 treats an unset WEB_OUTPUT_DIR as "don't
+      # bundle the console" and only prints "installer built WITHOUT the web console".
+      # The throw is the point: never silently ship a console-less installer.
       - name: Export the console output dir (cache hit or fresh build)
         shell: pwsh
         run: |
@@ -613,10 +591,11 @@ jobs:
 
       - name: Build plugin/script runner bundle (bun)
         shell: pwsh
-        # `bun build --target=bun` bundles the SDK's runner CLI to ONE self-contained JS (effect + the
-        # SDK inlined; the dynamic plugin import stays a runtime import). pack-host-installer.ps1 ships
-        # it (+ the shared bun) and registers its scheduled task DISABLED (opt-in). The SDK's deps are
-        # public npm (effect), so no @unom token is needed here.
+        # `bun build --target=bun` bundles the SDK's runner CLI to ONE self-contained JS (effect +
+        # the SDK inlined; the dynamic plugin import stays a runtime import).
+        # pack-host-installer.ps1 ships it (+ the shared bun); the installer registers its
+        # PunktfunkScripting task. The SDK's deps are public npm (effect), so no @unom token is
+        # needed here.
         run: |
           $bun = $env:BUN_EXE
           Push-Location sdk
@@ -631,10 +610,9 @@ jobs:
           "SCRIPTING_BUNDLE=$scr\runner-cli.js" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # Every payload this job is SUPPOSED to bundle, asserted before packing. The packer treats each
-      # one as optional — correct for a local debug pack, and the reason 0.22.1/0.22.2 shipped with no
-      # web console: an unset WEB_OUTPUT_DIR omitted it behind a single Write-Host. CI knows it bundles
-      # all of these, so here a missing input is a build failure rather than a quietly smaller
-      # installer. (pack-host-installer.ps1 already does this for VB-CABLE, for the same reason.)
+      # one as optional — correct for a local debug pack — and omits a missing one behind a
+      # single Write-Host. CI knows it bundles all of these, so here a missing input is a build
+      # failure rather than a quietly smaller installer.
       - name: Verify every installer payload is present
         shell: pwsh
         run: |
@@ -693,9 +671,9 @@ jobs:
         shell: pwsh
         run: sccache --show-stats
 
-      # WP3.3's smoke, now on the artifact that ships: the sandwich inspects, the file carries a
-      # signature, and the packed exe's silent dry-run — the exact fielded updater spawn plus
-      # --dry-run, no mutation on the shared runner — writes the expected plan into /LOG=.
+      # The smoke runs on the artifact that ships: the sandwich inspects and the file carries a
+      # signature. The packed exe's silent dry-run — the exact fielded updater spawn plus
+      # --dry-run, no mutation on the shared runner — is its own step below.
       - name: Smoke the installer (inspect, signature)
         shell: pwsh
         run: |
@@ -787,8 +765,7 @@ jobs:
           # Build this incrementally, NOT as one literal: under Azure signing there is no .cer, so
           # HOST_CER_PATH is unset — and an unset $env: var is $null, which is a HARD ERROR as a hash
           # literal key ("A null key is not allowed in a hash literal"), not the empty-string key it
-          # looks like it should be. The $files guard above filters the missing .cer out just fine;
-          # this line ran before anything could use it and failed the whole publish step.
+          # looks like it should be. The $files guard above filters the missing .cer out.
           $aliasNames = @{ $env:HOST_SETUP_PATH = 'punktfunk-host-setup${{ matrix.suffix }}.exe' }
           # One signing cert for both arches: the x64 leg owns the .cer alias.
           if ($env:HOST_CER_PATH -and '${{ matrix.arch }}' -eq 'x64') { $aliasNames[$env:HOST_CER_PATH] = 'punktfunk-host-windows.cer' }
@@ -832,11 +809,6 @@ jobs:
             Upsert-GiteaAsset -ReleaseId $rid -File $f.FullName
           }
 
-  # Republish the winget REST source on unom-1 once the release above carries its manifests.
-  #
-  # A separate Linux job, not another step in `package`: the deploy actions are Docker-based and do
-  # not run on a Windows runner. `needs: package` also gives the ordering that matters — build-data
-  # reads the manifests from the release, so it must not run before they are attached.
   # Publish the SIGNED canary update manifest after the canary installer lands (planning:
   # host-update-from-web-console.md §3.3 — canary rides this workflow because the installer is
   # the only artifact the manifest references by URL; other canary channels may trail by minutes,
@@ -856,7 +828,7 @@ jobs:
           UPDATE_MANIFEST_KEY: ${{ secrets.UPDATE_MANIFEST_KEY }}
         run: |
           set -euo pipefail
-          # Same derivation the package job used: canary = <next-minor base>'s major.minor + run#.
+          # Same derivation as the package job: canary = <next-minor base>'s major.minor + run#.
           eval "$(bash scripts/ci/pf-version.sh)"
           VER="${PF_MAJOR}.${PF_MINOR}.${GITHUB_RUN_NUMBER}"
           URL="https://${REGISTRY}/api/packages/${OWNER}/generic/${PKG}/${VER}/punktfunk-host-setup-${VER}.exe"
@@ -875,6 +847,11 @@ jobs:
             NOTES_URL="https://git.unom.io/unom/punktfunk/releases" \
             bash scripts/ci/publish-update-manifest.sh
 
+  # Republish the winget REST source on unom-1 once the release above carries its manifests.
+  #
+  # A separate Linux job, not another step in `package`: the deploy actions are Docker-based and do
+  # not run on a Windows runner. `needs: package` also gives the ordering that matters — build-data
+  # reads the manifests from the release, so it must not run before they are attached.
   winget-source:
     needs: package
     if: startsWith(gitea.ref, 'refs/tags/v')
@@ -930,10 +907,9 @@ jobs:
           # `env:` below populates the RUNNER's environment; this action runs `script` on the
           # REMOTE host, which inherits nothing from it. `envs:` is the action's OWN input —
           # it must live under `with:` (matching docker.yml/deploy-services.yml's REGISTRY_TOKEN
-          # forwarding) — naming the variables to forward into the remote shell. A prior fix put
-          # it as a step-level sibling of `with:`/`env:` instead: that key is not part of the
-          # step schema, so appleboy/ssh-action never received it as an input and the step kept
-          # failing ("GITHUB_REF_NAME: unbound variable") on every tag after 24d2f97e too.
+          # forwarding) — naming the variables to forward into the remote shell. A step-level
+          # sibling of `with:`/`env:` is not part of the step schema, so the action never
+          # receives it as an input.
           envs: GITHUB_REF_NAME
         env:
           GITHUB_REF_NAME: ${{ gitea.ref_name }}

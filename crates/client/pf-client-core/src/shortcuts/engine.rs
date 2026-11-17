@@ -53,7 +53,7 @@ struct Armed {
     twin: Option<usize>,
 }
 
-/// One pad's or the keyboard's shortcuts, as the rules of `design/client-shortcuts.md` §4.
+/// One pad's or the keyboard's shortcuts.
 /// Feed every transition to [`Engine::step`], call [`Engine::tick`] on every poll (late only
 /// delays), and [`Engine::flush`] when the device goes away. Pass only available actions.
 pub struct Engine {

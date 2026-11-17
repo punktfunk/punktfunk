@@ -86,9 +86,9 @@ pub(in crate::linux) struct Arrivals {
 pub(in crate::linux) type FrameQueue = Arc<Mutex<Arrivals>>;
 
 impl Arrivals {
-    /// Append an arrival, after letting go of every finished frame but the newest: a slow
-    /// consumer takes that one alone, and the producer needs the buffers of the rest to
-    /// send anything newer. Frames still rendering stay; one of them is the next to finish.
+    /// Append an arrival, after letting go of every frame older than the newest finished one:
+    /// a slow consumer takes that one alone, and the producer needs the buffers of the rest to
+    /// send anything newer. Newer frames still rendering stay; one of them is the next to finish.
     pub(super) fn push(&mut self, frame: CapturedFrame, fence: Option<RenderFence>, now: Instant) {
         self.push_shared(frame, fence.map(Arc::new), now);
     }
@@ -170,7 +170,8 @@ pub(in crate::linux) enum Woke {
 
 /// Block until [`Arrivals::take_ready`] has a frame and `not_before` has passed, `deadline`
 /// passes, a nudge lands (taken here), or the loop thread is gone. Before `not_before` only a
-/// nudge ends it: an arrival edge re-arms the wait. Never consumes a frame.
+/// nudge or the loop thread's exit ends it: an arrival edge re-arms the wait. Never consumes a
+/// frame.
 pub(in crate::linux) fn wait_ready(
     queue: &FrameQueue,
     wake: &Receiver<()>,

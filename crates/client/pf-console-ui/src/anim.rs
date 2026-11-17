@@ -43,7 +43,8 @@ pub fn spring_advance(
 /// Refused-move recoil: the kick against the push, design units/s. A velocity, not a
 /// displacement, so the list eases out and springs back rather than jumping.
 pub const BUMP_V: f64 = 380.0;
-/// Mount entrance ([`Entrance`]): arrival scale, rise (design units), yaw. Shared with the home carousel.
+/// Mount entrance ([`Entrance`]): arrival scale, rise (design units), yaw. The home carousel
+/// takes scale and rise; the library coverflow adds the yaw.
 pub const ENTER_SCALE: f64 = 0.96;
 pub const ENTER_RISE: f64 = 12.0;
 pub const ENTER_TURN_DEG: f64 = 62.0;
@@ -77,8 +78,8 @@ impl SpringSpec {
 }
 
 /// Shell springs. Carousel pairs ([`SPRING_K`]/[`SPRING_C`], [`BUMP_K`]/[`BUMP_C`]) stay raw:
-/// they are shared with the GTK launcher, and wrapping them as specs invites a
-/// tidy-up that retunes coverflow on both surfaces.
+/// wrapping them as specs invites a tidy-up that retunes the home carousel and the library
+/// coverflow.
 pub mod springs {
     use super::SpringSpec;
 
@@ -95,8 +96,9 @@ pub mod springs {
         response: 0.32,
         damping: 0.78,
     };
-    /// Tab pill and keyboard tray: the [`TRAY_K`]/[`TRAY_C`] pair, pinned by
-    /// `spring_spec_matches_the_tray_constants`.
+    /// The [`TRAY_K`]/[`TRAY_C`] pair as a spec, pinned by
+    /// `spring_spec_matches_the_tray_constants`. The keyboard tray and the shortcut editor
+    /// step the raw pair.
     pub const INDICATOR: SpringSpec = SpringSpec {
         response: 0.32,
         damping: 0.86,
@@ -130,7 +132,8 @@ pub mod springs {
 /// How far a press dips the pressed element.
 pub const PRESS_SCALE: f64 = 0.97;
 
-/// `k`/`c` live in [`crate::library`] and [`TRAY_K`]/[`TRAY_C`].
+/// `k`/`c` come from [`SPRING_K`]/[`SPRING_C`], [`BUMP_K`]/[`BUMP_C`], [`TRAY_K`]/[`TRAY_C`]
+/// or [`SpringSpec::kc`].
 #[derive(Clone, Copy)]
 pub struct Spring {
     pub pos: f64,
@@ -212,7 +215,7 @@ pub mod entrances {
         stagger: 0.04,
         cap: 0.6,
     };
-    /// Menu rows. Shorter than [`CARDS`], not zero: under about three frames
+    /// Menu rows. A shorter window than [`CARDS`], still staggered: under about three frames
     /// apart the rows read as one arrival rather than a ripple.
     pub const ROWS: EntranceSpec = EntranceSpec {
         window: 0.42,

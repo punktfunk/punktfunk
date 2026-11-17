@@ -2,8 +2,9 @@
 //!
 //! CPU-testable half: everything between a [`pf_bitstream`] access-unit plan and the
 //! bytes `ID3D11VideoContext::SubmitDecoderBuffers` delivers. It never names a D3D11,
-//! COM, or Windows type. The `cfg(windows)` rung lives in `pf-client-core`; this crate
-//! holds the layouts, packing, picture-parameter conversion, and descriptor policy.
+//! COM, or Windows type. The `cfg(windows)` rung is `pf-client-video`'s
+//! `video_d3d11_native`; this crate holds the layouts, packing, picture-parameter
+//! conversion, and descriptor policy.
 //!
 //! [`dxva`] hand-declares the `dxva.h` buffers (windows-rs does not generate them);
 //! compile-time size/offset proofs stand in for the header. [`pack`] and [`mod@pack_av1`]
@@ -40,9 +41,8 @@ pub use pf_bitstream::h265::RefRpsIdxError;
 pub use pf_bitstream::slots::SlotError;
 pub use pf_bitstream::slots::SlotMap;
 
-// DXVA submit is synchronous (`BeginFrame`…`EndFrame`); there is no decoder
-// object here. Re-exports let the Windows layer name planner types without a
-// pf-bitstream dependency of its own.
+// DXVA submit is synchronous (`DecoderBeginFrame`…`DecoderEndFrame`); there is no
+// decoder object here. The Windows layer names planner types through these re-exports.
 /// AV1 planner. ⚠ `plan_au` returns a **`Vec`**: an AV1 access unit is a temporal
 /// unit and may carry several frames, of which at most one displays.
 pub use pf_bitstream::av1::AuPlan as AuPlanAv1;

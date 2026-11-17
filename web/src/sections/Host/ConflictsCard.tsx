@@ -8,16 +8,14 @@ import { m } from "@/paraglide/messages";
  * "Something else is already listening on these ports."
  *
  * The host detects other Moonlight-compatible servers (Sunshine, Apollo, …) on the same machine at
- * startup and reports them in `GET /local/summary` as `conflicts`. Nothing surfaced it, even though
- * it is the single most common reason a Punktfunk host looks installed and working but no client can
- * reach it — two servers fighting over the same ports, with whichever won the bind answering the
- * client.
+ * startup and reports them in `GET /local/summary` as `conflicts`. It is the single most common
+ * reason a Punktfunk host looks installed and working but no client can reach it — two servers
+ * fighting over the same ports, with whichever won the bind answering the client.
  *
  * `conflicts` carries only servers that are running or set to start on their own; the host filters
  * dormant leftovers out (see `detect.rs`), because an uninstalled Sunshine's `Program Files` folder
- * clashes with nothing and this card used to shout about it on every load. Each entry names what was
- * observed — `Sunshine (running)`, `Apollo (starts automatically)` — so the heading never has to
- * guess, which it previously did by hardcoding "is running".
+ * clashes with nothing. Each entry names what was observed — `Sunshine (running)`, `Apollo (starts
+ * automatically)` — so the heading never has to guess whether it is running.
  *
  * Renders nothing at all when there is no conflict, so a healthy host sees no extra chrome.
  */

@@ -303,7 +303,7 @@ impl NativeD3d11Decoder {
             planner,
             codec,
             status_id: 0,
-            // D3D11VA has no per-picture status read (`ID3D11VideoContext` exposes none),
+            // This decoder sends no DXVA status request (`DecoderExtension`, function 7),
             // so `failed` stays 0 and `status_queries` is false. Claiming query support
             // we do not have would report "clean" for unmeasured.
             health: DecodeHealth {
@@ -337,8 +337,8 @@ impl NativeD3d11Decoder {
         std::mem::take(&mut self.want_recovery)
     }
 
-    /// The gate lifted on intra refresh marks: the planner's damaged-chain marks are stale
-    /// (`CleanLedger::clear`).
+    /// An intra refresh wave closed on an accepted picture: H.264 and H.265 drop that
+    /// picture's mark, AV1 clears the whole ledger (`AnyPlanner::forgive_unclean`).
     pub fn forgive_unclean(&mut self) {
         self.planner.forgive_unclean();
     }
@@ -512,15 +512,15 @@ impl NativeD3d11Decoder {
             return self.show_existing_av1(plan);
         }
         let sub = self.plan_frame_av1(au, plan)?;
-        // Hold the `Result` so the two slot releases below run on failure too.
-        // `decode_av1` keeps the session (no slot-map rebuild); an early return
-        // leaked a surface per failed frame. Later frames of a failed unit are
+        // Hold the `Result` so the two slot releases below run on failure too:
+        // `decode_av1` keeps the session (no slot-map rebuild), so an early return
+        // would leak a surface per failed frame. Later frames of a failed unit are
         // abandoned: recovering a half-decoded unit is the pump's question.
         let shown = self.decode_and_present_av1(au, &sub, damaged);
         if shown.is_err() {
             // Slot map now names this picture while the surface still holds the previous
             // occupant's pixels. A later `show_existing_frame` would blit the old geometry
-            // and colour. The `damaged` path already clears; the failure path did not.
+            // and colour. Clear `held` here as the `damaged` path does.
             if let Some(session) = self.session.as_mut() {
                 if let Some(held) = session.held.get_mut(usize::from(sub.target)) {
                     *held = None;
@@ -1829,7 +1829,7 @@ mod parity {
     //! Pin a GPU with `PF_DXVA_ADAPTER=<adapter description substring>`.
     //!
     //! Hashes the decode surface before `VideoProcessorBlt`. Goldens are libavcodec's
-    //! (same files as `pf-vkdecode`'s `gpu_parity`), not the FFmpeg D3D11VA rung.
+    //! software decode (same files as `pf-vkdecode`'s `gpu_parity`).
     //! This rung presents at decode time and never consults display order; the harness
     //! reorders by `PicId` against the planner's output list. Hosts emit zero-reorder
     //! low-delay, so production does not see this; the vendored vectors do reorder.

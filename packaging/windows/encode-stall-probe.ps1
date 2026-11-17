@@ -6,7 +6,7 @@
 
 .DESCRIPTION
   The driver's encode thread parks forever once it has encoded PFVD_ENCODE_BLOCK_AFTER frames
-  (probe builds only, packaging/windows/drivers/pf-vdisplay/src/encode/drive.rs). The G3 claim is
+  (probe builds only, packaging/windows/drivers/pf-vdisplay/src/encode/thread.rs). The G3 claim is
   that this costs one IDR and never a compose hitch, so the run measures three things:
 
     * COMPOSE - `capture.dropped_total` + `capture.published_total` from `punktfunk-host ctl

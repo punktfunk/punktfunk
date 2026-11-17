@@ -39,10 +39,10 @@ pub(crate) struct DisplaySettingsState {
     custom_presets: Vec<crate::vdisplay::policy::CustomPreset>,
     /// Names this build acts on (live vs coming-soon). Per-backend nuance is on `/display/state`.
     enforced: Vec<String>,
-    /// Overlay fields this build acts on PER DEVICE. A strict subset of
-    /// `enforced`: an axis can be host-wide and not yet per-device, and the
-    /// console must not offer a device control the host would store and ignore
-    /// (`design/web-console-overhaul.md` D1).
+    /// Overlay fields this build acts on PER DEVICE. Not a subset of `enforced`:
+    /// `max_mode` and `scale` are only here, and an axis can be host-wide and not yet
+    /// per-device. The console must not offer a device control the host would store and
+    /// ignore (`design/web-console-overhaul.md` D1).
     client_enforced: Vec<String>,
     /// Stored per-device overlays, so one fetch paints the device rows.
     /// READ-ONLY here — writes go to `/display/clients/{fingerprint}`, and the
@@ -65,7 +65,7 @@ pub(crate) fn preset_summary(id: &str) -> &'static str {
 /// Whether the AMD driver's control library loads — the EDID lever's only precondition.
 ///
 /// The lever is that driver's connector-emulation call, so the DLL is the honest question; a
-/// GPU-vendor check is a proxy for it, and was the console's own gate until this moved here.
+/// GPU-vendor check is only a proxy for it.
 fn edid_lock_available() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -175,15 +175,14 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     }
     #[cfg(target_os = "linux")]
     let session = session_terms();
-    // Hyprland and sway only. KWin is a later step, and Mutter/GNOME, gamescope and Windows
-    // have no per-output workspace to aim a launch at, so the axis would store and do nothing
-    // there — the dead control this gate exists to prevent.
+    // Only backends where `Compositor::places_launch_workspace` holds. Elsewhere the axis
+    // would store and do nothing — the dead control this gate exists to prevent.
     #[cfg(target_os = "linux")]
     if session.launch_workspace {
         enforced.push("launch_workspace".into());
     }
-    // KWin, Hyprland and sway. Mutter and the Windows CCD isolate darken every head they
-    // find, so the keep-list would store and do nothing there.
+    // Backends where `Compositor::honours_keep_monitors` holds. Mutter and the Windows CCD
+    // isolate darken every head they find, so the keep-list would store and do nothing there.
     #[cfg(target_os = "linux")]
     if session.keep_monitors {
         enforced.push("keep_monitors".into());
@@ -202,7 +201,7 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     // A Linux backend reads it at `create`, after `set_client_identity` named the device. The
     // Windows isolate is one topology per group, so the device that opens the group decides it.
     client_enforced.push("topology".into());
-    // Mutter mints a fresh EDID serial per session, so the host remembers the scale for it.
+    // Backends where `Compositor::applies_device_scale` holds: the host remembers the scale.
     #[cfg(target_os = "linux")]
     if session.scale {
         client_enforced.push("scale".into());
@@ -701,7 +700,8 @@ pub(crate) struct ApiMonitorInfo {
     /// One of our virtual displays, not a real head. Best-effort on Sway, whose
     /// `HEADLESS-N` may be the operator's own.
     managed: bool,
-    /// True when `PUNKTFUNK_CAPTURE_MONITOR` currently names this monitor.
+    /// True when the host-wide pin (`PUNKTFUNK_CAPTURE_MONITOR`, else the stored policy) names
+    /// this monitor.
     selected: bool,
 }
 
@@ -709,7 +709,7 @@ pub(crate) struct ApiMonitorInfo {
 pub(crate) struct MonitorsResponse {
     /// Enumeration source (`kwin`, `mutter`, `windows`), when resolved.
     compositor: Option<String>,
-    /// Heads, ordered left-to-right by desktop position.
+    /// Heads sorted by `(x, y, connector)`; Windows keeps CCD path priority order.
     monitors: Vec<ApiMonitorInfo>,
     /// Configured pin, even when it matches no head (console can show a dangling pin).
     pinned: Option<String>,

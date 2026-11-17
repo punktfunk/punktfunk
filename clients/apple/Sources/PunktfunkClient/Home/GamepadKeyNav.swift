@@ -1,8 +1,7 @@
-// Hardware-keyboard navigation for the library grid (iOS/iPadOS/macOS): arrows move,
-// Return/Space activate, Esc backs out.
+// Hardware-keyboard navigation for the library grid (iOS, iPadOS, visionOS and macOS): arrows
+// move, Return/Space activate, Esc backs out.
 //
-// Asked for by a field user on an iPad ("select games with keyboard arrows, enter to launch"). An
-// iPad on a Magic Keyboard and a couch Mac are the same situation the console layout was built
+// An iPad on a Magic Keyboard and a couch Mac are the same situation the console layout was built
 // for — a screen driven from a distance with a fixed set of directional inputs — and the whole
 // navigation model (a cursor, a confirm, a back) already exists here for the controller. A
 // keyboard is just a third input onto it, alongside the pad poll and touch.
@@ -10,8 +9,7 @@
 // tvOS is excluded: the focus engine already routes hardware-keyboard arrows into focus moves
 // there, and these screens hand it navigation authority on purpose.
 //
-// The view must be FOCUSED to receive key presses, so this takes focus on appear. That is safe on
-// exactly these screens because they have no system text fields to steal it from.
+// The view must be FOCUSED to receive key presses, so this takes focus on appear.
 
 import PunktfunkKit
 import SwiftUI
@@ -20,9 +18,8 @@ import SwiftUI
 extension View {
     /// Route arrows / Return / Esc into the same handlers the controller poll drives.
     ///
-    /// `active` mirrors the caller's `isActive` controller gate: a screen that has handed the pad
-    /// to something on top must not keep eating key presses either, or a covered launcher
-    /// navigates behind the screen in front of it.
+    /// `active` off hands the keys back: the view is not focusable and every press is ignored.
+    /// `LibraryView` passes `onLaunch != nil`, so a browse-only shelf takes no key presses.
     func gamepadKeyNavigation(
         active: Bool = true,
         onMove: @escaping (GamepadMenuInput.Direction) -> Void,

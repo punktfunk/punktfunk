@@ -1,5 +1,5 @@
 //! What a saved host's card says under its name: one sentence from the probe sweep, this
-//! device's own session and what the host has up. Every desktop shell words a host alike.
+//! device's own session and what the host has up. The GTK and WinUI host cards share it.
 
 use crate::trust::KnownHost;
 use pf_l10n::client;
@@ -11,7 +11,8 @@ pub enum Phase {
     Streaming,
 }
 
-/// What a saved card says under its name: one sentence, one register (design §2.2).
+/// What a saved card says under its name: one sentence, one register
+/// (`design/apple-touch-ui-overhaul.md` §2.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     Connecting,

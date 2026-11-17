@@ -1,6 +1,6 @@
-// Resize-in-progress indicator state (design/midstream-resolution-resize.md — client UX).
+// Resize-in-progress indicator state: the client UX of a Match-window mode switch.
 //
-// A mid-stream resize takes the host 0.3–2 s to rebuild its virtual display + encoder, and the
+// A mid-stream resize makes the host rebuild its virtual display + encoder, and the
 // first new-mode frame is an IDR that the decoder re-inits on. Rather than let the stream scale
 // (stretch/blur) to the changing window during that gap, the client EMBRACES the delay: it shows a
 // deliberate blur + spinner the instant a resize starts and clears it the instant the sharp

@@ -1,6 +1,4 @@
-//! `punktfunk-session` — the Vulkan session binary (punktfunk-planning
-//! `linux-client-rearchitecture.md`, Phase 1: the software-path presenter MVP, which IS
-//! the power-user CLI build).
+//! `punktfunk-session` — the Vulkan session binary: the power-user / gamescope stream client.
 //!
 //! One stream session per invocation: `--connect host[:port]` (+ `--fp HEX`,
 //! `--launch id`, `--as profile`, `--fullscreen`), exits when the session ends. Reads the same identity
@@ -24,8 +22,8 @@
 mod console;
 
 /// The session control socket: a line-per-connection unix socket other same-user
-/// processes use to poke the RUNNING stream — today two verbs, `guide` and `qam`, which
-/// press the HOST's system buttons (the Decky panel's "Steam menu / Quick access on the
+/// processes use to poke the RUNNING stream — two verbs, `guide` and `qam`, which press
+/// the HOST's system buttons (the Decky panel's "Steam menu on host" and "Quick access on
 /// host" buttons; see `GamepadService::tap_guide`). Plain text, no JSON: `<verb>\n` in,
 /// `ok\n` / `err\n` back.
 ///
@@ -56,9 +54,9 @@ mod ctl_socket {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(move || {
             let Some(path) = path() else { return };
-            // Bind FIRST. Unlinking on sight handed the socket to whichever session started
-            // last, leaving the running one holding an unreachable inode — so the Decky
-            // panel's guide/qam reached only the newest stream.
+            // Bind FIRST. Unlinking on sight would hand the socket to whichever session starts
+            // last and leave the running one holding an unreachable inode, so the Decky
+            // panel's guide/qam would reach only the newest stream.
             let listener = match UnixListener::bind(&path) {
                 Ok(l) => l,
                 Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -186,8 +184,8 @@ mod session_main {
     }
 
     /// Run fullscreen: `--fullscreen`, or the Deck/gamescope env as a fallback so a
-    /// manual launch under Gaming Mode does the right thing too. (Browse-mode only —
-    /// gated with `mod browse`, its one caller.)
+    /// manual launch under Gaming Mode does the right thing too. (Gated with the `ui`
+    /// feature like `mod console`, its one caller.)
     #[cfg(feature = "ui")]
     pub(crate) fn fullscreen_mode() -> bool {
         arg_flag("--fullscreen") || gaming_mode()
@@ -254,11 +252,6 @@ mod session_main {
         })
     }
 
-    /// `--preset <id|name>` — the preset this one session runs with, overriding the host's own
-    /// binding for this launch only (never rebinding it): the shells' "Connect with ▸ X" and a
-    /// `punktfunk://…&preset=` link both land here. Absent = honor the host's binding;
-    /// `--preset ""` (or a bare `--preset`) forces the global defaults, which is how "Connect
-    /// with ▸ Default settings" reaches a bound host. `--profile` is the pre-rename spelling.
     /// `--as` takes a profile id or name; the wire takes the id, so a name is looked up in the
     /// host's list. A minted id (12 hex) is sent as is, and so is anything the host can't list.
     fn as_profile(
@@ -283,6 +276,11 @@ mod session_main {
         }
     }
 
+    /// `--preset <id|name>` — the preset this one session runs with, overriding the host's own
+    /// binding for this launch only (never rebinding it): the shells' "Connect with ▸ X" and a
+    /// `punktfunk://…&preset=` link both land here. Absent = honor the host's binding;
+    /// `--preset ""` (or a bare `--preset`) forces the global defaults, which is how "Connect
+    /// with ▸ Default settings" reaches a bound host. `--profile` is the pre-rename spelling.
     fn preset_arg() -> Option<String> {
         ["--preset", "--profile"]
             .into_iter()
@@ -460,8 +458,8 @@ mod session_main {
             .then_some((settings.last_window_w, settings.last_window_h))
     }
 
-    /// The Match-window hook (design/midstream-resolution-resize.md D1/D2): each resize-end's
-    /// logical size goes out as a `window` line and the spawner persists it.
+    /// The Match-window hook: each resize-end's logical size goes out as a `window` line and
+    /// the spawner persists it.
     /// `persist_locally` is for a hand-run session, where nobody reads stdout.
     pub(crate) fn on_window_size(persist_locally: bool) -> Box<dyn FnMut(u32, u32)> {
         Box::new(move |w: u32, h: u32| {
@@ -494,10 +492,10 @@ mod session_main {
         }
     }
 
-    /// Drive a tone into a wired pad's coils (and with `--speaker`, its speaker), so
-    /// "the plane never arrived" separates from "it arrived and the graph folded the
-    /// coil pair away". Deliberately blind to the settings, which is why it says up
-    /// front when a real session would render nothing.
+    /// Drive a tone into a wired pad's coils, or with `--speaker` its speaker (`--coils`
+    /// adds the coils back), so "the plane never arrived" separates from "it arrived and
+    /// the graph folded the coil pair away". Deliberately blind to the settings, which is
+    /// why it says up front when a real session would render nothing.
     #[cfg(target_os = "linux")]
     fn pad_audio_devtest() -> u8 {
         let seconds = arg_value("--seconds")
@@ -591,10 +589,9 @@ mod session_main {
                     print_video_formats(a);
                 }
                 if adapters.len() > 1 {
-                    // The single most common misreading of this output: seeing a
-                    // capable GPU listed and concluding the decoder will use it.
-                    // Vulkan Video decodes on the PRESENTER's device, and the decoder
-                    // preference does not move the presenter.
+                    // A capable GPU in this list is not the decoder's pick: Vulkan Video
+                    // decodes on the PRESENTER's device, and the decoder preference does
+                    // not move the presenter.
                     println!();
                     println!(
                         "Vulkan Video decodes on the presenter's device. PUNKTFUNK_DECODER \
@@ -619,19 +616,6 @@ mod session_main {
         }
     }
 
-    /// Mesa gates Vulkan Video decode — the `VK_KHR_video_decode_*` extensions AND the
-    /// decode-capable queue family — behind one switch per driver: RADV reads
-    /// `RADV_PERFTEST=video_decode`, ANV (Intel) `ANV_DEBUG=video-decode`. Without it the
-    /// presenter's device advertises no decode queue and `auto` falls to VAAPI, which
-    /// chroma-fringes on VanGogh and is unverified on Intel. Every other driver ignores
-    /// both, and a driver that already decodes by default no-ops. Appended, never
-    /// clobbered, so a user's own flags survive; `PUNKTFUNK_DECODER=native-vaapi` still
-    /// pins VAAPI.
-    ///
-    /// ⚠⚠ Called from the TOP of [`run`], ahead of the `--list-adapters` / `--probe-decode`
-    /// early exits. Those create Vulkan instances of their own and Mesa latches these
-    /// variables when its ICD initialises, so a later call leaves the triage tools
-    /// describing a device that cannot decode while the streaming path decodes on it.
     /// Inside gamescope with another compositor's `WAYLAND_DISPLAY` (a flatpak binds the
     /// desktop's `wayland-0`), runs this binary again, same argv, on gamescope's socket name.
     /// gamescope's WSI layer stays off for a process whose `WAYLAND_DISPLAY` is not
@@ -696,6 +680,19 @@ mod session_main {
         pads.into_iter().chain(graphics.iter().copied()).collect()
     }
 
+    /// ANV (Intel) exposes Vulkan Video decode — the `VK_KHR_video_decode_*` extensions AND
+    /// the decode-capable queue family — only under `ANV_DEBUG=video-decode`. RADV turns it on
+    /// where the VCN firmware can (Mesa 25.0+); `RADV_PERFTEST=video_decode` forces it
+    /// elsewhere. Without it the presenter's device advertises no decode queue and `auto` falls
+    /// to VAAPI, which chroma-fringes on VanGogh and is unverified on Intel. Every other driver
+    /// ignores both, and a driver that already decodes by default no-ops. Appended, never
+    /// clobbered, so a user's own flags survive; `PUNKTFUNK_DECODER=native-vaapi` still pins
+    /// VAAPI.
+    ///
+    /// ⚠⚠ Called from the TOP of [`run`], ahead of the `--list-adapters` / `--probe-decode`
+    /// early exits. Those create Vulkan instances of their own and Mesa latches these
+    /// variables when its ICD initialises, so a later call leaves the triage tools
+    /// describing a device that cannot decode while the streaming path decodes on it.
     #[cfg(target_os = "linux")]
     #[allow(unsafe_code)] // the SAFETY-commented single-threaded-startup env write below
     fn enable_mesa_video_decode() {
@@ -726,12 +723,10 @@ mod session_main {
     /// The driver's own answers about video images, printed with nothing in front of
     /// them (`--probe-decode`).
     ///
-    /// Passing the five conjuncts above only says Vulkan Video EXISTS on a device; this
-    /// says whether the zero-copy pipeline can be BUILT on it — a different question
-    /// with, on at least one shipping driver, a different answer. Verbatim on purpose:
-    /// the Intel Arc refusal was twice diagnosed from punktfunk's own error text and
-    /// twice the diagnosis was wrong, and what broke it open both times was reading what
-    /// the driver actually said.
+    /// The `vulkan video decode` line (pf-presenter's `video_decode_gate`, five conjuncts)
+    /// only says Vulkan Video EXISTS on a device; this says whether the zero-copy pipeline
+    /// can be BUILT on it — a different question. Verbatim on purpose: a diagnosis rests on
+    /// what the driver said, not on punktfunk's wording of it.
     fn print_video_formats(a: &pf_presenter::vk::AdapterDecode) {
         use pf_presenter::vk::probe::{describe_create_flags, describe_usage};
         for p in &a.formats {
@@ -757,7 +752,7 @@ mod session_main {
                 };
                 println!("       {:<24} {answer}", u.label);
                 // The second opinion, printed only where it differs from the video format
-                // query. This call does not honour the profile list, so it answers
+                // query. This call does not fully honour the profile list, so it answers
                 // "creatable" for combinations the video query rejects; a difference is
                 // not the driver contradicting itself.
                 let listed = u
@@ -809,8 +804,8 @@ mod session_main {
 
         // Runs before ANY Vulkan call, including the probe flags below — hence the top of
         // `run`, ahead of the early exits, so triage answers the same question the streaming
-        // path asks. Makes RADV and ANV expose their video-decode queue and extensions so the
-        // decoder's `auto` path can take Vulkan Video. Windows drivers expose theirs already.
+        // path asks. Lets ANV, and RADV where its firmware leaves it off, expose Vulkan Video
+        // decode to the decoder's `auto` path. Windows drivers expose theirs already.
         #[cfg(target_os = "linux")]
         enable_mesa_video_decode();
 
@@ -871,14 +866,11 @@ mod session_main {
             return headless_pair(pin.trim());
         }
 
-        // (The RADV video-decode opt-in that used to live here now runs at the very top of
-        // `run` — it has to precede the probe flags too, not just the session.)
-
         // Settings device picks (adapter marketing name, PipeWire node names / WASAPI
         // endpoint ids) → env unless the user already set the var, before any Vulkan
         // call — covers `--connect` and `--browse`. With a spec the values come from the
-        // spec's settings, never the store (§5 zero-store-reads); lenient parsing is safe
-        // because `--connect` re-reads the spec authoritatively and errors there.
+        // spec's settings, not the store; lenient parsing is safe because `--connect`
+        // re-reads the spec authoritatively and errors there.
         {
             let s = arg_value("--resolved-spec")
                 .and_then(|p| {
@@ -903,8 +895,8 @@ mod session_main {
         }
 
         if arg_flag("--browse") {
-            // Bare `--browse` opens the console home (hosts, pairing, settings);
-            // `--browse host[:port]` opens straight into that host's library.
+            // Bare `--browse` opens where the start-screen setting says (the host list by
+            // default); `--browse host[:port]` opens a paired host's library.
             let target = arg_value("--browse");
             #[cfg(feature = "ui")]
             return crate::console::run(target.as_deref());
@@ -1021,8 +1013,8 @@ mod session_main {
             .map_or_else(|| host_label.clone(), |id| format!("{host_label} · {id}"));
 
         // `--fullscreen` carries the client's own `fullscreen_on_stream`, so the env may only
-        // ADD to it under a real gamescope — reading it loosely made every flatpak stream
-        // fullscreen no matter what the setting said.
+        // ADD to it under a real gamescope — a loose env read would make every flatpak
+        // stream fullscreen no matter what the setting said.
         let fullscreen = arg_flag("--fullscreen") || gaming_mode();
 
         let opts = pf_presenter::SessionOpts {
@@ -1041,7 +1033,7 @@ mod session_main {
             json_status: true,
             on_connected: Some(Box::new(|fingerprint: [u8; 32], mgmt_port: u16| {
                 let fp = trust::hex(&fingerprint);
-                // This host's card carries the accent bar in the desktop client now.
+                // The host list's "lastConnected" sort reads this stamp.
                 trust::touch_last_used(&fp);
                 // Save where this host serves its library, learned from the session's own
                 // Welcome rather than an mDNS advert — so it keeps working on a network where
@@ -1199,8 +1191,8 @@ mod session_main {
         }
 
         /// The console reads the file ONCE for its window, so a tier changed between streams
-        /// can only reach the overlay by riding the launch. Guards the wiring the field exists
-        /// for: whatever settings a launch resolved is what the params carry.
+        /// can only reach the overlay by riding the launch. Each tier stored in the settings
+        /// comes back unchanged through the rule the launch's params read.
         #[test]
         fn a_launch_carries_the_tier_its_settings_resolved() {
             let mut s = trust::Settings::default();

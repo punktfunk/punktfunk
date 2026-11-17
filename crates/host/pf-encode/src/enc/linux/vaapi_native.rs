@@ -186,7 +186,7 @@ impl NativeVaapiEncoder {
     }
 }
 
-/// Probe picture size. iHD binds an import compressed only above 64×64, so a smaller probe
+/// Probe picture size. iHD binds a Tile4 import compressed only above 64×64, so a smaller probe
 /// never reads a compressed candidate the way a capture frame is read.
 const PROBE_DIM: u32 = 128;
 /// Edge of one probe cell, and the gray level each cell is painted at.
@@ -1147,8 +1147,8 @@ mod tests {
             "a rebuild starts with an IDR"
         );
     }
-    /// BGRX frame of horizontal bands scrolled down by `shift` rows, with a diagonal so no
-    /// two rows are alike: the encoder must reach for rows above to predict it.
+    /// BGRX frame `i` of `smoke_pattern::scroll_pattern`: rows band by luma and move `i`
+    /// frames' worth (down by default), so the encoder must reach for rows above to predict it.
     fn scroll_frame(w: u32, h: u32, i: u32) -> CapturedFrame {
         let buf = crate::smoke_pattern::scroll_pattern(w as usize, h as usize, i as usize);
         CapturedFrame {

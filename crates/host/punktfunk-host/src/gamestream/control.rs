@@ -122,7 +122,7 @@ impl SessionAccess {
 
     /// Fold one watch state. A record applies its mask and deadline. `revoked` here means
     /// the record was deleted under a live session: that ends it, as on the native plane.
-    /// Nothing but a console edit may widen a live session (per-client-access §6.7).
+    /// Nothing but a console edit may widen a live session (per-client-access §5).
     fn fold(&mut self, st: crate::native_pairing::AccessState) {
         self.revoked = st.revoked;
         self.mask = if st.revoked { 0 } else { st.grants };
@@ -1090,9 +1090,9 @@ fn hdr_mode_plaintext(enabled: bool, m: &HdrMeta) -> Vec<u8> {
 /// silent looks like the host fell over (frozen last frame, or `-1` after disconnect).
 ///
 /// Type `0x0109` from `packetTypesGen7Enc[IDX_TERMINATION]`. The client picks that table
-/// iff `APP_VERSION_AT_LEAST(7, 1, 431)`; [`super::APP_VERSION`] is exactly `7.1.431`.
-/// Do not derive the type from [`NonceKind`] — that sent `0x0100` (plain table) to a
-/// client on the encrypted table, which ignored it. Pin: moonlight-common-c `ControlStream.c`.
+/// iff `APP_VERSION_AT_LEAST(7, 1, 431)`, which [`super::APP_VERSION`] meets. Do not derive
+/// the type from `NonceKind`: a client on the encrypted table ignores the plain table's
+/// `0x0100`. Pin: moonlight-common-c `ControlStream.c`.
 ///
 /// Payload is a big-endian `u32` (extended ≥6-byte branch; the short branch is LE `u16`).
 /// `0x80030023` is `NVST_DISCONN_SERVER_TERMINATED_CLOSED` → `ML_ERROR_GRACEFUL_TERMINATION`

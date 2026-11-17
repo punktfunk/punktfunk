@@ -14,7 +14,7 @@ use crate::*;
 /// Identity: `client_cert_pem`/`client_key_pem` (both NULL, or both NUL-terminated
 /// PEM — [`punktfunk_generate_identity`]) are TLS client auth so a host can
 /// recognize this client once paired ([`punktfunk_pair`]). NULL = anonymous;
-/// `--require-pairing` hosts reject anonymous sessions.
+/// a host that requires pairing, the default, rejects anonymous sessions.
 ///
 /// # Safety
 /// `host` is a NUL-terminated UTF-8 string (IP or resolvable hostname);
@@ -90,8 +90,8 @@ pub unsafe extern "C" fn punktfunk_connect_ex(
 
 /// [`punktfunk_connect_ex`] plus a virtual `gamepad` (`PUNKTFUNK_GAMEPAD_*`).
 /// `AUTO` (or unrecognized) lets the host decide (`PUNKTFUNK_GAMEPAD` env, else
-/// X-Box 360). Resolved via [`punktfunk_connection_gamepad`]. Only DualSense
-/// emits HID-output feedback.
+/// X-Box 360). Resolved via [`punktfunk_connection_gamepad`]. HID-output feedback, for the
+/// backends that emit it, arrives on [`punktfunk_connection_next_hidout`].
 ///
 /// # Safety
 /// Same as [`punktfunk_connect`].
@@ -130,7 +130,8 @@ pub unsafe extern "C" fn punktfunk_connect_ex2(
 }
 
 /// [`punktfunk_connect_ex2`] plus encoder `bitrate_kbps`. `0` = host default;
-/// other values clamp to the host range. Read [`punktfunk_connection_bitrate`].
+/// other values clamp to the host range, except PyroWave, which pins its own rate.
+/// Read [`punktfunk_connection_bitrate`].
 ///
 /// # Safety
 /// Same as [`punktfunk_connect`].
@@ -1269,7 +1270,8 @@ unsafe fn opts_prefix(
     let mut o = PunktfunkConnectOpts::default();
     let take = declared.min(std::mem::size_of::<PunktfunkConnectOpts>());
     // SAFETY: `opts` is readable for `declared >= take`; `o` is a local and cannot overlap.
-    // Every field is an integer or a raw pointer, so any bytes are a valid value.
+    // Every field is an integer, a raw pointer or an `Option` of a function pointer (null is
+    // `None`), so any bytes are a valid value.
     unsafe {
         std::ptr::copy_nonoverlapping(
             opts.cast::<u8>(),
@@ -1472,8 +1474,9 @@ unsafe fn connect_params(
 }
 
 /// The rate, kbps, a PyroWave quality of `bpp_x100` hundredths of a bit per pixel needs at a
-/// mode: what the quality row shows. `0` prices the client default, 1.6. Pass the mode a
-/// connect would ask for and the chroma and depth the player's switches ask.
+/// mode: what the quality row shows. `0` prices the client default
+/// (`punktfunk_core::pyrowave::BPP_DEFAULT`). Pass the mode a connect would ask for and the
+/// chroma and depth the player's switches ask.
 #[cfg(feature = "quic")]
 #[unsafe(no_mangle)]
 pub extern "C" fn punktfunk_pyrowave_kbps(
@@ -1557,8 +1560,8 @@ fn pyrowave_link_warning(
 
 /// The line the PyroWave quality row shows when `required_kbps` is more than this device's
 /// link carries ([`punktfunk_local_link_facts`]'s `kind` and `mbps`), NUL-terminated into
-/// `out`; empty when it fits. One wording for every client, in the language the console was
-/// given (`languages`), English before. 160 bytes is ample.
+/// `out`; empty when it fits. One wording for every client, in the language the process is set
+/// to ([`pf_l10n::set_languages`]), English before. 160 bytes is ample.
 ///
 /// # Safety
 /// `out` is writable for `cap` bytes.
@@ -1903,7 +1906,6 @@ mod tests {
         assert_eq!(unsafe { connect_params(&o) }.unwrap().profile, None);
     }
 
-    /// The quality reaches the dial as asked; the row's rate and warning come from core.
     /// `on_pending` reaches the dial, and calling it hands the caller its context back.
     #[test]
     fn connect_opts_carry_the_pending_callback() {
@@ -1999,6 +2001,7 @@ mod tests {
         assert!(!p.shows_screens && p.screens.is_empty());
     }
 
+    /// The quality reaches the dial as asked; the row's rate and warning come from core.
     #[test]
     fn connect_opts_carry_the_pyrowave_quality() {
         let o = PunktfunkConnectOpts {
@@ -2210,8 +2213,7 @@ mod tests {
             "must drop the whole ü, not half of it"
         );
 
-        // A name whose first character already exceeds the cap has nothing to keep —
-        // `unwrap_or(0)` must yield "" rather than panicking on an empty iterator.
+        // Three-byte characters: the cap keeps `max / 3` whole ones.
         assert_eq!(clamp_device_name(&"あ".repeat(max)), "あ".repeat(max / 3));
     }
 }

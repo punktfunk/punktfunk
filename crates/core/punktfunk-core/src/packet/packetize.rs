@@ -27,9 +27,10 @@ pub struct Packetizer {
     /// emits every block's data before any parity, so each block's recovery must live
     /// until the frame's second emission pass — one shared pool would overwrite.
     recovery: Vec<Vec<Vec<u8>>>,
-    /// Peer's per-block `data + recovery` ceiling, frozen from the negotiated config
-    /// ([`ReassemblerLimits::from_config`]). Adaptive FEC may raise `fec_percent` live;
-    /// clamp parity to this or the far side drops the whole block and loss ratchets FEC up.
+    /// Per-block `data + recovery` ceiling: a full block plus its parity at the session-start
+    /// `fec_percent`, capped by the scheme. Adaptive FEC may raise `fec_percent` live; parity
+    /// clamps to this. A block past the receiver's ceiling ([`ReassemblerLimits::from_config`])
+    /// is dropped whole.
     max_total_shards: usize,
     /// Per-frame block ceiling for streamed AUs (size unknown until finish). Receiver
     /// re-derives from each packet's `shard_bytes`; keep this in step with the stamped size.
@@ -60,8 +61,9 @@ pub struct StreamedAu {
     emitted_shards: u64,
 }
 
-/// Slice-flush floor. Below this, per-block FEC is `ceil(k × pct/100) ≥ 1` regardless of
-/// `k` (~22 KB at the standard shard payload). Smaller slices ride with the next one.
+/// Slice-flush floor (~22 KB at the standard shard payload). With FEC on, a block pays at
+/// least `MIN_RECOVERY_SHARDS` parity whatever its `k` (`config::recovery_shards`), so a
+/// smaller slice rides with the next one.
 pub const MIN_STREAM_BLOCK_SHARDS: usize = 16;
 
 impl StreamedAu {
@@ -81,7 +83,6 @@ impl Packetizer {
             fec: config.fec,
             tail: Vec::new(),
             recovery: Vec::new(),
-            // Mirrors `ReassemblerLimits::from_config` — keep the two in step.
             max_total_shards: (max_data + config.fec.recovery_for(max_data))
                 .min(config.fec.scheme.max_total_shards()),
             // Derived from the shard size below (single source of truth for the formulas).
@@ -473,8 +474,8 @@ impl Packetizer {
     }
 }
 
-/// Parity floor on a PyroWave head block ([`Packetizer::geometry_for`]): a link's burst after
-/// idle takes the first packets of a frame, and a clean link still drops ~4 in a row.
+/// Parity floor on a PyroWave head block ([`Packetizer::geometry_for`]): a burst after idle
+/// loses a frame's first packets, 3–4 in a row on one wired client's NIC.
 /// cbindgen:ignore
 pub const HEAD_MIN_RECOVERY_SHARDS: usize = 4;
 

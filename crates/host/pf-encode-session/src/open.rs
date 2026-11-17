@@ -83,15 +83,16 @@ pub fn hdr_meta(bytes: &[u8; 28]) -> Option<HdrMeta> {
 /// The slice count passes through as the client asked.
 pub fn spec_for(req: &SetEncodeRequest, backend: u32, knob: Knob<'_>) -> Result<OpenSpec, Fail> {
     let (hdr, chroma444) = (req.hdr == 1, req.chroma == 1);
-    // 10-bit SDR (depth 10, HDR off) picks a BT.709 P010 input on AMF; `choose` ignores it elsewhere.
+    // 10-bit SDR (depth 10, HDR off) picks a BT.709 P010 input on AMF and QSV; `choose`
+    // ignores it elsewhere.
     let ten_bit = req.bit_depth >= 10;
     let sdr_fp16 = req.flags & wire::SET_ENCODE_FLAG_SDR_FP16 != 0;
     // `None`: this backend reads no FP16 SDR desktop, so it never opens on one.
     let chosen =
         InputKind::choose(backend, hdr, ten_bit, chroma444, sdr_fp16).ok_or((-4, "fp16"))?;
-    // `PFVD_AMF_NV12` / `PFVD_QSV_NV12` (read per open) skip the encoder's own colour
-    // conversion and open on the YUV this side converts: the A/B for an encoder whose
-    // conversion looks or runs worse.
+    // `PFVD_AMF_NV12` (read per open) skips AMF's own colour conversion and opens on the YUV
+    // this side converts: the A/B for an encoder whose conversion looks or runs worse.
+    // `PFVD_QSV_NV12` changes nothing: QSV has no `fallback` input.
     let skip = match backend {
         backend::AMF => knob("PFVD_AMF_NV12"),
         backend::QSV => knob("PFVD_QSV_NV12"),
@@ -134,8 +135,9 @@ fn caps_wire(c: EncoderCaps) -> EncoderCapsWire {
 /// Walk the request's backend list in order; the first that opens wins. A backend that
 /// refuses its input is tried down its [`InputKind::fallback`] chain before the next one.
 /// `Err` is the last failure as the wire reply — no silent fallback past the list.
-/// `open_backend` returns a backend whose session already exists, so `reply.caps` describes
-/// the live encoder rather than its defaults — the host reads those caps once.
+/// `open_backend` returns every backend but Media Foundation, whose caps are fixed, with its
+/// session open, so `reply.caps` describes the live encoder rather than its defaults — the host
+/// reads those caps once.
 pub fn open_listed(
     req: &SetEncodeRequest,
     adapter: &AdapterId,
@@ -215,15 +217,15 @@ pub fn codec_from_wire(codec: u32) -> Option<Codec> {
 
 /// One backend open on `adapter`, signalling the range of `spec`. `Err` carries the stage tag;
 /// the backend's message is logged.
-/// `device` is the one the source's frames carry: NVENC opens its session against it here so
-/// the caller's caps read describes the hardware.
+/// `device` is the one the source's frames carry: NVENC, AMF and QSV open their sessions against
+/// it here so the caller's caps read describes the hardware.
 pub fn open_backend(
     spec: &OpenSpec,
     adapter: &AdapterId,
     device: &ID3D11Device,
     knob: Knob<'_>,
 ) -> Result<Box<dyn Encoder>, Fail> {
-    // NVENC is the only arm that opens against the device or reads a knob.
+    // NVENC is the only arm that reads a knob.
     #[cfg(not(feature = "nvenc"))]
     let _ = (device, knob);
     let (w, h, fps, bps) = (spec.width, spec.height, spec.fps, spec.bitrate_bps);

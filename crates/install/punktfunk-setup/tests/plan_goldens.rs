@@ -590,7 +590,7 @@ fn the_flatpak_line_is_carried_verbatim() {
 
 /// A bare re-run on a canary machine must never drag it to stable, and must leave the repo it
 /// already has alone. It still upgrades: that is how a fixed build reaches a box carrying an
-/// older one, and skipping it left an uninstall as the only way out.
+/// older one.
 #[test]
 fn trap_channel_follows_the_box_without_an_explicit_flag() {
     let facts = installed("arch", Family::Pacman, Channel::Canary);
@@ -658,9 +658,8 @@ fn trap_pacman_switch_uses_sy_then_s_and_never_syu() {
     );
 }
 
-/// The Omarchy report this came from: a box with everything installed got no package step at
-/// all, so a build carrying a fix could not reach it and an uninstall was the only way out.
-/// The db refresh has to survive too, or `-S` upgrades against a stale database.
+/// A box with everything installed still gets a package step, so a build carrying a fix reaches
+/// it. The db refresh has to survive too, or `-S` upgrades against a stale database.
 #[test]
 fn trap_a_complete_omarchy_box_still_refreshes_and_upgrades() {
     let facts = installed("omarchy", Family::Pacman, Channel::Canary);
@@ -729,7 +728,8 @@ fn trap_every_host_install_trusts_the_console_cert_after_the_start() {
     )));
 }
 
-/// Omarchy's libalpm hook aborts any transaction carrying both -S and -u.
+/// Omarchy's libalpm hook aborts a transaction that upgrades a package when pacman ran with
+/// both -S and -u.
 #[test]
 fn trap_omarchy_installs_with_sy_then_s_not_syu() {
     let cmds = plan_for(&fresh("omarchy", Family::Pacman), &pins()).commands();
@@ -921,7 +921,7 @@ fn the_hand_off_carries_every_row_it_used_to_ask_for() {
     assert!(handoff.contains("--groups=1"), "{handoff}");
 }
 
-/// The labels live in two files — the installer emits them, the script parses them — because the
+/// The flags live in two files — the installer emits them, the script parses them — because the
 /// script ships inside the host package and is not on disk when the settings screen is drawn.
 /// This is the seam that keeps the duplication honest.
 #[test]
@@ -950,7 +950,7 @@ fn trap_every_flag_the_installer_sends_is_one_the_script_accepts() {
     );
 }
 
-/// The smoke has to be able to decline the hand-off; the sh installer's question had no twin.
+/// The Omarchy smoke (`ci/omarchy/row.sh`) declines the hand-off; the generic wiring then runs.
 #[test]
 fn trap_the_hand_off_can_be_declined() {
     let declined = Pins {
@@ -1083,7 +1083,8 @@ fn trap_a_box_with_the_host_but_no_console_still_installs() {
     );
 }
 
-/// Linger defaults only for Bazzite and Nobara. Silverblue and Bluefin are workstations.
+/// The couch defaults follow `couch_box`, which is Bazzite and Nobara only. Silverblue and
+/// Bluefin are workstations.
 #[test]
 fn trap_couch_defaults_do_not_reach_a_workstation_image() {
     let couch = Choices::derive(&fresh("bazzite", Family::Sysext), &pins());
@@ -1166,8 +1167,7 @@ fn trap_a_ujust_box_uses_the_recipe_not_usermod() {
 }
 
 /// Every host platform's platforms.json lines must appear in the dry-run text, in the
-/// no-confirm form the run uses. This is D6's drift gate, moved into the crate that embeds
-/// the file.
+/// no-confirm form the run uses. This is the drift gate for the file the crate embeds.
 #[test]
 fn every_platforms_json_install_line_is_carried_verbatim() {
     let cases = [

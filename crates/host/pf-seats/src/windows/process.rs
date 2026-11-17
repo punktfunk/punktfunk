@@ -70,7 +70,7 @@ impl Job {
 pub(super) struct ChildProcess {
     process: OwnedHandle,
     pid: u32,
-    /// Outside any job: dropping the handle terminates the process.
+    /// A session child ends when its handle drops, in a job or not. The keeper ends with its job.
     kill_on_drop: bool,
 }
 
@@ -336,7 +336,7 @@ fn open_log(path: &Path) -> WinResult<OwnedHandle> {
         bInheritHandle: true.into(),
     };
     let path_w = wide(path.as_os_str(), "seat log")?;
-    // Append mask: bare `FILE_APPEND_DATA` gives a child handle that drops its writes.
+    // Append mask, as std's `OpenOptions::append` builds it.
     let access = (FILE_GENERIC_WRITE.0 & !FILE_WRITE_DATA.0) | FILE_APPEND_DATA.0;
     // SAFETY: `path_w` is NUL-terminated and `attributes` sized; both outlive the call.
     let raw = unsafe {

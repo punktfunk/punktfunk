@@ -3,7 +3,7 @@
 //! [`Driver`] is the whole of it: events in — a completed AU, a stats
 //! snapshot, a latency sample, an ack — and actions out of [`Driver::tick`].
 //! An embedder owns no policy, so two clients cannot drift apart: each runs it
-//! through [`feed`](crate::abr::feed), on the 750 ms cadence of the client's feedback window;
+//! through [`feed`](crate::abr::feed), on the [`WINDOW`] cadence of the client's feedback window;
 //! FEC absorbs short random loss, and the controller asks the host for a
 //! different encoder rate via [`crate::quic::SetBitrate`] when congestion
 //! persists.
@@ -19,7 +19,7 @@
 //! baseline.
 
 /// The link simulator and the checked-in baseline (`abr/sim/`). It drives the
-/// client's frame channel constants, so it builds with the client.
+/// client's jump-to-live and recovery code, so it builds with the client.
 #[cfg(all(test, feature = "quic"))]
 mod sim;
 
@@ -97,8 +97,8 @@ pub struct DriverConfig {
     pub marks_repeats: bool,
     /// Run the startup capacity probe (`PUNKTFUNK_ABR_PROBE`).
     pub probe: bool,
-    /// `PUNKTFUNK_ABR_PROBE_KBPS`. `None` = twice the stream-shape cap; with
-    /// [`ramp`](Self::ramp) it is the ramp's maximum instead.
+    /// `PUNKTFUNK_ABR_PROBE_KBPS`: the burst's target, and a bound on the ramp's
+    /// maximum. `None` leaves both to the capacity probe's own sizing.
     pub probe_target_kbps: Option<u32>,
     /// Host serves probe requests during bring-up
     /// ([`HOST_CAP2_RAMP`](crate::quic::HOST_CAP2_RAMP)): measure the link
@@ -241,8 +241,8 @@ pub struct Driver {
     fixed: bool,
     /// Automatic PyroWave's quality floor, and whether the session is held there.
     floor: Option<FloorWatch>,
-    /// Raised between ticks (a probe ended, a burst was abandoned) and sent
-    /// on the next one, microseconds later.
+    /// Raised between ticks (a burst ended that took the keyframe with it) and
+    /// sent on the next one, microseconds later.
     pending: Vec<Action>,
     /// Acks since the last window closed, with the reason each carried.
     acks: Vec<(u32, Option<crate::quic::AckReason>)>,
@@ -428,6 +428,13 @@ impl Driver {
         self.window.on_decode_latency(sum_us, count);
     }
 
+    /// Whether the client's decoder declares room for half again this stream's pixel rate.
+    /// Its latency near the period is then read as a pipeline's, not its load. Level, not
+    /// edge: say it every tick, and a mode switch needs nothing more.
+    pub fn on_decoder_spare(&mut self, spare: bool) {
+        self.abr.decode.declare_spare(spare);
+    }
+
     /// The window's host encode-stage total and its sample count. PyroWave's is
     /// dropped: its encode time is per pixel, not per bit, so a rise is never the
     /// rate's and a notch that seems to follow only follows the content.
@@ -575,11 +582,10 @@ impl Driver {
                 wall_kbps,
             } => {
                 self.set_ceiling(ceiling_kbps);
-                // The ramp's bargain, for the same reason. The burst reads
-                // low for a second one — it counts its own filler while video
-                // shares the link — so re-asking it matters more, not less.
-                // A burst the link kept up with refused nothing and leaves
-                // the ceiling alone, as it always has.
+                // The burst's wall is a link cap the re-probe clock asks again, as the
+                // ramp's is. It reads low besides — it counts its own filler while video
+                // shares the link — so the re-ask matters more. A burst the link kept up
+                // with refused nothing and latches no cap.
                 if let Some(kbps) = wall_kbps {
                     self.abr.note_measured_wall(ceiling_kbps, kbps);
                 }
@@ -660,11 +666,9 @@ impl Driver {
         }
         let proven_kbps = match ramped {
             probe::Ramped::Wall { delivered_kbps } => {
-                // The wall licenses a rate as it always has, and that rate is
-                // the link cap too, so the clock asks the wall again and
-                // carries the ceiling with the answer. A reading is one
-                // moment of a link that moves; bound for a session's life it
-                // left 45 % of the rig's tunnel unused (§4.1).
+                // The licensed rate is the link cap too, so the re-probe clock asks the
+                // wall again and carries the ceiling up with the answer: a reading is one
+                // moment of a link that moves, re-tested like any cap (§4.1).
                 let licensed = probe::wall_ceiling_kbps(delivered_kbps);
                 self.set_ceiling(licensed);
                 self.abr.note_measured_wall(licensed, delivered_kbps);
@@ -879,11 +883,12 @@ impl Driver {
         }
     }
 
-    /// A fixed rate has no controller to mark a wall and no ramp to retreat to, so frames
-    /// dying [`DEAD_RUN`] windows running bring `L` to the stream's own rate, once and for
-    /// the session. A queue that overflows early in a frame loses its middle more than its
-    /// tail, which the tail signature does not read; only head loss is excused, for the
-    /// wake shape. The host then paces at 1.5 × the rate, its cap included.
+    /// A fixed rate has no controller to mark a wall, and a ramp that met none proved a rate
+    /// over the stream's, so frames dying [`DEAD_RUN`] windows running bring `L` to the
+    /// stream's own rate, once and for the session. A queue that overflows early in a frame
+    /// loses its middle more than its tail, which the tail signature does not read; only head
+    /// loss is excused, for the wake shape. The host then paces at 1.5 × the rate, its cap
+    /// included.
     fn watch_fixed_rate(&mut self, w: &WindowSample) {
         let Some(kbps) = self.fixed_kbps else {
             return;
@@ -934,8 +939,8 @@ pub fn stream_ceiling_kbps(
         crate::quic::CODEC_H264 => 1_000,
         _ => 750,
     };
-    // 10-bit is 25 % more sample depth; 4:4:4 is twice the chroma of 4:2:0
-    // → half again as many samples overall.
+    // 10-bit is 25 % more sample depth. 4:4:4 carries twice the samples of
+    // 4:2:0; the bound allows it half again.
     let milli_bpp = if bit_depth >= 10 {
         milli_bpp * 5 / 4
     } else {
@@ -964,9 +969,9 @@ mod tests {
     /// The counter is the trap this pins. `frames_completed` cannot mean
     /// "video has started" — the reassembler completes a filler AU without
     /// asking whose index space it is in (`session.rs`), so a 5 Mbps step
-    /// moves it six times inside 25 ms. Reading it that way ended the ramp
-    /// one tick after its first step, before that step's own report arrived:
-    /// 40 of 40 runs on the rig, every profile, `proven_kbps=0`.
+    /// moves it six times inside 25 ms. Read that way, the ramp ends one tick
+    /// after its first step, before that step's own report arrives, having
+    /// proven nothing.
     #[test]
     fn the_ramp_steps_until_video_arrives() {
         /// Header plus shard, as the reassembler counts a filler packet.

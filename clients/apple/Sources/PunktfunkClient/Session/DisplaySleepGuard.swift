@@ -1,9 +1,10 @@
 // Keeps the local display awake for the duration of a streaming session.
 //
 // A stream is not "user activity" to the OS: the pixels arrive over the network and the input that
-// drives them is often a game controller, which does NOT feed the HID idle timer on any Apple
-// platform. So a controller-only session reliably idles the panel out from under the user — the
-// same reason the Android client holds FLAG_KEEP_SCREEN_ON while streaming (StreamScreen.kt).
+// drives them is often a game controller, and Apple requires a game driven by one to disable the
+// idle timer itself (iOS, tvOS). So a controller-only session can idle the panel out from under
+// the user — the same reason the Android client holds FLAG_KEEP_SCREEN_ON while streaming
+// (StreamWindow.kt).
 //
 // Held by SessionModel from `beginStreaming` to `disconnect`, so it is scoped to the session and
 // never leaks past it (including a host-ended or timed-out background session, which both land in
@@ -59,8 +60,8 @@ final class DisplaySleepGuard {
             RunLoop.main.add(timer, forMode: .common)
             heartbeat = timer
         #else
-            // iOS/iPadOS/tvOS: app-wide, and ignored while backgrounded — the background keep-alive
-            // (audio-only, video dropped) correctly lets the device sleep without touching this.
+            // iOS/iPadOS/tvOS/visionOS: app-wide, and ignored while backgrounded — the background
+            // keep-alive (audio-only, video dropped) lets the device sleep without touching this.
             Self.holders += 1
             UIApplication.shared.isIdleTimerDisabled = true
         #endif

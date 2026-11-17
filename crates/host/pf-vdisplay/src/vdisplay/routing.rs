@@ -1,8 +1,8 @@
 //! Gamescope sub-mode, injector id, dedicated-session, and TV-restore routing.
 //!
 //! Decisions travel as [`GamescopeRoute`] values on the backend instance — never
-//! through process env, or a concurrent session retargets this one. Operator
-//! knobs (`PUNKTFUNK_GAMESCOPE_*`) are sampled once. Pin: tests below.
+//! through process env, or a concurrent session retargets this one. The env-only
+//! operator knobs (`_ATTACH`, `_NODE`, `_SESSION`) are sampled once. Pin: tests below.
 //! Design: `design/gamemode-and-dedicated-sessions.md`.
 
 use super::*;
@@ -11,8 +11,8 @@ use super::*;
 ///
 /// Carried on the backend instance (`VirtualDisplay::set_gamescope_route`), never
 /// through process env — two sessions connecting at once would otherwise clobber
-/// each other. Operator knobs stay operator overrides, sampled once
-/// (`operator_gamescope`); nothing writes them.
+/// each other. Operator knobs stay operator overrides, read in `operator_gamescope`
+/// (the env ones once); nothing writes them.
 ///
 /// Defined on every platform: the host's `SessionContext` carries it beside
 /// `compositor`.
@@ -169,11 +169,11 @@ pub fn input_backend_id(chosen: Compositor) -> &'static str {
         // org_kde_kwin_fake_input — no RemoteDesktop portal. Headless krdpserver
         // path; the shipped .desktop authorizes it.
         Compositor::Kwin => "kwin",
-        // Neither fake_input nor wlr virtual-input → RemoteDesktop portal via libei.
+        // Neither fake_input nor wlr virtual-input → libei via Mutter's direct RemoteDesktop API.
         Compositor::Mutter => "libei",
         // Hyprland still speaks `zwlr_virtual_pointer_v1` + `zwp_virtual_keyboard_v1`
         // — same wlr injector as sway/river.
-        // niri serves both too, on stock builds and biri alike.
+        // niri 26.04 serves both too, and so does biri.
         Compositor::Wlroots | Compositor::Hyprland | Compositor::Niri => "wlr",
         // Same protocols, but Umbriel maps absolute motion over the whole layout and ignores
         // the pointer's output: the injector aims in layout space.
@@ -494,10 +494,10 @@ pub fn claim_workspace(
         Compositor::Umbriel if hyprland::is_managed_output(name) => {
             umbriel::desktop::claim_workspace(name, want)
         }
-        // No `_` arm: a new backend must decide here. KWin is a later step (its
-        // workspaces are a D-Bus script away); Mutter/GNOME has no per-output
-        // workspace to aim at; gamescope already gives the game the whole
-        // session; Windows has no workspaces at all.
+        // No `_` arm: a new backend must decide here. KWin is a later step: its desktops span
+        // every output unless 6.7's per-output desktops are on. Mutter 51 has no per-output
+        // workspace; gamescope gives the game the whole session; Windows virtual desktops are
+        // not wired here.
         Compositor::Hyprland
         | Compositor::Wlroots
         | Compositor::Kwin
@@ -529,7 +529,7 @@ pub fn claim_workspace(
 
 /// Nested Xwayland `(DISPLAY, XAUTHORITY)` pairs for the XFixes cursor source.
 /// Gamescope can run several; the pointer is on the focused one. Empty when
-/// none are exposed — the host then leaves gamescope cursorless.
+/// none is exposed yet — the cursor source asks again on a slow cadence.
 #[cfg(target_os = "linux")]
 pub fn gamescope_xwayland_cursor_targets(seat: Option<&str>) -> Vec<(String, Option<String>)> {
     gamescope::xwayland_cursor_targets(seat)

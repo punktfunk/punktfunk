@@ -2,8 +2,8 @@
 //!
 //! A ledger has one schema version and at most four seats. IDs remain stable
 //! while names, accounts, ports, and display slots are unique. Display slots
-//! are fixed at 12 through 15; port pools are explicit so a later platform
-//! backend can choose a different reserved range without changing the ledger.
+//! are fixed at 12 through 15; the native, management and browser ports each
+//! come from a fixed pool of four.
 //! Every value is validated again after deserialization. Runtime state is an
 //! observation, not a substitute for the backend's own process identity.
 //!
@@ -34,7 +34,7 @@ pub const DEFAULT_MGMT_PORTS: [u16; MAX_SEATS] = [47995, 47996, 47997, 47998];
 /// Each seat's browser plane, beside its native port: the seat whose native port is the n-th of
 /// [`DEFAULT_NATIVE_PORTS`] streams to browsers on the n-th of these.
 pub const DEFAULT_BROWSER_PORTS: [u16; MAX_SEATS] = [9783, 9784, 9785, 9786];
-/// `LM20_UNLEN`: NetUserAdd rejects longer SAM account names.
+/// `LM20_UNLEN` (lmcons.h, SDK 10.0.26100): NetUserAdd rejects longer SAM account names.
 pub const MAX_ACCOUNT_LEN: usize = 20;
 /// Bytes of backend error text a seat's runtime status keeps.
 pub const MAX_RUNTIME_DETAIL: usize = 512;

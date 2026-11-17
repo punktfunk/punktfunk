@@ -2,7 +2,7 @@
 //!
 //! Hosts, pairing/trust, settings, and the desktop library page; every stream (and the
 //! console game library) runs in the spawned `punktfunk-session` Vulkan binary — the
-//! shell never touches video (punktfunk-planning `linux-client-rearchitecture.md`).
+//! shell never touches video.
 // `deny`, not `forbid`: clearing Steam's SDL device filter and the spawn test's config-dir write
 // mutate the process env, and the password prompt reads its entry through GTK's C API. Each
 // carries a named `#[allow(unsafe_code)]` with the proof at the site.
@@ -33,7 +33,7 @@ mod shots;
 // Hosts, settings and presets in memory, kept in step with the disk.
 #[cfg(target_os = "linux")]
 mod store;
-// Shared widgets: the FlowBox activation bridge and the Lucide icons.
+// Shared widgets: the FlowBox activation bridge, the Lucide icons and the window chrome.
 #[cfg(target_os = "linux")]
 mod widgets;
 

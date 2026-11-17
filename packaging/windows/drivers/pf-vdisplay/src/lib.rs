@@ -1,19 +1,17 @@
-//! pf-vdisplay — the all-Rust UMDF IddCx virtual-display driver (M1 step-2 rewrite, on wdk-sys + the
-//! owned pf-driver-proto ABI). See design/windows-host-rewrite.md §14 for the full port plan.
+//! pf-vdisplay — the all-Rust UMDF IddCx virtual-display driver, on wdk-sys and the owned
+//! `pf_driver_proto` ABI. Port notes: design/windows-host-rewrite.md §6.3.
 //!
-//! STEP 2: the IddCx driver SKELETON — DriverEntry → driver_add builds the full `IDD_CX_CLIENT_CONFIG`
-//! (14 IddCx callbacks + the PnP `EvtDeviceD0Entry`, all stubs) sized via the versioned
-//! [`size::idd_cx_client_config_size`], runs `IddCxDeviceInitConfig` → `WdfDeviceCreate` →
-//! `WdfDeviceCreateDeviceInterface`(the owned pf-vdisplay GUID) → `IddCxDeviceInitialize`, and exports
-//! `IddMinimumVersionRequired`. This links `IddCxStub` (the CI gate). The real adapter init (STEP 3),
-//! control plane + monitor/modes (STEP 4), and swap-chain/IDD-push (STEP 5-6) fill the stubs in.
+//! `entry` is DriverEntry and `driver_add`: the IddCx client config and the control interface
+//! the host opens. The adapter comes up at the first `EvtDeviceD0Entry` (`callbacks`); the
+//! control plane creates monitors on demand (`control`, `monitor`); each swap chain gets a drain
+//! worker (`swap_chain_processor`) that feeds the in-driver encoder (`encode`). The driver
+//! exports `IddMinimumVersionRequired` below.
 
 #![allow(non_snake_case, clippy::missing_safety_doc)]
-// P0 lint (audit §8): an unsafe op inside an `unsafe fn` must be in an explicit `unsafe {}` block, so the
-// fn-level `unsafe` never silently blesses the whole body, AND every `unsafe {}` must carry its proof.
-// An IddCx display driver is inherently FFI-bound (D3D11 / IddCx DDIs / cross-process shared
-// textures), so it can't be unsafe-FREE the way the gamepad drivers now are (their logic moved onto the
-// safe `pf_umdf_util` layer); these gates make it unsafe-AUDITED instead, and stop it regressing.
+// The drivers workspace denies `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks`
+// (`[workspace.lints]`): an unsafe op sits in an explicit `unsafe {}` block that carries its
+// proof. An IddCx driver is FFI-bound (D3D11, IddCx DDIs, cross-process textures), so these
+// gates audit its unsafe instead of removing it.
 
 #[macro_use]
 mod log;
@@ -49,13 +47,13 @@ pub(crate) const STATUS_ACCESS_DENIED: NTSTATUS = 0xC000_0022u32 as NTSTATUS;
 /// `#ifndef IDD_STUB` branch of `IddCxFuncEnum.h` that normally emits it is compiled out under
 /// `IDD_STUB`.
 ///
-/// `10` = IddCx 1.10, the TRUTHFUL floor: the drain loop calls
+/// `10` = IddCx 1.10, the floor the driver needs: the drain loop calls
 /// `IddCxSwapChainReleaseAndAcquireBuffer2` (1.10) unconditionally and the swap-chain worker uses
-/// `IddCxSetRealtimeGPUPriority` (1.9); the product floor is already Windows 11 22H2 / build 22621,
-/// whose framework is 1.10 (the installer gate — `MIN_HOST_BUILD` in punktfunk-setup —
-/// exists precisely for this driver). The oracle's historical `4` predated that floor and would let
-/// the driver load against a SHORT `IddFunctions` table, where dispatching any post-1.4 DDI reads
-/// past the populated entries. With `10`, an older framework fails the bind cleanly (driver doesn't
-/// load) instead of limping into undefined dispatch.
+/// `IddCxSetRealtimeGPUPriority` (1.9). The product floor is build 22621 (`MIN_HOST_BUILD` in
+/// punktfunk-setup); its framework is 1.9 at release and 1.10 from the 22H2 September Update
+/// (0x1A00). A lower value would let the driver load against a SHORT `IddFunctions` table,
+/// where dispatching a newer DDI reads past the populated entries. With `10`, an older
+/// framework fails the bind cleanly (driver doesn't load) instead of limping into undefined
+/// dispatch.
 #[unsafe(no_mangle)]
 pub static IddMinimumVersionRequired: wdk_sys::ULONG = 10;

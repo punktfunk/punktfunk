@@ -10,7 +10,7 @@ pub(crate) mod entry;
 pub(crate) mod idd;
 // Pause NVIDIA Instant Replay while it shares the encoder with a stream; resume after.
 pub(crate) mod instant_replay;
-// WM_CLOSE on the interactive desktop, then TerminateProcess.
+// One AppContainer per plugin: its profile, its package SID, and the spawn inside it.
 pub(crate) mod app_container;
 // GameInput's background-input quirk for each app a seat starts (`seat_background_input`).
 pub(crate) mod background_input;
@@ -18,6 +18,7 @@ pub(crate) mod capture_worker;
 // Take-turns profiles: which account holds the console, and the `tscon` switch to another.
 pub(crate) mod console;
 pub(crate) mod folder_ace;
+// WM_CLOSE on the interactive desktop, then TerminateProcess.
 pub(crate) mod game_term;
 pub(crate) mod install;
 pub(crate) mod interactive;
@@ -28,7 +29,7 @@ pub(crate) mod registry_ace;
 pub(crate) mod service;
 // The console user's theme values, read for `mgmt::theme` — which forbids the `unsafe` they need.
 pub(crate) mod theme;
-// Per-user tray start/stop/status — the only recovery path after a crash or upgrade.
+// Per-user tray start/stop/status, and the watch that restarts a tray that dies.
 pub(crate) mod tray;
 
 /// A secret the host did not write is not a credential. Only Windows can be pre-planted:

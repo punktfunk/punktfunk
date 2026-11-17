@@ -1,7 +1,7 @@
 // What the shortcut code remembers across reloads, and the per-game shortcut registry read from
 // it. An appId is stable for the life of its shortcut, so remembering one per role reuses it
-// instead of churning the library. The registry's cache sits beside `remember`, the one writer
-// that has to drop it.
+// instead of churning the library. The registry's cache sits beside `remember` and
+// `dropGamePairCache`, the two places that drop it.
 import { keys, read, write } from "../lib/storage";
 
 // The hidden stream shortcut's appId. The oldest key, so a one-shortcut install migrates into the

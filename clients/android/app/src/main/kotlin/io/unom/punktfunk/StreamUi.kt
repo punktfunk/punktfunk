@@ -78,8 +78,9 @@ internal class StreamUi(
     var screenHeld by mutableStateOf(true)
 
     /**
-     * Whether this session has a controller — seeded from the router the moment it is built and
-     * latched true by a pad that arrives later; it never goes back to false.
+     * Whether this session has a controller — seeded from the connected controllers when
+     * [StreamPeripherals] starts and latched true by a pad that arrives later; it never goes back
+     * to false.
      */
     var padPresent by mutableStateOf(false)
 

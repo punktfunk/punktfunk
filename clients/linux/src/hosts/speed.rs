@@ -1,6 +1,7 @@
-//! The network speed test as a page (design §2.4): live goodput drawn while the host bursts,
-//! then what was measured, what it recommends, and where the recommendation goes. A measured
-//! bitrate lands in the layer this host reads bitrate from (client-settings-profiles.md §5.3).
+//! The network speed test as a page (design/linux-client-overhaul.md §2.4): live goodput drawn
+//! while the host bursts, then what was measured, what it recommends, and where the
+//! recommendation goes. A measured bitrate lands in the layer this host reads bitrate from
+//! (client-settings-profiles.md §5.3).
 
 use super::ConnectRequest;
 use crate::store::Store;
@@ -100,7 +101,7 @@ pub fn push(
 
     enum Probe {
         Sample(u32),
-        // Boxed: the report is 300 bytes against a sample's four.
+        // Boxed: the report is ~290 bytes on 64-bit against a sample's four.
         Done(Result<Box<HealthReport>, String>),
     }
     let (tx, rx) = async_channel::unbounded::<Probe>();

@@ -41,8 +41,8 @@ const PCI_VENDOR_NVIDIA: u32 = 0x10de;
 ///
 /// CUDA's device first, so GL interop and the Vulkan bridge ([`super::vkdev`]) stay on one GPU
 /// of a dual-NVIDIA box. Scan by vendor, not first node: on a hybrid host `renderD128` is the
-/// iGPU. Do not call `pf_gpu::linux_render_node` — this crate is a leaf worker, and that
-/// helper follows the operator VAAPI preference, which may name the iGPU.
+/// iGPU. Do not call `pf_gpu::linux_render_node` — this crate is a leaf worker, and that helper
+/// follows the operator's GPU preference and `PUNKTFUNK_RENDER_NODE`, which may name the iGPU.
 fn nvidia_render_node() -> std::path::PathBuf {
     use std::path::{Path, PathBuf};
     if let Some(p) = std::env::var_os("PUNKTFUNK_ZEROCOPY_RENDER_NODE").filter(|s| !s.is_empty()) {
@@ -352,8 +352,8 @@ pub(super) type Egl = egl::DynamicInstance<egl::EGL1_5>;
 /// libEGL, an initialized GBM `EGLDisplay` on the NVIDIA render node, and that node. The
 /// display has dma-buf import with modifiers.
 pub(super) fn gbm_display() -> Result<(Egl, egl::Display, GbmDevice, std::path::PathBuf)> {
-    // GBM on the NVIDIA render node so the EGLDisplay shares the DRM device CUDA-GL interop
-    // uses. The EGL *device* platform does not — `cuGraphicsGLRegisterImage` rejects those textures.
+    // GBM on the NVIDIA render node: `cuGraphicsGLRegisterImage` rejects textures from an EGL
+    // *device* platform display.
     let node = nvidia_render_node();
     let render_node = std::fs::OpenOptions::new()
         .read(true)
@@ -731,8 +731,8 @@ impl EglImporter {
             )
             .context("eglCreateImage(EGL_LINUX_DMA_BUF_EXT) — modifier mismatch?")?;
 
-        // Blit into a CUDA-registrable render target. Registering the EGLImage texture itself
-        // fails — its layout is not a CUDA-registrable format.
+        // Blit into a CUDA-registrable render target: `cuGraphicsGLRegisterImage` rejects the
+        // EGLImage-bound texture itself.
         let result = self.blit_and_copy(layout, image.as_ptr(), width, height);
         let _ = self.egl.destroy_image(self.display, image);
         result

@@ -1,5 +1,6 @@
 //! `quic` client connector: the connection handle and the wire vocabulary its calls
-//! share. Header symbols sit under `PUNKTFUNK_FEATURE_QUIC`.
+//! share. Items marked `#[cfg(feature = "quic")]` sit under `PUNKTFUNK_FEATURE_QUIC` in the
+//! header; the plain `pub const`s here do not.
 
 // Declaration order is header order, as in `lib.rs`; blank lines keep rustfmt from sorting.
 mod connect;
@@ -87,7 +88,7 @@ pub const PUNKTFUNK_HIDOUT_TRACKPAD_HAPTIC: u8 = 4;
 /// `which` = flags; `effect[0..6]` = report bytes 5..=10; `effect_len = 6`. Change-only.
 pub const PUNKTFUNK_HIDOUT_AUDIO_CTL: u8 = 5;
 /// Raw hidraw report to replay (`HidRaw`). `hid_kind` + `raw`/`raw_len` valid.
-/// Only `PUNKTFUNK_GAMEPAD_STEAMCONTROLLER2` emits these; others drop.
+/// Only the Steam Controller, Steam Controller 2 and Puck backends emit these.
 pub const PUNKTFUNK_HIDOUT_HID_RAW: u8 = 6;
 /// `PunktfunkHidOutput::kind`: DualSense microphone-mute LED. `which` = mode (0 off, 1 on,
 /// 2 pulse).
@@ -545,6 +546,7 @@ pub const PUNKTFUNK_COMPOSITOR_UMBRIEL: u32 = 8;
 /// Gamepad-backend preference for [`punktfunk_connect_ex2`]: which virtual pad
 /// the host creates. Precedence: client choice > `PUNKTFUNK_GAMEPAD` env > X-Box 360.
 /// `AUTO` (or unrecognized) = host decides. Resolved via [`punktfunk_connection_gamepad`].
+/// Which hosts take which kind: `pick_gamepad` in punktfunk-host.
 pub const PUNKTFUNK_GAMEPAD_AUTO: u32 = 0;
 /// uinput X-Box 360 pad (default — every game speaks XInput).
 pub const PUNKTFUNK_GAMEPAD_XBOX360: u32 = 1;
@@ -558,8 +560,8 @@ pub const PUNKTFUNK_GAMEPAD_XBOXONE: u32 = 3;
 /// Rich-input + HID-output planes, no adaptive triggers / player LEDs / mute.
 /// Linux UHID / Windows UMDF; else X-Box 360.
 pub const PUNKTFUNK_GAMEPAD_DUALSHOCK4: u32 = 4;
-/// UHID classic Steam Controller (`hid-steam`): one stick + dual trackpads + two
-/// grip paddles. Linux only; else Xbox 360.
+/// Classic Steam Controller (`hid-steam` on Linux): one stick + dual trackpads + two
+/// grip paddles. Linux and Windows hosts; else Xbox 360.
 pub const PUNKTFUNK_GAMEPAD_STEAMCONTROLLER: u32 = 5;
 /// Steam Deck controller: four back grips, both trackpads, IMU. Steam Input
 /// re-grabs with native glyphs when Steam runs on the host. Linux/Windows; else X-Box 360.
@@ -568,9 +570,9 @@ pub const PUNKTFUNK_GAMEPAD_STEAMDECK: u32 = 6;
 /// paddles land on native slots. Linux UHID / Windows UMDF; else X-Box 360.
 pub const PUNKTFUNK_GAMEPAD_DUALSENSEEDGE: u32 = 7;
 /// Nintendo Switch Pro: Nintendo glyphs + positional layout, gyro/accel, HD rumble.
-/// Linux UHID `hid-nintendo` only; else X-Box 360.
+/// Linux UHID `hid-nintendo` / Windows UMDF; else X-Box 360.
 pub const PUNKTFUNK_GAMEPAD_SWITCHPRO: u32 = 8;
-/// Steam Controller 2 as-is passthrough. Linux UHID; else X-Box 360.
+/// Steam Controller 2 as-is passthrough. Linux (usbip, UHID fallback) / Windows; else X-Box 360.
 pub const PUNKTFUNK_GAMEPAD_STEAMCONTROLLER2: u32 = 9;
 /// Steam Controller Puck dongle: native seven-interface topology, four slots.
 /// For capture clients that own the physical Puck; wired/BLE SC2 stays `STEAMCONTROLLER2`.
@@ -601,17 +603,13 @@ pub const PUNKTFUNK_GAMEPAD_BTN_PADDLE3: u32 = 0x0004_0000;
 pub const PUNKTFUNK_GAMEPAD_BTN_PADDLE4: u32 = 0x0008_0000;
 pub const PUNKTFUNK_GAMEPAD_BTN_MISC1: u32 = 0x0020_0000;
 
-/// Connect to a `punktfunk/2` host at `width`x`height`@`refresh_hz`. Blocks up to
-/// `timeout_ms`. NULL on failure. Same as [`punktfunk_connect_ex`] with
-/// `compositor = PUNKTFUNK_COMPOSITOR_AUTO`.
-///
 /// Video-capability bit for [`punktfunk_connect_ex5`]: the client can decode
 /// 10-bit (Main10) HEVC.
 pub const PUNKTFUNK_VIDEO_CAP_10BIT: u8 = 0x01;
 /// Video-capability bit: the client can present BT.2020 PQ HDR10 (implies 10-bit).
 pub const PUNKTFUNK_VIDEO_CAP_HDR: u8 = 0x02;
 /// Video-capability bit: the client can decode full-chroma 4:4:4 HEVC. The host
-/// emits 4:4:4 only when this is set, the host opted in, the codec is HEVC, and
+/// emits 4:4:4 only when this is set, the host opted in, the codec is HEVC or PyroWave, and
 /// the GPU supports it — else 4:2:0. Read [`punktfunk_connection_chroma_format`].
 pub const PUNKTFUNK_VIDEO_CAP_444: u8 = 0x04;
 
@@ -621,7 +619,8 @@ pub const PUNKTFUNK_CODEC_H264: u8 = 0x01;
 pub const PUNKTFUNK_CODEC_HEVC: u8 = 0x02;
 /// Codec bit: AV1.
 pub const PUNKTFUNK_CODEC_AV1: u8 = 0x04;
-/// PyroWave. Never auto-selected; pass it as `preferred_codec` (`design/pyrowave-codec-plan.md`).
+/// PyroWave. Off the codec ladder: chosen only as `preferred_codec`, or by the host's Encoder
+/// pin for a client that names none (`design/pyrowave-codec-plan.md`).
 pub const PUNKTFUNK_CODEC_PYROWAVE: u8 = 0x08;
 
 /// Host-capability bit: the host applies gamepad-state snapshots (a capable client

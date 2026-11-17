@@ -1,7 +1,7 @@
-//! Coverflow geometry and the 4×4 card transform (GTK launcher / Apple coverflow parity).
+//! Coverflow geometry and the 4×4 card transform.
 
 /// The shelf's largest 2:3 cover, design units. The height fits the field between
-/// [`SHELF_COVER_MIN`] and this, as the Apple coverflow's does.
+/// [`SHELF_COVER_MIN`] and this.
 pub const POSTER_W: f64 = 240.0;
 pub const POSTER_H: f64 = 360.0;
 pub const SHELF_COVER_MIN: f64 = 140.0;

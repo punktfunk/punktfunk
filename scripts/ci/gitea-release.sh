@@ -1,18 +1,17 @@
 # shellcheck shell=bash
 # Shared Gitea Release helpers for the punktfunk CI workflows (Linux + macOS runners).
 #
-# Source this file, then call ensure_release / upsert_asset. It replaces the three
-# copy-pasted inline blocks that used to live in apple.yml / flatpak.yml / decky.yml,
-# and fixes a latent bug those had: the bare asset POST returns 409 if an asset with the
-# same name already exists, so re-running a workflow — or reusing the rolling `canary`
-# release with stable filenames — would fail. upsert_asset deletes the old asset first.
+# Source this file, then call ensure_release / upsert_asset. The bare asset POST returns 409
+# if an asset with the same name already exists, so re-running a workflow — or reusing the
+# rolling `canary` release with stable filenames — would fail. upsert_asset deletes the old
+# asset first.
 #
 # upsert_asset also attaches a `<asset>.sha256` sidecar for every asset, so a download off a
 # release page is verifiable (`sha256sum -c punktfunk-1.2.3.dmg.sha256`) — see its comment for
 # why sidecars rather than one shared SHA256SUMS.
 #
-# Callers run under Gitea Actions' default `bash -eo pipefail`, so a non-zero return from
-# these functions aborts the step (the desired behaviour on a real failure).
+# Callers run under `bash -eo pipefail` or POSIX `sh -e` (see _release_notes_path), so a
+# non-zero return from these functions aborts the step (the desired behaviour on a real failure).
 #
 # Env (Gitea Actions sets the first two automatically in every step):
 #   GITHUB_SERVER_URL   e.g. https://git.unom.io
@@ -41,8 +40,7 @@ _urlencode() { python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.
 # ⚠ Do NOT add helpers here for a workflow step that runs against a CHECKED-OUT RELEASE TAG
 # (arch.yml's release-rebuild dispatch). Callers source this file from the working tree, so such a
 # step gets the version of this file that shipped in that tag — never the one you just wrote. That
-# logic belongs in the workflow, which is always read from the dispatched ref. Cost this once
-# already: `prune_release_assets: command not found`, after the packages published fine.
+# logic belongs in the workflow, which is always read from the dispatched ref.
 
 # _release_notes_path TAG
 #   Print the path of the in-repo release notes for TAG (docs/releases/<TAG>.md) IFF it exists,
@@ -54,7 +52,7 @@ _urlencode() { python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.
 #   Resolved relative to CWD: every caller sources this as `. scripts/ci/gitea-release.sh` from the
 #   repo root, so the notes are always docs/releases/<tag>.md from here. Do NOT use ${BASH_SOURCE[0]}
 #   — the deb + decky attach steps run under POSIX sh (dash), where an array subscript is a fatal
-#   "Bad substitution" (it silently broke the v0.19.0 deb/decky release-attach).
+#   "Bad substitution".
 _release_notes_path() {
   local notes="docs/releases/$1.md"
   [ -f "$notes" ] && printf '%s' "$notes"
@@ -131,8 +129,8 @@ _put_asset() {
 }
 
 # _sha256 FILE -> lowercase hex digest
-#   python3 rather than sha256sum/shasum: python3 is already a hard dependency of this file, and
-#   the two coreutils spellings differ across our runners (Linux has sha256sum, macOS only shasum).
+#   python3 rather than sha256sum/shasum: python3 is already a hard dependency of this file, so
+#   one spelling works on every runner.
 _sha256() {
   python3 - "$1" <<'PY'
 import hashlib, sys
@@ -148,10 +146,11 @@ PY
 #   Attach FILE to the release AND a `<NAME>.sha256` checksum sidecar next to it, so every
 #   download off a release page can be verified:  sha256sum -c punktfunk-1.2.3.dmg.sha256
 #
-#   Sidecars, not one shared SHA256SUMS, ON PURPOSE: half a dozen workflows (release, windows-*,
-#   android, decky, deb, rpm, arch, flatpak) attach to the SAME release object concurrently, and a
-#   single manifest would be a read-modify-write race that silently loses whichever leg lost. One
-#   sidecar per asset has no shared mutable state — each leg only ever writes names it owns.
+#   Sidecars, not one shared SHA256SUMS, ON PURPOSE: every platform's workflow (windows-*,
+#   android, apple, decky, deb, rpm, arch, flatpak) attaches to the SAME release object
+#   concurrently, and a single manifest would be a read-modify-write race that silently loses
+#   whichever leg lost. One sidecar per asset has no shared mutable state — each leg only ever
+#   writes names it owns.
 #
 #   Living here rather than in the callers means a new packaging workflow inherits checksums for
 #   free; the only way to attach an unchecksummed asset is to bypass this helper entirely.

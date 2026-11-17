@@ -62,8 +62,8 @@ enum Fail {
     /// Transport broke. Surfaces as `submit` `Err` so the host rebuild path runs;
     /// [`RemotePyroWave::reset`] is the one respawn.
     Dead(anyhow::Error),
-    /// Worker alive, this frame refused. Pin in-process: the raw-dmabuf degrade latch is a host
-    /// process-wide static, and an import failure noted inside the worker dies with it.
+    /// Worker alive, this frame refused: pin in-process. A refusal marked `capture_rebuild` has
+    /// already fed the capture's raw-dmabuf latch here in the host.
     Encode(String),
 }
 
@@ -249,13 +249,13 @@ impl Link {
     }
 }
 
-/// Dmabuf identity across frames: its inode, the key the zerocopy importer uses too.
 /// Whether an AU length the worker reports can be read out of its return buffer. An honest
 /// worker never returns an empty AU.
 fn au_len_in_buffer(len: usize, buffer: u64) -> bool {
     len != 0 && len as u64 <= buffer
 }
 
+/// Dmabuf identity across frames: its inode, the key the zerocopy importer uses too.
 fn dmabuf_key(fd: BorrowedFd) -> io::Result<u64> {
     Ok(pf_zerocopy::fd_identity(fd)?.1)
 }
@@ -510,7 +510,7 @@ pub(crate) struct RemotePyroWave {
     /// leftovers from the fallback, which [`Self::poll_whole`] drains first.
     pending: VecDeque<EncodedFrame>,
     /// One respawn per session. After that, in-process: a worker that dies twice will keep dying,
-    /// and burning the host's five-reset budget on it costs the session.
+    /// and burning the host's reset budget (`MAX_ENCODER_RESETS`) on it costs the session.
     respawn_used: bool,
 }
 
@@ -609,8 +609,8 @@ impl Encoder for RemotePyroWave {
                     return Err(e.context("pyrowave encode worker"));
                 }
                 Err(Fail::Encode(message)) => {
-                    // Worker alive but refused this frame. Re-run in-process: the recovery
-                    // machinery (raw-dmabuf degrade latch is a host-process static) lives here.
+                    // Worker alive but refused this frame. Re-run it in-process; an import
+                    // refusal already fed the capture's latch through `capture_rebuild`.
                     self.pin_inline(&format!("the worker failed a frame: {message}"));
                 }
             }
@@ -1075,7 +1075,7 @@ mod tests {
 
     /// Ladder rung: a dead worker gets one respawn from `reset`, then the session is in-process.
     /// Driven with a dead socket and `/bin/false` so the respawn attempt is real and fails. A
-    /// proxy that retried every `reset` would burn the host's five-reset recovery budget.
+    /// proxy that retried every `reset` would burn the host's reset budget (`MAX_ENCODER_RESETS`).
     #[test]
     fn reset_respawns_the_worker_at_most_once() {
         let (host, peer) = ipc::socketpair_seqpacket().unwrap();

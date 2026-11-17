@@ -1,4 +1,4 @@
-//! Host→client gamepad feedback pulls (Option B): blocking JNI shims that forward to the connector's
+//! Host→client gamepad feedback pulls: blocking JNI shims that forward to the connector's
 //! rumble (0xCA) / HID-output (0xCD) planes and return one decoded event. Kotlin owns the poll
 //! threads + the Android Vibrator/Lights rendering (see `GamepadFeedback.kt`) — no JNI upcalls, no
 //! `JavaVM` attach, no cached method ids. Mirrors the audio plane's one-thread-per-plane contract,
@@ -29,9 +29,8 @@ pub(crate) fn idle_pull<T>(sentinel: T) -> T {
 
 /// Width of the packed `pad` field in [`pack_rumble`] — 4 bits, i.e. indices 0..15.
 const PAD_BITS: u32 = 4;
-/// The packing is only lossless while every representable pad index fits in [`PAD_BITS`]. This was
-/// a comment before; growing `MAX_PADS` past 16 would have silently aliased pad 16 onto pad 0
-/// rather than failing the build.
+/// The packing is only lossless while every representable pad index fits in [`PAD_BITS`]:
+/// growing `MAX_PADS` past 16 fails the build instead of aliasing pad 16 onto pad 0.
 const _: () = assert!(
     punktfunk_core::input::MAX_PADS <= 1usize << PAD_BITS,
     "MAX_PADS no longer fits the 4-bit pad field in the packed rumble long"
@@ -59,12 +58,12 @@ const TAG_MIC_LED: u8 = 0x07;
 
 /// `NativeBridge.nativeNextRumble(handle): Long` — block up to ~100 ms for the next EFFECTIVE
 /// rumble command from the core's shared policy engine (`design/rumble-root-fix.md` §D). The
-/// engine owns ALL rumble policy — v2 lease expiry, legacy-host staleness (a uniform 1 s, ending
-/// the old 60 s Android exposure), connection-close drain zeros — so Kotlin applies commands
-/// verbatim: `(0, 0)` = cancel now, non-zero = one-shot at this level.
+/// engine owns ALL rumble policy — v2 lease expiry, legacy-host staleness (`LEGACY_STALE_MS`),
+/// connection-close drain zeros — so Kotlin applies commands verbatim: `(0, 0)` = cancel now,
+/// non-zero = one-shot at this level.
 ///
 /// Returns a packed positive long: bits 49..52 = wire `pad` index (0..15), bits 32..47 = the
-/// command's `backstop_ms` (≤ 5000 — the one-shot duration, i.e. the hardware net under a stalled
+/// command's `backstop_ms` (the one-shot duration, i.e. the hardware net under a stalled
 /// poll thread; the engine emits explicit zeros at every policy stop, so it is never the stop
 /// mechanism), bits 16..31 = `low`, bits 0..15 = `high` (0..=0xFFFF). `-1` on timeout / session
 /// closed (all packed values are positive, so `-1` stays unambiguous). Kotlin routes the command
@@ -97,13 +96,14 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNextRumble(
     })
 }
 
-/// `NativeBridge.nativeNextHidout(handle, buf): Int` — block up to ~100 ms for the next DualSense
+/// `NativeBridge.nativeNextHidout(handle, buf): Int` — block up to ~100 ms for the next
 /// HID-output event, written into the caller's direct ByteBuffer as `[pad][kind][fields…]` (the
 /// leading `pad` is the wire pad index the event is addressed to, so Kotlin routes it to that
 /// controller — multi-pad HID feedback):
 ///   Led        → `[pad][0x01][r][g][b]`         (len 5)
 ///   PlayerLeds → `[pad][0x02][bits]`            (len 3)
 ///   Trigger    → `[pad][0x03][which][effect…]`  (len 3 + effect.len())
+///   HidRaw     → `[pad][0x05][kind][data…]`     (len 3 + data.len())
 ///   MicLed     → `[pad][0x07][mode]`            (len 3)
 /// Returns the byte count written, or `-1` on timeout / session closed / an event with no
 /// Android replay (dropped). A buffer too small for the event is logged.

@@ -1,6 +1,6 @@
-// Spike 1 (plan Phase 0): prove that an `effect/http-api` HttpApi can serve as the
-// plugin-local API behind the SDK's `servePluginUi` on Bun, using ONLY effect-core layers
-// (no @effect/platform-node / platform-bun) — the riskiest seam of the plugin-kit design.
+// Proves that an `effect/http-api` HttpApi can serve as the plugin-local API behind the SDK's
+// `servePluginUi` on Bun, using ONLY effect-core layers (no @effect/platform-node /
+// platform-bun).
 //
 // Validates:
 //   1. HttpApi + HttpApiBuilder.group + HttpRouter.toWebHandler answer plain fetch Requests.

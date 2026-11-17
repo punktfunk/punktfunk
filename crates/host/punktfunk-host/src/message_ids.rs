@@ -2,7 +2,7 @@
 //!
 //! The ids are read off the live source of the host, the seat supervisor, the virtual display
 //! crate and the update helper: each literal with a message prefix, the code each coding call
-//! takes, and the codes in `("code", "Sentence")` pairs under `mgmt/`. A message no site sends
+//! takes, and the codes in `("code", "Sentence")` pairs under `PAIRS_IN`. A message no site sends
 //! is printed, not failed.
 
 use std::collections::{BTreeMap, BTreeSet};

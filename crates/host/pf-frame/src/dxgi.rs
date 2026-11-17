@@ -44,9 +44,9 @@ pub struct WinCaptureTarget {
 /// PyroWave zero-copy share: second plane + cross-device fence.
 ///
 /// The wavelet encoder takes two shareable textures, not planar NV12: full-res `R8_UNORM`
-/// Y on [`D3d11Frame::texture`], half-res `R8G8_UNORM` CbCr here. NVIDIA's Vulkan import
-/// of a single planar NV12 is unreliable at arbitrary sizes. `None` on NVENC/AMF/QSV
-/// frames. The encoder mints each texture's shared handle on demand.
+/// Y on [`D3d11Frame::texture`], half-res `R8G8_UNORM` CbCr here. PyroWave's interop test
+/// reports NVIDIA's Windows import of planar NV12 working only at specific sizes. `None` on
+/// NVENC/AMF/QSV frames. The encoder mints each texture's shared handle on demand.
 pub struct PyroFrameShare {
     /// Half-res `R8G8_UNORM` CbCr, created `SHARED | SHARED_NTHANDLE`.
     pub cbcr: ID3D11Texture2D,
@@ -71,9 +71,9 @@ pub struct D3d11Frame {
     pub pyro: Option<PyroFrameShare>,
 }
 // SAFETY: `ID3D11Texture2D` and `ID3D11Device` are COM pointers with interlocked
-// refcounting. `make_device` does not pass `D3D11_CREATE_DEVICE_SINGLETHREADED`, so
-// the device is free-threaded. The value is moved, never aliased (`Send` without
-// `Sync`); the single-threaded immediate context is never used concurrently.
+// refcounting. Every device a frame carries omits `D3D11_CREATE_DEVICE_SINGLETHREADED`
+// (`make_device`, the driver's pooled device), so it is free-threaded. Moved, never aliased
+// (`Send` without `Sync`); the single-threaded immediate context is never used concurrently.
 unsafe impl Send for D3d11Frame {}
 
 pub fn pack_luid(luid: LUID) -> i64 {
@@ -115,7 +115,7 @@ pub unsafe fn make_device(adapter: &IDXGIAdapter1) -> Result<(ID3D11Device, ID3D
     // Thread priority and a 1-frame latency cap are secondary.
     elevate_process_gpu_priority();
     if let Ok(dxgi_dev) = device.cast::<IDXGIDevice>() {
-        // Absolute max GPU thread priority (`0x4000_001E`); fall back to relative +7.
+        // Absolute max GPU thread priority (`0x4000_001E`, Windows 10+); fall back to relative +7.
         // SAFETY: `dxgi_dev` is a live interface just obtained by a checked `cast`; both calls take
         // a scalar and only report failure through their return value.
         if unsafe { dxgi_dev.SetGPUThreadPriority(0x4000_001E) }.is_err()
@@ -192,7 +192,7 @@ enum PrioMode {
 ///
 /// D3DKMT_SCHEDULINGPRIORITYCLASS: IDLE 0, BELOW_NORMAL 1, NORMAL 2, ABOVE_NORMAL 3,
 /// HIGH 4, REALTIME 5. Default is REALTIME so capture/convert/encode preempts a
-/// saturating game. Trap: REALTIME + NVIDIA + HAGS + near-full VRAM hangs NVENC —
+/// saturating game. Trap: REALTIME + NVIDIA + HAGS + near-full VRAM can freeze NVENC —
 /// set `high` then. Costing local game fps under load is by design.
 fn configured_gpu_priority_mode() -> PrioMode {
     match std::env::var("PUNKTFUNK_GPU_PRIORITY_CLASS")
@@ -217,10 +217,10 @@ fn enable_inc_base_priority() {
     }
 }
 
-/// `gdi32!D3DKMTSetProcessSchedulingPriorityClass(process, prio)` by name (no
-/// stable windows-rs binding). Returns NTSTATUS (0 = success) or `None` if the
-/// export is missing. Caller must hold `SE_INC_BASE_PRIORITY` for HIGH/REALTIME;
-/// the kernel checks the caller whether the target is self or a child.
+/// `gdi32!D3DKMTSetProcessSchedulingPriorityClass(process, prio)` by name: windows-rs binds
+/// it only under `Wdk_Graphics_Direct3D`, a feature this crate leaves off. Returns NTSTATUS
+/// (0 = success) or `None` if the export is missing. Caller must hold `SE_INC_BASE_PRIORITY`
+/// for HIGH/REALTIME; the kernel checks the caller whether the target is self or a child.
 unsafe fn d3dkmt_set_scheduling_priority_class(
     process: windows::Win32::Foundation::HANDLE,
     prio: i32,
@@ -261,10 +261,9 @@ fn elevate_process_gpu_priority() {
 /// Raise `process`'s D3DKMT GPU scheduling class (best-effort, logged per call). `what`
 /// names the process in the log.
 ///
-/// Process class is the cross-process lever; `SetGPUThreadPriority` alone does not
-/// unstarve encode under a GPU-bound game. It covers every GPU context the process owns,
-/// including ones a driver creates internally (NVENC's RGB→YUV pass). Default REALTIME;
-/// see [`configured_gpu_priority_mode`]. The kernel checks this caller's
+/// Process class is the cross-process lever: it sets the scheduling class of the whole
+/// process, where `SetGPUThreadPriority` raises one device. The class comes from
+/// [`configured_gpu_priority_mode`]. The kernel checks this caller's
 /// `SE_INC_BASE_PRIORITY`, so it no-ops under a UAC-filtered token.
 ///
 /// # Safety

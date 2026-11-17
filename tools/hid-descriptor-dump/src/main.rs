@@ -1,14 +1,9 @@
-//! Capture a real HID device's report descriptor, decode it, and print it in the shape the
-//! `pf-gamepad` driver keeps its blobs in.
+//! Capture a real HID device's report descriptor, decode it, and print it in the shape
+//! `crates/host/pf-driver-proto/src/` keeps its blobs in (`pf-gamepad` serves them).
 //!
-//! WHY THIS EXISTS. `packaging/windows/drivers/pf-gamepad/src/lib.rs` serves a report descriptor
-//! per emulated pad. Three of the four are verbatim captures off real hardware; `XBOX_RDESC` was
-//! hand-constructed, and its own provenance warning came true three separate times (a missing
-//! channel-proof Feature report meant the pad never delivered a single input report; there is no
-//! OUTPUT collection at all, so rumble cannot arrive; `xinputhid` appears to validate the
-//! descriptor and rejects ours). We claim a genuine Microsoft VID/PID, and SDL, Steam and Windows
-//! all apply stock mappings keyed on it — so a layout that differs from the real pad lands every
-//! control on the wrong action. Captures, not constructions.
+//! WHY THIS EXISTS. SDL, Steam and Windows apply stock mappings keyed on the VID/PID we claim,
+//! so a layout that differs from the real pad lands every control on the wrong action.
+//! Captures, not constructions.
 //!
 //! USAGE
 //! ```text
@@ -18,17 +13,14 @@
 //!   hid-descriptor-dump --path '\\?\HID#...'       # one exact collection
 //! ```
 //!
-//! WHAT THE DESCRIPTOR COMES FROM, PER PLATFORM. On Linux hidapi reads
-//! `/sys/class/hidraw/hidrawN/device/report_descriptor` — the literal bytes the device sent. On
-//! Windows there is no API that returns those bytes: the HID class driver keeps only the parsed
-//! form, so hidapi RECONSTRUCTS a descriptor from `HidD_GetPreparsedData`. The reconstruction is
-//! faithful in structure, item order and every field's bit offset — which is what a layout diff
-//! needs — but the byte encoding may differ from the wire (an item the device sent as one byte can
-//! come back as two, and hidapi emits collections it inferred). ⇒ **Diff the LAYOUT MAP and the
-//! item listing, not the raw bytes, when the capture came off Windows.** A byte-exact capture
-//! needs Linux hidraw.
-//!
-//! This tool is deliberately not a workspace member; see its `Cargo.toml`.
+//! WHAT THE DESCRIPTOR COMES FROM, PER PLATFORM. On Linux hidapi returns the hidraw descriptor
+//! (`HIDIOCGRDESC`) — the literal bytes the device sent. On Windows there is no API that returns
+//! those bytes: the HID class driver keeps only the parsed form, so hidapi RECONSTRUCTS a
+//! descriptor from `HidD_GetPreparsedData`. The reconstruction keeps structure, item order and
+//! every field's bit offset — what a layout diff needs — but the byte encoding may differ from
+//! the wire. ⇒ **Diff the LAYOUT MAP and the item listing, not the raw bytes, when the capture
+//! came off Windows.** A byte-exact capture needs Linux hidraw. Not a workspace member; see
+//! `Cargo.toml`.
 
 mod decode;
 mod sc2;
@@ -58,11 +50,10 @@ fn extract_rust_array(src: &str, symbol: &str) -> Result<Vec<u8>, String> {
         .find(&format!("static {symbol}:"))
         .ok_or_else(|| format!("no `static {symbol}:` in that file"))?;
 
-    // 🛑 STRIP COMMENTS FIRST, then find the brackets — not the other way round. These arrays are
-    // heavily annotated and the annotations contain both `,` and `]` (a comment documenting a wire
-    // layout as `[0x03][enable][left]…` is real, and it appears inside `XBOX_RDESC`). Locating the
-    // closing bracket on the raw text stops at the first `]` in a COMMENT and silently truncates
-    // the array — which reads as a corrupt descriptor rather than a parse bug.
+    // STRIP COMMENTS FIRST, then find the brackets. The arrays are annotated, and a comment can
+    // hold `,` or `]` (a wire layout written `[0x03][enable][left]…`); the closing bracket found
+    // on raw text would stop inside a COMMENT and silently truncate the array, which reads as a
+    // corrupt descriptor rather than a parse bug.
     let tail: String = src[at..]
         .lines()
         .map(|l| l.split("//").next().unwrap_or(""))
@@ -413,7 +404,7 @@ fn main() -> ExitCode {
                 continue;
             }
         };
-        // 4 KiB is the HID class driver's own ceiling for a report descriptor.
+        // hidapi's recommended descriptor buffer size (HID_API_MAX_REPORT_DESCRIPTOR_SIZE).
         let mut buf = vec![0u8; 4096];
         let len = match dev.get_report_descriptor(&mut buf) {
             Ok(n) => n,

@@ -139,7 +139,7 @@ pub fn art_sampling() -> skia_safe::SamplingOptions {
     skia_safe::SamplingOptions::new(skia_safe::FilterMode::Linear, skia_safe::MipmapMode::Linear)
 }
 
-/// Status red (GTK `#ff938a`). A warning must not follow the wallpaper.
+/// Status red. A warning must not follow the wallpaper.
 pub const ERROR: Color4f = Color4f::new(1.0, 0.576, 0.541, 1.0);
 pub const ONLINE_GREEN: Color4f = Color4f::new(0.20, 0.84, 0.29, 1.0);
 
@@ -157,8 +157,8 @@ pub const HAIRLINE: f64 = 1.2;
 pub struct Ink {
     fg: Color4f,
     accent: Color4f,
-    /// Glass at a panel's top and at its foot. The shell draws no glass since the panel became
-    /// a line; the theme lab's data (`dump_theme_lab`) still carries both for its preview.
+    /// Glass at a panel's top and at its foot. The shell draws none; the theme lab's data
+    /// (`dump_theme_lab`) carries both for its preview.
     #[allow(dead_code)]
     glass: Color4f,
     #[allow(dead_code)]
@@ -218,7 +218,8 @@ const PALE_INK: Ink = Ink {
 /// A white-ink field whose ground is brighter than this takes [`VIVID_INK`].
 const VIVID_GROUND: f64 = 0.3;
 
-/// Relative luminance of an sRGB colour, for picking ink against a ground.
+/// Rec. 709 luma of the components as given, for picking ink against a ground. Unlike
+/// `Rgb::luminance` in pf-client-core it does not linearise first.
 pub(crate) fn luma((r, g, b): (f64, f64, f64)) -> f64 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
@@ -289,8 +290,8 @@ pub struct Frame {
     /// Travel suppressed this frame. Callers keep the state change and drop the glide.
     /// Never used to skip a haptic: the pulse replaces the motion.
     pub reduce_motion: bool,
-    /// The reduced interface: a TV-class GPU. Passes that read back what is already drawn
-    /// (a backdrop blur) break a tiled GPU's render pass and are skipped.
+    /// The reduced interface: a TV-class GPU. It is `reduce_ui_res`'s answer; the shell's
+    /// backdrop reads the same one and takes a smaller buffer.
     pub reduced_ui: bool,
     /// The safe area's left inset, px ([`Frame::edge`]).
     pub side_inset: f64,
@@ -501,7 +502,7 @@ pub fn focus_ring(canvas: &Canvas, ui: &Frame, rect: Rect, corner: f32, k: f32) 
 /// [`focus_halo`] growth past the card, design units. Applied to both rect and corner radius.
 const HALO_OUTSET: f32 = 4.0;
 
-/// Accent glow under the focused card. Drawn behind [`drop_shadow`].
+/// Accent glow under the focused card. Draw it before [`drop_shadow`] so the shadow lies over it.
 pub fn focus_halo(canvas: &Canvas, ui: &Frame, rect: Rect, corner: f32, k: f32, f: f32) {
     if f <= 0.01 {
         return;
@@ -521,7 +522,7 @@ pub fn focus_halo(canvas: &Canvas, ui: &Frame, rect: Rect, corner: f32, k: f32, 
     };
     let mut p = fill(Color4f::new(c.r, c.g, c.b, alpha));
     // Outer, not Normal: Normal keeps the interior, so the halo fills the card
-    // at full accent and shows through translucent glass (α 0.62 / 0.66).
+    // at full accent and shows through a translucent card.
     p.set_mask_filter(MaskFilter::blur(
         skia_safe::BlurStyle::Outer,
         10.0 * k,
@@ -632,8 +633,8 @@ struct Fallback {
     pages: HashMap<(u32, W), Typeface>,
 }
 
-/// The language hint a font manager reads. Android's fallback list tags Chinese by script,
-/// fontconfig by region; each spelling picks the other's wrong Han face.
+/// The language hint a font manager reads. Android's fallback list (Android 15) tags Chinese by
+/// script, fontconfig (2.18) by region; each spelling picks the other's wrong Han face.
 fn font_lang(lang: &'static str) -> &'static str {
     const CHINESE: [(&str, &str); 3] = [
         ("zh-Hans", "zh-CN"),
@@ -786,7 +787,7 @@ pub(crate) fn test_fonts(fallback: &[&[u8]]) -> Fonts {
     build(fallback, FontMgr::new(), FontMgr::empty()).expect("faces load")
 }
 
-/// A face for chars Geist lacks: Lucide's icons, at private-use codepoints from U+E000.
+/// A face for chars Geist lacks: Lucide's icons, at private-use-area codepoints.
 #[cfg(test)]
 pub(crate) const TEST_FALLBACK: &[u8] = include_bytes!("../../../../assets/lucide/font/lucide.ttf");
 

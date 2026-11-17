@@ -32,7 +32,7 @@ use crate::uapi_stateless::V4l2CtrlHevcScalingMatrix;
 use crate::uapi_stateless::V4l2CtrlHevcSliceParams;
 use crate::uapi_stateless::V4l2CtrlHevcSps;
 
-/// Pictures beyond the stream's DPB: the one being decoded, plus what the
+/// Pictures beyond the stream's DPB and the one being decoded: what the
 /// consumer may still hold.
 const POOL_HEADROOM: u32 = 4;
 

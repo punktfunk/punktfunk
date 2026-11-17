@@ -222,7 +222,7 @@ const LogCard: FC<{
 						{m.controllers_log_empty()}
 					</p>
 				) : (
-					// Newest last, and scrolled to the bottom: the reader is watching the tail.
+					// Newest last: the reader is watching the tail.
 					<ol className="flex max-h-80 flex-col overflow-y-auto font-mono text-xs">
 						{log.map((l) => (
 							<li key={l.seq} className="flex gap-2 tabular-nums">

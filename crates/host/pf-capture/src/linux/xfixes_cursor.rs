@@ -967,7 +967,6 @@ mod tests {
         assert_eq!(s.for_key((1, 6)), 3, "another display reusing the number");
     }
 
-    /// A 5K frame times a 5K coordinate overflows `i32` — scale in `i64`.
     #[test]
     fn scaling_does_not_overflow_at_5k() {
         assert_eq!(

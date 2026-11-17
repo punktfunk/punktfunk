@@ -1,6 +1,6 @@
 # S2 spike (vdisplay-disturbance-immunity plan §4): can a sealed texture ring plus two shared
-# D3D11 fences replace the per-slot keyed mutex between the host and a producer process? Run on
-# both vendors before WP7 commits to the CAS/fence transport.
+# D3D11 fences replace the per-slot keyed mutex between the host and a producer process? Fence
+# sharing differs by vendor, so run it on both.
 #
 # Not a workspace member (see the root `Cargo.toml` `exclude` list): build it from this directory.
 [workspace]

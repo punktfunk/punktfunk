@@ -165,10 +165,8 @@ object SkiaConsole {
      * `App` gates the console on `wanted() && healthy` on top of the user's own setting, and those
      * two terms are the ONLY ones that can veto "Always": the mode, the attached pad, the TV check
      * and the dev flag are ORed together, so a device where the console never comes up ignores
-     * every one of them. Until this existed that produced a switch the app silently disobeyed —
-     * indistinguishable, from the outside, from the switch itself being broken, and it is what a
-     * report of "the gamepad UI just doesn't activate, even on Always, even with a controller"
-     * looks like. Reads [healthy] as Compose state, so the note clears itself if it ever recovers.
+     * every one of them. Without a note the switch looks broken rather than overruled. Reads
+     * [healthy] as Compose state, so the note appears as soon as the console dies.
      */
     @Composable
     fun unavailable(): String? = when {
@@ -187,10 +185,9 @@ object SkiaConsole {
 
     /**
      * Build the console if it does not exist yet. Idempotent; call from the main thread. Returns
-     * the native handle (`0` = the console could not be built; the caller keeps the Compose
-     * console).
-     */
-    /**
+     * the native handle (`0` = the console could not be built; [healthy] is false and the touch
+     * UI takes over).
+     *
      * @param pendingLink true when a `punktfunk://` URL is waiting to be routed. Explicit intent
      *   beats the start-screen policy, and the link is handled after composition — so the console
      *   must not open a shelf first and make the link the second thing that happens.
@@ -279,8 +276,9 @@ object SkiaConsole {
     }
 
     /**
-     * Skia's resource budget: a quarter of the desktop's 160 MB on a ≤ 2 GB box, the desktop
-     * figure above (design D11 — a 160 MB texture cache is how a TV box gets its process killed).
+     * Skia's resource budget: the desktop's (`DEFAULT_GPU_CACHE_BYTES`) from a 256 MB app heap
+     * class up, 64 MB below it (design D11 — a 160 MB texture cache is how a TV box gets its
+     * process killed).
      */
     private fun gpuCacheBytes(context: Context): Int {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
@@ -331,10 +329,10 @@ object SkiaConsole {
     private val onNetworkChanged: () -> Unit = { sweepNow() }
 
     /**
-     * The reachability sweep — the whole of presence, every ~12 s (the desktop's cadence), and at
-     * once on [sweepNow]. Every saved host, including the ones on mDNS: an advert is a cache entry
-     * with a 75-minute TTL that a suspending host sends no goodbye for, so trusting it left a
-     * sleeping machine reading Online and, since Wake is gated on `!online`, unwakeable.
+     * The reachability sweep — the whole of presence, every [SWEEP_MS], and at once on
+     * [sweepNow]. Every saved host, including the ones on mDNS: an advert is a cache entry with a
+     * 75-minute TTL that a suspending host sends no goodbye for, so trusting it would read a
+     * sleeping machine as Online and, since Wake is gated on `!online`, leave it unwakeable.
      *
      * Only while the console is ON SCREEN (attached, the app in front): parked behind the touch
      * UI, a stream or Home there is nobody to show the pips to — and mid-stream the radio belongs
@@ -638,7 +636,7 @@ object SkiaConsole {
 
     /**
      * Keep each paired, reachable host's advertised actions and running title fresh, mirroring
-     * the desktop's `Service::refresh_host_state`.
+     * the desktop's `ServiceState::refresh_host_state`.
      *
      * Actions run on a slow TTL and never when a menu opens: the row list has to be SETTLED
      * before the menu draws, or rows would appear under a cursor already moving toward
@@ -685,7 +683,7 @@ object SkiaConsole {
     /**
      * Adopt a `/status` answer as the carousel's "▶ <title>" line: the first entry that is up
      * and has a title to show, else nothing. Re-pushes only on a real change, so a host
-     * answering every 20 s does not churn the snapshot generation.
+     * answering every [NOW_PLAYING_TTL_MS] does not churn the snapshot generation.
      */
     internal fun recordNowPlaying(fpHex: String, games: List<RunningGame>) {
         val title = games.firstOrNull { it.isUp && it.title.isNotEmpty() }?.title.orEmpty()
@@ -1338,10 +1336,10 @@ object SkiaConsole {
 
     /** How long a host's advertised actions stay fresh before we ask again — the desktop's
      *  `pf_client_core::host_actions::TTL`. Long on purpose: what it governs changes when an
-     *  operator edits access, not minute to minute, and each refresh is a TLS handshake. */
+     *  operator edits access, not minute to minute. */
     private const val HOST_ACTIONS_TTL_MS = 300_000L
 
-    /** The presence cadence — the desktop's. */
+    /** The presence cadence; the desktop runs its own (`probe_due` in `ServiceState::run`). */
     private const val SWEEP_MS = 12_000L
 
     /** How long a host's running title stays fresh — `pf_client_core::library::RUNNING_TTL`.

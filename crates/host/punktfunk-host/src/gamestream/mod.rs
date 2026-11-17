@@ -8,7 +8,6 @@
 // Ports and pairing persistence stay in every build; `tls` is the crate's `https`.
 #[cfg(feature = "gamestream")]
 pub mod apps;
-// Non-Linux builds get a stub `start` inside this module.
 #[cfg(feature = "gamestream")]
 mod audio;
 #[cfg(feature = "gamestream")]
@@ -284,7 +283,8 @@ pub type VideoHdr = std::sync::Arc<std::sync::Mutex<Option<pf_frame::HdrMeta>>>;
 #[cfg(feature = "gamestream")]
 pub type VideoPoke = std::sync::Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 
-/// Cumulative client-loss telemetry from the control stream's periodic `0x0201` loss-stats.
+/// Cumulative client-loss telemetry from the control stream's `0x0201` loss stats and
+/// `0x5502` FEC status.
 /// Control thread adds; video thread's 1 Hz step reads deltas — no lock, no reset.
 #[derive(Default)]
 #[cfg_attr(not(feature = "gamestream"), allow(dead_code, reason = "compat plane"))]
@@ -300,7 +300,7 @@ pub struct GsLossStats {
 pub struct LaunchSession {
     /// AES-128 key for RTSP/control/video/audio (`rikey`).
     pub gcm_key: [u8; 16],
-    /// Seeds the per-stream GCM IVs (`rikeyid`).
+    /// Seeds the audio AES-CBC IV (`rikeyid`).
     pub rikeyid: i32,
     pub width: u32,
     pub height: u32,
@@ -346,9 +346,8 @@ pub struct GsState {
     /// The running video source's poke, which ends the stream loop's tick wait. [`control`]
     /// fires it on a recovery ask, so the ask goes out at once. `None` without a stream.
     pub video_poke: VideoPoke,
-    /// Persistent screen capturer, reused across streams. The slot's `bool` is whether it was
-    /// opened with the HDR offer; a stream whose negotiated `hdr` differs drops it and opens
-    /// a fresh session at the right depth.
+    /// Persistent screen capturer, reused across streams. A stream whose reuse keys
+    /// ([`stream::PooledCapturer`], HDR among them) differ drops it and opens a fresh session.
     pub video_cap: stream::CapturerSlot,
     /// The native session this launch shares a screen with, set by every `/launch`.
     pub joined: std::sync::Mutex<Option<GsJoin>>,
@@ -629,7 +628,7 @@ mod av_ping_tests {
         let mut near = P;
         near[7] ^= 1;
         assert!(!ping_matches(&near, &P), "last raw byte wrong");
-        // Former fixed ping, now that every session mints its own.
+        // Another session's ping does not match.
         assert!(!ping_matches(b"0011223344556677", &[0xAB; AV_PING_LEN]));
     }
 }
@@ -689,7 +688,7 @@ mod tests {
         let fmode = std::fs::metadata(&key).unwrap().permissions().mode() & 0o777;
         assert_eq!(fmode, 0o600, "private key must be owner-only (0600)");
 
-        // Overwrite must keep 0600 (truncate + reopen, not create).
+        // Overwrite must keep 0600 (unlink, then create-new at 0600).
         pf_paths::write_secret_file(&key, b"new contents").expect("rewrite secret");
         let fmode = std::fs::metadata(&key).unwrap().permissions().mode() & 0o777;
         assert_eq!(fmode, 0o600);

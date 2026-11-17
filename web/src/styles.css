@@ -14,8 +14,9 @@
    palette the design/Scalar reference uses: white bg, faint-violet cards/borders,
    #6c5bf3 brand) is the :root default; DARK (the violet-tinted app-icon chrome
    #141019 / #1c1530, #a79ff8 brand) is the `.dark` override. The live console
-   pins `<html class="dark">` so it stays dark by default — removing or toggling
-   that class (e.g. Storybook's theme switch) yields light. The token set feeds
+   sets `<html class="dark">` unless the operator's pick or the desktop's theme
+   says light, so it is dark by default — removing or toggling that class
+   (e.g. Storybook's theme switch) yields light. The token set feeds
    BOTH @unom/ui's semantic contract (--brand/--primary/--accent/--neutral/
    --main…) and the shadcn-style tokens the console's primitives + routes use
    (--background/--card/--muted…), mapped onto one palette so both render the

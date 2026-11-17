@@ -53,8 +53,9 @@ public struct DiscoveredHost: Identifiable, Sendable, Equatable {
     /// client then assumes `punktfunkDefaultMgmtPort`.
     ///
     /// Persisted onto the saved host like the MACs and the OS chain: without it
-    /// `StoredHost.effectiveMgmtPort` falls back to 47990, and a host that moved its mgmt port
-    /// (to share a machine with a Sunshine fork, whose web UI owns 47990) shows no library.
+    /// `StoredHost.effectiveMgmtPort` falls back to `punktfunkDefaultMgmtPort`, and a host that
+    /// moved its mgmt port (to share a machine with a Sunshine fork, whose web UI owns that
+    /// port) shows no library.
     public let mgmtPort: UInt16?
 }
 
@@ -99,7 +100,7 @@ public final class HostDiscovery: ObservableObject {
     private var retryAt: [String: Date] = [:]
     /// Services whose address should be re-resolved even though we already have one — set by
     /// `refresh()`. The old address keeps showing until the new one lands, so a rescan never
-    /// blinks the list empty; without this a manual Refresh silently skipped every host it had
+    /// blinks the list empty; without this a manual Refresh silently skips every host it has
     /// already resolved, which is exactly the host whose address may have moved.
     private var staleAddresses: Set<String> = []
     /// Consecutive non-ready browser states, and when to tear it down and re-arm. nil = healthy.
@@ -192,7 +193,7 @@ public final class HostDiscovery: ObservableObject {
 
     /// `refresh()`, but only when discovery is already running — the app-foreground hook. iOS
     /// suspends a backgrounded process's browse and `onAppear`/`onDisappear` don't fire across
-    /// background/foreground, so a browse that died while suspended stayed dead on return; this
+    /// background/foreground, so a browse that dies while suspended stays dead on return; this
     /// re-arms it without starting a browse on a screen that deliberately isn't browsing
     /// (mid-session, where the home tore discovery down).
     public func refreshIfRunning() {
@@ -212,8 +213,7 @@ public final class HostDiscovery: ObservableObject {
 
     /// Screenshot/preview seam, the discovery counterpart to `HostWaker.debugSet`: publish a FIXED
     /// set of adverts and keep browsing off. Without it a capture shows whatever happens to be on
-    /// the machine's LAN — the App Store screenshots shipped a stranger's hostname more than once —
-    /// and every mock host reads Offline because nothing advertises it.
+    /// the machine's LAN, and every mock host reads Offline because nothing advertises it.
     public func debugSet(_ adverts: [DiscoveredHost]) {
         stop()
         debugPinned = true
@@ -409,7 +409,7 @@ public final class HostDiscovery: ObservableObject {
     private func tick() {
         let now = Date()
         // Time out the resolves that parked. Without this they never end, and `pump()` skips a
-        // service that has a connection in flight — so that host stayed invisible indefinitely.
+        // service that has a connection in flight — so that host stays invisible indefinitely.
         for key in deadlines.filter({ $0.value <= now }).keys {
             connections[key]?.cancel()
             connections[key] = nil

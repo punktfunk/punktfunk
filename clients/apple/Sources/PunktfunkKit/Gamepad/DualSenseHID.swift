@@ -1,8 +1,8 @@
 // Raw-HID DualSense rumble and mic-mute LED for macOS.
 //
 // Apple's GameController/CHHapticEngine path does NOT drive the DualSense's rumble motors on
-// macOS — a documented platform gap: adaptive triggers, lightbar and player LEDs all work
-// (different APIs), but `CHHapticEngine` output never reaches the motors. So we write the motor
+// macOS (seen on hardware): adaptive triggers, lightbar and player LEDs all work (different
+// APIs), but `CHHapticEngine` output never reaches the motors. So we write the motor
 // amplitudes straight into the DualSense HID output report, exactly the way SDL and the Linux
 // `hid-playstation` driver do (the same report that already rumbles this pad on a Linux host).
 //

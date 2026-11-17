@@ -4,10 +4,10 @@
 //!
 //! The file holds one line per (build fingerprint, decoder, codec, ladder): `\t`-separated, the
 //! fields of [`Entry`] in order. A line that does not parse is dropped, a six-field line written
-//! without the ladder too. A rung is written only when the floor moved (two clean failures) and a
-//! decoder then settled on it ([`outcome`]). An entry from another OS build is dropped on the
-//! next write; one [`MAX_AGE_SECS`] old or from another app version gives rung 0 one more chance
-//! ([`Start::Retry`]).
+//! without the ladder too. A rung is written only when the floor moved
+//! ([`RungFloor::note_failed`]) and a decoder then settled on it ([`outcome`]). An entry from
+//! another OS build is dropped on the next write; one [`MAX_AGE_SECS`] old or from another app
+//! version gives rung 0 one more chance ([`Start::Retry`]).
 //!
 //! Rungs are ladder indices, and the backend pick, the session's colour and the low-latency
 //! toggle reshape the ladder. The key carries its label
@@ -203,7 +203,8 @@ pub(crate) fn outcome(start: Start, floor_rung: usize, rendered: u64) -> Outcome
 /// One surface's copy of the memory: the file's entries, the stream codec's key, and where that
 /// codec's decoders started.
 pub(crate) struct Memory {
-    /// Where the file is written: `None` with no files dir, or once a write failed.
+    /// Where the file is written: `None` with no log dir (`logs::dir`), or once a write
+    /// failed.
     path: Option<PathBuf>,
     entries: Vec<Entry>,
     key: Key,

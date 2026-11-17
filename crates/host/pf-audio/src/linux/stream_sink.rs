@@ -1,7 +1,7 @@
 //! Session-scoped default claims for the host's own audio nodes.
 //!
-//! In stream-sink mode (see [`super`]) the capture stream is an `Audio/Sink`
-//! node and must be the session default so host apps play into it; the shared
+//! In both sink modes (see [`super`]) the host-owned `Audio/Sink` node must be
+//! the session default so host apps play into it; the shared
 //! virtual mic is the default source for a session's span, so an app that
 //! records the default hears the client. A claim saves the configured default
 //! and points it at our node; release restores. WirePlumber's

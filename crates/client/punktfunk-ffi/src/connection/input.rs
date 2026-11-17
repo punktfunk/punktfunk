@@ -73,7 +73,7 @@ pub unsafe extern "C" fn punktfunk_connection_send_mic(
 }
 
 /// Send one rich input (DualSense touchpad contact or motion) as a QUIC datagram.
-/// No-op unless the host runs the DualSense backend. `InvalidArg` on unknown `kind`.
+/// The host drops it for an Xbox pad, which has no rich plane. `InvalidArg` on unknown `kind`.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `rich` points to a valid [`PunktfunkRichInput`].
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn punktfunk_connection_send_rich_input2(
     })
 }
 
-/// Clamp `pad` to 16 and the report to `HID_REPORT_MAX` — same rules as the Android shim.
+/// Mask `pad` to 16 and clamp the report to `HID_REPORT_MAX` — same rules as the Android shim.
 #[cfg(feature = "quic")]
 fn hid_report_rich_input(pad: u8, report: &[u8]) -> punktfunk_core::quic::RichInput {
     let n = report.len().min(punktfunk_core::quic::HID_REPORT_MAX);
@@ -411,10 +411,11 @@ pub unsafe extern "C" fn punktfunk_connection_send_pen(
     })
 }
 
-/// Send the whole touchpad as one `0xCC/0x06` frame (`design/touchpad-passthrough.md`). Send
-/// one with no contacts when the source appears, and one on every change after. Core stamps
-/// the sequence and repeats the last frame every 100 ms while a contact or the button is down.
-/// Gate on [`punktfunk_connection_host_touchpad`]; without it this is `Unsupported`.
+/// Send the whole touchpad as one `0xCC/0x06` frame (wire: `punktfunk-core`'s
+/// `quic/touchpad.rs`). Send one with no contacts when the source appears, and one on every
+/// change after. Core stamps the sequence and repeats the last frame every 100 ms while a
+/// contact or the button is down. Gate on [`punktfunk_connection_host_touchpad`]; without it
+/// this is `Unsupported`.
 /// `InvalidArg` on a count above `PUNKTFUNK_TOUCHPAD_MAX_CONTACTS`, an unknown state bit, an id
 /// above `PUNKTFUNK_TOUCHPAD_MAX_ID` or one id twice.
 ///

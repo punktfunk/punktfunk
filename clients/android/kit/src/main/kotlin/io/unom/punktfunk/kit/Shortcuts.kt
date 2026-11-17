@@ -5,10 +5,9 @@ import org.json.JSONObject
 
 /**
  * In-stream shortcuts: a press or hold of controller buttons or keys, bound to a quick action —
- * the `shortcuts` settings blob. The Kotlin twin of pf-client-core's `shortcuts` module
- * (design/client-shortcuts.md in the planning repo); `ShortcutVectorsTest` replays
- * `clients/shared/shortcut-vectors.json` as the Rust `tests.rs` does, so a rule changes there
- * first.
+ * the `shortcuts` settings blob. The Kotlin twin of pf-client-core's `shortcuts` module;
+ * `ShortcutVectorsTest` replays `clients/shared/shortcut-vectors.json` as the Rust `tests.rs`
+ * does, so a rule changes there first.
  *
  * [parse] never fails; an empty blob is this client's [defaults] ([resolve]). [Engine] is the pure
  * state machine that holds back, forwards and fires: one per pad, one for the keyboard.
@@ -233,10 +232,11 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
     }
 
     /**
-     * One device's shortcuts, as the rules of design §4. Feed every transition to [step], call
-     * [tick] by [nextDue] (late only delays), and [flush] when the device goes away. Pass only the
-     * actions this session can perform. Ids are wire bits, or VKs with left and right modifiers
-     * folded onto `keyVk("ctrl" | "alt" | "shift")`. Pure: the caller owns the clock and the wire.
+     * One device's shortcuts, with the rules of pf-client-core's `shortcuts::Engine`. Feed every
+     * transition to [step], call [tick] by [nextDue] (late only delays), and [flush] when the
+     * device goes away. Pass only the actions this session can perform. Ids are wire bits, or VKs
+     * with left and right modifiers folded onto `keyVk("ctrl" | "alt" | "shift")`. Pure: the
+     * caller owns the clock and the wire.
      */
     class Engine(bindings: List<Binding>, private val device: Device) {
         private class Rule(val ids: List<Int>, val hold: Boolean, val action: Action)
@@ -550,7 +550,7 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
         private val EXIT = listOf("lb", "rb", "start", "select")
         private val PS5_EXIT = listOf("lb", "rb", "start", "touchpad")
 
-        /** This client's shortcuts when the player has changed none: the chords it always had.
+        /** This client's shortcuts when the player has changed none.
          *  [legacyGuideGesture] is the old Hold Select for guide value: `on` and `off` decide the
          *  Hold Select row, anything else is the client's automatic. */
         fun defaults(client: Client, gameMode: Boolean, legacyGuideGesture: String): Shortcuts {
@@ -563,7 +563,7 @@ data class Shortcuts(val bindings: List<Binding> = emptyList()) {
                     else -> false
                 }
             }
-            // The clients with their own pad path; the others' dial is their only pad chord.
+            // The clients with their own pad path; the others get only the dial and exit chords.
             val native = client in listOf(Client.DESKTOP, Client.ANDROID, Client.APPLE, Client.MAC)
             // The dial opener is Select + the confirm button: Minus + A (east) on a Switch.
             val (open, exit) = when (client) {

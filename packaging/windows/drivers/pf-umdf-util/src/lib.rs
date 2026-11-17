@@ -12,8 +12,8 @@
 //!   (`design/gamepad-channel-sealing.md`), a **`#[forbid(unsafe_code)]` module**.
 //! * [`wdf`] — [`wdf::Request`] + queue/device-property helpers: each callback converts its raw
 //!   `WDFREQUEST` into a token exactly once; everything after that is safe.
-//! * [`hid`] — the channel-proof answer (also `#[forbid(unsafe_code)]`): how `pf_gamepad` and
-//!   `pf_mouse` tell the host which process serves this devnode, over the device stack rather
+//! * [`hid`] — the HID IOCTL table, descriptor and string helpers (no `unsafe`), and the notes on
+//!   how a driver tells the host which process serves its devnode over the device stack rather
 //!   than the LocalService-writable bootstrap mailbox.
 //! * [`log`] — [`log::FileLog`] plus [`file_log!`] / [`dbglog!`]: the opt-in bring-up file log.
 //! * [`skeleton`] — `DriverEntry`, both queues and the periodic timer the HID drivers share.

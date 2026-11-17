@@ -1,17 +1,13 @@
 //! Which Windows input APIs can see this gamepad?
 //!
-//! WHY THIS EXISTS. The Xbox-pad-on-Windows programme
-//! (`punktfunk-planning/design/xbox-pad-windows-handoff.md`) is a five-row matrix — classic
-//! XInput, WGI `Gamepad`, WGI `RawGameController`, GameInput, and the HID/DirectInput/Steam
-//! family — and **nothing in this tree measured any of it**. Every reading in that document came
-//! from ad-hoc off-tree tools, which is why several of them could not be reproduced or A/B'd
-//! afterwards, and why one of them turned out to be a false positive. This makes the matrix a
-//! command you can run twice and diff.
+//! The Xbox-pad-on-Windows work (`punktfunk-planning/design/xbox-pad-windows-handoff.md`) is a
+//! five-row matrix — classic XInput, WGI `Gamepad`, WGI `RawGameController`, GameInput, and the
+//! HID/DirectInput/Steam family. This makes the matrix a command you can run twice and diff.
 //!
 //! ⚠️⚠️ **THE FALSE-POSITIVE TRAP, and why `--watch` exists.** A test box usually has REAL pads on
-//! it. A real Xbox pad owns XInput slot 0 and appears in WGI, so "I can see a pad" proves nothing.
-//! This already burned one session: `XInputGetState(0)` read `rc=0 LX=-885` with the virtual pad
-//! live *and* with it killed — slot 0 was always the real Elite.
+//! it. A real Xbox pad owns XInput slot 0 and appears in WGI, so "I can see a pad" proves nothing:
+//! when slot 0 is the real pad, `XInputGetState(0)` answers `rc=0` with the virtual pad live or
+//! killed.
 //! ⇒ **ALWAYS take a baseline with your pad STOPPED and diff it**, and identify entries by name and
 //! vendor/product id, never by slot index alone.
 //! `--watch N` is the second half of that discipline: it samples repeatedly and reports whether a
@@ -19,8 +15,8 @@
 //! this programme is chasing — WGI listing a gamepad that reports nothing is arguably worse than
 //! not listing it, because a title that binds the first gamepad latches a dead one.
 //!
-//! GAP: **GameInput is not covered here.** It has no binding in the `windows` crate and needs
-//! hand-written COM vtables; it is measured separately for now. Everything else is.
+//! GameInput has no binding in the `windows` crate: `gameinput.rs` declares its COM vtables by
+//! hand, and `--gameinput`, `--gi-rumble` and `--gi-focus` drive it.
 
 #[cfg(not(windows))]
 fn main() {
@@ -159,16 +155,14 @@ mod imp {
     /// return a cache that WGI's device-watcher fills in. In a GUI app something else has already
     /// started that watcher, so the cache looks like a query and everyone writes code as if it
     /// were one. In a bare console process nothing has, and both collections come back **EMPTY
-    /// even with real controllers attached** — measured here on 2026-08-09: a DualSense sitting in
-    /// the HID interface class, `RawGameControllers` count=0.
+    /// even with real controllers attached**.
     ///
     /// Subscribing to the Added events is what starts the watcher. The handlers deliberately do
     /// nothing; registering them is the entire point. The sleep gives the watcher a beat to
     /// enumerate before the first read.
     ///
-    /// ⚠️ This is a live trap for the readings in `design/xbox-pad-windows-handoff.md`: an
-    /// off-tree probe without this would report "WGI cannot see the pad" when WGI could not see
-    /// ANYTHING, which is a very different conclusion.
+    /// ⚠️ A probe without this reports "WGI cannot see the pad" when WGI could not see ANYTHING,
+    /// which is a very different conclusion.
     fn wake_wgi() {
         let gp_tok = Gamepad::GamepadAdded(&EventHandler::<Gamepad>::new(|_, _| Ok(())));
         let raw_tok = RawGameController::RawGameControllerAdded(
@@ -342,7 +336,8 @@ mod imp {
         }
     }
 
-    /// Sample XInput over the whole watch window and report the RANGE each axis covered.
+    /// What `xinput_watch` tracks per slot: the packet range, the buttons ever seen and the RANGE
+    /// each axis covered.
     ///
     /// A single `XInputGetState` call cannot tell "translated correctly" from "stuck at zero" —
     /// a sweeping stick reads 0 every time it crosses centre. `dwPacketNumber` advancing proves

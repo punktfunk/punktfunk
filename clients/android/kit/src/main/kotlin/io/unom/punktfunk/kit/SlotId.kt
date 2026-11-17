@@ -2,8 +2,8 @@ package io.unom.punktfunk.kit
 
 /*
  * The quick-action ids and the key names the dial and the shortcuts both speak: the ids of
- * pf-client-core's `overlay_actions.rs` and the names of its `key_vk`. In the kit so the pad
- * router's [Shortcuts.Engine] can name an action; the ring's blob lives in the app's
+ * pf-client-core's `overlay_actions.rs` and the names of punktfunk-core's `key_vk`. In the kit so
+ * the pad router's [Shortcuts.Engine] can name an action; the ring's blob lives in the app's
  * `OverlayActions.kt`.
  */
 

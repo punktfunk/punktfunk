@@ -87,8 +87,8 @@ impl<'a> MappedSubresource<'a> {
         self.row_pitch
     }
 
-    /// What the driver reports as the surface's size. A diagnostic: drivers disagree on
-    /// whether it counts the chroma rows, so the slice length never comes from it.
+    /// The mapped `DepthPitch`, for logs. D3D11 defines it only between depth slices and leaves
+    /// it unused on a 2D texture, so the slice length never comes from it.
     pub fn depth_pitch(&self) -> usize {
         self.depth_pitch
     }

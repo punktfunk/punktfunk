@@ -1,9 +1,9 @@
 //! Per-title hide list. `scanners.rs` hides a whole source; this hides one id.
 //!
-//! A side table, not a field on the entry: scanner and plugin titles are rebuilt
-//! on every scan, so a flag written onto one would vanish at the next reconcile.
-//! Keys are the stable `<store>:<external_id>` ids — the same pin GameStream app
-//! ids and client art caches already use.
+//! A side table, not a field on the entry: plugin titles are rebuilt on every
+//! reconcile, so a flag written onto one would vanish at the next.
+//! Keys are library ids (`library_id_for`) — the same pin GameStream app ids and
+//! client art caches use.
 //!
 //! [`all_games`](crate::library::all_games) drops hidden ids from every play
 //! surface, including launch resolution. The console still lists them so they

@@ -1,6 +1,6 @@
 //! One title as the Games tab draws it, after the Apple library's card.
 //!
-//! The 2:3 poster carries its store badge top-left and the Resume badge top-right, or the
+//! The 2:3 poster carries its store badge top-left and the Running badge top-right, or the
 //! title's files badge when it isn't installed or is downloading. Under it
 //! run the title on two held lines, the host's OS mark and name, and a caption where the row
 //! or the sort has one. The focus plate is the lift, so the card never grows. The host desk
@@ -391,7 +391,6 @@ pub(super) fn heading(
     );
 }
 
-/// The one line of text a band draws, centred in `max_w`, ellipsized.
 /// What the focused-title band says: the title, the provenance line under it, and the
 /// cache note that leads that line.
 pub(super) struct TitleBand<'a> {

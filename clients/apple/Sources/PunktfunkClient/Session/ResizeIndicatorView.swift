@@ -1,10 +1,10 @@
-// The resize overlay (design/midstream-resolution-resize.md — client resize UX). A Match-window
-// resize renegotiates the host's virtual display + encoder and re-inits the local VideoToolbox
-// decoder on the first new-mode IDR — an unavoidable sub-second gap where the last frame lingers,
-// briefly freezes, or the picture pops to the new geometry. Rather than let that read as a stutter,
-// we make it DELIBERATE: the caller blurs the live stream and this centered spinner + caption
-// acknowledges the transition. It clears the instant a frame at the requested size decodes (the
-// `onDecodedSize` END signal) or on the follower's safety timeout — see `SessionModel.resizing`.
+// The resize overlay. A Match-window resize renegotiates the host's virtual display + encoder and
+// re-inits the local decoder on the first new-mode IDR — an unavoidable gap where the last frame
+// lingers, briefly freezes, or the picture pops to the new geometry. Rather than let that read as
+// a stutter, we make it DELIBERATE: the caller blurs the live stream and this centered spinner +
+// caption acknowledges the transition. It clears the instant a frame at the requested size
+// decodes (the `onDecodedSize` END signal) or on `ResizeIndicator`'s safety timeout — see
+// `SessionModel.resizing`.
 //
 // Floating overlay, never a hit-test target: input keeps flowing to the stream underneath so a
 // resize the user triggers by dragging the window never swallows their next click.

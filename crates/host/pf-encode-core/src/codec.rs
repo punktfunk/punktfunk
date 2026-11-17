@@ -56,7 +56,7 @@ pub struct EncodedFrame {
     /// Boundary of an encoder-driven intra refresh wave: its start AU and its close AU.
     /// The pump tags `punktfunk_core::packet::USER_FLAG_RECOVERY_POINT`; the client lifts
     /// its freeze on the second mark since a loss, so a wave that starts after the loss
-    /// heals in one cycle. Only the Vulkan backend sets it.
+    /// heals in one cycle. Vulkan Video, native VAAPI and direct NVENC set it.
     pub recovery_point: bool,
     /// The wave's close AU, set beside `recovery_point`. The pump tags
     /// `punktfunk_core::packet::USER_FLAG_RECOVERY_CLOSE`: a client that knows the bit lifts
@@ -122,8 +122,8 @@ pub enum Codec {
 }
 
 /// Chroma the encoder emits (`PUNKTFUNK_444` + client `VIDEO_CAP_444` + GPU
-/// probe). `Yuv420` is the default. `Yuv444` is HEVC-only, native-protocol
-/// only (GameStream stays 4:2:0), and only after `pf_encode::can_encode_444`.
+/// probe). `Yuv420` is the default. `Yuv444` is HEVC or PyroWave only: the native
+/// protocol takes it after `pf_encode::can_encode_444`, GameStream for a PyroWave client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ChromaFormat {
     #[default]
@@ -165,7 +165,7 @@ impl Codec {
 pub struct EncoderCaps {
     /// [`invalidate_ref_frames`](Encoder::invalidate_ref_frames) can return `true`.
     /// When `false` the caller skips the call and keyframes on loss. Direct
-    /// NVENC, native AMF and the native VAAPI session implement it.
+    /// NVENC, AMF, QSV, Vulkan Video and the native VAAPI session implement it.
     pub supports_rfi: bool,
     /// Opened encoder is producing `chroma_format_idc = 3`. Post-open
     /// cross-check against `Welcome::chroma_format` from the pre-open probe.
@@ -196,9 +196,9 @@ pub struct EncoderCaps {
     /// cursor channel with `pf_encode::cursor_blend_capable`;
     /// `open_video`'s post-open check is the backstop.
     pub blends_cursor: bool,
-    /// A larger input picture is scaled down to the session's size on ingest
-    /// (the native VAAPI VideoProc pass). The host opens a mirrored head at the
-    /// client's size only when this is set; every other backend gets the head's own.
+    /// A larger input picture is scaled down to the session's size on ingest. The host
+    /// opens a mirrored head at the client's size only when this is set; every other
+    /// backend gets the head's own.
     pub downscales_input: bool,
     /// [`set_input_crop`](Encoder::set_input_crop) is honoured: one rectangle of each
     /// picture is encoded, scaled when [`downscales_input`](Self::downscales_input) also holds.
@@ -388,7 +388,7 @@ pub trait Encoder: Send {
     /// How long a whole AU's packets currently take to leave the socket (µs,
     /// smoothed) — the host's paced-send `spread_us`.
     ///
-    /// Linux direct-NVENC split arbitration compares `encode_1eng +
+    /// Direct-NVENC split arbitration compares `encode_1eng +
     /// send_of_last_slice` vs `encode_2eng + send_of_whole_AU` (HEVC split
     /// costs sub-frame readback; the value is send overlapping encode). The
     /// backend turns this into that handicap. Optional: ignoring it never
@@ -425,25 +425,22 @@ impl Codec {
     pub fn max_dimension(self) -> u32 {
         match self {
             Codec::H264 => 4096,
-            // No codec-level dimension cap (arbitrary even sizes). 8192 matches
-            // the buffer-math guard the other codecs get.
+            // HEVC and AV1 levels cap a picture at 35 651 584 samples, not a side below
+            // 8704; PyroWave has no level. 8192 is the buffer-math guard for all three.
             Codec::H265 | Codec::Av1 | Codec::PyroWave => 8192,
         }
     }
 
-    /// Spec top level/tier bitrate (bits/s) — the usual boundary at which NVENC
-    /// rejects `avcodec_open2` with EINVAL. Not a hard cap:
-    /// `pf_encode::open_video` probes the GPU ceiling by stepping
-    /// down from the requested bitrate only on EINVAL, and uses this as the
-    /// first step-down candidate so a card that accepts more is never clamped
-    /// to it. HEVC Level 6.2 High = 800 Mbps; H.264 High 6.2 ≈ 480 Mbps.
+    /// Spec top level/tier bitrate (bits/s): HEVC Level 6.2 High = 800 Mbps; H.264
+    /// High 6.2 ≈ 480 Mbps. Nothing calls it: the direct-NVENC open finds each GPU's
+    /// own ceiling (`nvenc_session::open_at_ceiling`).
     pub fn max_bitrate_bps(self) -> u64 {
         match self {
             Codec::H264 => 480_000_000,
             Codec::H265 => 800_000_000,
             Codec::Av1 => 1_200_000_000,
-            // No spec level/tier: the rate is a per-frame byte budget. Use the
-            // protocol bitrate clamp so the step-down probe never binds below it.
+            // No spec level/tier: the rate is a per-frame byte budget. The host's session
+            // cap (`MAX_BITRATE_KBPS` in punktfunk-host `native/bitrate.rs`).
             Codec::PyroWave => 8_000_000_000,
         }
     }
@@ -452,19 +449,17 @@ impl Codec {
 /// Pixel rate (luma samples/s) at or above which NVENC split-frame encoding
 /// is forced 2-way. Both hosts select through [`resolve_split_mode`], so
 /// Windows and Linux cannot disagree.
-/// A single NVENC engine tops out ~1 Gpix/s on HEVC, and AUTO does not
-/// engage below ~2112 px height, so sessions that need the second engine
-/// must be forced. 4K120 is 3840×2160×120 = 995,328,000; 950 M keeps
-/// margin for fractional refresh while leaving 1440p240 (884.7 M) on AUTO.
+/// One GB203 engine measured ~1 Gpix/s on HEVC P1 ultra-low-latency, and AUTO splits only at
+/// 2112 px height and up (AV1: 2048), so sessions that need the second engine must be forced.
+/// 4K120 is 3840×2160×120 = 995,328,000; 950 M keeps margin for fractional refresh while
+/// leaving 1440p240 (884.7 M) on AUTO.
 pub const SPLIT_FORCE_PIXEL_RATE: u64 = 950_000_000;
 
 /// `NV_ENC_SPLIT_ENCODE_MODE` values as plain constants.
 ///
 /// They live here, not in `nvenc_core`, so the policy and the SDK enum have one
 /// home for both hosts. `nvenc_split_constants_match_the_sdk` pins them.
-// Split-policy cfg: union of callers. Linux always, Windows only with
-// `feature = "nvenc"`. Ungated this is `dead_code` on a featureless Windows
-// build — an item lint, not a module one.
+// Split-policy cfg: union of callers. Linux always, Windows only with `feature = "nvenc"`.
 #[cfg(any(target_os = "linux", all(target_os = "windows", feature = "nvenc")))]
 pub const SPLIT_AUTO: u32 = 0;
 #[cfg(any(target_os = "linux", all(target_os = "windows", feature = "nvenc")))]
@@ -492,7 +487,7 @@ pub const SPLIT_DISABLE: u32 = 15;
 ///    10-bit or 10-bit 4K120.
 /// 4. Else AUTO. AUTO splits only with sub-frame off; with sub-frame on
 ///    the driver resolves it to no-split (HEVC cannot do both).
-///    [`resolve_split_subframe`] logs that.
+///    `nvenc_core::resolve_split_subframe` logs that.
 ///
 /// Caller owns the rejection fallback (retry split-disabled). `engines` is
 /// `NV_ENC_CAPS_NUM_ENCODER_ENGINES`; `0` = unknown (assume a second engine).
@@ -563,8 +558,8 @@ pub fn clamp_to_engines(requested: u32, hw_max: u32, engines: u32) -> u32 {
     // a >3-engine part, which is not less than TWO_FORCED and must not clamp.
     let named = |m: u32| (2..=3).contains(&m);
     // One engine cannot split at all, and its ceiling is DISABLE — not a named mode, so the
-    // ordered test below never fires and the knob used to survive intact. `engines == 0` is
-    // "unreadable", whose ceiling is TWO_FORCED, so it does not land here.
+    // ordered test below never fires for it. `engines == 0` is "unreadable", whose ceiling
+    // is TWO_FORCED, so it does not land here.
     if named(requested) && hw_max == SPLIT_DISABLE {
         tracing::warn!(
             requested,
@@ -589,8 +584,8 @@ pub fn clamp_to_engines(requested: u32, hw_max: u32, engines: u32) -> u32 {
 
 /// `PUNKTFUNK_VBV_FRAMES` — HRD/VBV size in frame intervals (default 1.0:
 /// each frame must fit its rate share, keeping sizes uniform for the pacer).
-/// Direct-NVENC, AMF, VAAPI, and QSV read the same knob. Larger
-/// values let complex frames borrow bits at the cost of size variance.
+/// Direct-NVENC, AMF and native VAAPI read it; Vulkan Video through `vbv_window_ms`.
+/// Larger values let complex frames borrow bits at the cost of size variance.
 pub fn vbv_frames_env() -> f64 {
     crate::knobs::get().vbv_frames()
 }
@@ -644,7 +639,7 @@ pub fn validate_dimensions(codec: Codec, width: u32, height: u32) -> Result<()> 
         );
     }
     // Rate controller packs the 32×32 block index into the low 16 bits of
-    // `RDOperation::block_offset_saving` (pyrowave-sys `patches/0002`). Past
+    // `RDOperation::block_offset_saving` (upstream `analyze_rate_control.comp`). Past
     // `u16::MAX` the index collides. Check 4:2:0 here (most permissive);
     // 4:4:4 is re-checked at open.
     #[cfg(feature = "pyrowave")]
@@ -694,8 +689,8 @@ mod tests {
     }
 
     /// The knob is held to what the hardware can deliver. One engine cannot split, and its
-    /// ceiling is `DISABLE` rather than a named mode, so the ordered comparison alone let an
-    /// operator's `=2`/`=3` through on a GPU that would then encode narrower in silence.
+    /// ceiling is `DISABLE` rather than a named mode, so the ordered comparison alone would
+    /// pass an operator's `=2`/`=3` to a GPU that then encodes narrower in silence.
     #[cfg(any(target_os = "linux", all(target_os = "windows", feature = "nvenc")))]
     #[test]
     fn a_split_request_is_disabled_on_a_single_engine_gpu() {

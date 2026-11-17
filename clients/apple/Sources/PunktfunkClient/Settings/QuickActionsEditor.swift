@@ -76,7 +76,7 @@ struct QuickActionsEditor: View {
                         Color(.secondarySystemGroupedBackground)
                         // The backdrop runs the real twist. Its tap only dismisses the preview
                         // sheet: UIKit hands a disc tap to this view as well as to the SwiftUI
-                        // button above it, so closing the ring here closed it on every pick.
+                        // button above it, so closing the ring here would close it on every pick.
                         DialCatcher(onDial: { ring.handle($0) }) { ring.sheet = false }
                         #endif
                         RingOverlay(state: ring, cfg: cfg, actions: previewRingActions(cfg),

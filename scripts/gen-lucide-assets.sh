@@ -14,12 +14,9 @@
 #   WinUI shell    draws Lucide's icon FONT    -> the same table's codepoints
 #                                              +  clients/windows/packaging/assets/lucide.ttf
 #
-# The WinUI shell is the odd one only because windows-reactor has no vector element: its
-# `Image` takes a raster URI and it builds every `BitmapIcon` with `ShowAsMonochrome(false)`,
-# so a bitmap there can be neither sized by the control nor tinted by the theme. A font glyph
-# can be both — WinUI sizes and tints a `FontIcon` exactly as it did the `SymbolIcon` this
-# replaced. An earlier version of this script baked PNGs instead; they came out the wrong size
-# on every button and stuck at one grey on every theme.
+# Inside a control the WinUI shell draws a glyph of the font: it takes the control's foreground
+# and stays a vector at any DPI, where a bitmap keeps one colour on every theme
+# (clients/windows/src/app/lucide.rs).
 #
 # Idempotent. Usage: bash scripts/gen-lucide-assets.sh
 set -euo pipefail

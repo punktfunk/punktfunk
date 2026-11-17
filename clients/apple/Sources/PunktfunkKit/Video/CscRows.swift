@@ -52,8 +52,8 @@ public enum CscRows {
                 matrix = 9
             } else {
                 // CICP codes CoreMedia has no named constant for arrive as the literal string
-                // "YCbCrMatrix#<code>" — the suffix IS the H.273 code. BT.470BG (5) takes this
-                // form, and it is what a Linux host's RGB-input NVENC signals.
+                // "YCbCrMatrix#<code>" (macOS 27); the suffix is the H.273 code. BT.470BG (5)
+                // takes this form.
                 let str = s as String
                 if str.hasPrefix("YCbCrMatrix#"), let code = UInt8(str.dropFirst(12)) {
                     matrix = code

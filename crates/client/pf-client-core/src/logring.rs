@@ -57,8 +57,8 @@ pub fn note(mut line: String) {
 }
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ` from the system clock. Wall time so a bundle
-/// correlates with the host log beside it. Shared by every feeder (`ring_layer`,
-/// Android logcat tee).
+/// correlates with the host log beside it. Shared by every feeder ([`RingLayer`], Android
+/// logcat tee).
 pub fn wallclock() -> String {
     let ms = punktfunk_core::quic::wall_clock_ns() / 1_000_000;
     punktfunk_core::time::utc_rfc3339(ms, true)

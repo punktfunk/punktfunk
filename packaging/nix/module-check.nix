@@ -1,17 +1,17 @@
 # Does the NixOS module actually evaluate, and does it still render the drop-ins we decided on?
-# The units under them are the packages' own (scripts/*.service); vm-test.nix runs them.
+# The units under them are the packages' own (scripts/*.service, packaging/linux/*.service);
+# vm-test.nix runs them.
 #
-# WHY THIS FILE EXISTS. `nix flake check` does NOT check `nixosModules`. It forces the value and
-# asserts it is a lambda taking an open attribute set — nothing more; nix's own source carries
-# `// FIXME: if we have a 'nixpkgs' input, use it to check the module.` MEASURED: a flake whose
-# `nixosModules.default` sets a nonexistent OPTION, references a nonexistent `pkgs` attribute AND
-# calls a nonexistent `lib` function passes clean, printing the thoroughly reassuring
+# WHY THIS FILE EXISTS. `nix flake check` does NOT evaluate `nixosModules`. Nix 2.24+ only forces
+# the value, and Determinate Nix 3.23 (CI's) only checks it is a function or an attribute set.
+# MEASURED: a flake whose `nixosModules.default` sets a nonexistent OPTION, references a
+# nonexistent `pkgs` attribute AND calls a nonexistent `lib` function passes clean, printing the
+# thoroughly reassuring
 #
 #     checking NixOS module 'nixosModules.default'... all checks passed!
 #
-# So every option name, type, `pkgs.*` reference and systemd directive in nixos-module.nix was
-# unverified by CI while reading as covered — on a flake whose own history is Nix regressions
-# reaching main invisibly (`nix build .#punktfunk-web` was broken for 553 commits).
+# So every option name, type, `pkgs.*` reference and systemd directive in nixos-module.nix would
+# be unverified by CI while reading as covered.
 #
 # HOW IT CLOSES THAT. Exposed as a flake `checks` output, so `nix flake check --no-build` — the leg
 # CI already runs — must INSTANTIATE it, and instantiating forces the `assert` below. Every
@@ -84,15 +84,15 @@ let
       ];
     }).config;
 
-  # Every scenario keeps `gamescopeHdr = false`: its default would pull a real (stub, here)
-  # gamescope onto the host unit's PATH, and nothing below is about that. `scripting` is left at
-  # its default (on with the host) precisely BECAUSE the runner belongs on that PATH — see the
-  # "not just in systemPackages" check.
+  # Every scenario whose units are read keeps `gamescopeHdr = false`: its default would pull a
+  # real (stub, here) gamescope onto the host unit's PATH, and nothing below is about that.
+  # `scripting` is left at its default (on with the host) precisely BECAUSE the runner belongs
+  # on that PATH — see the "not just in systemPackages" check.
   desktop = evalWith {
     services.punktfunk.host = {
       enable = true;
       users = [ "alice" ];
-      # Explicit: gamestream defaults to false now (opt-in on every route) — this fixture
+      # Explicit: gamestream defaults to false (opt-in on every route) — this fixture
       # is the one that proves opting IN still reaches the argv and the firewall.
       gamestream = true;
       gamescopeHdr = false;
@@ -211,7 +211,7 @@ let
     # as soon as anyone logs in as root), and `autoStart` puts these in default.target. Root's host
     # then wins the fixed ports and the desktop user's restarts forever on
     # `bind RTSP 48010: Address already in use` — every other listener in its log having bound
-    # fine, so it reads like an unrelated program. MEASURED on a real box before this was fixed.
+    # fine, so it reads like an unrelated program.
     {
       # `|` = TRIGGERING condition, which systemd ORs. Plain repeated ConditionUser= lines are
       # ANDed and would match nobody — the whole reason the prefix is there.
@@ -261,7 +261,7 @@ let
     # --- the desktop-login route (scripts/punktfunk-host-desktop-session.conf) -----------------
     # Asserted on the evaluated LISTS, not the rendered text: systemd renders `After=` as one
     # space-separated line, so `hasInfix "After=graphical-session.target"` silently depends on
-    # ordering — it failed against a correct module the first time this check ran.
+    # ordering.
     {
       name = "desktopSession binds the host to graphical-session.target";
       ok =
@@ -341,7 +341,7 @@ let
       );
     }
     {
-      # Since the library scanners became plugins, a runner that is off means an EMPTY LIBRARY and
+      # The library scanners are plugins, so a runner that is off means an EMPTY LIBRARY and
       # no obvious reason why — which is why deb+rpm `systemctl --global enable` it.
       name = "the plugin runner is started by default, like every other channel";
       ok = has appliance "punktfunk-scripting" "WantedBy=default.target";
@@ -351,8 +351,8 @@ let
       # (`plugins add`, and the console's store jobs, which run inside the host process) locate
       # `punktfunk-scripting` as an executable, and on NixOS PATH is the only rung that can ever
       # match — the runner is its own derivation, so it is never beside the host binary and never
-      # under /usr. systemPackages covers an operator's shell and NOT this unit, which is exactly
-      # how a running, enabled runner reported itself "not installed" through the console.
+      # under /usr. systemPackages covers an operator's shell and NOT this unit, so without the
+      # PATH entry the console reports a running, enabled runner as "not installed".
       name = "the plugin runner is on the host unit's PATH, not just in systemPackages";
       ok =
         has appliance "punktfunk-host" "/pf-stub/punktfunk-scripting/bin"
@@ -363,8 +363,8 @@ let
       ok = has desktop "punktfunk-host" "system-path/bin";
     }
     {
-      # …and only when it is actually installed, so `scripting.enable = false` does not put a
-      # package the machine never built onto a unit's PATH.
+      # The runner is on that PATH only when it is installed, so `scripting.enable = false` does
+      # not put a package the machine never built onto a unit's PATH.
       name = "a host without the runner does not carry it on PATH";
       ok = !(has noScripting "punktfunk-host" "/pf-stub/punktfunk-scripting/bin");
     }
@@ -473,7 +473,8 @@ let
           "ExecStart=\nExecStart=/pf-stub/punktfunk-web/bin/punktfunk-web-server";
     }
     {
-      # The helpers and the door's ExecStartPre call useradd, runuser, flock and awk by name.
+      # The door verb behind the helpers and the door's ExecStartPre calls useradd and runuser
+      # by name.
       name = "the door's helpers have a PATH with the account tools";
       ok =
         let

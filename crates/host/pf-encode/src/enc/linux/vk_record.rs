@@ -1464,7 +1464,7 @@ impl VulkanVideoEncoder {
         quant.base_q_idx = AV1_BASE_Q_IDX;
 
         let mut loop_filter: h::StdVideoAV1LoopFilter = std::mem::zeroed();
-        // Spec 7.14.1 default_loop_filter_ref_deltas: intra +1, golden/bwd/altref2/altref -1.
+        // Spec 7.14.1 default_loop_filter_ref_deltas: intra +1, golden/altref2/altref -1.
         loop_filter.loop_filter_ref_deltas = [1, 0, 0, 0, -1, 0, -1, -1];
 
         let cdef: h::StdVideoAV1CDEF = std::mem::zeroed();

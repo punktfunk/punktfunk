@@ -1,6 +1,6 @@
 //! Do not `cargo:rustc-link-lib=nvencodeapi`. `nvEncodeAPI64.dll` ships only
 //! with the NVIDIA driver; a link-time import aborts the all-vendor host before
-//! `main`. `pf-encode` loads the entry points at runtime (`LoadLibraryExW`).
+//! `main`. `pf-encode-win` loads the entry points at runtime (`LoadLibraryExW`).
 
 /// Windows hands a DPI-unaware or system-aware process the cursor bitmap and GDI
 /// metrics for the DPI it was LAUNCHED at, whatever a thread's awareness says: a host

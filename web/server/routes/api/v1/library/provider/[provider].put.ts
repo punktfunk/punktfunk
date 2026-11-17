@@ -4,7 +4,7 @@
 // user. The host defers the "is this the operator's authority?" question to the console
 // (mgmt/library.rs), and the console must actually ask it — otherwise a bare session cookie plants
 // a persistent command through this lane while `custom.post.ts`/`custom/[id].put.ts` are gated.
-// See util/libraryConfirm.ts; security-review 2026-08-15 finding 6.
+// See util/libraryConfirm.ts.
 //
 // Wins over the `/api/**` catch-all by h3 route specificity — the catch-all injects the admin
 // bearer unconditionally, so without this file the host-side check is inert for this caller.

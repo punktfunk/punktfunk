@@ -9,9 +9,9 @@
   Built on the .NET CertificateRequest API rather than New-SelfSignedCertificate, for two reasons:
     * No key container is involved, so this works over SSH. New-SelfSignedCertificate fails with
       NTE_PERM 0x80090010 on a network logon because it wants the user's key container.
-    * The extension set is explicit, so it matches byte-for-byte what the drivers have always been
-      signed with (verified against the certs on this box): KeyUsage=DigitalSignature (critical),
-      EKU=codeSigning (non-critical), SubjectKeyIdentifier, and NO basicConstraints.
+    * The extension set is explicit, so it matches the driver cert already shipped:
+      KeyUsage=DigitalSignature (critical), EKU=codeSigning (non-critical),
+      SubjectKeyIdentifier, and NO basicConstraints.
 
   The key exists only in memory and in the .pfx this writes. It is never added to a certificate
   store, so there is nothing to clean up afterwards except the output folder.
@@ -49,9 +49,9 @@ if (-not $OutDir) {
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # -- 1. key + self-signed cert, in memory ------------------------------------------------------
-# RSA 3072 / SHA-256. The drivers were previously signed with 2048; nothing interoperates with this
-# cert except our own installer (we are our own trust anchor), so there is no compatibility reason
-# to stay at 2048 - and the signtool self-test below proves 3072 is consumable.
+# RSA 3072 / SHA-256. Nothing interoperates with this cert except our own installer (we are our
+# own trust anchor), so there is no compatibility reason for a smaller key - and the signtool
+# self-test below proves 3072 is consumable.
 $rsa = [System.Security.Cryptography.RSA]::Create(3072)
 $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
     $subject, $rsa,
@@ -83,8 +83,8 @@ $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $bytes = [byte[]]::new(24); $rng.GetBytes($bytes)
 $pw = [Convert]::ToBase64String($bytes)
 
-# .NET's own PKCS#12 writer - avoids the OpenSSL 3 trap where the default AES-256/PBKDF2 encryption
-# produces a .pfx that Windows CryptoAPI cannot read.
+# .NET's own PKCS#12 writer: OpenSSL 3's default AES-256/PBKDF2 .pfx does not import on Windows
+# before 10 1709 / Server 2019, where PBES2 PKCS#12 support begins.
 $pfxBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $pw)
 $pfxPath = Join-Path $OutDir 'driver.pfx'
 [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
@@ -107,8 +107,8 @@ if ($signtool) {
         # NTE_PERM. Not a bad certificate - a network logon (SSH) has no key container, so signtool
         # cannot import the .pfx to sign with it. The KEY ABOVE IS STILL VALID: generating it needs
         # no container, only consuming it does. Re-run at an interactive logon (console/RDP) to
-        # exercise this, or just let the canary CI build be the proof - the runner signs under a
-        # real logon, which is how the MSIX cert already works.
+        # exercise this, or just let the canary CI build be the proof - the runner signs as SYSTEM,
+        # a service logon, which is how the MSIX cert already works.
         $selftest = 'SKIPPED (NTE_PERM 0x80090010 - no key container on this logon; run at a console/RDP session, or verify via a canary build)'
     }
     else {

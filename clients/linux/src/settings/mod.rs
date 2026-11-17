@@ -93,8 +93,8 @@ pub fn show_scoped(
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title(pf_l10n::desktop::desktop_preferences_title());
     dialog.set_search_enabled(true);
-    // Wide enough that the page switcher sits in the header: the dialog moves it to a bottom
-    // bar below 110 pt per page, ≈ 733 px for five.
+    // Wide enough that the page switcher sits in the header: libadwaita 1.8 moves it to a
+    // bottom bar below 110 pt per page, ≈ 733 px for five.
     dialog.set_content_width(830);
     let next: presets::NextScope = Rc::default();
     let mut b = pages::Build {

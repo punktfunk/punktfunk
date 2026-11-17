@@ -47,7 +47,8 @@ float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
 }
 ";
 
-/// Cursor-quad blend pass and shape-texture cache. One per capturer (device-scoped).
+/// Cursor-quad blend pass and shape-texture cache, device-scoped. `pf-encode-session`'s
+/// `Targets` holds one per backend.
 pub struct CursorBlendPass {
     vs: ID3D11VertexShader,
     ps: ID3D11PixelShader,
@@ -84,7 +85,7 @@ impl CursorBlendPass {
             };
             let mut sampler = None;
             device.CreateSamplerState(&sd, Some(&mut sampler))?;
-            // Straight-alpha over: dst.rgb = src.rgb*a + dst.rgb*(1-a); keep dst alpha.
+            // Straight-alpha over: dst.rgb = src.rgb*a + dst.rgb*(1-a); dst.a = src.a + dst.a.
             let mut bd = D3D11_BLEND_DESC::default();
             bd.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
                 BlendEnable: true.into(),

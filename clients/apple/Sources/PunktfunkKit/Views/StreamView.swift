@@ -22,7 +22,7 @@ import os
 
 /// Same diagnostic switch as InputCapture: PUNKTFUNK_INPUT_DEBUG=1 logs when the macOS
 /// NSEvent mouse monitor (relative motion + buttons) is installed/removed, so the user can
-/// confirm the new motion path is actually live for a session.
+/// confirm the motion path is actually live for a session.
 private let streamInputLog = ClientLog(category: "input")
 private let streamInputDebug =
     ProcessInfo.processInfo.environment["PUNKTFUNK_INPUT_DEBUG"] == "1"
@@ -177,7 +177,8 @@ public final class StreamLayerView: NSView {
     /// Capture→on-glass for the A/V sync loop while the stage-2 presenter runs. Read at start().
     var endToEndMeter: LatencyMeter?
     /// The shared presenter stack: stage-2 (CAMetalLayer sublayer + display link) with the
-    /// stage-1 StreamPump → displayLayer path as the Metal-unavailable / DEBUG fallback.
+    /// stage-1 StreamPump → displayLayer path as the Metal-unavailable fallback (or
+    /// `PUNKTFUNK_PRESENTER=stage1`).
     private let presenter = SessionPresenter()
     public private(set) var connection: PunktfunkConnection?
     /// The session's further screens, while its connection shows them.
@@ -203,7 +204,7 @@ public final class StreamLayerView: NSView {
     private var appObservers: [NSObjectProtocol] = []
     private var windowObservers: [NSObjectProtocol] = []
     /// Local NSEvent monitor carrying relative mouse MOTION + BUTTONS to the host while
-    /// captured (GCMouse's own delivery proved unreliable on macOS — see InputCapture).
+    /// captured (GCMouse can stay silent on macOS — see InputCapture).
     /// Installed on engage, removed on release; nil while not captured.
     private var mouseEventMonitor: Any?
     /// The window's `acceptsMouseMovedEvents` value before client-side-cursor capture raised
@@ -258,10 +259,9 @@ public final class StreamLayerView: NSView {
     private var hostCursors: [UInt32: HostCursorShape] = [:]
     /// The last shape actually worn. State (`0xD0`, a per-frame datagram) announces a new serial the
     /// moment the host QUEUES its bitmap on the reliable control stream, so the client routinely
-    /// knows a serial before it holds the pixels — and the shape ring drops the NEWEST under burst
-    /// (`CURSOR_SHAPE_QUEUE`), which the host never re-sends because it only sends on a serial
-    /// CHANGE. Both leave `hostCursors[serial]` empty; wearing the previous pointer through that
-    /// gap degrades it to a briefly-stale shape instead of blinking the pointer out of existence.
+    /// knows a serial before it holds the pixels, and `hostCursors[serial]` is empty. Wearing the
+    /// previous pointer through that gap degrades it to a briefly-stale shape instead of
+    /// blinking the pointer out of existence.
     private var lastWornShape: HostCursorShape?
     private var cursorState: PunktfunkConnection.CursorStateEvent?
     /// Last `CursorRenderMode.clientDraws` told to the host (the §8 mid-stream render flip);
@@ -279,7 +279,7 @@ public final class StreamLayerView: NSView {
     /// A keyboard shortcut fired; the session runs it. Main thread.
     public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
 
-    /// Resize overlay signals (design/midstream-resolution-resize.md client UX): `onResizeTarget`
+    /// Resize overlay signals: `onResizeTarget`
     /// (main thread, via the follower) fires the instant the window starts steering toward a new
     /// size; `onDecodedSize` (PUMP thread) fires when a new-mode IDR's dims land. The owner drives
     /// the blur+spinner from these — set before `start()`.
@@ -563,8 +563,8 @@ public final class StreamLayerView: NSView {
     }
     /// Modifier keys (shift/control/option/command) arrive ONLY as flagsChanged on macOS,
     /// never keyDown/keyUp — the changed key is `event.keyCode`; InputCapture resolves the
-    /// down-vs-up direction from the flags (diffing the device-dependent flag bits alone
-    /// proved unreliable — some keyboards omit them, which silently dropped Control).
+    /// down-vs-up direction from the flags (diffing the device-dependent flag bits alone is
+    /// unreliable — some keyboards omit them, which would drop Control).
     public override func flagsChanged(with event: NSEvent) {
         if captured, let inputCapture {
             inputCapture.handleFlagsChanged(
@@ -664,17 +664,10 @@ public final class StreamLayerView: NSView {
     /// globally via `CursorCapture` (the pointer can't leave the view there).
     override public func resetCursorRects() {
         if captured && desktopMouse {
-            // Cursor channel active: wear the HOST's pointer shape (it is no longer in the
-            // video); a HIDDEN host pointer (or nothing seen yet at all) = invisible. Without the
-            // channel, M1 behavior: invisible local cursor, the composited host cursor is the
-            // visible one.
-            //
-            // A visible pointer whose announced serial has no bitmap yet falls back to the last
-            // worn shape (see `lastWornShape`) rather than to `invisibleCursor`. That case is
-            // routine, not degenerate — state outruns its bitmap on every single shape change —
-            // and treating it as "hide the pointer" made the pointer VANISH over anything whose
-            // shape arrived late or got dropped, with no recovery until the next change. Only
-            // `st.visible == false` may hide the pointer; a missing bitmap may not.
+            // Cursor channel active: wear the HOST's pointer shape; a hidden host pointer or none
+            // seen yet is invisible. Without the channel: invisible local cursor, the composited
+            // host cursor is the visible one. A missing bitmap wears `lastWornShape` (state outruns
+            // its bitmap on every shape change); only `st.visible == false` hides the pointer.
             if cursorChannelActive, let st = cursorState, st.visible,
                let shape = hostCursors[st.serial] ?? lastWornShape {
                 lastWornShape = shape
@@ -788,13 +781,10 @@ public final class StreamLayerView: NSView {
         if prev?.visible != ev.visible || prev?.serial != ev.serial {
             window?.invalidateCursorRects(for: self)
         }
-        // M3 host-driven auto-flip is DISABLED: `relative_hint` is derived from host cursor
-        // VISIBILITY, and Windows hides the pointer for ordinary desktop activity (clicking,
-        // typing) — not just when a game grabs it. Acting on those transients flipped
-        // desktop→capture→desktop, which warped the cursor to view-centre and flushed held
-        // buttons (a spurious button-up ~200 ms into every press → broke window drags). Until
-        // the host exposes a real pointer-LOCK signal (ClipCursor/raw-input, not visibility),
-        // the mouse model is user-driven only (⌃⌥⇧M). The hint still rides the wire, unused.
+        // No host-driven mouse-model flip (M3): `relative_hint` comes from host cursor
+        // VISIBILITY, which Windows drops for ordinary typing and clicking, and a flip re-engages
+        // capture, releasing held buttons. Until the host exposes a pointer-LOCK signal, only
+        // ⌃⌥⇧M flips the model; the hint still rides the wire, unused.
     }
 
     /// Decode a forwarded straight-alpha RGBA shape into a CGImage + hotspot. The on-screen SIZE is
@@ -995,7 +985,8 @@ public final class StreamLayerView: NSView {
     }
 
     /// The Mac clicks on its own taps, so core takes every tap back from the host. A refused call
-    /// opts the view out: today's paths carry the trackpad until capture or the inversion decides.
+    /// opts the view out: the motion and scroll paths carry the trackpad until capture or the
+    /// inversion decides.
     private func sendTrackpad(_ contacts: [PunktfunkSurfaceTouch], at time: TimeInterval) {
         let answer = connection?.touchpadSurface(
             contacts, maxContacts: 2, keep: false, retractTaps: true,
@@ -1162,13 +1153,10 @@ public final class StreamLayerView: NSView {
             reconcileCursorRender() // initial render mode (a capture-model start composites)
         }
 
-        // Presenter choice + lifecycle live in SessionPresenter (shared with iOS/tvOS): stage-2
-        // (explicit VTDecompressionSession decode + a CAMetalLayer/display-link present) by
-        // default, the stage-1 pump as the Metal-missing / DEBUG fallback. The link comes from
-        // NSView.displayLink so it tracks the display this view is on.
-        // Intercept the pump's coded-dims callback: re-fit the metal sublayer to the real content
-        // aspect (main thread) BEFORE forwarding to the owner's overlay END-signal. Fires only on a
-        // size CHANGE (first frame + each resolved resize), so this is rare, not per-frame.
+        // Presenter choice + lifecycle live in SessionPresenter (shared with iOS/tvOS); its link
+        // comes from NSView.displayLink, so it tracks this view's display. The coded-dims callback
+        // re-fits the metal sublayer to the real content aspect (main thread) BEFORE forwarding to
+        // the owner's overlay END-signal; it fires only on a size CHANGE, not per frame.
         let overlayDecodedSize = onDecodedSize
         presenter.start(
             connection: connection,
@@ -1309,9 +1297,8 @@ public final class StreamLayerView: NSView {
         matchFollower = nil
         lastDecodedContentSize = nil // the next session re-derives it from its first frame
         connection = nil
-        // Cursor-channel state is per-session: without this reset a next session against a
-        // host WITHOUT the cap would wear this session's stale shapes (`cursorChannelActive`
-        // stayed latched true across sessions).
+        // Cursor-channel state is per-session: a next session against a host WITHOUT the cap
+        // must not wear this session's shapes or inherit `cursorChannelActive`.
         cursorChannelActive = false
         cursorState = nil
         hostCursors.removeAll()

@@ -91,8 +91,8 @@ fn reset_on_fork() {
 }
 
 /// Best-effort nice of the calling thread; RealtimeKit after a refusal when `ask_rtkit` says
-/// so. `true` when the direct call took. Never SCHED_RR/FIFO by default: realtime can preempt
-/// the compositor and the game's render thread (opt-in: PUNKTFUNK_SCHED_RR).
+/// so. `true` when the direct call took. Never SCHED_RR/FIFO: realtime can preempt the
+/// compositor and the game's render thread.
 #[cfg(target_os = "linux")]
 fn renice(nice: i32, ask_rtkit: impl FnOnce() -> bool) -> bool {
     // SAFETY: `setpriority` takes three by-value integers and no pointers, so there is nothing to
@@ -202,9 +202,9 @@ pub fn current_thread_sched() -> (&'static str, i32, i32) {
 /// thread when `setpriority` was refused. No file capability — a cap on the
 /// host binary breaks KWin's client identification.
 ///
-/// High-priority (nice) only, never `MakeThreadRealtime` — the SCHED_RR
-/// reservations in [`boost_thread_priority`] apply to rtkit-granted RR too,
-/// and the RT verb also demands an RLIMIT_RTTIME we do not set.
+/// High-priority (nice) only, never `MakeThreadRealtime` — [`boost_thread_priority`] avoids
+/// SCHED_RR/FIFO, and rtkit-granted RR is the same policy. The RT verb also demands an
+/// RLIMIT_RTTIME we do not set.
 #[cfg(target_os = "linux")]
 mod linux_rtkit {
     /// One-shot blocking D-Bus call, never from inside a task: callers are dedicated threads

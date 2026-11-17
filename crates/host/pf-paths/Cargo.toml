@@ -1,6 +1,6 @@
-# Host config-dir + owner-private file helpers, extracted into a leaf crate so the subsystem crates
-# (pf-media, pf-vdisplay) and the orchestrator can share them without depending on the `gamestream`
-# module they used to live in (plan §W6). Std + tracing; on Windows, pf-paths-win's ACL calls.
+# Host config-dir + owner-private file helpers, a leaf crate so the subsystem crates
+# (pf-vdisplay, pf-capture) and the orchestrator can share them without depending on the
+# `gamestream` module (plan §W6). Std + tracing; on Windows, pf-paths-win's ACL calls.
 [package]
 name = "pf-paths"
 version.workspace = true

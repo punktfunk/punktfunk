@@ -1,11 +1,11 @@
 //! How both video planes put a frame on the wire: every packet on one session clock at the
 //! rate the link carries.
 //!
-//! The rate is `R = min(max(f × B, 0.9 L), 0.9 L_hard)` ([`rate_bps`]): `B` the stream rate
-//! and `f` its factor, `L` the session's link rate ([`LinkRate::resolve`]), `L_hard` the
-//! ports' speed, or the link a pinned stream proved. Packets leave in groups of
-//! [`group_bytes`]; a wait under the sleep floor spins, so the clock holds at multi-gigabit
-//! rates. `PUNKTFUNK_DELIVERY` is the operator's A/B ([`forced`]).
+//! The rate is `R = min(max(f × B, 0.9 L), cap)` ([`rate_bps`]): `B` the stream rate and `f`
+//! its factor, `L` the session's link rate ([`LinkRate::resolve`]), `cap` ([`cap_bps`]) the
+//! least of a measured `L`, 0.9 × the ports' speed `L_hard` and 0.9 × a pinned stream's link.
+//! Packets leave in groups of [`group_bytes`]; a wait under the sleep floor spins, so the
+//! clock holds at multi-gigabit rates. `PUNKTFUNK_DELIVERY` is the operator's A/B ([`forced`]).
 //!
 //! The frame-driven tick wait ([`wait_next_tick`]), `PUNKTFUNK_VIDEO_DROP` and the
 //! percentile helper live here too.
@@ -69,12 +69,12 @@ pub(crate) enum Shape {
     /// Every group on the clock at `R`.
     #[default]
     Auto = 0,
-    /// A 16 KiB first group, a gap, then the rest at `R`: for a receiver that loses the
+    /// A [`GROUP_MIN`] first group, a gap, then the rest at `R`: for a receiver that loses the
     /// head of a burst while its adapter wakes.
     Wake = 1,
     /// No clock: every frame at line rate.
     Burst = 2,
-    /// 16 KiB groups at `f × B` alone, the link ignored.
+    /// [`GROUP_MIN`] groups at `f × B` alone, the link ignored.
     Smooth = 3,
 }
 
@@ -442,8 +442,9 @@ impl Pacer {
     }
 
     /// Per AU: the stream rate, the client's link report (`0` = none yet), a pinned
-    /// stream's wall, the client's shape, and the spread one frame may take. Returns `R`.
-    /// Every shape stays under [`cap_bps`].
+    /// stream's wall, the client's shape, and the spread one frame may take. Returns `R`, at
+    /// most [`cap_bps`] for every shape. A [`Shape::Burst`] frame ignores it and leaves at line
+    /// rate.
     pub(crate) fn update(
         &mut self,
         bitrate_kbps: u32,
@@ -1193,7 +1194,7 @@ mod tests {
         assert!(groups.iter().all(|&(b, _)| b <= train), "{groups:?}");
     }
 
-    /// (d) The wake shape: a 16 KiB first group, then at least 300 µs, then the rest.
+    /// (d) The wake shape: a [`GROUP_MIN`] first group, then at least [`WAKE_GAP`], then the rest.
     #[test]
     fn the_wake_shape_sends_a_small_group_then_waits() {
         let mut p = pacer(2_000_000, Shape::Wake);
@@ -1596,8 +1597,9 @@ mod tests {
         assert!(latest >= busy && latest < busy * 2, "{latest:?}");
     }
 
-    /// How the arrival wait meets a poke: today's sleeps out the credit gate, direct Wayland
-    /// had none, the poke-aware one asks [`CaptureCredit::ask_waits`].
+    /// How the arrival wait meets a poke: `Asleep` sleeps out the credit gate (the default
+    /// [`pf_capture::Feed::wait_paced`]), `Deaf` hears none (a feed with no `arrival_poke`),
+    /// `PokeAware` asks [`CaptureCredit::ask_waits`].
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum Gate {
         Asleep,
@@ -1692,7 +1694,7 @@ mod tests {
     }
 
     /// Every phase of an ask against a source at the rate, 3 ms ticks: the poke-aware wait
-    /// acts no later than today's sleep unless a fresh frame carries the ask on time, and no
+    /// acts no later than [`Gate::Asleep`] unless a fresh frame carries the ask on time, and no
     /// fresh frame ever waits on its arrival. `--nocapture` prints the before/after table.
     #[test]
     fn an_ask_ends_the_gate_without_delaying_a_fresh_frame() {

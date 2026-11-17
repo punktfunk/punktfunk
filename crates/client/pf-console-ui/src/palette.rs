@@ -1,9 +1,9 @@
 //! Background palettes and the mesh-gradient field: [`PALETTES`] is the one palette table,
 //! and native pickers read its ids and names over their bridge.
 
-// --- Mesh-gradient background (Swift `GamepadScreenBackground` MeshGradient) ---
+// --- Mesh-gradient background ---
 
-/// 16 mesh colours, row-major 4×4 sRGB. Verbatim Swift `meshColors`.
+/// 16 mesh colours, row-major 4×4 sRGB: the brand default's mesh ([`Palette::mesh_colors`]).
 pub const MESH_COLORS: [(f64, f64, f64); 16] = [
     (0.075, 0.060, 0.160),
     (0.34, 0.27, 0.72),
@@ -417,7 +417,7 @@ impl Palette {
     }
 }
 
-/// 16 mesh cells from any 5-stop ramp, including the runtime OS field (`shell::build_mesh_os`).
+/// 16 mesh cells from a ramp, sampled diagonally with [`CELL_RAMP`].
 pub(crate) fn mesh_colors_of(stops: &[(f64, f64, f64)]) -> [(f64, f64, f64); 16] {
     core::array::from_fn(|i| {
         let (x, y) = ((i % 4) as f64 / 3.0, (i / 4) as f64 / 3.0);
@@ -425,9 +425,8 @@ pub(crate) fn mesh_colors_of(stops: &[(f64, f64, f64)]) -> [(f64, f64, f64); 16]
     })
 }
 
-/// The brand default's field ramp: the website's surfaces, dark first — `--neutral-accent`
-/// `#0e093a`, `--neutral` `#21186e`, `--neutral-highlight` `#302593`, `--brand` `#6c5bf3`,
-/// `--brand-light` `#a79ff8` (punktfunk-website `src/styles/globals.css`).
+/// The brand default's field ramp, dark first. Its two lightest stops are the logo's violets,
+/// `#6c5bf3` and `#a79ff8` (punktfunk-website `public/punktfunk-logo.svg`).
 pub const VIOLET_FIELD: [(f64, f64, f64); 5] = [
     (0.055, 0.035, 0.227),
     (0.129, 0.094, 0.431),

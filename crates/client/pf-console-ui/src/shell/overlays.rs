@@ -74,7 +74,7 @@ impl Shell {
             .and_then(|sp| self.speed_pinned_by(&sp.key))
             .map(str::to_string);
         // Connect, wake and the speed test share one full-screen shape. A connect can
-        // follow a wake (`sync`) so they share the backdrop and never blink between them.
+        // follow a wake (`sync_wake`) so they share the backdrop and never blink between them.
         let cancel = || Hint::new(HintKey::Back, pf_l10n::common::common_cancel());
         let takeover: Option<(f64, bool, String, String, Vec<Hint>)> =
             if let Some(c) = self.connect.card_mut() {

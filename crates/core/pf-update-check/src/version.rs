@@ -67,7 +67,8 @@ pub fn commit_of(version: &str) -> Option<&str> {
     (sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
 }
 
-/// Canary compares run numbers, not patch fields, unless both sides name a commit; see module docs.
+/// Canary compares run numbers, not patch fields. A current build on the manifest's commit is
+/// never behind it; see module docs.
 pub fn is_newer(
     manifest_version: &str,
     manifest_ci_run: Option<u64>,

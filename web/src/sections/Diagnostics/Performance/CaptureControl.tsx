@@ -32,9 +32,8 @@ export const CaptureControlSection: FC = () => {
 
 	const refreshStatus = () =>
 		qc.invalidateQueries({ queryKey: getStatsCaptureStatusQueryKey() });
-	// Both paths report failure. A failed STOP is the one that matters: it is "stop & save", so
-	// swallowing the error let a capture the operator had been recording for minutes disappear with
-	// no recording written and nothing on screen to say so.
+	// Both paths report failure. A failed STOP is the one that matters: it is "stop & save", and
+	// the error is the only sign that no recording was written.
 	const onStart = () =>
 		start.mutate(undefined, {
 			onSuccess: refreshStatus,

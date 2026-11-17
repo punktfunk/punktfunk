@@ -18,7 +18,7 @@ final class Stage444Tests: XCTestCase {
     /// A 10-bit SDR stream decodes to a 10-bit buffer and stays SDR. The probe blob is plain
     /// libx265 with no PQ/HLG, which is exactly the shape of a host's 10-bit SDR session
     /// (Main10 under BT.709): depth comes from the negotiated session, HDR from the transfer
-    /// function. Before the depth axis existed this decoded into an 8-bit buffer.
+    /// function.
     func testVideoDecoderDecodes10BitSdrAsTenBitAndNotHDR() throws {
         try XCTSkipUnless(
             Stage444Probe.hwDecode444_10bit, "no hardware 10-bit 4:4:4 decode on this device")
@@ -70,7 +70,7 @@ final class Stage444Tests: XCTestCase {
             "expected a biplanar 4:4:4 8-bit buffer, got \(fourCCString(pf))")
         XCTAssertFalse(isHDR, "an 8-bit BT.709 4:4:4 stream is SDR")
         // The chroma plane (plane 1) must be FULL resolution for 4:4:4 (vs half for 4:2:0) — this is
-        // what lets the unchanged shader sample chroma at the luma UV.
+        // what lets the shader sample chroma at the luma UV.
         XCTAssertEqual(CVPixelBufferGetWidthOfPlane(buffer, 1), 256)
         XCTAssertEqual(CVPixelBufferGetHeightOfPlane(buffer, 1), 256)
     }

@@ -1,11 +1,11 @@
 //! Host-side input injection: [`punktfunk_core::input::InputEvent`] → compositor or OS input.
 //!
-//! Headless Sway sets `WLR_LIBINPUT_NO_DEVICES=1`, so kernel `uinput` is never a seat device.
-//! Injection uses wlroots virtual-input (`zwlr_virtual_pointer_manager_v1` +
-//! `zwp_virtual_keyboard_manager_v1`) as an ordinary Wayland client on Sway's
-//! `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`. Keyboard codes are Linux evdev; the keymap is the
-//! box layout (`pf_host_config::layout` — `XKB_DEFAULT_*`, then `localectl`) and modifiers
-//! are tracked so the compositor resolves shifted keysyms.
+//! Backends are the [`Backend`] variants. Headless Sway sets `WLR_LIBINPUT_NO_DEVICES=1`, so
+//! kernel `uinput` is never a seat device there; the wlroots backend uses virtual-input
+//! (`zwlr_virtual_pointer_manager_v1` + `zwp_virtual_keyboard_manager_v1`) as an ordinary
+//! Wayland client on Sway's `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`. Its keyboard codes are Linux
+//! evdev; the keymap is the box layout (`pf_host_config::layout` — `XKB_DEFAULT_*`, then
+//! `localectl`) and modifiers are tracked so the compositor resolves shifted keysyms.
 //!
 //! Consumes `punktfunk_core::input` and `pf-driver-proto`. Not the orchestrator.
 
@@ -45,8 +45,8 @@ mod head_pick;
 #[path = "inject/plan.rs"]
 mod plan;
 
-/// Host-session injector. Not `Send`: owns compositor resources and stays on the control
-/// thread that created it.
+/// Host-session injector. Not `Send`: owns compositor resources and stays on the thread that
+/// opened it, the [`InjectorService`] thread.
 pub trait InputInjector {
     fn inject(&mut self, event: &InputEvent) -> Result<()>;
 
@@ -504,7 +504,7 @@ pub fn scroll_supported() -> bool {
     false
 }
 
-/// Full-fidelity stylus (`HOST_CAP_PEN`). Linux only: [`pen::VirtualPen`] uinput tablet.
+/// Full-fidelity stylus (`HOST_CAP_PEN`). Linux: [`pen::VirtualPen`] uinput tablet.
 /// Probe is "can we open the kernel's /dev/uinput" (same permission as virtual gamepads) plus
 /// the `PUNKTFUNK_PEN` row. A seat's proxy there refuses a tablet. Welcome-time; clients
 /// without the bit fold pen into touch/pointer.
@@ -743,8 +743,7 @@ mod pad_driver_verdict_tests {
         );
     }
 
-    /// A failed start on a devnode whose ids carry no pf_* token is the driver's refusal; the
-    /// ids as the devnode reported them on .173.
+    /// A failed start on a devnode whose ids carry no pf_* token is the driver's refusal.
     #[test]
     fn a_failed_pad_with_no_pf_id_reads_as_refused() {
         let unknown =
@@ -1015,8 +1014,8 @@ pub mod steam_controller_windows;
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/steam_deck_windows.rs"]
 pub mod steam_deck_windows;
-/// Virtual Steam Deck via USB gadget (`raw_gadget` + `dummy_hcd`). Only virtual-Deck
-/// transport Steam Input promotes (controller on USB interface 2). SteamOS-host only.
+/// Virtual Steam Deck via USB gadget (`raw_gadget` + `dummy_hcd`), controller on USB interface
+/// 2 so Steam Input promotes it. On by default on SteamOS only; [`steam_usbip`] is the other.
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/steam_gadget.rs"]
 pub mod steam_gadget;
@@ -1113,8 +1112,9 @@ pub mod usbip_relay;
 #[path = "inject/linux/usbip_trace.rs"]
 pub mod usbip_trace;
 /// Xbox HID codec — report `pf-gamepad` serves as device-types 4/5/6 (Wireless / One S /
-/// Elite Series 2). Same descriptor, VID/PID differ. Gives HID footing `pf-xusb` never had:
-/// Steam / WGI / GameInput / DirectInput cannot see an XUSB-interface-only device.
+/// Elite Series 2). Wireless has Share; One S and Elite serve the descriptor cut without it.
+/// Gives HID footing `pf-xusb` never had: Steam / WGI / GameInput / DirectInput cannot see an
+/// XUSB-interface-only device.
 ///
 /// Not cfg-gated: pure byte-packing, so layout tests run on any host — including machines
 /// that cannot build the Windows backends.
@@ -1122,8 +1122,8 @@ pub mod usbip_trace;
 pub mod xbox_proto;
 /// Virtual Xbox pads via UMDF — Wireless (device-type 4), One S (5), Elite Series 2 (6).
 /// HID-visible alternative to [`gamepad`]'s XUSB companion, which Steam / WGI / GameInput
-/// / DirectInput cannot enumerate (XUSB interface only). Three identities share one
-/// descriptor; VID/PID, product string, and INF model line differ.
+/// / DirectInput cannot enumerate (XUSB interface only). VID/PID, product string, and INF
+/// model line differ per identity; One S and Elite share the descriptor without Share.
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/xbox_windows.rs"]
 pub mod xbox_windows;
@@ -1263,9 +1263,9 @@ mod backend_select_tests {
     use super::*;
 
     /// Session backend is a published value ([`set_backend_id`]) and outranks every env
-    /// rung. [`default_backend`] runs per input batch; a `getenv` there raced connect-path
-    /// `setenv`. Makes no claim about the environment: nothing needs to write it, so the
-    /// test does not.
+    /// rung. [`default_backend`] runs per input batch, so a `getenv` there would race a
+    /// connect-path `setenv`. Makes no claim about the environment: nothing needs to write it,
+    /// so the test does not.
     #[test]
     fn the_session_backend_threads_through_instead_of_the_process_env() {
         set_backend_id("gamescope");

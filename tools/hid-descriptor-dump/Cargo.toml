@@ -1,7 +1,6 @@
 # Capture a real HID device's report descriptor and decode it into something diffable against the
-# blobs `packaging/windows/drivers/pf-gamepad/src/lib.rs` serves. Every descriptor we ship must be
-# CAPTURED, not constructed (see that file's provenance warning, and the three bugs a constructed
-# one already cost us) — this is the tool that captures them.
+# blobs in `crates/host/pf-driver-proto/src/`. A descriptor we ship should be CAPTURED, not
+# constructed — this is the tool that captures them.
 #
 # Deliberately NOT a workspace member (see the root `Cargo.toml` `exclude` list): it pulls `hidapi`,
 # a C library needing libudev on Linux, which we do not want in `cargo build --workspace` or on any
@@ -10,8 +9,7 @@
 #
 #     cargo run --manifest-path tools/hid-descriptor-dump/Cargo.toml -- --list
 #
-# Stands alone. Without this, cargo walks up, finds the repo's `[workspace]` and refuses to build a
-# package that root does not list as a member.
+# Its own workspace root, so it builds standalone even without the root `exclude` entry.
 [workspace]
 
 [package]

@@ -43,13 +43,13 @@ data class StreamNote(
  * How long a session holds when the app leaves the screen, or null when it does not hold at all.
  *
  * One answer rather than two, because a keep-alive without a bound is a session the host can never
- * reclaim: it cannot tell a player who walked away from one who is watching. Never on a TV, where
- * the notification carrying the End action has nowhere to appear — a held session there would be
- * one nothing outside the app could stop.
+ * reclaim: it cannot tell a player who walked away from one who is watching. Never on a TV: a TV
+ * launcher may not show the notification that carries the End action, and without it nothing
+ * outside the app could stop a held session.
  *
- * The minutes are clamped, not trusted: the picker offers 1/5/10/30, but the value is a plain
- * number in a settings document a console or a preset can write, and a zero would end the session
- * the instant it was backgrounded.
+ * The minutes are clamped, not trusted: the picker offers [BACKGROUND_TIMEOUT_OPTIONS], but the
+ * value is a plain number in a settings document a console or a preset can write, and a zero
+ * would end the session the instant it was backgrounded.
  */
 fun keepAliveSpanMs(settings: Settings, isTv: Boolean): Long? {
     if (!settings.backgroundKeepAlive || isTv) return null
@@ -62,10 +62,10 @@ fun keepAliveSpanMs(settings: Settings, isTv: Boolean): Long? {
  * freezes the process, and the audio and the QUIC traffic stop with it.
  *
  * It runs for the whole session whenever the background keep-alive setting is on, not only once
- * the app is away: an app already in the background may not start a foreground service, so the
- * start has to happen while the stream screen is plainly on top. With the setting off there is no
- * service and no notification — backgrounding ends the session, so there would be nothing to keep
- * alive and nothing to show.
+ * the app is away: from Android 12 (API 31) an app already in the background may not start a
+ * foreground service, so the start has to happen while the stream screen is plainly on top. With
+ * the setting off there is no service and no notification — backgrounding ends the session, so
+ * there would be nothing to keep alive and nothing to show.
  */
 class StreamKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null

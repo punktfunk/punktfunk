@@ -20,7 +20,7 @@ use anyhow::Result;
 use punktfunk_core::config::CompositorPref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// `None` only when nothing is available *and* nothing was detected — the
+/// `None` when nothing was detected *and* no backend the client named is available — the
 /// caller turns that into a handshake error.
 #[cfg_attr(windows, allow(dead_code, reason = "Windows has one compositor"))]
 fn pick_compositor(

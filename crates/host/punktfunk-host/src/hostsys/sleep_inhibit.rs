@@ -25,9 +25,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Quiet window before the host vetoes suspend. Under Steam's 5 min and KDE's
-/// 10 min idle timers, and long enough that a Sleep confirmation cannot re-arm
-/// mid-click.
+/// Quiet window before the host vetoes suspend. Under Steam's shortest sleep preset (1 min)
+/// and KDE's default suspend (5–15 min), and long enough that a Sleep confirmation cannot
+/// re-arm mid-click.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 const QUIET_BEFORE_VETO: Duration = Duration::from_secs(30);
 
@@ -344,9 +344,9 @@ fn hold_desktop_inhibit() -> bool {
     })
 }
 
-/// One logind `Inhibit` of `what` on a dedicated plain thread. zbus's blocking API
-/// panics on a tokio worker (`block_on` nested), and [`hold`] callers may be either.
-/// The join waits the D-Bus round-trip (~ms); every call site tolerates that.
+/// One logind `Inhibit` of `what` on a dedicated plain thread: a nested `block_on` panics
+/// on a tokio worker. The one caller is [`watch`], on its own thread, so the join's D-Bus
+/// round trip (~ms) holds up nothing else.
 #[cfg(target_os = "linux")]
 fn acquire(what: &'static str) -> Option<ashpd::zbus::zvariant::OwnedFd> {
     let fd = std::thread::spawn(move || -> Option<ashpd::zbus::zvariant::OwnedFd> {

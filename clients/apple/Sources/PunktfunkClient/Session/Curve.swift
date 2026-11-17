@@ -180,7 +180,7 @@ private struct CurveScreen: View {
     private static let ringSide: CGFloat = 720
     /// The window picture width, in points, whose overlay proportions the curve keeps.
     private static let referenceWidth: CGFloat = 1280
-    /// The twist that commits the ring, as on a touchscreen.
+    /// The twist that commits the ring, as `TouchTuning.dialCommitDeg` does on a touchscreen.
     private static let commitDegrees: Double = 30
 
     var body: some View {
@@ -387,7 +387,8 @@ private struct Anchor: UIViewRepresentable {
 /// the window at the picture's shape. It takes no input; the stream view under it keeps every
 /// touch, so a touch reaches the host where it lands.
 struct FlatScreen: View {
-    /// How far the window's 2D overlays lift, points: past the plane's millimetre (~1.4 pt).
+    /// How far the window's 2D overlays lift, points: past the plane's millimetre (about 1.4 pt in
+    /// an unscaled scene; `physicalMetrics` gives the real figure).
     static let overlayLift: CGFloat = 4
     let target: CurveTarget
     @Environment(\.physicalMetrics) private var metrics
@@ -401,7 +402,7 @@ struct FlatScreen: View {
             } update: { content in
                 guard let plane = content.entities.first as? ModelEntity, let texture, let aspect
                 else { return }
-                // The picture's shape fitted inside the window, as the layer's aspect fit was.
+                // The picture's shape, aspect-fitted inside the window.
                 let width = Float(min(bounds.width, bounds.height * CGFloat(aspect)))
                 plane.model = ModelComponent(
                     mesh: .generatePlane(width: width, height: width / Float(aspect)),

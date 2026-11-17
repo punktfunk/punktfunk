@@ -59,8 +59,7 @@ pub struct HostRow {
     /// Fingerprint when pinned, else `addr:port` — cursor identity across snapshot churn.
     pub key: String,
     /// The store record's stable id (`KnownHost::id`), what "Make default host" points at.
-    /// `None` on a merely discovered row, and on any row a producer built before this
-    /// field existed — `serde(default)` because Android's bridge is one of them.
+    /// `None` on a merely discovered row; `serde(default)` for a producer that omits it.
     #[serde(default)]
     pub id: Option<String>,
     pub name: String,
@@ -112,8 +111,9 @@ pub struct HostRow {
     /// only while `remember` is set ([`Self::remembered`]); otherwise a connect asks.
     #[serde(default)]
     pub profile: Option<pf_client_core::profiles::ProfilePick>,
-    /// The screens this host offers this device and its pick (`GET /display/targets`). `None`
-    /// until the host answers, and from a host without the route: then there is no Screen section.
+    /// The screens this host offers this device and its pick (`GET /api/v1/display/targets`).
+    /// `None` until the host answers, and from a host without the route: then there is no
+    /// Screen section.
     #[serde(default)]
     pub screens: Option<pf_client_core::display_targets::Targets>,
 }
@@ -654,8 +654,8 @@ pub enum ConsoleCmd {
     /// not as a notice — the takeover narrates it and holds the Apply button.
     ///
     /// A second connect, not the running stream's: the console offers this out of session,
-    /// and a burst down a live stream is what the host's keyframe-at-probe-end guard exists
-    /// to survive rather than something to invite.
+    /// and a burst down a live stream is something the ABR controller recovers from
+    /// (`on_probe_active` asks for a keyframe), not something to invite.
     SpeedTest {
         key: String,
         addr: String,
@@ -779,9 +779,10 @@ pub enum ConsoleCmd {
         choice: Option<usize>,
     },
     /// Platform-only pad work. `action` is [`crate::screens::players::PadAction::id`];
-    /// `pad_key` indexes [`crate::screens::Ctx::pads`] and is empty when the pad list
-    /// cannot name the device. One command, not one per button: the host's answer is
-    /// always "do it, report as a notice", and a command per grant would span three crates.
+    /// `pad_key` is the `PadInfo::key` of an entry in [`crate::screens::Ctx::pads`], empty
+    /// when the pad list cannot name the device. One command, not one per button: the host's
+    /// answer is always "do it, report as a notice", and a command per grant would span three
+    /// crates.
     PadAction {
         action: String,
         pad_key: String,
@@ -800,7 +801,7 @@ pub enum ConsoleCmd {
         /// the screen already settled.
         label: String,
     },
-    /// Write a Screen row's pick on the host (`PUT /display/clients/{fp}`). Same lane as
+    /// Write a Screen row's pick on the host (`PUT /api/v1/display/clients/{fp}`). Same lane as
     /// [`Self::HostAction`]; a refusal is a notice, and the new pick arrives on the host row.
     SetScreen {
         addr: String,

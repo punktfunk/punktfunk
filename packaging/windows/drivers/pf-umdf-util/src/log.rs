@@ -1,8 +1,6 @@
 //! The bring-up file log every punktfunk UMDF driver keeps, in one place.
 //!
-//! Four drivers had a byte-identical copy of this, and `pf-mouse` recorded what that costs: the
-//! world-writable-path hardening of security-review 2026-07-28 reached three of them and missed
-//! the fourth. Landing it here means the next such fix cannot miss a driver.
+//! One copy serves every driver, so a hardening of the sink reaches all of them.
 //!
 //! The path is the decision worth owning. WUDFHost's own (LocalService) temp dir — never
 //! `C:\Users\Public`, where a non-admin could pre-create or hold the file, or read diagnostics

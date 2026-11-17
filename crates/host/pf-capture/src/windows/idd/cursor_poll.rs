@@ -6,11 +6,11 @@
 //! whatever the display's scale; the section holds the one Windows draws, and
 //! `cursor_model.rs` prefers it for a cursor of the same class. The driver declares XOR
 //! FULL so DWM excludes every cursor type from the IDD frame. DXGI `GetFramePointerShape`
-//! is not used: `PointerPosition.Visible` goes stale under injected input, and it burns
-//! one of four duplication slots.
+//! is not used: `PointerPosition.Visible` is reported to go stale under injected input, and
+//! it burns one of four duplication slots.
 //!
 //! The host runs as SYSTEM inside the interactive session on `winsta0\default`
-//! (`windows/service.rs` `spawn_host`), so this thread reads the session cursor
+//! (`windows/service/runtime.rs` `spawn_host`), so this thread reads the session cursor
 //! directly. Pin via the overlay snapshot and `pf_win_display::secure_desktop`. Invert/mask
 //! contracts live in `cursor_raster.rs`; design in `design/remote-desktop-sweep.md`.
 
@@ -49,8 +49,8 @@ pub(super) struct CursorPoller {
 }
 
 impl CursorPoller {
-    /// 4 ms ≈ 250 Hz. The polled position is also the composite-blend position, so
-    /// it must out-pace a 240 fps session; 16 ms reused a stale spot for ~4 frames.
+    /// 4 ms ≈ 250 Hz. The polled position is the one a client-drawn pointer takes, so
+    /// it must out-pace a 240 fps session.
     const INTERVAL: Duration = Duration::from_millis(4);
     /// Unconditional input-desktop reattach. `GetCursorInfo` on a stale desktop
     /// *succeeds* with stale data, so there is no failure signal. Each reattach also
@@ -66,10 +66,9 @@ impl CursorPoller {
     /// the overlay is frame-relative, and a pointer outside the rect is
     /// `visible: false` (per-output, matching shm and the Linux portal).
     ///
-    /// A SEED, not the value: the poll thread re-queries the rect on its [`Self::REATTACH`]
-    /// cadence, because both mid-session mode changes (`DisplayControl::resize`,
-    /// `poll_display_hdr`) keep this poller. The query runs on the poll thread to keep the CCD
-    /// call off the capture thread (see `DescriptorPoller`).
+    /// A SEED, not the value: the poll thread re-reads the rect from the display actor's
+    /// snapshot on its [`Self::REATTACH`] cadence, because both mid-session mode changes
+    /// (`DisplayControl::resize`, `poll_display_hdr`) keep this poller.
     pub(super) fn spawn(
         ccd: pf_win_display::win_display::CcdTargetKey,
         rect: (i32, i32, i32, i32),
@@ -487,7 +486,7 @@ fn read_bitmap_32(dc: HDC, hbm: HBITMAP) -> Option<RawBitmap> {
         )
     };
     if n == 0 || bm.bmWidth <= 0 || bm.bmHeight <= 0 || bm.bmWidth > 512 || bm.bmHeight > 1024 {
-        return None; // 512/1024: sanity caps (256² is the wire max; XL accessibility ≤ that)
+        return None; // 512/1024: sanity caps; cursor_fwd downscales to CURSOR_SHAPE_MAX_SIDE
     }
     let (w, h) = (bm.bmWidth, bm.bmHeight);
     let mut info = BITMAPINFO {

@@ -1,13 +1,12 @@
 //! The display ACTOR (vdisplay immunity plan WP8, decision D6) and the OS display-event listener.
 //!
-//! One thread owns the hidden window that receives the three user-mode display signals Windows
+//! One thread owns the hidden window that receives the user-mode display signals Windows
 //! exposes, and it is the only place that reads the CCD inventory for the hot paths:
 //!
 //! - `WM_DEVICECHANGE` + `RegisterDeviceNotificationW(GUID_DEVINTERFACE_MONITOR)`: monitor
 //!   interface arrival/removal, including devnode churn that leaves topology unchanged.
 //! - `DBT_DEVNODES_CHANGED`: PnP-tree churn with no payload.
-//! - `WM_DISPLAYCHANGE`: a mode/topology commit reached the desktop. Absence is a signal: a
-//!   probe with no mode delta does not fire this.
+//! - `WM_DISPLAYCHANGE`: a mode/topology commit reached the desktop (a no-delta probe fires none).
 //! - `EVENT_SYSTEM_DESKTOPSWITCH` (WinEvent): the input desktop moved (UAC / lock / logon and
 //!   back). Not logged; it refreshes [`crate::secure_desktop`] for the capturer's cursor guard.
 //!
@@ -102,8 +101,8 @@ fn lock() -> std::sync::MutexGuard<'static, State> {
     state().0.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Window or registration failure leaves the ring empty and the snapshot at generation 0;
-/// streaming continues on the legacy direct readers.
+/// Start the actor thread, once. A window bring-up failure leaves the ring empty and the
+/// snapshot at generation 0; [`snapshot_or_query`] then reads the inventory directly.
 pub fn spawn_once() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -251,9 +250,9 @@ fn refresh_inventory(hwnd: HWND) {
     let started = Instant::now();
     let result = crate::win_display::target_inventory_checked();
     let now = Instant::now();
-    // The display-config lock diagnostic the descriptor poller used to carry: a healthy inventory
-    // read is sub-millisecond; tens of milliseconds means something holds the lock (topology
-    // churn, display-poller software). Rate-limited to one line per 10 s.
+    // Display-config lock diagnostic: a healthy inventory read is sub-millisecond; tens of
+    // milliseconds means something holds the lock (topology churn, display-poller software).
+    // Rate-limited to one line per 10 s.
     static LAST_SLOW: Mutex<Option<Instant>> = Mutex::new(None);
     let took = now.saturating_duration_since(started);
     if took >= Duration::from_millis(50) {

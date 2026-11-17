@@ -7,8 +7,15 @@ import android.media.MediaCodecInfo.VideoCapabilities.PerformancePoint
 import android.media.MediaCodecList
 import android.os.Build
 
-/** The decoder Kotlin ranked for a MIME, handed to [NativeBridge.nativeStartVideo]. */
-data class DecoderChoice(val name: String, val lowLatencyFeature: Boolean)
+/**
+ * The decoder Kotlin ranked for a MIME, handed to [NativeBridge.nativeStartVideo]. [pixelRate]
+ * is the most pixels a second it declares, 0 when it declares none.
+ */
+data class DecoderChoice(
+    val name: String,
+    val lowLatencyFeature: Boolean,
+    val pixelRate: Long = 0,
+)
 
 /** What a session asks of its decoder: the requested size and rate, and 10-bit (HDR or SDR). */
 data class DecodeNeed(val width: Int, val height: Int, val fps: Int, val tenBit: Boolean)
@@ -163,11 +170,21 @@ object VideoDecoders {
     fun pickDecoder(mime: String): DecoderChoice? {
         if (mime.isEmpty()) return null
         val infos = codecInfos() ?: return null
-        val facts = decoders(infos, mime).map { (info, caps) -> facts(info, caps, mime, null, false) }
-        return bestDecoder(facts, Build.VERSION.SDK_INT)?.let { DecoderChoice(it.name, it.lowLatency) }
+        val rows = decoders(infos, mime)
+        val facts = rows.map { (info, caps) -> facts(info, caps, mime, null, false) }
+        val best = bestDecoder(facts, Build.VERSION.SDK_INT) ?: return null
+        val video = rows.firstOrNull { (info, _) -> info.name == best.name }?.second?.videoCapabilities
+        return DecoderChoice(best.name, best.lowLatency, video?.let(::pixelRate) ?: 0)
     }
 
     private val MIMES = listOf("video/avc", "video/hevc", "video/av01")
+
+    /** The most pixels a second [video] declares: its largest size at the rate it takes there. */
+    private fun pixelRate(video: MediaCodecInfo.VideoCapabilities): Long = runCatching {
+        val w = video.supportedWidths.upper
+        val h = video.getSupportedHeightsFor(w).upper
+        (w.toLong() * h * video.getSupportedFrameRatesFor(w, h).upper).toLong()
+    }.getOrDefault(0L)
 
     private fun codecInfos(): Array<MediaCodecInfo>? =
         runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos }.getOrNull()
@@ -226,7 +243,8 @@ object VideoDecoders {
 
     /**
      * Below API 35 some vendors' performance points leave real modes out. They count only when an
-     * H.264 decoder's list covers 720p60, which the CDD asks of every device (as ExoPlayer does).
+     * H.264 decoder's list covers 720p60, which the CDD requires wherever the display is 720 lines
+     * or taller (ExoPlayer checks the same).
      */
     private fun pointsTrusted(infos: Array<MediaCodecInfo>): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) return true
@@ -394,10 +412,11 @@ internal fun codecCaps(decoders: List<DecoderFacts>, tenBit: Boolean, api: Int):
 }
 
 /**
- * A Qualcomm display HAL from before the Android 13 vendor release (kalama, SM8550) converts every
- * BT.709 YUV layer with the limited matrix whatever its range tag (`SelectCscType`): full-range
- * video shows crushed blacks and clipped highlights. Later HALs check the range. A Qualcomm
- * decoder marks the HAL's vendor; an unreadable vendor level (0) counts as old.
+ * A Qualcomm display HAL older than kalama's (SM8550) converts every BT.709 YUV layer with the
+ * limited matrix whatever its range tag (`SelectCscType`): full-range video shows crushed blacks
+ * and clipped highlights. Vendor API 33 approximates the cut; some API-33 HALs (DIVAR) still
+ * ignore the range. A Qualcomm decoder marks the HAL's vendor; an unreadable vendor level (0)
+ * counts as old.
  */
 internal fun limitedOnlyBt709Hal(decoder: String, vendorApi: Int): Boolean {
     val name = decoder.lowercase()

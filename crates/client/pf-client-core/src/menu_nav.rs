@@ -4,7 +4,7 @@
 //! and stick/D-pad moves with initial-delay auto-repeat. Cadence, dead zone, and
 //! hysteresis live here so desktop SDL and Android JNI share one feel.
 //!
-//! Numbers match Apple `GamepadMenuInput`. Tests in this file pin the cadence.
+//! Dead zone and repeat timing match Apple `GamepadMenuInput`. Tests in this file pin the cadence.
 
 use punktfunk_core::config::GamepadPref;
 use std::time::{Duration, Instant};
@@ -242,8 +242,8 @@ impl MenuNav {
 #[derive(Clone, Debug)]
 pub struct PadInfo {
     pub name: String,
-    /// Stable per physical controller on this platform: `vid:pid:serial` where the pad reports
-    /// one (a DualSense reports its MAC), else `vid:pid:name`. SDL instance ids are per-run;
+    /// Stable across runs, not per physical pad: desktop keys `vid:pid:name` (hex ids), so two
+    /// pads of one model and name share a key. SDL instance ids are per-run;
     /// [`Settings::forward_pad`](crate::trust::Settings) and `Settings::pads` persist this.
     pub key: String,
     /// What "Automatic" resolves this physical pad to. Fallback is Xbox 360.

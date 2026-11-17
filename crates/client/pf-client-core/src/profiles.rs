@@ -274,8 +274,8 @@ pub enum SeatGate {
     Dial,
     /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desktop ready…`.
     Wake,
-    /// The seat is coming up. Poll `enumerate` every 2 s, show `detail`, offer **Cancel**; there
-    /// is no timeout.
+    /// The seat is coming up. Poll `enumerate` every [`SEAT_POLL`], show `detail`, offer
+    /// **Cancel**; there is no timeout.
     Wait { detail: Option<String> },
     /// The seat can't play now; the line says why. Don't dial.
     Refuse(String),
@@ -373,8 +373,8 @@ pub fn wake(
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
-/// What `unlock-challenge` answers: 32 fresh bytes, good once for two minutes, and what the
-/// signed message names.
+/// What `unlock-challenge` answers: 32 fresh bytes, good once and only for the host's
+/// `pf_seats::unlock::CHALLENGE_LIFE`, and what the signed message names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnlockChallenge {
     pub challenge: [u8; 32],

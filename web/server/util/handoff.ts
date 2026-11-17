@@ -16,7 +16,7 @@ export type HandoffVerdict =
 	  };
 
 /** The signed message. Kept in one place because it is a cross-language contract: change it here
- * and `console_url` in the host must change in the same commit. */
+ * and `handoff_ticket` in the host's ctl.rs must change in the same commit. */
 export function handoffMessage(ts: string, nonce: string): string {
 	return `pf-console-handoff:v1:${ts}:${nonce}`;
 }
@@ -87,9 +87,8 @@ export async function verifyHandoff(
 	}
 	// Reserve BEFORE the first await: the event loop can interleave two redemptions of one
 	// ticket while the HMAC is in flight, and both would pass a check-then-record written the
-	// obvious way round (security-review 2026-08-31 M-1). A failed signature releases the
-	// reservation; that cannot burn someone else's ticket, because a wrong-mac guess is a
-	// different map key than the real ticket.
+	// obvious way round. A failed signature releases the reservation; that cannot burn someone
+	// else's ticket, because a wrong-mac guess is a different map key than the real ticket.
 	if (seen.has(ticket)) return { ok: false, reason: "replayed" };
 	seen.set(ticket, now);
 	for (const key of typeof keys === "string" ? [keys] : keys) {

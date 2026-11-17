@@ -1,8 +1,8 @@
-//! The sealed pad channel, driver side (`design/gamepad-channel-sealing.md`, gamepad proto v2):
-//! poll the named bootstrap mailbox by index, publish our pid (iff the host's proto version
-//! matches), adopt the host-delivered DATA-section handle, and validate the mapped section's magic
-//! and `pad_index` before use. One implementation shared by `pf-xusb` and `pf-gamepad` (they used
-//! to hand-duplicate it), parameterized by [`ChannelConfig`].
+//! The sealed pad channel, driver side (`design/gamepad-channel-sealing.md`): poll the named
+//! bootstrap mailbox by index, publish our pid (iff the host's proto version matches), adopt the
+//! host-delivered DATA-section handle, and validate the mapped section's magic and `pad_index`
+//! before use. One implementation shared by `pf-xusb`, `pf-gamepad`, `pf-mouse` and `pf-touchpad`,
+//! parameterized by [`ChannelConfig`].
 //!
 //! This module **forbids `unsafe`**: the entire state machine is safe Rust over
 //! [`section`](crate::section)'s checked accessors — the memory-safety surface of the sealed
@@ -25,9 +25,9 @@ const BOOT_OFF_HANDLE_PID: usize = offset_of!(PadBootstrap, handle_pid);
 const BOOT_OFF_HANDLE_SEQ: usize = offset_of!(PadBootstrap, handle_seq);
 const BOOT_SIZE: usize = core::mem::size_of::<PadBootstrap>();
 
-/// What varies between the two pad drivers.
+/// What varies between the drivers.
 pub struct ChannelConfig {
-    /// Log-line prefix (`"pf-xusb"` / `"pf-ds"`).
+    /// Log-line prefix (`"pf-xusb"` / `"pf-gamepad"`).
     pub tag: &'static str,
     /// Mailbox name prefix, completed with the pad index (`"Global\\pfxusb-boot-"` / `"Global\\pfds-boot-"`).
     pub boot_name_prefix: &'static str,

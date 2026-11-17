@@ -1,8 +1,7 @@
 // Steam's BINARY `shortcuts.vdf` — the user's "Add a Non-Steam Game to My Library" entries.
 //
-// Ported from the host's in-tree scanner (crates/host/punktfunk-host/src/library/steam.rs), together
-// with its unit tests, which are the real specification here: the format is undocumented, and the
-// two id derivations below (`shortcutAppId`, `shortcutGameId`) are the difference between a
+// The format is undocumented, so test/library-parsers.test.ts is the real specification here, and
+// the two id derivations below (`shortcutAppId`, `shortcutGameId`) are the difference between a
 // shortcut that launches and one that silently does nothing.
 //
 // Format: a 1-byte type tag (`0x00` nested map, `0x01` string, `0x02` int32, `0x07` uint64), a
@@ -21,7 +20,7 @@ export interface Shortcut {
 	readonly hidden: boolean;
 }
 
-/** A cursor over the buffer — the ported code's `pos` threaded explicitly. */
+/** A cursor over the buffer: `pos` threaded explicitly. */
 interface Cursor {
 	pos: number;
 }

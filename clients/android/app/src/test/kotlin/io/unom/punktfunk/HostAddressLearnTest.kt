@@ -16,7 +16,7 @@ import org.robolectric.annotation.Config
  * address — so the record follows it, by fingerprint, keeping everything the user set on it.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36]) // Robolectric 4.16 has no SDK 37 image yet; the app targets 37
+@Config(sdk = [36]) // Robolectric has no SDK 37 image yet; the app targets 37
 class HostAddressLearnTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val fp = "ab".repeat(32)
@@ -39,7 +39,7 @@ class HostAddressLearnTest {
         assertFalse(store.learnAddress("", "192.168.1.31", 9777))
     }
 
-    /** The addresses a host left are kept, newest first, without repeats, three at most. */
+    /** The addresses a host left: newest first, no repeats, up to `PREV_ADDRESSES_MAX`. */
     @Test
     fun a_moved_host_remembers_the_addresses_it_left() {
         val store = KnownHostStore(context)

@@ -1,12 +1,12 @@
 // Explicit VideoToolbox decode and presentation orchestration.
 //
-//   net pump -> VideoDecoder -> tvOS video renderer
-//                            -> newest-wins store -> render thread -> CAMetalLayer
+//   net pump -> VideoDecoder -> system video renderer (`decoded`, iOS/tvOS)
+//                            -> FrameStore -> render thread -> CAMetalLayer
 //
 // Metal rendering is driven by decoded-frame arrival. The ordinary display link supplies a clock,
-// retries transient drawable misses, and polls tvOS's displayed IOSurface; deadline pacing instead
-// owns a CAMetalDisplayLink. macOS keeps displaySyncEnabled off because synchronized out-of-band
-// presents can starve its drawable pool.
+// retries transient drawable misses, and polls the decoded path's displayed IOSurface; deadline
+// pacing instead owns a CAMetalDisplayLink. macOS keeps displaySyncEnabled off because
+// synchronized out-of-band presents can starve its drawable pool.
 //
 // The pump, VideoToolbox callback, and Metal render loop run on separate threads. Start, stop, and
 // ordinary display-link ticks run on main. Shared stores and clocks are lock-guarded; presenter
@@ -43,7 +43,7 @@ extension Stage2Pipeline {
 /// The deadline link's lines (link up, stalls, wedges, the window line outside
 /// PUNKTFUNK_PRESENT_DEBUG), category "present". The pf-present line logs from PresentDiagnostics.
 private let presentLog = ClientLog(category: "present")
-/// Pump-side events (loss recovery, format seeding) — the stage-2 sibling of StreamPump's log.
+/// VideoToolbox's refused AUs (the decoder's error callback), category "pump".
 private let pumpLog = ClientLog(category: "pump")
 
 /// Decoded-frame hand-off between the decode half and the render thread. The POLICY is the
@@ -52,8 +52,7 @@ private let pumpLog = ClientLog(category: "pump")
 /// - `.newestWins` (Prioritize lowest latency, off deadline pacing): a 1-slot ring — the decoder
 ///   overwrites (drops the older undisplayed frame), the render thread takes-and-clears. Zero
 ///   store by construction: any deeper app-held buffer ahead of a latch-paced display becomes a
-///   STANDING queue costing one full refresh per slot, forever (the depth-2 gate post-mortem —
-///   see SessionPresenter.gateDepth).
+///   STANDING queue costing one full refresh per slot, forever (see SessionPresenter.gateDepth).
 /// - `.fifo(capacity: K)` (Prioritize smoothness): a small deliberate jitter buffer. The
 ///   decoder appends; overflow drops the OLDEST (bounded added latency — the newest keeps
 ///   flowing); the render thread pops the oldest ONE per present opportunity, so the cadence is
@@ -383,7 +382,7 @@ struct ArrivalSlots {
     }
 }
 
-/// Selects when a decoded frame enters the layer; decode and the newest-wins store are shared.
+/// Selects when a decoded frame enters the layer; decode and the frame store are shared.
 ///
 /// Which pacing a platform takes by default is decided in `PresenterChoice.platformDefault`.
 ///
@@ -1152,10 +1151,10 @@ struct DeadlineSelector {
 
 /// Stage-4's stale-link ladder. A link that stops vending is relinked; a link that stalls
 /// AGAIN within `rebuildWindow` of that relink means the CAMetalLayer itself is wedged, so
-/// the caller is told and its `WedgePolicy` picks the cure. A wedged layer's relink vends
-/// its pool once and is silent again within ≈0.3 s; 2 s covers that with margin, and a link
-/// that ran clean for longer has earned a fresh relink. Render-thread confined. Internal
-/// for tests.
+/// the caller is told and its `WedgePolicy` picks the cure. A wedged layer's relink vends once
+/// and stalls again ≈0.3 s later (one vend plus `LinkWatchdog.staleAfter`); 2 s covers that
+/// with margin, and a link that ran clean for longer has earned a fresh relink. Render-thread
+/// confined. Internal for tests.
 struct LinkStallPolicy {
     enum Action { case relink, rebuild }
     let rebuildWindow: CFTimeInterval
@@ -1174,7 +1173,7 @@ struct LinkStallPolicy {
 ///
 /// A stall relinks. A stall `LinkStallPolicy` reads as a wedged layer is reported once, and
 /// the watchdog then holds, the fresh link staying, until the system shows a frame again
-/// (`rearm`): a vend alone proves nothing, since a wedged layer vends its pool once. The caller
+/// (`rearm`): a vend alone proves nothing, since a wedged layer's relink still vends. The caller
 /// starts the links and does the reporting. Render-thread confined. Internal for tests.
 struct LinkWatchdog {
     enum Action: Equatable {
@@ -1228,13 +1227,11 @@ struct LinkWatchdog {
 /// `release`s and re-signals the render thread. Depth 1 serializes presents on the on-glass
 /// callback, which costs a refresh whenever the callback's own latency pushes the next present
 /// past a vsync; a deeper gate builds a standing queue (`SessionPresenter.gateDepth` picks the
-/// depth). `staleAfter` is insurance against a present whose handler never fires (the macOS
-/// "out-of-band presents aren't damage" hazard class — see MetalVideoPresenter's init
-/// post-mortem): rather than freezing the stream, a full gate
-/// force-opens a slot 100 ms after its oldest present, a visible ~10 fps degradation that
-/// PUNKTFUNK_PRESENT_DEBUG's `forced` counter exposes (it reads 0 on healthy systems). Internal
-/// (not private) for unit tests. Sendable; lock-guarded — the releaser runs on a Metal callback
-/// thread.
+/// depth). `staleAfter` is insurance against a present whose handler never fires: rather than
+/// freezing the stream, a full gate force-opens a slot 100 ms after its oldest present, a
+/// visible ~10 fps degradation that PUNKTFUNK_PRESENT_DEBUG's `forced` counter exposes (it reads
+/// 0 on healthy systems). Internal (not private) for unit tests. Sendable; lock-guarded — the
+/// releaser runs on a Metal callback thread.
 final class PresentGate: @unchecked Sendable {
     /// How long one pending present may hold its slot before it's presumed lost.
     static let staleAfter: CFTimeInterval = 0.1
@@ -1337,7 +1334,7 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
     private let hint: FrameRateHint
     private let stats: PresentDebugStats
     /// Takes one OS-floor sample per update (what it measures: `metalDisplayLink(_:needsUpdate:)`);
-    /// its p50 is the floor iOS and tvOS take off the shown display and end-to-end.
+    /// its p50 is the floor iOS, tvOS and visionOS take off the shown display and end-to-end.
     private let hud: HudSink
     /// The pool depth this session vends from (`startDeadlinePresenter` sets it on the layer).
     private let drawableCount: Int
@@ -1352,7 +1349,7 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
     private var steps = [CFTimeInterval](repeating: .infinity, count: 16)
     private var stepIndex = 0
 
-    /// Apple accepts 1 or 2 here; 1 is the shorter.
+    /// Apple accepts 1 or 2 here (CAMetalDisplayLink docs, 27 SDKs); 1 is the shorter.
     static let frameLatency: Float = 1
 
     init(
@@ -1527,8 +1524,8 @@ public final class Stage2Pipeline {
     private let frameHDR = FrameHDRReporter()
     private var token = StopFlag()
     /// Live host↔client clock offset, read at each record and never cached: the core re-syncs it
-    /// mid-stream (60 s + step detection), as a host's wall clock can step. Each call is an
-    /// atomic load behind the FFI.
+    /// mid-stream (punktfunk-core's `CLOCK_RESYNC_INTERVAL`, plus step detection), as a host's
+    /// wall clock can step. Each call is an atomic load behind the FFI.
     private var clockOffset: () -> Int64 = { 0 }
     /// Signalled when the pump thread exits, so `stop()` can join it (bounded) before `decoder.reset()`
     /// — otherwise a pump iteration already past its `token.isStopped` check can rebuild a decode session
@@ -1654,8 +1651,8 @@ public final class Stage2Pipeline {
                 renderSignal.signal()
             },
             // Async decode failure: reported to the core, which freezes and asks for an IDR after
-            // three in a row. One WARN per run of refusals carries the OSStatus, the only trace
-            // a field log has of what VideoToolbox refused.
+            // `NO_OUTPUT_KEYFRAME_STREAK` in a row. One WARN per run of refusals carries the
+            // OSStatus, the only trace a field log has of what VideoToolbox refused.
             onDecodeError: { status in
                 if recovery.refused() {
                     pumpLog.warning(
@@ -1913,9 +1910,9 @@ public final class Stage2Pipeline {
     /// CAMetalDisplayLink on its own runloop thread vends one drawable per refresh, two refreshes
     /// before glass, into the newest-wins stash. The render thread pairs it with the newest
     /// decoded frame and presents by the drawable's deadline (`DeadlinePacer`). A drawable no
-    /// frame claims by then goes back to the pool at once: the three-drawable pool has no slot to
-    /// spare, and a held one would cost the next vend. `LinkWatchdog` judges a silent link and
-    /// `DeadlineSelector` the pick and the carry; the thread applies their answers.
+    /// frame claims by then goes back to the pool at once: the pool (`drawableCount(env:)`) has no
+    /// slot to spare, and a held one would cost the next vend. `LinkWatchdog` judges a silent link
+    /// and `DeadlineSelector` the pick and the carry; the thread applies their answers.
     ///
     /// Threading mirrors the arrival/glass half: neither thread captures `self`; the link is
     /// created, driven and invalidated entirely on its own thread (CAMetalDisplayLink is only
@@ -2333,7 +2330,8 @@ public final class Stage2Pipeline {
         #endif
     }
 
-    /// MAIN thread: the hosting panel, for the pf-present line's grid and `panel=` field.
+    /// MAIN thread: the hosting panel, for the pf-present line's grid and `panel=` field and for
+    /// arrival pacing's refresh interval (`ArrivalSlots.refresh`).
     public func setPanel(_ info: PanelInfo) {
         frameRateHint.stagePanel(info)
     }
@@ -2551,8 +2549,8 @@ public final class Stage2Pipeline {
             var pool = firstPool
             if lends { connection.setAccessUnitMemory(pool) }
             defer { if lends { connection.releaseAccessUnitMemory(pool) } }
-            // Newest decoded frame index — a late partial (the reassembler's 30 ms fuse can
-            // deliver one behind a newer complete frame) must not travel back in time.
+            // Newest decoded frame index — a late partial (the reassembler's `PARTIAL_WINDOW_NS`
+            // fuse can deliver one behind a newer complete frame) must not travel back in time.
             var newestIndex: UInt32?
             var lastDims: (w: Int, h: Int)?
             var alive = true
@@ -2584,7 +2582,7 @@ public final class Stage2Pipeline {
                             au.flags & PunktfunkConnection.userFlagChunkAligned != 0
                         let ptsNs = au.ptsNs
                         // Decode stage starts at the PULL (matching the VT path's FrameContext —
-                        // receipt→pull is the HUD's separate client-queue term, ABI v9 split).
+                        // receipt→pull is the HUD's separate client-queue term).
                         let receivedNs = au.pulledNs
                         let flags = au.flags
                         // In the pool already, or copied into a slot: an AU the core assembled

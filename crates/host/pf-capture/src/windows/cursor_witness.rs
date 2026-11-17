@@ -4,7 +4,7 @@
 //! travel is the evidence that separates them, so this accumulator decides whether a silent
 //! stretch escalates into a reset. Pure over a `(now, position)` pair, so the rule
 //! is a table test rather than a soak — the capturer owns the `GetCursorPos` call and the
-//! classifier owns the verdict ([`recovery::Inputs::cursor_gap_px`]).
+//! classifier owns the verdict ([`crate::windows::remote::supervisor::Inputs::cursor_gap_px`]).
 //!
 //! `GetCursorPos` is global, not per-display: a delta of 0 proves the cursor sat still
 //! EVERYWHERE, while a delta > 0 on a parallel-displays host may be a sibling's motion. Only
@@ -15,7 +15,8 @@
 
 use std::time::{Duration, Instant};
 
-/// Two user32 reads; 8 ms so a ≥150 ms hole still gets many samples.
+/// One `GetCursorPos` per sample. 8 ms so the shortest stall hole (`StallWatch::STALL_MIN`)
+/// still gets many samples.
 pub(crate) const SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
 
 /// Accumulated pointer travel since the last fresh frame, plus the one-call lag that keeps a

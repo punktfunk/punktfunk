@@ -34,9 +34,9 @@ final class StreamPump {
         let token = token
         // A pump start is a fresh decoder: the core's post-loss freeze starts over with it.
         connection.recoveryReset()
-        // The layer is non-Sendable but its enqueue/flush are documented thread-safe, and after
-        // this point only the pump thread drives it — assert that so the @Sendable Thread closure
-        // may capture it.
+        // The layer is non-Sendable, and the SDK (macOS/tvOS 27.0, iOS 27.1) documents background
+        // enqueue only for its `sampleBufferRenderer`. After this point only the pump thread drives
+        // the layer — assert that so the @Sendable Thread closure may capture it.
         nonisolated(unsafe) let layer = layer
         layer.flush() // drop any frames a previous connection left queued
 
@@ -114,7 +114,7 @@ final class StreamPump {
     /// Flag a sample decode-but-don't-display (`kCMSampleAttachmentKey_DoNotDisplay`). Used to
     /// withhold decoder-concealed post-loss frames while the re-anchor gate holds: the layer keeps
     /// its reference chain fed without flipping the frozen picture. No-op if the attachments array
-    /// can't be materialized (then the frame just displays — the freeze degrades to the old behavior).
+    /// can't be materialized (then the frame just displays and the freeze does not hold for it).
     private static func setDoNotDisplay(_ sample: CMSampleBuffer) {
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
             sample, createIfNecessary: true), CFArrayGetCount(attachments) > 0

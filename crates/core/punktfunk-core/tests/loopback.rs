@@ -153,7 +153,6 @@ fn flush_backlog_discards_queue_and_recovers() {
     .unwrap();
 
     let frames = sample_frames();
-    // Read one frame first so the client's recv ring exists and may hold an undelivered tail.
     host.submit_frame(&frames[0], 0, 0).unwrap();
     client.poll_frame().unwrap();
     for (i, f) in frames.iter().enumerate().skip(1) {

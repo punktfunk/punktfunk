@@ -65,7 +65,8 @@ const ACCENTS = {
 	"swatch slate": "#6f8396",
 };
 
-/** The console's own surfaces, from the `:root` / `.dark` blocks in styles.css. */
+/** The page and text colours the accent-only checks run on. They are literals, not read from
+ *  styles.css: its dark `--pf-page` and light `--foreground` are other values. */
 const CONSOLE_SURFACES = {
 	light: { bg: "#ffffff", fg: "#0a0a0a" },
 	dark: { bg: "#0a0a0a", fg: "#fafafa" },
@@ -120,8 +121,8 @@ const contrast = (a, b) => {
 // ── read the ratios back out of the stylesheet ─────────────────────────────────────────────
 const css = readFileSync(CSS, "utf8");
 
-/** The body of one rule, so a ratio is read from the block that owns it. Two blocks now
- *  declare `--card`; an unscoped search takes whichever comes first in the file and checks
+/** The body of one rule, so a ratio is read from the block that owns it. Several
+ *  blocks declare `--card`; an unscoped search takes whichever comes first in the file and checks
  *  the wrong derivation without saying so. */
 function rule(selector) {
 	const open = css.indexOf(`${selector} {`);
@@ -166,7 +167,7 @@ const R = {
 	brand: ratio("pf-brand", ACCENT),
 	brandLight: ratio("pf-brand-light", ACCENT),
 	highlight: ratio("pf-highlight", ACCENT),
-	/* The accent-only half now tints the console's own surfaces too. */
+	/* The accent-only half tints the console's own surfaces too. */
 	aBackground: ratio("background", ACCENT),
 	aCard: ratio("card", ACCENT),
 	aMuted: ratio("muted", ACCENT),
@@ -224,9 +225,8 @@ for (const [name, [bgH, fgH, acH]] of Object.entries(THEMES)) {
 		// The lens mark is three tints of one accent; too close and it reads as a blob.
 		["mark: light circle vs deep circle", brandLight, brand, 1.4],
 		["mark: highlight vs light circle", highlight, brandLight, 1.25],
-		// ...and separation from each other is not visibility. Checking only the tints
-		// against ONE ANOTHER is how three near-white tones passed while the wordmark sat
-		// at 1.13:1 on a white page. --pf-highlight is the wordmark, so it reads as text.
+		// ...and separation from each other is not visibility: three tints can sit well apart
+		// and all near the page colour. --pf-highlight is the wordmark, so it reads as text.
 		["mark: wordmark tone on the page", highlight, bg, 3],
 		["mark: light circle on the page", brandLight, bg, 1.5],
 		["mark: deep circle on the page", brand, bg, 1.5],
@@ -257,7 +257,8 @@ for (const [name, acH] of Object.entries(ACCENTS)) {
 		const secondary = mix(page, R.aSecondary, ac);
 		const border = mix(page, R.aBorder, ac);
 		// Dark takes --primary from the light tint with the page background as its text;
-		// light takes the 75%-toward-black mix with white text. Same rule as the themed half.
+		// light mixes the accent with black, as `:root[data-accent]:not(.dark)` does, with white
+		// text. Same rule as the themed half.
 		const primary = dark ? brandLight : mix(ac, 75, BLACK);
 		const primaryFg = dark ? bg : WHITE;
 		const checks = [

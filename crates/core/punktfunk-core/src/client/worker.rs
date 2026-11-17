@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 
 /// Cells [`NativeClient`] and the worker's tasks share, one `Arc` per dial.
 ///
-/// `clock_offset` and `shutdown` stay `Arc`s: embedders hold those cells on their own.
+/// `clock_offset` stays an `Arc`: the HUD and embedders hold that cell on their own
+/// ([`NativeClient::clock_offset_shared`]).
 pub(crate) struct ClientShared {
     pub(crate) frames: FrameChannel,
     pub(crate) shutdown: Arc<AtomicBool>,
@@ -47,6 +48,8 @@ pub(crate) struct ClientShared {
     pub(crate) rtt_us: AtomicU32,
     /// Embedder decode-latency samples. The pump drains a window mean into ABR.
     pub(crate) decode_lat: Mutex<DecodeLatAcc>,
+    /// The embedder's decoder declares spare capacity ([`NativeClient::report_decoder_spare`]).
+    pub(crate) decoder_spare: AtomicBool,
     /// Closed ABR windows, newest last ([`NativeClient::take_abr_windows`]).
     pub(crate) abr_windows: Mutex<std::collections::VecDeque<crate::abr::WindowRecord>>,
     /// What the bring-up ramp measured, once it stopped.
@@ -164,6 +167,7 @@ impl ClientShared {
             clock_offset: Arc::new(AtomicI64::new(0)),
             rtt_us: AtomicU32::new(0),
             decode_lat: Mutex::default(),
+            decoder_spare: AtomicBool::new(false),
             abr_windows: Mutex::default(),
             abr_ramp: Mutex::default(),
             host_link: Mutex::default(),

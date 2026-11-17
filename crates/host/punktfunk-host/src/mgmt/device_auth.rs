@@ -44,9 +44,8 @@ const MAX_TOKENS_PER_DEVICE: usize = 4;
 
 /// Live nonces and the tokens they turned into.
 ///
-/// Both are in memory and both die with the process, which is the right lifetime: a restart
-/// re-mints the host identity's binding anyway, and a browser re-runs an exchange it can do
-/// unattended.
+/// Both are in memory and both die with the process, which is the right lifetime: a browser
+/// re-runs an exchange it can do unattended.
 #[derive(Default)]
 pub(crate) struct DeviceAuth {
     inner: Mutex<Inner>,
@@ -77,9 +76,9 @@ impl DeviceAuth {
             .retain(|_, (at, _)| now.duration_since(*at) < NONCE_TTL);
         guard.tokens.retain(|_, s| s.expires > now);
         // A flood of challenges must not evict a live token, so only the nonce map is capped.
-        // Oldest one out per new one in, never the whole map: clearing it let any unauthenticated
-        // caller cancel a real browser's exchange in flight, 256 requests at a time. The
-        // per-address cap comes first, so a flood evicts its own nonces before anyone else's.
+        // Oldest one out per new one in, never the whole map: clearing it would let any
+        // unauthenticated caller cancel a real browser's exchange in flight. The per-address
+        // cap comes first, so a flood evicts its own nonces before anyone else's.
         let mine = guard.nonces.values().filter(|(_, ip)| *ip == peer).count();
         if mine >= MAX_NONCES_PER_IP {
             evict_oldest(&mut guard.nonces, |(_, ip)| *ip == peer);
@@ -381,8 +380,8 @@ mod tests {
         );
     }
 
-    /// One in, one out. Wiping the map instead let an unauthenticated caller cancel whatever
-    /// exchange a real browser had in flight, which is a denial nobody had to authenticate for.
+    /// One in, one out. Wiping the map instead would let an unauthenticated caller cancel
+    /// whatever exchange a real browser has in flight, a denial nobody has to authenticate for.
     #[test]
     fn the_cap_evicts_one_nonce_not_the_whole_map() {
         let auth = DeviceAuth::default();

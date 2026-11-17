@@ -222,8 +222,7 @@ pub fn mark_failed(generation: u64) {
     let _ = generation;
 }
 
-/// Force-release a superseded kept display by generation
-/// (`design/midstream-resolution-resize.md`). A mode-switch lease drop looks
+/// Force-release a superseded kept display by generation. A mode-switch lease drop looks
 /// like a disconnect, so linger/forever would keep stale-mode monitors. Called
 /// once the new pipeline is up. Active entries are refused; already-gone is a
 /// no-op. No-op off Linux (Windows resizes in place).
@@ -257,7 +256,7 @@ pub fn shared(generation: u64) -> bool {
 ///
 /// The session already carries its pool generation, so this hands the seat to the launch, the
 /// exit watch and the cursor source without threading it through the pipeline. `None` for a
-/// non-poolable output — discovery then falls back to unscoped, as it was before seats.
+/// non-poolable output — discovery then falls back to unscoped.
 #[cfg(target_os = "linux")]
 pub fn seat_for(pool_gen: u64) -> Option<String> {
     linux::seat_for(pool_gen)
@@ -567,7 +566,7 @@ mod pool {
     /// Group membership for restore hand-off, first-in-group, and layout.
     ///
     /// `supersedes` is the display a mode switch is replacing (create-before-drop).
-    /// It is still Active but leaving; counting it made the newcomer defer
+    /// It is still Active but leaving; counting it would make the newcomer defer
     /// topology and auto-row one width to the right on every resize.
     ///
     /// Lifecycle is ignored: a lingering/pinned entry still occupies desktop
@@ -581,7 +580,7 @@ mod pool {
     /// before dropping the keepalive (the compositor must not see zero outputs).
     ///
     /// `group` is the departing display's [`Entry::group`]: keyed on backend alone, a
-    /// spawned compositor's restore floated onto another client's spawn.
+    /// spawned compositor's restore would float onto another client's spawn.
     pub(super) fn hand_off_restore(
         remaining: &mut [Entry],
         group: &str,
@@ -666,7 +665,7 @@ mod pool {
     }
 
     /// `resized` is the compositor's own answer to a mode it was asked to take; a refusal or a
-    /// timeout is `false`, and then this is the retire-and-spawn a mode mismatch always got.
+    /// timeout is `false`, and then this is the retire-and-spawn of a mode mismatch.
     pub(super) fn kept_verdict(alive: bool, resized: bool) -> Kept {
         match (alive, resized) {
             (false, _) => Kept::Dead,
@@ -1136,9 +1135,9 @@ mod pool {
             );
         }
 
-        /// S1: a kept spawn is retired so the acquire that follows never runs a second one.
-        /// Two live gamescopes lose the `gamescope-N` lock, and Steam then hands the URL to the
-        /// older instance and exits, killing the new spawn's primary child.
+        /// A kept spawn is retired so the acquire that follows never runs a second one.
+        /// A second gamescope takes the next `gamescope-N` socket, but Steam's single instance
+        /// hands the URL to the older one and exits, killing the new spawn's primary child.
         #[test]
         fn a_sole_instance_acquire_retires_every_kept_sibling() {
             let mut pinned = test_entry("gamescope", 1, None);
@@ -1323,8 +1322,8 @@ mod pool {
             }
         }
 
-        /// The compositor's own answer decides. A refusal or a timeout is the retire-and-spawn a
-        /// mode mismatch always got; only a dead one is dropped where it stands.
+        /// The compositor's own answer decides. A refusal or a timeout is the retire-and-spawn of
+        /// a mode mismatch; only a dead one is dropped where it stands.
         #[test]
         fn a_kept_display_that_will_not_take_the_mode_is_spawned_past_not_buried() {
             assert_eq!(kept_verdict(true, true), Kept::Reuse);
@@ -1661,8 +1660,8 @@ mod linux {
     }
 
     /// Bound on waiting out another create for the same seat. A create publishes its entry within
-    /// its own budget — gamescope's node wait is 15 s — and a waiter past this creates anyway: a
-    /// second compositor is recoverable, a connect that never returns is not.
+    /// its own budget (a bare gamescope spawn waits 15 s for its node), and a waiter past this
+    /// creates anyway: a second compositor is recoverable, a connect that never returns is not.
     const SEAT_CREATE_WAIT: Duration = Duration::from_secs(30);
 
     /// Creates in flight, [`slot_key`] and the thread running each.
@@ -1671,9 +1670,9 @@ mod linux {
 
     /// Hold this seat's create slot for the length of a create.
     ///
-    /// A create publishes no pool entry for about a second, so two on one seat — a pre-warm and
-    /// that device's own connect — leave two compositors under one Steam home, each killing the
-    /// other's. The waiter takes the slot only once the entry it wanted exists, so the reuse
+    /// A create publishes its pool entry only once it finishes, so two on one seat — a pre-warm
+    /// and that device's own connect — leave two compositors under one Steam home, each killing
+    /// the other's. The waiter takes the slot only once the entry it wanted exists, so the reuse
     /// probe under the same slot finds it. Shared-plane backends are never keyed.
     ///
     /// LOCK ORDER: this slot, then the pool lock. Never the reverse.
@@ -1955,7 +1954,7 @@ mod linux {
         let backend = vd.name();
         // Reuse keys: isolation must match; epoch is current. The launch command is deliberately
         // NOT one — a kept spawn serves any title and the session launches into it. Keying on it
-        // spawned a second compositor per game, which broke the socket lock and Steam.
+        // would spawn a second compositor per game, which breaks the socket lock and Steam.
         let isolation = vd.isolation_key();
         let cur_epoch = crate::session_epoch();
         let r = reg();
@@ -2105,7 +2104,7 @@ mod linux {
         let alive = pid.is_none_or(crate::proc::pid_alive) && vd.kept_display_alive(node_id);
         // A kept display whose only mismatch is the mode moves to it instead of being retired,
         // so the Steam a pre-warm booted inside it survives the change. A refusal falls through
-        // to the create, which is the retire-and-spawn this always did.
+        // to the create, which retires the kept display and spawns.
         let resized = cand_mode == mode || (alive && vd.resize_kept(cand_seat.as_deref(), mode));
         if alive && !resized {
             tracing::info!(
@@ -2251,8 +2250,8 @@ mod linux {
         let preferred_mode = real.preferred_mode;
         let refresh_mhz = real.refresh_mhz;
         let output_name = real.output_name.clone();
-        // KWin and Mutter report their cast name apart from `output_name`, which drives
-        // input aiming and direct capture. The rest cast by the output name.
+        // KWin, Mutter and gamescope report their join name apart from `output_name`, which
+        // drives input aiming and direct capture. The rest join by the output name.
         let join_name = vd
             .last_join_name()
             .or_else(|| output_name.clone().map(|n| Arc::new(OnceLock::from(n))));
@@ -2618,9 +2617,7 @@ mod linux {
             .is_some_and(|r| super::pool::shared(&r.entries.lock().unwrap(), generation))
     }
 
-    /// Tear down every kept display of `backend` sharing `isolation`, so a sole-instance
-    /// backend never runs two. Active entries are left alone (`force_release` refuses them):
-    /// a live session keeps its own compositor, and this acquire creates alongside it.
+    /// Seat key of the pooled display with this `pool_gen`, under the pool lock.
     pub(super) fn seat_for(pool_gen: u64) -> Option<String> {
         let r = REG.get()?;
         let es = r.entries.lock().unwrap();
@@ -2637,6 +2634,9 @@ mod linux {
             .and_then(|e| e.pid)
     }
 
+    /// Tear down every kept display of `backend` sharing `isolation`, so a sole-instance
+    /// backend never runs two. Active entries are left alone (`force_release` refuses them):
+    /// a live session keeps its own compositor, and this acquire creates alongside it.
     pub(super) fn retire_incompatible(backend: &'static str, isolation: &Option<String>) {
         let Some(r) = REG.get() else { return };
         let doomed = {
@@ -2672,8 +2672,8 @@ mod linux {
         }
     }
 
-    /// Tear down kept (lingering/pinned) entries — all, or one by generation —
-    /// with keepalive drops outside the lock. Shared by [`force_release`] and [`retire`].
+    /// Tear down the seat's Game Mode display ([`is_seat_game_mode`]) once the seat switches to
+    /// its desktop.
     pub(super) fn release_seat_game_mode() -> usize {
         let Some(r) = REG.get() else { return 0 };
         let released = {
@@ -2685,6 +2685,9 @@ mod linux {
         released.finish("the seat switched to its desktop")
     }
 
+    /// Tear down kept (lingering/pinned) entries — all, or one by generation —
+    /// with keepalive drops outside the lock. Shared by [`force_release`], [`retire`] and the
+    /// retirements inside [`acquire`].
     fn release_kept(slot: Option<u64>, why: &'static str) -> usize {
         let Some(r) = REG.get() else { return 0 };
         let released = {

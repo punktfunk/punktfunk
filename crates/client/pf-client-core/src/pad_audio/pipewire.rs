@@ -435,9 +435,9 @@ fn unity_volume_pod(channels: u32) -> anyhow::Result<Vec<u8>> {
     .into_inner())
 }
 
-/// Pin the pad sink to unity. WirePlumber starts new cards at 0.4 (−24 dB, cubed UI 40%)
-/// globally, so both session ends stack. Not restored: putting −24 dB back would restore the
-/// bug. Failures cost attenuation, never audio. `PUNKTFUNK_PAD_SINK_VOLUME=0` skips.
+/// Pin the pad sink to unity. WirePlumber (0.4, 0.5) starts new cards at 0.4 (−24 dB, cubed
+/// UI 40%) globally, so both session ends stack. Not restored: putting −24 dB back would restore
+/// the bug. Failures cost attenuation, never audio. `PUNKTFUNK_PAD_SINK_VOLUME=0` skips.
 /// Two rounds under one deadline: registry bind, then `set_param`.
 fn pin_sink_volume(node_id: u32, channels: u32) -> anyhow::Result<()> {
     use anyhow::{anyhow, Context};
@@ -690,7 +690,8 @@ impl Drop for PadOut {
 }
 
 /// Playback on the DualSense node: 4 unpositioned `AUX0..AUX3`, 5 ms quantum, ring floor
-/// 3 quanta in [240, 2400] frames (main player is [720, 9600] — haptics are felt latency).
+/// 3 quanta in [240, 2400] frames. The main player's ring follows `JitterTuning::PIPEWIRE`;
+/// haptics are felt latency.
 fn pad_pw_thread(
     pcm_rx: std::sync::mpsc::Receiver<Vec<f32>>,
     recycle_tx: std::sync::mpsc::SyncSender<Vec<f32>>,
@@ -724,7 +725,6 @@ fn pad_pw_thread(
         *pw::keys::NODE_DESCRIPTION => "Punktfunk Pad Audio",
         // ~5 ms quantum (one haptics Opus frame) keeps felt latency small.
         *pw::keys::NODE_LATENCY     => "240/48000",
-        // Raw key: `keys::TARGET_OBJECT` is feature-gated on a newer libpipewire than we require.
         "target.object"             => target.as_str(),
         // Unplug must END the stream (worker re-correlates), not re-route 4-ch haptics to desktop speakers.
         "node.dont-reconnect"       => "true",

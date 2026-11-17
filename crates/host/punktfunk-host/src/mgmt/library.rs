@@ -25,8 +25,8 @@ use std::collections::BTreeMap;
 
 /// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
 /// changes none of it: every write under `/api/v1/library` answers 409, but the custom-entry
-/// writes, which land in its own titles ([`crate::library::keeps_own_titles`]), and on Linux its
-/// own plugins' provider writes ([`crate::library::keeps_provider_rows`]). The box host is
+/// writes, which land in its own titles ([`crate::library::keeps_own_titles`]), and its own
+/// plugins' provider writes ([`crate::library::keeps_provider_rows`]). The box host is
 /// the library's one writer. On a person's own account only that person's lane writes them, and
 /// every other lane is told so where `person_lane` is open.
 pub(super) async fn box_library_is_read_only(

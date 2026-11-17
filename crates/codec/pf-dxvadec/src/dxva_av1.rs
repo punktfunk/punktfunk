@@ -3,8 +3,8 @@
 //! Same contract as [`crate::dxva`]: windows-rs generates nothing from `dxva.h`,
 //! and a field at the wrong offset is a driver reading a reference index where a
 //! quantiser should be. Sizes, offsets, and bit positions come from
-//! `layout-probe-av1.c` against the Windows SDK `dxva.h` and are compile-time
-//! assertions. Re-run the probe if the SDK moves.
+//! `layout-probe-av1.c` against the Windows SDK `dxva.h`; sizes and offsets are
+//! compile-time assertions, bit positions a test. Re-run the probe if the SDK moves.
 //!
 //! `DXVA_PicParams_AV1` is 912 bytes, alignment 1. `dxva.h` packs these to a
 //! byte boundary, so the structs carry `#[repr(C, packed)]`.
@@ -350,7 +350,7 @@ impl FilmGrainAv1 {
     }
 }
 
-/// Packed into a 16-bit word; every other control word here is 8 bits.
+/// Packed into a 16-bit word; every other `control_flags` here is 8 bits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FilmGrainFlagsAv1 {
     pub apply_grain: bool,

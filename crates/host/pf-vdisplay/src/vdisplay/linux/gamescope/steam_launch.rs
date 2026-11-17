@@ -333,7 +333,7 @@ fn steam_up_since(path: &std::path::Path, from: &mut u64) -> bool {
     }
     let mut tail = Vec::new();
     // Bounded read: a cold Steam writes a few hundred KiB before it is up. Bytes, not a
-    // string: Steam's log is not UTF-8 throughout, and one bad byte hid the marker.
+    // string: Steam's log is not UTF-8 throughout, and one bad byte would hide the marker.
     let _ = f.take(4 << 20).read_to_end(&mut tail);
     String::from_utf8_lossy(&tail).contains(STEAM_UP_MARKER)
 }
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn desktop_steam_cgroup_ownership() {
-        // A desktop-launched Steam (the instance-conflict case, as observed on a GNOME host).
+        // A desktop-launched Steam (the instance-conflict case).
         assert!(!cgroup_is_punktfunk_owned(
             "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-gnome-steam-48605.scope"
         ));

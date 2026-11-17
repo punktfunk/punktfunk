@@ -1,6 +1,6 @@
 // How this host treats a device that connects (design/web-console-structure-2026-10.md §5.4).
 //
-// The presets are ON THE PAGE, one line each: hiding them behind a button hid the page's answers.
+// The presets are ON THE PAGE, one line each: behind a button they would hide the page's answers.
 // Hovering or focusing one redraws the map and the ghost; the sentence above says what is in
 // force. Customise is a dialog: the questions and a live sentence, a focused edit.
 //

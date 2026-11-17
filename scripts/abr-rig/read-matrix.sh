@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read what a matrix run left in out/ and print the C6 answer per run, then the
 # spread per cell. Separate from matrix.sh so a finished run can be re-read
-# without re-running it — twenty minutes of real time per matrix.
+# without re-running it — a matrix is cells × repeats × seconds of real time.
 #
 #   scripts/abr-rig/read-matrix.sh [out-dir]
 set -euo pipefail
@@ -10,9 +10,10 @@ OUT=${1:-$(cd "$(dirname "$0")" && pwd)/out}
 
 # One run, out of its trajectory: what the burst cost in the window the driver
 # discards, what reached the first three judged windows, whether anything cut,
-# and whether slow start survived. Slow start's steps are 1.2-1.5x here (the
-# climb is bounded by what the window proved, not a literal doubling); the crawl
-# that replaces it is +6 %, so 1.12 separates them.
+# and whether slow start survived. Below its other ceilings a slow-start step is
+# at least 1.125x here (a window must deliver 3/4 of the rate, and the step may
+# reach 1.5x what it proved); the crawl that replaces it is +6 %, so 1.12
+# separates them.
 read_run() {
   tr -d '{}"' < "$2" | awk -F'[:,]' -v tag="$1" '
     !/summary/ {

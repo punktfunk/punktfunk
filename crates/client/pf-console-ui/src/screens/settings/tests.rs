@@ -468,7 +468,7 @@ fn every_row_icon_ships() {
 /// 165 and 240 arrive here whether or not this table offers them.
 #[test]
 fn refresh_table_covers_every_rate_the_desktop_shells_write() {
-    // clients/linux/src/ui_settings.rs and clients/windows/src/app/settings.rs.
+    // clients/linux/src/settings/tables.rs and clients/windows/src/app/settings/display.rs.
     for hz in [0u32, 30, 60, 90, 120, 144, 165, 240] {
         assert!(
             REFRESH.contains(&hz),
@@ -1758,7 +1758,7 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
 
 /// The other direction, and the one that bites: a platform missing from every list
 /// offers no row at all, so all six tabs draw empty instead of one control going
-/// missing. `Web` shipped that way.
+/// missing.
 #[test]
 fn every_platform_offers_rows() {
     use crate::platform::Platform;
@@ -2278,7 +2278,7 @@ fn palette_row_names_the_pick_and_opens_the_cards() {
 }
 
 /// Input lists Shortcuts right after Quick actions on every platform, and a press opens the
-/// page; About no longer lists the stream controls.
+/// page; About lists only the version and the licences.
 #[test]
 fn input_opens_the_shortcuts_page_on_every_platform() {
     let mut settings = Settings::default();

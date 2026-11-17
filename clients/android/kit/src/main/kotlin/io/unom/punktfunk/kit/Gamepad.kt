@@ -8,9 +8,10 @@ import kotlin.math.roundToInt
 
 /**
  * Android gamepad capture → punktfunk/1 gamepad wire (the `input.rs::gamepad` contract; the host
- * accumulates the incremental events into its virtual xpad). The Android analogue of the Linux
- * client's `gamepad.rs` (SDL3) and the Apple client's `GamepadCapture.swift` (GameController) — all
- * three emit byte-identical events. Single-pad model: exactly one controller forwarded as pad 0.
+ * accumulates the incremental events into its virtual xpad). The Android analogue of the desktop
+ * clients' SDL3 gamepad module (`pf-client-core`'s `gamepad/`) and the Apple client's
+ * `GamepadCapture.swift` (GameController) — all three emit byte-identical events. [GamepadRouter]
+ * gives each forwarded controller its own wire pad index and its own [AxisMapper].
  *
  * Buttons arrive as KeyEvents (SOURCE_GAMEPAD); sticks/triggers/HAT arrive as joystick MotionEvents
  * (SOURCE_JOYSTICK, ACTION_MOVE). The D-pad is sent as BTN_DPAD_* buttons (no hat axis on the wire),
@@ -40,7 +41,8 @@ object Gamepad {
 
     // Extended bits (Moonlight `buttonFlags2 << 16` namespace — `input.rs::gamepad`): the four
     // back grips (Steam L4/L5/R4/R5 ≙ Elite P1–P4), touchpad click, the misc/QAM button and a second misc.
-    // The SC2 capture link sends all six; [buttonBit] finds the upper grip pair on a plain pad.
+    // The SC2 capture link sends all but [BTN_MISC2]; [buttonBit] finds the upper grip pair on a
+    // plain pad.
     const val BTN_PADDLE1 = 0x10000
     const val BTN_PADDLE2 = 0x20000
     const val BTN_PADDLE3 = 0x40000
@@ -67,12 +69,11 @@ object Gamepad {
 
     // Motion wire units — must equal punktfunk-core `input.rs::gamepad::MOTION_*`. Every motion
     // sender on this client goes through the two converters below, so a scale that ever has to
-    // change changes in ONE place: the gyro program's first finding was a client sending 40× hot
-    // because a second copy of the number had drifted.
+    // change changes in ONE place.
     const val MOTION_GYRO_LSB_PER_DEG_S = 20
     const val MOTION_ACCEL_LSB_PER_G = 10_000
 
-    /** Standard gravity, `punktfunk-core`'s `G` — the divisor that turns m/s² into g. */
+    /** Standard gravity, as `pf-client-core`'s gamepad worker `G` — turns m/s² into g. */
     const val GRAVITY = 9.80665f
 
     /** [MOTION_GYRO_LSB_PER_DEG_S] restated for Android's rad/s sensors: 1 rad/s ⇒ ~1145.9 raw. */
@@ -148,8 +149,8 @@ object Gamepad {
     private const val VID_NINTENDO = 0x057E
 
     // Sony product ids. DualSense (PS5), DualSense Edge, and DualShock 4 (PS4) map to distinct
-    // host pad types — the Edge's back paddles get native slots on the virtual Edge (Android
-    // forwards no paddle input yet, but the identity + rich planes match the physical pad).
+    // host pad types — the Edge's back paddles get native slots on the virtual Edge (the USB
+    // capture link forwards them, see DsDevice.parseState).
     private val PID_DUALSENSE = setOf(0x0CE6)
     private val PID_DUALSENSEEDGE = setOf(0x0DF2)
     private val PID_DUALSHOCK4 = setOf(0x05C4, 0x09CC)
@@ -172,9 +173,8 @@ object Gamepad {
     private val PID_HID_NINTENDO = setOf(0x2006, 0x2007, 0x2008, 0x2009, 0x200E)
 
     // Valve: Steam Deck built-in controller (0x1205); classic Steam Controller wired (0x1102) /
-    // dongle (0x1142). The host builds the virtual hid-steam pad; rich-input capture (paddles /
-    // trackpads / gyro) is out of scope on Android (no rich-input plane yet), so only the standard
-    // buttons + sticks reach the host for now — parity with the desktop type resolution.
+    // dongle (0x1142). The host builds the virtual hid-steam pad. Sc2Capture claims the classic
+    // pad over USB and forwards its raw reports; this table is the plain InputDevice path.
     private val PID_STEAMDECK = setOf(0x1205)
     private val PID_STEAMCONTROLLER = setOf(0x1102, 0x1142)
 
@@ -238,7 +238,8 @@ object Gamepad {
      * generic key layout grants a remote the A/B keys too, so face buttons prove nothing. One
      * such device pins the console UI on and lists itself as a controller.
      *
-     * A stick or HAT is hardware a remote does not report. `isVirtual` only means "device id < 0".
+     * A stick or HAT is hardware a remote does not report. `isVirtual` only means "device id < 0"
+     * (API 37).
      */
     // ponytail: a pad with no stick and no HAT is not listed; the router still forwards it on its
     // first button. Track first presses here if such a pad turns up.
@@ -377,7 +378,7 @@ object Gamepad {
      * `BUTTON_C` and `BUTTON_Z` are the two slots the Android gamepad layout leaves empty, and
      * where a handheld puts its back buttons (AYN: M1 on C, M2 on Z). They are the upper back
      * grips, L4 and R4. A six-button pad's own C and Z land there too. Only a host pad with
-     * grips shows them: Steam Deck, DualSense Edge.
+     * grips shows them (Steam Deck and DualSense Edge, for example).
      *
      * [BTN_TOUCHPAD] and [BTN_MISC1] have no Android keycode, so [PadButtons.GENERIC_SONY]
      * borrows `BUTTON_15`/`BUTTON_16` for them. This table is global: any device that presses
@@ -417,20 +418,18 @@ object Gamepad {
      * (NVIDIA's SHIELD controller) or "Select"/"View" (most pads in an Android mode). Which one is
      * on the couch cannot be told from here, and does not need to be — the keycode is what routes.
      *
-     * Read through [buttonBit] alone that button mapped to nothing, so it fell out of the
-     * streaming branch unconsumed and reached the activity's back stack, which is the
-     * deliberate-quit exit: ONE press of Select dropped the session and the host logged a client
-     * quit. `KEYCODE_BACK` is in fact the ONLY keycode that can get there from a pad — a mapped
-     * button is consumed here, anything with a VK is consumed on the keycode path, volume/power go
-     * to the system, and a FLAG_FALLBACK BACK is swallowed — which is what identifies this as the
-     * cause of such a report without knowing the hardware.
+     * Read through [buttonBit] alone that button maps to nothing, so it would fall out of the
+     * streaming branch unconsumed and reach the activity's back stack, which is the
+     * deliberate-quit exit: ONE press of Select would drop the session and the host would log a
+     * client quit. `KEYCODE_BACK` is in fact the ONLY keycode that can get there from a pad — a
+     * mapped button is consumed here, anything with a VK is consumed on the keycode path,
+     * volume/power go to the system, and a FLAG_FALLBACK BACK is swallowed.
      *
-     * It also meant such a pad could not produce [BTN_BACK] at all, so every shortcut built on
-     * Select — the emergency exit chord this client's own start banner advertises, the mic mute,
-     * the stats tier — was unreachable on exactly the devices whose users have no keyboard.
+     * Such a pad could also not produce [BTN_BACK] at all, so every shortcut built on Select —
+     * the emergency exit chord this client's own start banner advertises, the mic mute, the
+     * stats tier — would be unreachable on exactly the devices whose users have no keyboard.
      *
-     * A pad that DOES carry `BUTTON_SELECT` is unaffected in both directions: it never had the
-     * bug, and this changes nothing for it.
+     * A pad that DOES carry `BUTTON_SELECT` is unaffected: this changes nothing for it.
      *
      * FLAG_FALLBACK events are excluded: those are the synthetic BACK the framework raises after
      * an unconsumed `BUTTON_*` press (a pad reporting L2/R2 as keys, say), not a button anyone
@@ -458,16 +457,13 @@ object Gamepad {
     // no kernel driver behind it numbers its buttons 1..n straight through IN ITS OWN REPORT
     // ORDER — so every keycode after the first divergence is somebody else's button.
     //
-    // Reported from a Fire TV Stick 4K Max (2026-08-20): a DualSense and an Xbox Elite Series 2,
-    // both over Bluetooth, both identified correctly but with buttons landing on the wrong
-    // actions ("L1 being L2"). Neither has a layout there — AOSP ships none for the Elite
-    // Series 2 over Bluetooth (`045e:0b05`) on ANY version, and the DualSense's
-    // (`054c:0ce6`) both postdates Fire OS and carries `requires_kernel_config
-    // CONFIG_HID_PLAYSTATION`, which a Fire TV kernel does not have. A DualSense reporting
-    // straight through puts L2 on `0x136`, which `Generic.kl` calls BUTTON_L1: the reported
-    // symptom exactly.
+    // Example: a DualSense or an Xbox Elite Series 2 over Bluetooth on a Fire TV box has no
+    // layout there — AOSP ships none for the Elite Series 2 over Bluetooth (`045e:0b05`), and
+    // none for the DualSense (`054c:0ce6`) before Android 12, which Fire OS 7 and 8 (Android 9
+    // and 11) predate. A DualSense reporting straight through puts L2 on `0x136`, which
+    // `Generic.kl` calls BUTTON_L1.
     //
-    // The fix is to resolve buttons from the SCANCODE, which is the pad's own report position and
+    // So buttons are resolved from the SCANCODE, which is the pad's own report position and
     // is immune to the layout file — the same reason [Keymap.toVk] reads `scanCode` for keyboards.
     // Two things keep it from breaking a pad that already works:
     //
@@ -483,14 +479,11 @@ object Gamepad {
     // `isNonStandardDualShock4` / `isNonStandardXboxBtController`, the latter on `gasRange == null`),
     // which is why both pads work there on the same box.
     //
-    // The first cut of this asked `hasKeys(BUTTON_C, BUTTON_Z)` on its own, on the reasoning that a
-    // pad numbering straight through reaches keycodes no controller has a button for. It does — but
-    // so does every pad that merely DECLARES six buttons, because `hid-input` allocates `BTN_A + n`
-    // straight through for the whole descriptor whether or not the pad ever presses them. That fired
-    // the correction on pads Android was already reading correctly (2026-08-21: an Xbox pad
-    // answering X with Y, Y with LB, and both shoulders with a menu button), and it could not have
-    // done otherwise: the signal is identical on the firmware that needs correcting and the one that
-    // does not. Declaration is not report order. Only the axes tell them apart.
+    // `hasKeys(BUTTON_C, BUTTON_Z)` alone cannot decide it: every pad that merely DECLARES six
+    // buttons has both, because `hid-input` allocates `BTN_A + n` straight through for the whole
+    // descriptor whether or not the pad ever presses them, so the signal is identical on the
+    // firmware that needs correcting and the one that does not. Declaration is not report order.
+    // Only the axes tell them apart ([padButtons]).
 
     /** [MotionEvent] axis id meaning "this pad has no such axis" — see [PadMap]. */
     const val AXIS_NONE = -1
@@ -521,7 +514,7 @@ object Gamepad {
         /**
          * An Xbox-layout pad numbering straight through: A B X Y LB RB View Menu LS RS, i.e.
          * `0x130`..`0x139`. Also the fallback for an unbranded pad, which near-universally
-         * clones the Xbox layout — the same assumption [styleFor] makes for its glyphs.
+         * clones the Xbox layout.
          */
         GENERIC_XBOX,
 
@@ -684,10 +677,10 @@ object Gamepad {
      * device DECLARES, not what it reports: `hid-input` allocates `BTN_A + n` straight through for
      * every button in the descriptor, so BTN_C (`0x132`) and BTN_Z (`0x135`) are set on any pad
      * declaring six or more — a standard-layout pad that never presses either included. Read alone
-     * it fired the correction on pads whose buttons were already right, which is how an Xbox pad
-     * came to answer X with Y and Y with LB (field reports, 2026-08-21). It stays as the narrower
-     * question it can answer — WHICH straight-through order, once `namedTriggers` has established
-     * there is one — where a false positive costs nothing.
+     * it would fire the correction on pads whose buttons are already right, and an Xbox pad would
+     * answer X with Y and Y with LB. It stays as the narrower question it can answer — WHICH
+     * straight-through order, once `namedTriggers` has established there is one — where a false
+     * positive costs nothing.
      */
     fun padButtons(dev: InputDevice, namedTriggers: Boolean): PadButtons {
         val has = dev.hasKeys(KeyEvent.KEYCODE_BUTTON_C, KeyEvent.KEYCODE_BUTTON_Z, 0)

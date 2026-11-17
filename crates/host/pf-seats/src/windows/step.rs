@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 const SESSION_TIMEOUT: Duration = Duration::from_secs(45);
 const QUALITY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Fresh sessions a failing gate gets. A session whose display misses its path never
-/// gets one; a fresh logon passes about 40% of the time on 9300.
+/// gets one; a fresh logon passes about 40% of the time on Windows Server 2025.
 const QUALITY_SESSIONS: u32 = 5;
 const HOST_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Room for a slow first logon plus two gate sessions, the usual worst healthy start.
@@ -331,7 +331,7 @@ pub(crate) enum Action {
     StartGate,
     /// Read the gate's output and remove it: empty output fails the gate.
     CollectGate,
-    /// Start the host, in place of one that exited.
+    /// Start the host in the session: first in a cycle, and again after one exited.
     StartHost,
     /// Log that the host exited with this code and starts again.
     LogHostExit(u32),

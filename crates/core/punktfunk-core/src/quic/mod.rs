@@ -66,7 +66,7 @@ pub use touchpad::*;
 pub use crate::reject::*;
 
 // `quic` as well as `test`: this hands out `quinn` endpoints, and `endpoint` above is
-// feature-gated. Gated on `test` alone it broke `cargo test -p punktfunk-core`, which
-// resolves default features and has no quinn.
+// feature-gated. Gated on `test` alone, `cargo test -p punktfunk-core` would not build:
+// it resolves default features, which have no quinn.
 #[cfg(all(test, feature = "quic"))]
 pub(crate) mod test_util;

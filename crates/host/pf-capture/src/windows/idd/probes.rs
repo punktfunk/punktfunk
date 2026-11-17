@@ -7,10 +7,11 @@
 //!
 //! Threads are never joined: a probe wedged in a kernel call exits at the
 //! next loop turn after the last [`acquire`] `Arc` drops. One engine per
-//! process, refcounted across capturers. ≤20 Hz, microseconds each.
+//! process, refcounted across capturers. ≤20 Hz each (the CPU sentinel
+//! wakes every 5 ms), microseconds each.
 //!
 //! Consumer: [`super::stall`]. Scanline target:
-//! [`pf_win_display::win_display::active_scanline_target`]. Evidence:
+//! [`pf_win_display::snapshot::DisplaySnapshot::scanline_target`]. Evidence:
 //! `design/vdisplay-disturbance-immunity.md`.
 
 use std::collections::VecDeque;
@@ -502,8 +503,8 @@ fn scanline_loop(inner: &Inner) {
                 // successful open below and is closed exactly once here.
                 unsafe { close(&mut req) };
             }
-            // From the display actor's snapshot (immunity plan WP9): the retarget no longer takes
-            // the display-config lock on this probe thread every 2 s.
+            // From the display actor's snapshot (immunity plan WP9): once the actor has
+            // published, the retarget takes no display-config lock on this probe thread.
             if let Some((lo, hi, source, physical)) =
                 pf_win_display::display_events::snapshot_or_query().scanline_target()
             {

@@ -73,7 +73,7 @@ pub fn chroma_idc(chroma: ChromaFormat) -> u8 {
 }
 
 /// Wire volume ([`punktfunk_core::quic::HdrMeta`]) → the encoders'
-/// [`pf_frame::HdrMeta`]. Same seven fields; both types are foreign here, so
+/// [`pf_frame::HdrMeta`]. Same six fields; both types are foreign here, so
 /// a field copy stands in for `From`. A client panel that reports zero primaries,
 /// white point or peak keeps the generic HDR10 value there: a 0-nit mastering
 /// display tone-maps to black.
@@ -124,7 +124,7 @@ mod nvenc_cuda;
 #[path = "enc/linux/nvenc_lane.rs"]
 mod nvenc_lane;
 // Software (openh264) H.264 — the GPU-less Linux path. Windows has none: the driver
-// needs a render adapter to exist at all (plan §9-1).
+// needs a render adapter to exist at all.
 #[cfg(target_os = "linux")]
 #[path = "enc/sw.rs"]
 mod sw;
@@ -146,8 +146,8 @@ mod vulkan_video;
 )]
 #[path = "enc/linux/vk_ring.rs"]
 mod vk_ring;
-// Vendored `VK_KHR_video_encode_av1` — pinned `ash` predates 1.3.290. Do not
-// bump `ash` (breaks the SDL/Vulkan client).
+// Vendored `VK_KHR_video_encode_av1` (Vulkan 1.3.302); pinned `ash` is 1.3.281. Do not bump
+// `ash`: `sdl3`'s `ash` feature binds ash 0.38 types, so the SDL/Vulkan client breaks.
 #[cfg(all(target_os = "linux", feature = "vulkan-encode"))]
 #[path = "enc/linux/vk_av1_encode.rs"]
 mod vk_av1_encode;
@@ -198,7 +198,7 @@ mod vk_csc;
 ))]
 #[path = "enc/linux/vk_reframe.rs"]
 mod vk_reframe;
-// PyroWave: Vulkan-compute intra wavelet. Explicit `PUNKTFUNK_ENCODER=pyrowave`.
+// PyroWave: Vulkan-compute intra wavelet, for a client that prefers it or a `pyrowave` Encoder row.
 // See `design/pyrowave-codec-plan.md`.
 #[cfg(all(target_os = "linux", feature = "pyrowave"))]
 #[path = "enc/linux/pyrowave.rs"]

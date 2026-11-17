@@ -148,8 +148,8 @@ internal fun QuickActionsScreen(
             }
             Text(stringResource(R.string.ring_editor_title), style = MaterialTheme.typography.headlineMedium)
         }
-        // The ring in a card like every other field, but without the group's 16 dp inset: the
-        // inset left the stage narrower than the ring. Its caption sits under the card the way a
+        // The ring in a card like every other field, but without the group's 16 dp inset, which
+        // would leave the stage narrower than the ring. Its caption sits under the card the way a
         // group's footer does.
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedCard(modifier = Modifier.fillMaxWidth()) {
@@ -251,8 +251,8 @@ private fun RingStage(cfg: OverlayConfig, editing: RingEditing) {
     val previewActions = remember(ctx) { previewActionsIn(ctx) }
     val haptics = rememberConsoleHaptics()
     var size by remember { mutableStateOf(IntSize.Zero) }
-    // Read the size INSIDE the effects: a centre computed at composition was one step behind
-    // the size state on the first open and put the ring at (0, 0), clamped to the margin.
+    // Read the size INSIDE the effects: a centre computed at composition lags the size state on
+    // the first open and puts the ring at (0, 0), clamped to the margin.
     fun centre() = Offset(size.width / 2f, size.height / 2f)
     LaunchedEffect(size) {
         if (size != IntSize.Zero && !ring.committed) ring.openAt(centre())
@@ -264,8 +264,8 @@ private fun RingStage(cfg: OverlayConfig, editing: RingEditing) {
         }
     }
     // No fill of its own: the card it sits in is the field. The twist surface is a SIBLING
-    // under the ring, as the stream's gesture layer is — on a parent it took the moves before
-    // the discs' drag detectors saw them, so a drag never started.
+    // under the ring, as the stream's gesture layer is — on a parent it would take the moves
+    // before the discs' drag detectors see them, so a drag would never start.
     Box(
         Modifier
             .fillMaxWidth()
@@ -454,7 +454,10 @@ private data class ShortcutDraft(val id: String, val label: String, val keys: Li
 
 private val MODIFIER_KEYS = listOf("ctrl", "alt", "shift", "win")
 
-/** The keys a chord can end on, grouped the way a keyboard groups them — every name [keyVk] knows. */
+/**
+ * The keys a chord can end on, grouped the way a keyboard groups them. Each name is one [keyVk]
+ * knows; F13–F24, which it also knows, are not offered.
+ */
 internal val KEY_GROUPS: List<Pair<Int, List<String>>> = listOf(
     R.string.ring_key_group_function to (listOf("escape") + (1..12).map { "f$it" }),
     R.string.ring_key_group_letters to "qwertyuiopasdfghjklzxcvbnm".map { it.toString() },

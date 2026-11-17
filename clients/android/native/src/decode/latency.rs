@@ -13,9 +13,9 @@ pub(crate) use punktfunk_core::client::now_realtime_ns;
 /// [`crate::stats::VideoStats::note_decoded`]. The pts keys the receipt stamp in `in_flight`;
 /// entries older than it are evicted (decode order == input order here — low-latency, no
 /// B-frames — so anything before it was dropped inside the codec or stamped before a flush).
-/// `decoded_ns` is the availability instant: the dequeue (sync loop) or the output callback's
-/// stamp (async loop). Returns the receipt stamp it paired (if any) so the caller can split the
-/// `decode` stage further (feed wait vs codec-pure) without re-walking the map.
+/// `decoded_ns` is the availability instant: the output callback's stamp. Returns the receipt
+/// stamp it paired (if any) so the caller can split the `decode` stage further (feed wait vs
+/// codec-pure) without re-walking the map.
 pub(super) fn note_decoded_pts(
     client: &NativeClient,
     measure_decode: bool,
@@ -48,7 +48,7 @@ pub(super) fn note_decoded_pts(
 /// overlay; draining the timings here matches each 0xCF to its frame.
 pub(crate) fn note_received_frame(client: &NativeClient, frame: &Frame) -> i128 {
     // Reassembly completion, NOT the pull instant: stamping at the pull would fold the hand-off
-    // queue wait into the network figure. 0 = older core.
+    // queue wait into the network figure. 0 = unstamped (`Frame::received_ns`).
     let received_ns = if frame.received_ns > 0 {
         frame.received_ns as i128
     } else {

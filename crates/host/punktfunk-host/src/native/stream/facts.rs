@@ -5,7 +5,8 @@
 use super::*;
 use crate::native::bitrate::EncoderCeiling;
 
-/// What the session negotiated and was handed at bring-up. Nothing here changes while it runs.
+/// What the session negotiated and was handed at bring-up. Only `format_facts` changes while it
+/// runs, as the session's source or its content's HDR state moves.
 pub(super) struct SessionFacts {
     /// The session's `seconds` cap: the loop ends here.
     pub(super) deadline: std::time::Instant,

@@ -10,7 +10,7 @@ import androidx.compose.ui.text.font.FontWeight
 // Android UI carries the brand type identically to the other clients. Geist Sans only — Geist Mono
 // is intentionally not shipped (the licenses screen's technical block uses the platform monospace).
 //
-// Licensed under the SIL Open Font License 1.1 (see the Geist OFL entry in THIRD-PARTY-NOTICES.txt).
+// Licensed under the SIL Open Font License 1.1 (assets/GEIST-OFL.txt, on the licenses screen).
 val Geist = FontFamily(
     Font(R.font.geist_regular, FontWeight.Normal),
     Font(R.font.geist_medium, FontWeight.Medium),

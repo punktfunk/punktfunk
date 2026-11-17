@@ -57,7 +57,7 @@ public enum Resolutions {
         return aspects.firstIndex { abs(shape / $0.shape - 1) < tolerance }
     }
 
-    /// Smallest stream mode the host accepts, per side.
+    /// Smallest mode a client asks for, per side.
     public static let minWidth = 320
     public static let minHeight = 200
 

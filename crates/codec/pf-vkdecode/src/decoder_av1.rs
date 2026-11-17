@@ -16,8 +16,8 @@
 //!
 //! [`plan_bitstream`] uploads concatenated tile payloads only
 //! (`frameHeaderOffset` 0). `pTileOffsets` / `pTileSizes` are 256-long
-//! zero-tailed arrays (the driver reads the full arrays); `tileCount` is the
-//! real count. Result-status queries only when the queue family advertises them.
+//! zero-tailed arrays; `tileCount` is the real count. Result-status queries
+//! only when the queue family advertises them.
 
 use ash::vk;
 use ash::vk::native as hh;
@@ -59,10 +59,10 @@ use crate::session_av1::VideoSessionAv1;
 /// an SPS field: an AV1 session never renegotiates DPB depth.
 const REQUIRED_SLOTS: u32 = NUM_REF_SLOTS as u32 + 1;
 
-/// 256: RADV reads that many entries regardless of `tileCount`.
+/// 256: the most tiles RADV copies; it reads `min(tileCount, 256)` entries.
 pub(crate) const AV1_MAX_NUM_TILES: usize = 256;
 
-/// Per-tile offsets/sizes. Arrays are 256 (what the driver reads); `count` is
+/// Per-tile offsets/sizes. Arrays are 256 (the most RADV copies); `count` is
 /// the real tile count. ash's `tile_offsets()`/`tile_sizes()` set `tileCount`
 /// from slice length, so a slice would fuse the two numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -661,8 +661,8 @@ mod tests {
         );
     }
 
-    /// RADV reads 256 entries regardless of `tileCount`; the tail must be zero.
-    /// `tileCount` is the real count — ash setters would write 256 from slice len.
+    /// RADV reads `min(tileCount, 256)` entries, so `tileCount` must be the real count —
+    /// ash setters would write 256 from slice len.
     #[test]
     fn the_picture_info_carries_padded_tile_arrays_with_the_real_tile_count() {
         let packed = pack_av1_tiles(&[100..1000, 1000..1600, 1600..2100]).expect("fits u32");

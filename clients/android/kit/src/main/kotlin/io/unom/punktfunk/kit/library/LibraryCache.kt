@@ -9,14 +9,9 @@ import java.security.MessageDigest
 // On-disk cache for a host's library CATALOG — the list of titles, not their art. The Android
 // mirror of the Apple client's `LibraryCache.swift` and the Rust `pf_client_core::library_cache`.
 //
-// Cover art has been cached on disk for a while; the catalog behind it never was. Every visit to a
-// library refetched `GET /api/v1/library` and showed a spinner until that call returned. A host
-// that is asleep, or simply not reachable yet, therefore had an EMPTY library — which is the
-// opposite of what a player wants from the screen they use to decide what to play, and it makes
-// waking a host on library entry pointless: there would be nothing to look at while it boots.
-//
-// So the catalog is cached per host and rendered immediately, marked stale, and reconciled when the
-// host answers.
+// The catalog is cached per host and rendered immediately, marked stale, and reconciled when the
+// host answers. A host that is asleep, or not reachable yet, still shows its last-known library,
+// so waking a host on library entry leaves something to look at while it boots.
 //
 // Cache directory (`context.cacheDir`), not files: every byte is re-derivable from the host, so
 // Android is welcome to evict it under storage pressure. Unlike art, a catalog is small (a few
@@ -35,9 +30,8 @@ class LibraryCache(private val directory: File) {
      * This host's last-known catalog as [profile] plays it (null: the box's), or null if there is
      * no usable one. A shelf never shows another profile's titles.
      *
-     * A catalog written by an older build whose [GameEntry] had different fields decodes to null
-     * rather than throwing: a miss costs one fetch, which is what would have happened anyway.
-     * Never surfaced as an error.
+     * A file that does not decode (truncated, or not a catalog) reads as null rather than
+     * throwing: a miss costs one fetch. Never surfaced as an error.
      */
     fun load(hostKey: String, profile: String?): CachedLibrary? = try {
         val file = pathFor(hostKey, profile)

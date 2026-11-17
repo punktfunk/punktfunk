@@ -1,9 +1,8 @@
 // The OpenAPI spec as `openapigen` needs to read it.
 //
-// utoipa writes an optional number as `type: ["integer", "null"]`. The generator turns that into
-// `Never` when a `format` is present, and drops the `null` when only `minimum` is, so the SDK
-// rejects any value the host sends. The same field written as `anyOf` with a null branch
-// generates `number | null`. Nullable strings, booleans and arrays already generate correctly.
+// utoipa writes an optional number as `type: ["integer", "null"]`. openapigen 4.0.1 decodes it
+// but hangs `format` on the union; the same field written as `anyOf` with a null branch keeps
+// `format` on the number. Nullable strings, booleans and arrays need no rewrite.
 
 const NUMERIC = new Set(["integer", "number"]);
 /** Keywords about the field rather than its value; they stay on the outer schema. */

@@ -106,9 +106,8 @@ Write-Host "==> building punktfunk-setup-client ($triple) -> $wizTarget"
 $prevTarget = $env:CARGO_TARGET_DIR
 $env:CARGO_TARGET_DIR = $wizTarget
 Push-Location $repoRoot
-# windows-reactor-setup extracts the WinAppSDK runtime into ONE cache under LOCALAPPDATA,
-# keyed by package version only: whichever arch fills it first is what every later wizard
-# build stages. A cross-built wizard therefore gets a cache of its own.
+# windows-reactor-setup caches the WinAppSDK runtime under LOCALAPPDATA. A cross-built wizard
+# gets a cache directory of its own.
 $prevLocal = $env:LOCALAPPDATA
 if ($Arch -ne 'x64') { $env:LOCALAPPDATA = Join-Path $OutDir "reactor-cache-$Arch" }
 & cargo build --release -p punktfunk-setup-win --target $triple
@@ -125,7 +124,7 @@ if ($wizExit -ne 0) { throw "punktfunk-setup-win build failed ($wizExit)" }
 $wizRel = Join-Path $wizTarget "$triple\release"
 $wizExe = Join-Path $wizRel 'punktfunk-setup-client.exe'
 $packer = Join-Path $wizTarget 'x86_64-pc-windows-msvc\release\punktfunk-setup-pack.exe'
-# D6: the payload-less uninstaller lands in {app} (the stage IS the {app} tree; the portable
+# The payload-less uninstaller lands in {app} (the stage IS the {app} tree; the portable
 # zip above was cut before it arrived), signed before it is packed.
 $unins = Join-Path $stage 'unins000.exe'
 & $packer pack-uninstaller --exe $wizExe --runtime $wizRel --version $Version --artifact client --out $unins

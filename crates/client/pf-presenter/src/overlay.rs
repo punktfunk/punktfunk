@@ -7,7 +7,7 @@
 //! `None` records no quad.
 //!
 //! Pin: `Option<Box<dyn Overlay>>` from the session binary; `None` is the
-//! Skia-free build. Evidence: punktfunk-planning `linux-client-rearchitecture.md`.
+//! Skia-free build.
 
 use ash::vk;
 use pf_client_core::gamepad::{MenuEvent, MenuPulse};
@@ -68,8 +68,8 @@ pub struct FrameCtx<'a> {
     /// while it is audible, or once a local mute has been read. A host mute stands.
     /// Independent of the stats tier.
     pub audio_mute: Option<&'a str>,
-    /// Mid-stream Match-window resize in flight (`design/midstream-resolution-resize.md`).
-    /// Draw a full-screen scrim and spinner until the new-resolution frame arrives.
+    /// Mid-stream Match-window resize in flight. Draw a full-screen scrim and spinner until
+    /// the new-resolution frame arrives.
     pub resizing: bool,
     pub pad: Option<&'a str>,
     /// Resolved pad kind for button glyphs (PlayStation shapes vs ABXY).

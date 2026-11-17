@@ -3,7 +3,7 @@
 //! Evidence latches a cap, the rate parks under it, clean loaded windows
 //! accrue, and the cap lifts +12.5 % when the clock runs out. Re-learning a
 //! lifted cap doubles the interval toward [`CAP_REPROBE_WINDOWS_MAX`]: a
-//! standing limit costs one probe every few minutes, a transient one clears
+//! standing limit costs one probe every 96 s, a transient one clears
 //! in twelve seconds. [`StandDown`] is the same clock without a number —
 //! a signal that stopped answering the rate, re-armed by a clean run.
 //! [`StepProbe`] is how a driver finds that out: take one notch, then read
@@ -12,11 +12,11 @@
 /// Clean windows parked at a learned cap before re-probing above it, and the
 /// ceiling that interval backs off to.
 ///
-/// A short ack means "not right now" — durable encoder ceiling or a transient
-/// cadence refusal. The client cannot tell, so it probes again after 16
-/// windows (~12 s) and doubles the interval each time the lift is immediately
-/// re-learned. A still-standing limit re-teaches itself in two short acks
-/// with no encoder rebuild.
+/// A short ack means "not right now": a durable encoder ceiling, or a transient
+/// one (a failed rebuild, an older host's unnamed cadence refusal). The client
+/// cannot tell, so it probes again after 16 windows (~12 s) and doubles the
+/// interval each time the lift is immediately re-learned. A still-standing
+/// limit re-teaches itself in one short ack with no encoder rebuild.
 pub(super) const CAP_REPROBE_WINDOWS_MIN: u32 = 16;
 pub(super) const CAP_REPROBE_WINDOWS_MAX: u32 = 128;
 
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(c.current_kbps, cap);
     }
 
-    /// A link verdict is held to today because nothing knows where the wall
+    /// A link verdict is held to, because nothing knows where the wall
     /// is. A latched cap does, and the doubling cannot pass it — so a session
     /// left far under it comes back in seconds.
     #[test]
@@ -583,8 +583,8 @@ mod tests {
         assert!(c.host_cap.kbps().is_none());
     }
 
-    /// *Encoder limit* is the reason today's nameless short ack always meant,
-    /// so it must latch exactly as an unnamed one does.
+    /// A nameless short ack reads as an *encoder limit*, so a named one must
+    /// latch exactly as an unnamed one does.
     #[test]
     fn an_encoder_limit_latches_the_cap_like_an_unnamed_short_ack() {
         let mut named = BitrateController::new(400_000, None);
@@ -624,8 +624,8 @@ mod tests {
         assert!(run_clean(&mut c, start, 10 + held, 4).is_some_and(|k| k > 794_000));
     }
 
-    /// PyroWave is per-frame CBR: there is no rate to control, so the
-    /// controller retires the way an unanswered host retires it.
+    /// A pinned rate leaves nothing to control, so the controller retires the
+    /// way an unanswered host retires it.
     #[test]
     fn a_pinned_session_turns_the_controller_off() {
         let mut c = BitrateController::new(400_000, None);

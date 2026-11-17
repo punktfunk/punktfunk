@@ -1,7 +1,8 @@
 //! Blocking data-plane pump: poll the session, run Adaptive-FEC / ABR /
 //! jump-to-live / standing-latency, and hand frames to the embedder.
 //!
-//! Dedicated user-interactive thread. Newest-frame drop on embedder lag.
+//! Dedicated user-interactive thread. A lagging embedder's standing backlog
+//! jumps to live (`frame_channel`).
 //! [`FLAG_PROBE`] filler never enters the decoder. The ABR window is
 //! assembled by [`crate::abr::feed::Feed`]: [`abr_feed`] reads what it hears
 //! and sends what it asks for. [`recovery_asks`] asks for what a short frame lost.
@@ -12,9 +13,9 @@ use super::*;
 mod abr_feed;
 mod recovery_asks;
 
-/// Data-plane pump on a blocking thread. `try_send` drops the newest frame
-/// when the embedder lags. [`FLAG_PROBE`] filler goes to the probe accumulator,
-/// not the decoder.
+/// Data-plane pump on a blocking thread. A lagging embedder's standing backlog
+/// jumps to live. [`FLAG_PROBE`] filler goes to the probe accumulator, not the
+/// decoder.
 pub(super) struct DataPump {
     pub(super) session: Session,
     pub(super) shared: Arc<ClientShared>,
@@ -25,7 +26,7 @@ pub(super) struct DataPump {
     /// mode through it, as the control task does.
     pub(super) events_tx: PumpTx,
     /// Host encode-stage window ([`super::super::frame_channel::EncodeLatAcc`]);
-    /// fed by the datagram task, not the overlay's lossy `host_timing_tx`.
+    /// fed by the datagram task, not the overlay's lossy `host_timing` plane.
     pub(super) encode_lat: Arc<Mutex<super::super::frame_channel::EncodeLatAcc>>,
     /// Embedder-requested rate. `0` = Automatic (the only case ABR arms).
     pub(super) bitrate_kbps: u32,
@@ -440,7 +441,7 @@ impl DataPump {
         if clock_offset_ns != 0 && lat_ns > 0 {
             lp.feed.driver.on_owd(frame.pts_ns, lat_ns);
             // Window MINIMUM, not mean: a standing state
-            // elevates the floor. 10 s clamp matches hn stats.
+            // elevates the floor. 10 s clamp matches the overlay's `hud::SANE_NS`.
             if lat_ns < 10_000_000_000 {
                 lp.standing_lat.note_frame(lat_ns);
             }

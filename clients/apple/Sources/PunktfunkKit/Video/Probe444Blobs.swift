@@ -1,4 +1,4 @@
-// Synthetic 4:4:4 HEVC keyframes used only by `Stage444Probe` to probe decode capability.
+// Synthetic 4:4:4 HEVC keyframes for `Stage444Probe`'s decode-capability probe, and its tests.
 //
 // Each is the first IDR access unit (VPS + SPS + PPS + IDR slice, Annex-B) of a 256×256 HEVC
 // Range-Extensions clip — `chroma_format_idc = 3` — generated offline with libx265:
@@ -6,7 +6,7 @@
 //          -pix_fmt yuv444p[10le] -c:v libx265 \
 //          -x265-params keyint=1:min-keyint=1:no-info=1:repeat-headers=1:aud=0 -f hevc out.hevc
 // 256×256 clears the hardware decoder's minimum-dimension floor (a 16×16 clip is rejected for every
-// chroma format).
+// chroma format; M3 Ultra, macOS 27).
 enum Probe444Blobs {
     /// 256×256 HEVC Range-Extensions 4:4:4 keyframe (Annex-B): 134 bytes.
     static let au444_8bit: [UInt8] = [

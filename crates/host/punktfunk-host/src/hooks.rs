@@ -349,7 +349,7 @@ impl HooksStore {
     }
 
     /// Empty when unconfigured. Reloads `hooks.json` if identity moved — hand edits apply
-    /// on the next event (`docs/automation.md`).
+    /// on the next event (`docs-site/content/docs/(guide)/(host)/automation.md`).
     pub fn get(&self) -> HooksConfig {
         self.get_marked().0
     }
@@ -728,7 +728,7 @@ fn shell_tokens(cmd: &str) -> Vec<String> {
 /// True if this process is `NT AUTHORITY\SYSTEM` (S-1-5-18) — the SCM service, or the `serve`
 /// child it launches into the interactive session.
 ///
-/// Fail closed: an unreadable token reads as SYSTEM. Both callers want the cautious answer —
+/// Fail closed: an unreadable token reads as SYSTEM. Every caller wants the cautious answer —
 /// a skipped hook beats a SYSTEM command, and no tray beats a SYSTEM-owned one.
 #[cfg(windows)]
 pub(crate) fn running_as_system() -> bool {
@@ -1482,7 +1482,7 @@ mod tests {
         };
         assert!(!f.matches(&ev.kind));
 
-        // stream.* events carry no fingerprint — a fingerprint filter cannot match them.
+        // Another device's fingerprint does not match.
         let f = HookFilter {
             fingerprint: Some("ab12".into()),
             ..Default::default()

@@ -10,9 +10,11 @@ import android.view.InputDevice
 /**
  * One captured Sony pad (DualSense / DualSense Edge / DualShock 4) over USB — stream mode only.
  * The capture exists to fix what the InputDevice path structurally can't: rumble depends on the
- * phone's kernel exposing force feedback (many don't), and adaptive triggers / lightbar / player
- * LEDs have NO platform API at all. Claiming the pad's HID interface makes all of it work on any
- * phone, plus gyro + touchpad the standard path never captured.
+ * phone's kernel exposing force feedback (many don't), adaptive triggers have NO platform API
+ * (through API 37), and lightbar / player LEDs reach an InputDevice only through `LightsManager`
+ * (bound from API 33, where the kernel exposes lights). Claiming the pad's HID interface makes
+ * all of it work on any phone, plus the touchpad the standard path never captures and gyro below
+ * API 31, where [PadSensors] cannot read it.
  *
  * Unlike [Sc2Capture] there is no raw passthrough — the host's DualSense/DS4 backends consume
  * only typed events — and no UI mode: an UNcaptured Sony pad is a perfectly good InputDevice, so
@@ -32,9 +34,10 @@ import android.view.InputDevice
  * Feedback: implements [GamepadFeedback.PadFeedbackSink] — rumble / trigger / lightbar / player
  * LED events addressed to this pad's wire index become USB output reports on the physical pad
  * ([DsDevice] builders). Rendering runs on the feedback poll threads; [HidUsbLink.writeRaw] is
- * thread-safe (bounded newest-wins queue, submitted by the reader thread). A USB pad holds its
- * rumble level until written zero, so a backstop timer re-arms per command and writes the stop
- * itself if the poll thread stalls — the engine's explicit zeros remain the real stop mechanism.
+ * thread-safe (bounded queue, rumble coalesced to its newest level, submitted by the reader
+ * thread). A USB pad holds its rumble level until written zero, so a backstop timer re-arms per
+ * command and writes the stop itself if the poll thread stalls — the engine's explicit zeros
+ * remain the real stop mechanism.
  */
 class DsCapture(
     context: Context,
@@ -83,7 +86,10 @@ class DsCapture(
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var backstop: Runnable? = null
 
-    /** Fired (link thread) when the capture engages or drops — the Controllers screen's status. */
+    /**
+     * Fired when the capture engages or drops, on the thread that ran [startUsb], [stop] or the
+     * link's drop signal — the Controllers screen's status.
+     */
     @Volatile
     var onActiveChanged: ((active: Boolean) -> Unit)? = null
 
@@ -228,8 +234,8 @@ class DsCapture(
     private fun readMotionCal(m: DsDevice.Model): DsDevice.MotionCal {
         val blob = usb.getReport(HidUsbLink.REPORT_TYPE_FEATURE, m.calReportId, m.calReportLen)
         val cal = DsDevice.MotionCal.parse(blob, m.calReportId)
-        // Worth a line either way: this is the number the owed on-glass check reads back — a pad
-        // whose blob was read declares its own resolution, the fallback declares the wire's.
+        // Worth a line either way: a pad whose blob was read declares its own resolution, the
+        // fallback declares the wire's.
         if (cal === DsDevice.MotionCal.NOMINAL) {
             Log.w(
                 TAG,
@@ -278,8 +284,8 @@ class DsCapture(
     private fun onReport(report: ByteArray, len: Int) {
         val m = model ?: return
         // Nominal scaling until this claim's calibration read lands (see MotionCalHandoff): for
-        // that millisecond the pad behaves as it did before the read existed, which nobody can
-        // feel — unlike a pad whose buttons wait on a control transfer.
+        // that millisecond only the motion scale is off, and the buttons never wait on a control
+        // transfer.
         if (!DsDevice.parseState(m, report, len, state, motionCal.effective)) return
         // Normally claimed already, at capture time; this is the retry for a capture that engaged
         // while every wire index was taken.
@@ -293,10 +299,10 @@ class DsCapture(
      * indices are taken.
      *
      * Claimed when the capture engages rather than on the first report, because a pad that reports
-     * nothing is still a pad: with the lazy claim, a captured-but-silent pad left the host with no
+     * nothing is still a pad: a lazy claim would leave a captured-but-silent pad with no host
      * arrival, hence no virtual pad, no pad-audio capability and so no `0xD1` — a renderer sitting
-     * at zero frames, indistinguishable from a broken pipeline (it took a physical replug to
-     * clear). Callable from the main thread (capture start) and the link thread (the fallback).
+     * at zero frames, indistinguishable from a broken pipeline. Callable from the main thread
+     * (capture start) and the link thread (the fallback).
      */
     @Synchronized
     private fun ensureSlot(m: DsDevice.Model): GamepadRouter.ExternalPad? {
@@ -348,10 +354,10 @@ class DsCapture(
             }, "pf-pad-selftest").start()
         } else {
             padAudioConn = conn
-            // B6: hand the coils back before the first haptics frame. Any rumble earlier in this
-            // session asserted HAPTICS_SELECT, which firmware-mutes them, and nothing else ever
-            // clears it — so without this the stream renders into a muted actuator and looks for
-            // all the world like the host is sending nothing.
+            // Hand the coils back before the first haptics frame. Any rumble earlier in this
+            // session asserted HAPTICS_SELECT, which firmware-mutes them, so without this the
+            // stream renders into a muted actuator and looks for all the world like the host is
+            // sending nothing.
             restoreAudioHaptics()
             if (padSpeaker) routeSpeaker()
             hook.start(index, fd)
@@ -359,7 +365,7 @@ class DsCapture(
     }
 
     /**
-     * B6: clear the rumble/haptics-select bits so the pad's voice coils answer the audio-haptics
+     * Clear the rumble/haptics-select bits so the pad's voice coils answer the audio-haptics
      * path again. EP0-direct, like the other out-of-band writes here: this has to land even when
      * the interrupt-OUT queue is busy or draining, and it is idempotent.
      */
@@ -383,10 +389,9 @@ class DsCapture(
     /**
      * Stop the renderer, then close the connection whose descriptor it borrows — in that order.
      *
-     * Runs on [stop] and on unplug alike. Skipping it on unplug left the render thread writing to a
-     * descriptor whose device was gone, leaked the connection, and — because the started flag stayed
-     * set and the native tier-A registry stayed armed for that index — cost the pad both its pad
-     * audio and its wire rumble on the way back in.
+     * Runs on [stop] and on unplug alike. Skipping it on unplug would leave the render thread
+     * writing to a descriptor whose device is gone, leak the connection, and leave the started
+     * flag set, so the pad gets no pad audio on the way back in.
      */
     @Synchronized
     private fun stopPadAudio() {
@@ -412,7 +417,7 @@ class DsCapture(
         motionCal.end()
         awaitCalRead()
         // Release the transport too: the link only *signals* the drop, so without this an unplug
-        // left its connection open, its interfaces claimed and its detach receiver registered.
+        // leaves its connection open, its interfaces claimed and its detach receiver registered.
         usb.stop()
         if (wasActive) onActiveChanged?.invoke(false)
     }
@@ -476,10 +481,10 @@ class DsCapture(
         }
         if (stop) {
             // Disarm only once the stop is actually on its way. Dropping the net *before* the
-            // write — as this used to — meant a discarded stop left the motors running with
-            // nothing scheduled to try again; a USB pad holds its last level until told zero.
+            // write would let a discarded stop leave the motors running with nothing scheduled
+            // to try again; a USB pad holds its last level until told zero.
             if (sent) disarmBackstop() else armBackstop(STOP_RETRY_MS)
-            // B6: the stop report just re-asserted HAPTICS_SELECT on its way past, so if a
+            // The stop report just re-asserted HAPTICS_SELECT on its way past, so if a
             // haptics stream is live the coils it drives were muted by the very write that
             // silenced the motors. Give them back.
             if (sent && padAudioStarted) restoreAudioHaptics()
@@ -534,9 +539,9 @@ class DsCapture(
      * clear.
      *
      * Rumble stops the moment nothing renews it, but these are LATCHED in the controller's
-     * firmware — they outlive the stream, the app, and being unplugged. Ending a session while a
-     * game held a weapon's trigger resistance left the physical trigger stiff afterwards, with
-     * nothing to release it but another game that happens to set one.
+     * firmware: they outlive the stream and the app. Ending a session while a game holds a
+     * weapon's trigger resistance would leave the physical trigger stiff afterwards, with nothing
+     * to release it but another game that happens to set one.
      *
      * EP0-direct like the rumble stop above: the reader thread is stopping, so the interrupt-OUT
      * queue would never drain. Writes are best-effort — the pad may already be gone.

@@ -40,8 +40,8 @@ export function QueryState({
 			seat !== null && error instanceof ApiError && error.status === 502;
 		return (
 			// `role="alert"` so the failure is announced. The loading branch above already has
-			// role="status"; without this, a query that resolved into an error swapped one silent
-			// region for another and a screen-reader user was told only that loading had stopped.
+			// role="status"; without this, a query that resolved into an error would swap one silent
+			// region for another and a screen-reader user would be told only that loading had stopped.
 			<div
 				role="alert"
 				className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm"

@@ -207,8 +207,7 @@ impl Monitor {
 
     /// The next publish-token generation: one per `SET_ENCODE`, never 0, and unique for the
     /// driver's life. Per monitor is not enough — a re-arrival keeps the target id and starts a
-    /// fresh monitor at zero, so the replacement session took the same token as the one it
-    /// replaced and a stale close matched it exactly.
+    /// fresh monitor at zero, so a stale close would match the replacement session's token.
     pub fn next_encode_generation(&self) -> u32 {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         NEXT.fetch_add(1, Ordering::Relaxed) + 1
@@ -610,7 +609,7 @@ fn create_object(
     wdk_iddcx::nt_success(st).then_some(create_out.MonitorObject)
 }
 
-/// `IOCTL_UPDATE_MODES` (v4): lead the live monitor's mode list with a new preferred mode and
+/// `IOCTL_UPDATE_MODES`: lead the live monitor's mode list with a new preferred mode and
 /// push the target list to the OS via `IddCxMonitorUpdateModes2` — the in-place mid-stream
 /// resize. No departure: OS identity, drain worker and encode session all survive.
 ///

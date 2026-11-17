@@ -4,7 +4,8 @@
 //! resampler, which reports whatever rate we asked for. `AudioCapturer::sample_rate` is
 //! therefore the request, not the device. WirePlumber's `default` metadata names the
 //! elected sink; only a bind's negotiated `Format` names its rate (the announce props
-//! omit it — same trap as `audio.channels` in `pf_client_core::pad_audio::walk_graph`).
+//! omit it — same trap as `audio.channels` in `walk_graph`, pf-client-core's
+//! `pad_audio/pipewire.rs`).
 //!
 //! Every failure is [`super::super::CaptureRate::Unknown`]: a missing node, unset key,
 //! unnegotiated format, or timeout all decline. Over-claiming advertises 96 kHz of

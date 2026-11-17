@@ -229,7 +229,7 @@ fn marker_path() -> std::path::PathBuf {
 
 /// Owed apps, one `exe<TAB>device-id` line each: the lowercase exe name and the target
 /// this host pinned it to. A bare `exe` line (older hosts) has no target: its clear
-/// writes "default" whatever the pin is now.
+/// writes the saved pin, or "default", whatever the pin is now.
 fn read_owed() -> BTreeMap<String, Option<String>> {
     std::fs::read_to_string(marker_path())
         .map(|s| parse_owed(&s))
@@ -372,7 +372,8 @@ fn run_helper(args: &[&str]) -> bool {
 /// `probe` only reads: it fails for a process Windows will not pin, one that never played audio.
 /// `set` saves the app's current pins in the user's profile the first time, then pins it.
 /// `clear` puts a saved pin back on each role still pinned to `device-id`, and leaves a role
-/// the operator moved since. `-` (an older marker) clears every role to "default".
+/// the operator moved since. `-` (an older marker) puts every role back on its saved pin,
+/// "default" when none was saved.
 pub fn cli(args: &[String]) -> Result<()> {
     const USAGE: &str = "usage: punktfunk-host voice-route probe|set <device-id> <pid> <exe> | \
                          clear <device-id|-> <pid> <exe>";
@@ -660,7 +661,7 @@ mod tests {
         assert_eq!(mmdevapi_path("{0.0.0.00000000}.{aaaa}"), OURS);
     }
 
-    /// Older hosts wrote bare exe names; they still parse, as "clear to default".
+    /// Older hosts wrote bare exe names; they still parse, with no target.
     #[test]
     fn owed_marker_round_trips_and_reads_old_lines() {
         let mut owed = BTreeMap::new();

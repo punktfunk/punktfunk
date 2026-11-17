@@ -5,7 +5,7 @@
 pub const FLAG_PIC: u8 = 0x1;
 pub const FLAG_SOF: u8 = 0x4;
 /// Bandwidth-probe filler. Not decodable video — do not feed to the decoder.
-/// Punktfunk/1 only; GameStream never sets this bit.
+/// Punktfunk only; GameStream never sets this bit.
 pub const FLAG_PROBE: u8 = 0x8;
 
 /// `user_flags` bit, not a transport `flags` bit. Intra-refresh wave complete:
@@ -36,9 +36,11 @@ pub const USER_FLAG_CHUNK_ALIGNED: u32 = 0x40;
 /// the shard-aligned base in `frame_bytes`; the final block's base is
 /// `(total_data_shards − final_data_shards) × shard_bytes`. Uniform-geometry
 /// offsets do not apply. Set on every packet of the AU — reorder can deliver
-/// the final block first. Only toward peers advertising
+/// the final block first. A streamed AU carries it only toward peers advertising
 /// [`VIDEO_CAP_STREAMED_AU`](crate::quic::VIDEO_CAP_STREAMED_AU) ∧
-/// [`VIDEO_CAP_MULTI_SLICE`](crate::quic::VIDEO_CAP_MULTI_SLICE).
+/// [`VIDEO_CAP_MULTI_SLICE`](crate::quic::VIDEO_CAP_MULTI_SLICE); a PyroWave AU with a head
+/// block (`Geometry::head`) always does, and [`decode_v2`](super::decode_v2) sets it on
+/// every packet it reads.
 pub const USER_FLAG_SLICE_STREAM: u32 = 0x80;
 
 /// `user_flags` bit. Host re-encoded a held frame (idle keepalive); no new

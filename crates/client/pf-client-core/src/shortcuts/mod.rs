@@ -1,5 +1,5 @@
 //! In-stream shortcuts: a press or hold of controller buttons or keys, bound to a quick
-//! action. Design: `design/client-shortcuts.md` (planning repo).
+//! action.
 //!
 //! - `model.rs`: [`Trigger`], [`Action`], [`Binding`] and the `shortcuts` settings blob
 //!   ([`Shortcuts::parse`] never fails), plus the editor's [`Shortcuts::validate`].

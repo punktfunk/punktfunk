@@ -1,11 +1,10 @@
 // SettingsView's shared sections — each setting's Section is defined exactly once here and
 // composed by the per-platform bodies in SettingsView.swift.
 //
-// 2026-07 settings revamp: every field carries its explanation DIRECTLY under it in the same
-// cell (the `described` helper in SettingsView+Support) — the old per-section footer paragraphs
-// collected several fields' explanations into one blob nobody could match back to its row.
+// Every field carries its explanation DIRECTLY under it in the same cell (the `described`
+// helper in SettingsView+Support), so a description is never separated from its row.
 // Where a picker's meaning depends on the selection (touch mode, modifier layout, prioritize),
-// the description is DYNAMIC — it explains the current choice. The only footers left are the
+// the description is DYNAMIC — it explains the current choice. The only footers are the
 // one-line "Applies from the next session." form notes.
 //
 // The SAME builders edit settings presets (design/client-settings-profiles.md §5.1 —
@@ -27,11 +26,9 @@ import SwiftUI
 
 extension SettingsView {
     /// The SC2 passthrough toggle's caption: one clause of what it does + one of what it costs
-    /// (the caption rule). macOS says it differently because USB is the preferred transport
-    /// there and its cost is the Input Monitoring grant, not Bluetooth — the controller
-    /// interface carries the lizard keyboard collection, so macOS gates the open behind that
-    /// permission. Only iOS names menus: a Mac or Apple TV reaches them through GameController,
-    /// which never sees the pad on iOS.
+    /// (the caption rule). macOS also names Input Monitoring, which `Sc2UsbLink` needs to open a
+    /// wired pad. Only the iOS string (visionOS shares it) names browsing: GameController never
+    /// sees a Bluetooth pad there, so `Sc2MenuPad` reads it for the menus.
     static var sc2CaptureCaption: String {
         #if os(macOS)
         return String(localized: L10n.applePlayerSc2CaptureMacHint)
@@ -44,10 +41,6 @@ extension SettingsView {
 
     // MARK: - Display: Resolution
 
-    // NOTE: the Section content is deliberately split into the small named builders below — as one
-    // inline expression the iOS branch (wheel + 3-way refresh + bitrate rows) blew Swift's
-    // type-checker budget ("unable to type-check this expression in reasonable time"), which
-    // failed exactly one slice: the iOS archive (macOS/tvOS never compile that branch).
     @ViewBuilder var resolutionSection: some View {
         Section(L10n.prefsGroupResolution) {
             #if os(iOS) || os(visionOS) || os(macOS)
@@ -239,8 +232,8 @@ extension SettingsView {
         SettingsOptions.family(width: effective.width, height: effective.height)
     }
 
-    /// The segmented switch: picking a family writes its size nearest the current height, so the
-    /// wheel below always holds a row of that family.
+    /// The aspect switch: picking a family writes its size nearest the current height, so the
+    /// resolution list always holds a row of that family.
     private var aspectSelection: Binding<Int> {
         Binding(
             get: { family },
@@ -523,7 +516,8 @@ extension SettingsView {
     /// Render-scale picker + the resulting host resolution. > 1 supersamples (sharper, at more host
     /// work; a host that cannot scale the picture down also costs bandwidth and client decode);
     /// < 1 renders under native (lighter), and the presenter upscales.
-    /// Any percent from 50 to 400 can be typed: "Custom…" shows the field, a TV has its own row.
+    /// Any percent within `RenderScale.range` can be typed: "Custom…" shows the field, a TV has
+    /// its own row.
     @ViewBuilder var renderScaleRow: some View {
         #if os(tvOS)
         described(renderScaleDescription, field: "render_scale") {
@@ -725,9 +719,9 @@ extension SettingsView {
         s.streamPicture(native: connectNative)
     }
 
-    /// PyroWave quality in Bitrate's place: 0.5 to 2 by tenths, read as the rate it needs at the
-    /// picture a connect would have the host encode, warned when this device's link is short of
-    /// it. The TV lists those rates.
+    /// PyroWave quality in Bitrate's place: `PyroWaveQuality.range` by tenths, read as the rate it
+    /// needs at the picture a connect would have the host encode, warned when this device's link
+    /// is short of it. The TV lists those rates.
     @ViewBuilder private var pyrowaveQualityRows: some View {
         if pyroWaveRate {
             let s = effective
@@ -1132,8 +1126,8 @@ extension SettingsView {
         described(dialOpener + String(localized: L10n.playerOverlayActionsHint),
                   field: "overlay_actions") {
             // A SHEET, not a push: the detail column is not a NavigationStack, and a
-            // NavigationLink pushed from it popped the collapsed iPhone stack to the category
-            // list on the way back and left the selection dead (AboutView's rows say the same).
+            // NavigationLink pushed from it pops the collapsed iPhone stack to the category
+            // list on the way back and leaves the selection dead (AboutView's rows are sheets too).
             Button {
                 showQuickActions = true
             } label: {
@@ -1171,8 +1165,8 @@ extension SettingsView {
                 }
                 #if os(macOS)
                 // A settings-window sheet has no size of its own; the editor is a ring at full
-                // size over a stage, so give it one. Inside the 500 × 668 preferences window, not
-                // over it — a sheet larger than its parent hangs off the edges.
+                // size over a stage, so give it one. Inside the 500 × 580 preferences window
+                // (`macBody`), not over it — a sheet larger than its parent hangs off the edges.
                 .frame(width: 460, height: 540)
                 #endif
             }
@@ -1294,7 +1288,7 @@ extension SettingsView {
                 }
             }
             #endif
-            // An Apple TV has no microphone an app can open.
+            // The tvOS app opens no mic; tvOS offers one only through a Continuity iPhone or iPad.
             #if !os(tvOS)
             described(L10n.playerMicEnabledHint, field: "mic_enabled") {
                 Toggle(L10n.playerMicEnabled, isOn: scoped(SettingsFields.micEnabled))
@@ -1375,8 +1369,8 @@ extension SettingsView {
     }
 
     /// The SELECTED audio format: what it is, what it costs on the wire, and that it falls back
-    /// to Standard — the host's own switch (off by default), its capture gate or this device's
-    /// output can each decline it.
+    /// to Standard — the host's own switch (`PUNKTFUNK_AUDIO_HIRES`), its capture gate or this
+    /// device's output can each decline it.
     ///
     /// ⚠ The design's rule: **the UI states the RESOLVED format, never the requested one.**
     /// Nothing here may read as a guarantee — the stats overlay's audio line, built from the
@@ -1566,9 +1560,10 @@ extension SettingsView {
     }
 
     #if !os(tvOS)
-    /// Tracks whether the OS keeps the controller's Home press (macOS/iOS 27). An app listed under
-    /// Home Button Overrides reads `.defer`, and `GamepadCapture.attach`'s gesture claim then
-    /// hands the press to the stream. The setting reads only while a controller is connected.
+    /// Tracks whether the OS keeps the controller's Home press (macOS/iOS/visionOS 27). An app
+    /// listed under Home Button Overrides reads `.defer`, and `GamepadCapture.attach`'s gesture
+    /// claim then hands the press to the stream. The setting reads only while a controller is
+    /// connected.
     func watchHomeButton() async {
         guard #available(macOS 27.0, iOS 27.0, visionOS 27.0, *), !gamepads.controllers.isEmpty else {
             homeButtonKept = false

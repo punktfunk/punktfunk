@@ -132,12 +132,10 @@ foreach ($n in @('LICENSE-MIT', 'LICENSE-APACHE', 'THIRD-PARTY-NOTICES.txt')) {
 }
 
 # --- build (from source) + stage the pf-vdisplay virtual-display driver -----------------------
-# pf-vdisplay is our all-Rust IddCx driver (packaging/windows/drivers/). It is now BUILT FROM SOURCE
-# every release (build-pf-vdisplay.ps1) instead of shipping a checked-in prebuilt binary: the vendored
-# binary went stale (its .cat stopped covering an edited .inf -> pnputil SPAPI_E_FILE_HASH_NOT_IN_CATALOG
-# on every box, and it predated IOCTL_SET_RENDER_ADAPTER the host needs on hybrid/Optimus GPUs). Building
-# here keeps the .dll/.inf/.cat in lockstep + ships current driver features. stage-pf-vdisplay.ps1 then
-# adds the fetched nefcon device tool. (Needs the WDK build env; -NoDriver skips it for a WDK-less pack.)
+# pf-vdisplay is our all-Rust IddCx driver (packaging/windows/drivers/), BUILT FROM SOURCE every
+# release (build-pf-vdisplay.ps1), so the .dll/.inf/.cat stay in lockstep with the source.
+# stage-pf-vdisplay.ps1 then adds the fetched nefcon device tool. (Needs the WDK build env;
+# -NoDriver skips it for a WDK-less pack.)
 if (-not $NoDriver) {
     $built = Join-Path $OutDir 'pfvd-built'
     & (Join-Path $here 'build-pf-vdisplay.ps1') -Out $built -Arch $Arch
@@ -147,11 +145,10 @@ if (-not $NoDriver) {
 else { Write-Host "-NoDriver: building installer WITHOUT the bundled pf-vdisplay driver" }
 
 # --- build (from source) + stage the punktfunk virtual-gamepad UMDF drivers --------------------
-# pf-gamepad (DualSense / DS4 / Edge / Deck) + pf-xusb (Xbox 360 / XInput) are members of the same drivers
-# workspace as pf-vdisplay, built from source per release (build-gamepad-drivers.ps1) - same anti-stale
-# reasoning as pf-vdisplay; the prior checked-in binaries under gamepad-drivers/ are retired. The
-# installer adds each to the store via `punktfunk-host.exe driver install --gamepad` (the host
-# SwDeviceCreate's the per-session devnodes).
+# pf-gamepad (DualSense / DS4 / Edge / Deck), pf-xusb (Xbox 360 / XInput), pf-mouse and
+# pf-touchpad are members of the same drivers workspace as pf-vdisplay, built from source per
+# release (build-gamepad-drivers.ps1). The installer adds each to the store via
+# `punktfunk-host.exe driver install --gamepad` (the host SwDeviceCreate's per-session devnodes).
 if (-not $NoDriver) {
     $gpBuilt = Join-Path $OutDir 'gamepad-built'
     # -SkipBuild: build-pf-vdisplay.ps1 above already `cargo build`s the WHOLE drivers workspace (incl.
@@ -164,11 +161,10 @@ if (-not $NoDriver) {
     Write-Host "==> built + staged gamepad UMDF drivers -> $gpStage"
 }
 
-# --- stage the official base VB-CABLE package (the streaming virtual microphone) --------------
-# VB-CABLE is no longer bundled (the audio-substrate program, 2026-08): the host mints its own
-# audio endpoints from Steam's streaming drivers ("Punktfunk Speakers/Microphone"), so audio needs
-# Steam installed on the target box - never running - and no third-party cable. A user-installed
-# VB-CABLE keeps working as a fallback mic target.
+# --- audio: no virtual cable is bundled -------------------------------------------------------
+# The host mints its own audio endpoints from Steam's streaming drivers ("Punktfunk Speakers/
+# Microphone"), so audio needs Steam installed on the target box - never running. A user-installed
+# VB-CABLE still serves as a fallback mic target (pf-audio wiring_plan.rs).
 
 # --- stage the bun runtime + the two bun payloads (web console, plugin/script runner) --------------
 # Both the web console and the runner run on bun. bun is staged ONCE into $OutDir and shared by the
@@ -192,9 +188,9 @@ if ($wantWeb) {
     Write-Host "bundling the web console from $WebDir (+ bun $BunExe)"
 }
 else { Write-Host "no -WebDir/-BunExe -> installer built WITHOUT the web console" }
-# The plugin/script runner: one self-contained bundle (effect + the SDK inlined). Its scheduled task
-# is registered DISABLED (opt-in) by the installer. Built by CI (SCRIPTING_BUNDLE) alongside the web
-# console; omitted when -ScriptingBundle/-BunExe are unset.
+# The plugin/script runner: one self-contained bundle (effect + the SDK inlined). The installer
+# registers its PunktfunkScripting task and an upgrade keeps the task's enabled state. Built by CI
+# (SCRIPTING_BUNDLE) alongside the web console; omitted when -ScriptingBundle/-BunExe are unset.
 if ($wantScripting) {
     $scrStage = Join-Path $OutDir 'scripting'
     if (Test-Path $scrStage) { Remove-Item $scrStage -Recurse -Force }
@@ -210,10 +206,11 @@ else { Write-Host "no -ScriptingBundle/-BunExe -> installer built WITHOUT the pl
 # --- build + stage the HDR Vulkan layer (pf-vkhdr-layer) --------------------------------------
 # A tiny always-on Vulkan implicit layer (cdylib) that advertises HDR10/scRGB surface formats on the
 # virtual display so Vulkan games (Doom: The Dark Ages, etc.) can enable HDR while streaming - the
-# NVIDIA/AMD ICDs hide HDR formats on an indirect display even though they accept+present a forced HDR
-# swapchain there. Self-gated on the display's actual advanced-color state, so it's a no-op on SDR.
-# Standalone crate (own [workspace]); built here and registered by the installer. Skipped if cargo
-# is unavailable or the build fails -> installer is produced WITHOUT the layer (non-fatal).
+# NVIDIA ICD hides HDR formats on an indirect display even though it accepts+presents a forced HDR
+# swapchain there (AMD unmeasured). Self-gated on the display's actual advanced-color state, so
+# it's a no-op on SDR.
+# Standalone crate (own [workspace]); built here and registered by the installer. A failed build
+# produces the installer WITHOUT the layer (non-fatal).
 $layerSrc = Join-Path $here 'pf-vkhdr-layer'
 if (Test-Path (Join-Path $layerSrc 'Cargo.toml')) {
     $layerTarget = Join-Path $OutDir 'vklayer-target'
@@ -274,9 +271,9 @@ Write-Host "==> building punktfunk-setup-win (self-contained wizard + packer) ->
 $prevTarget = $env:CARGO_TARGET_DIR
 $env:CARGO_TARGET_DIR = $wizTarget
 Push-Location $repoRoot
-# windows-reactor-setup extracts the WinAppSDK runtime into ONE cache under LOCALAPPDATA,
-# keyed by package version only: whichever arch fills it first is what every later wizard
-# build stages. A cross-built wizard therefore gets a cache of its own.
+# windows-reactor-setup caches the WinAppSDK runtime under LOCALAPPDATA with one extract per
+# arch (`.msix_extract-<arch>`), so a cross-built wizard stages its own arch's runtime even
+# without the separate cache below.
 $prevLocal = $env:LOCALAPPDATA
 if ($Arch -ne 'x64') { $env:LOCALAPPDATA = Join-Path $OutDir "reactor-cache-$Arch" }
 & cargo build --release -p punktfunk-setup-win --target $triple

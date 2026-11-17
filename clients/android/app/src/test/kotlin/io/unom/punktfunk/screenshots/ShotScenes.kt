@@ -108,11 +108,11 @@ internal fun ShotTheme(content: @Composable () -> Unit) {
 }
 
 /**
- * Robolectric has no system UI, so every capture was missing the status bar and the content sat
- * where the bar belongs — on the Pixel render the app title collided with the camera punch-hole.
- * This frame draws a plausible bar (time left, radios right, the CENTRE left empty for the hole)
- * and pushes the scene below it, the same geometry real insets produce. The height mirrors a
- * Pixel's tall bar as measured off a real 1344×2992 capture (~145 px ≈ 40 dp).
+ * Robolectric has no system UI: with no status bar the content sits where the bar belongs and the
+ * app title collides with a camera punch-hole. This frame draws a plausible bar (time left,
+ * radios right, the CENTRE left empty for the hole) and pushes the scene below it, the same
+ * geometry real insets produce. The height approximates a Pixel's tall bar (151 px on a
+ * 1344×2992 Pixel 8 Pro, 50 dp at its default 480 dpi).
  */
 @Composable
 internal fun ShotStatusFrame(content: @Composable () -> Unit) {
@@ -242,7 +242,7 @@ internal fun SpeedTestScene() {
 /**
  * Creating a preset. Small, but it is the first thing a user meets when they reach for this
  * feature — and dialogs only get a shot each because a layout slip inside one is invisible from
- * every other scene (this one shipped with the field and its caption touching).
+ * every other scene.
  */
 @Composable
 internal fun NewPresetScene() {
@@ -424,12 +424,6 @@ internal fun WakeTimedOutScene() =
     ConnectModal(ConnectPhase.WakeTimedOut("Living Room PC"), onCancel = {}, onRetry = {})
 
 /**
- * The real console settings screen — the section tab strip, the glass rows, the focused row's
- * unfolded detail, and the living (calmed) backdrop behind them. The touch [SettingsScene] can't
- * stand in for it: this is a different screen with different navigation, and the strip is the part
- * a layout regression would eat first.
- */
-/**
  * The start-of-stream banner over the same synthetic "streamed frame" — the real
  * [StreamStartBanner] at full opacity, since the caller owns the 6 s timer and a shot must not race
  * it. Two variants because the WORDS are the point: the banner names pad chords or touch gestures
@@ -519,12 +513,10 @@ internal fun AddHostScene() {
 }
 
 
-// The Compose console's scenes (home carousel, settings, coverflow, connect takeover) are gone
-// with the screens themselves: the console is the Skia shell now
-// (design/android-skia-console-port.md), which renders over native GL and cannot compose under
-// Roborazzi. Its store shots come from the desktop screenshot dump (the same pixels) or from a
-// device capture. The scenes that remain are the touch UI and the two Compose platform screens
-// the console still opens (Controllers, Licences).
+// The console is the Skia shell (design/android-skia-console-port.md), which renders over native
+// GL and cannot compose under Roborazzi. Its store shots come from the desktop screenshot dump
+// (the same pixels) or from a device capture. The scenes here are the touch UI's, Controllers
+// screen included.
 
 /** The two pads the store listing names: DualSense (adaptive triggers, LEDs, rumble) and Xbox. */
 internal fun shotPads() = listOf(

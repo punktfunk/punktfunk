@@ -6,10 +6,10 @@
 //! per driver, not vtable changes. Loads `amfrt64.dll` at runtime — no build feature. Missing or
 //! old runtime fails [`AmfEncoder::open`] and the session.
 //!
-//! Input is a same-device D3D11 texture in NV12, P010 or BGRA: the caller's own when it
+//! Input is a same-device D3D11 texture in NV12, P010, BGRA or FP16: the caller's own when it
 //! declared a ring depth, else a `CopySubresourceRegion` into [`Inner::ring`], then
-//! `CreateSurfaceFromDX11Native`. BGRA is converted by VCN, so no pass of ours runs on the 3D
-//! engine. No readback: Rgb10a2 or CPU frames fail open/submit. VCN does not encode 4:4:4.
+//! `CreateSurfaceFromDX11Native`. BGRA and FP16 are converted by VCN, so no pass of ours runs on
+//! the 3D engine. No readback: Rgb10a2 or CPU frames fail open/submit. VCN does not encode 4:4:4.
 //! Evidence: `design/native-amf-encoder.md`.
 
 use super::policy::{intra_refresh_period, intra_refresh_requested, ltr_test_force_at};
@@ -308,8 +308,8 @@ struct CodecProps {
     out_color_profile: &'static HSTRING,
     out_transfer: &'static HSTRING,
     out_primaries: &'static HSTRING,
-    /// Input colour, set for a BGRA input only: VCN converts it, and AMF's defaults for an
-    /// RGB input do not describe a desktop.
+    /// Input colour, set for an RGB input only: VCN converts it. A BGRA input sets all four, as
+    /// AMF's defaults for it do not describe a desktop; FP16 sets transfer and primaries alone.
     in_color_profile: &'static HSTRING,
     in_transfer: &'static HSTRING,
     in_primaries: &'static HSTRING,
@@ -866,7 +866,7 @@ fn input_formats(input: PixelFormat) -> Option<(i32, DXGI_FORMAT)> {
 }
 
 /// Input texture ring depth. AMF keeps reading a slot until its AU is retrieved, so at most
-/// `RING - 1` frames may be in flight. `submit` drains before reuse. Shallow enough that
+/// `RING - 1` frames may be in flight. `submit` waits for a free slot. Shallow enough that
 /// back-pressure starts after a few frames, not after AMF's 16-deep input queue.
 const RING: usize = 6;
 
@@ -1049,7 +1049,8 @@ struct Live {
     hdr_pushed: Option<pf_frame::HdrMeta>,
     /// Driver accepted intra-refresh — gates [`EncoderCaps::intra_refresh`].
     ir_active: bool,
-    /// Driver accepted LTR. Mutually exclusive with intra-refresh; LTR wins.
+    /// Driver accepted LTR. Mutually exclusive with intra-refresh; a requested intra-refresh
+    /// wins ([`AmfEncoder::ltr_wanted`]).
     ltr_active: bool,
     /// The driver keeps the slots a force leaves out (`LTRMode` 1): a mark awaiting the
     /// client's confirmation survives the forces before it.
@@ -1331,7 +1332,7 @@ impl AmfEncoder {
             }
             Codec::Av1 => {
                 // Never B-frames: VCN5 can grow them (H.264 already did on RDNA3+). A B-frame
-                // adds a frame of latency and breaks FIFO on the codec with no LTR/IR. Pre-VCN5
+                // adds a frame of latency and breaks the FIFO pairing of AUs to submits. Pre-VCN5
                 // rejects the names (no-op). HEVC has no B-frame property at all.
                 comp.set_prop(h!("Av1BPicturesPattern"), AmfVariant::from_i64(0), false)?;
                 comp.set_prop(
@@ -1381,7 +1382,7 @@ impl AmfEncoder {
         }
         // BT.709 (SDR, either depth) or BT.2020 PQ (HDR), at `full_range`. Keyed on colour, not
         // depth: 10-bit SDR is Main10 under BT.709. Required for HDR — missing PQ washes out; for
-        // SDR the set is best-effort (the 8-bit arm always was), so the fatal flag is `hdr`.
+        // SDR the set is best-effort, so the fatal flag is `hdr`.
         let profile = match (self.hdr, self.full_range) {
             (true, true) => COLOR_PROFILE_FULL_2020,
             (true, false) => COLOR_PROFILE_2020,
@@ -1657,7 +1658,7 @@ fn drain_one_output(
     Ok(DrainOutcome::Frame { data, key_prop })
 }
 
-/// How long `submit` drains for a free input slot before declaring a wedge. Above one frame's
+/// How long `submit` waits for a free input slot before declaring a wedge. Above one frame's
 /// encode time, far under the session watchdog's ~2 s floor.
 const INPUT_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -1773,8 +1774,8 @@ impl AmfEncoder {
             }
         }
         // Bound in-flight below RING before reuse: AMF keeps reading a slot until its AU is
-        // retrieved. Drain finished AUs into `ready` rather than overwrite or treat INPUT_FULL as
-        // a wedge. No progress for the whole budget is a genuine wedge.
+        // retrieved. Wait for the retrieve thread to drain finished AUs into `ready` rather than
+        // overwrite or treat INPUT_FULL as a wedge. No progress for the whole budget is a wedge.
         // In place, the caller's declared depth is the bound; copying, it is our own ring.
         let cap = in_place.unwrap_or(RING);
         inner
@@ -1895,7 +1896,7 @@ impl AmfEncoder {
             let deadline = std::time::Instant::now() + INPUT_DRAIN_BUDGET;
             loop {
                 // The retrieve thread drains; this only re-offers the same surface until a
-                // slot opens, on the same budget the drain loop used to run on.
+                // slot opens, within `INPUT_DRAIN_BUDGET`.
                 std::thread::sleep(std::time::Duration::from_micros(250));
                 r = inner.comp.submit_input(&surf);
                 if r != sys::AMF_INPUT_FULL || std::time::Instant::now() >= deadline {
@@ -2124,7 +2125,7 @@ impl Encoder for AmfEncoder {
     }
 
     /// `TargetBitrate` via `GetProperty`. `None` before lazy open or on decline — caller keeps
-    /// the requested rate. Without this, ABR never learns `encoder_ceiling_kbps` on AMD.
+    /// the requested rate. Without this, the host never sees the rate a VCN ceiling clamped to.
     fn applied_bitrate_bps(&self) -> Option<u64> {
         let inner = self.inner.as_ref()?;
         inner

@@ -76,8 +76,8 @@ mod tests {
         );
     }
 
-    /// An MFT that opens the AU with a delimiter still gets its header cached. That is
-    /// the Qualcomm shape, and requiring the run to come first defeated it entirely.
+    /// An MFT that opens the AU with a delimiter still gets its header cached: the
+    /// Qualcomm shape.
     #[test]
     fn parameter_set_prefix_skips_a_leading_delimiter() {
         // AUD (0x09) + SPS (0x67) + PPS (0x68) + IDR slice (0x65).
@@ -90,7 +90,7 @@ mod tests {
         let prefix =
             parameter_set_prefix(Codec::H264, &au).expect("delimiter-led AU still has a prefix");
         assert_eq!(prefix, &au[6..18]);
-        // SEI-led, parameter sets running to the end of the AU.
+        // Delimiter-led, parameter sets running to the end of the AU.
         assert_eq!(
             parameter_set_prefix(Codec::H264, &au[..18]).expect("delimiter then parameter sets"),
             &au[6..18]

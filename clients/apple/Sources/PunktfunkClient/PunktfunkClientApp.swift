@@ -1,5 +1,5 @@
-// PunktfunkClient — the macOS client app (also runs unbundled via swift run).
-// Hosts grid → trust-on-first-use → StreamView (AVSampleBufferDisplayLayer HEVC) + input.
+// PunktfunkClient — the Apple client app on macOS, iOS, tvOS and visionOS (the macOS build also
+// runs unbundled via swift run). Hosts grid → trust-on-first-use → StreamView + input.
 
 #if os(macOS)
 import AppKit
@@ -79,8 +79,8 @@ struct PunktfunkClientApp: App {
             .tint(.brand)
             #endif
             // Geist Sans at each platform's own body size: the default for unstyled text, form
-            // rows and fields. The phone's 17 pt shrank every tvOS control (29 pt there) and
-            // bloated every Mac one (13 pt); views with an explicit size use `.geist(…)`.
+            // rows and fields. The phone's 17 pt would shrink every tvOS control (29 pt there) and
+            // bloat every Mac one (13 pt); views with an explicit size use `.geist(…)`.
             #if os(tvOS)
             .font(.geist(29, relativeTo: .body))
             #elseif os(macOS)

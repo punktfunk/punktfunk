@@ -40,8 +40,8 @@ vec3 srcTexel(ivec2 p) {
 // 10-bit code value -> the normalized float that stores it in the high bits of a 16-bit texel.
 const float CODE10 = 64.0 / 65535.0;
 
-// The session's range, a pipeline specialization constant: full (the default, whose arithmetic
-// is unchanged) or studio (Y 64..940, CbCr 64..960).
+// The session's range, a pipeline specialization constant: full (the default) or studio
+// (Y 64..940, CbCr 64..960).
 layout(constant_id = 0) const bool FULL_RANGE = true;
 
 // BT.709 non-constant-luminance in 10-bit code values. Full range, then studio:

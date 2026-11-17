@@ -1,6 +1,7 @@
-//! The Library's Customize panel: which sections show, in what order (design §2.5). One layout
-//! per device, stored in `library_sections`, which the console reads too. The console's
-//! Collections band is not drawn here; its entry keeps its stored place and state.
+//! The Library's Customize panel: which sections show, in what order
+//! (design/linux-client-overhaul.md §2.5). One layout per device, stored in
+//! `library_sections`, which the console reads too. The console's Collections band is not
+//! drawn here; its entry keeps its stored place and state.
 
 use crate::store::Store;
 use adw::prelude::*;
@@ -52,8 +53,8 @@ pub fn popover(store: &Rc<Store>) -> gtk::Popover {
     popover
 }
 
-/// Rebuild the rows from the store. Called after every change, from an idle so the row whose
-/// handler asked is not torn down inside its own signal.
+/// Rebuild the rows from the store. A move button goes through [`refill`], an idle, so the
+/// row whose handler asked is not torn down inside its own signal.
 fn fill(list: &gtk::ListBox, store: &Rc<Store>) {
     list.remove_all();
     let all = sections(&store.settings().library_sections);

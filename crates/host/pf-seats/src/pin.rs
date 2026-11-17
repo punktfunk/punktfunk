@@ -1,9 +1,9 @@
 //! Leaf-certificate fingerprinting and pinned rustls verification for the RDP keeper.
 //!
 //! The keeper reaches TermService over loopback TLS and trusts exactly one leaf: the one
-//! `seats rdp-trust` recorded. The leaf SHA-256 uses the same aws-lc-rs provider as rustls.
-//! CertificateVerify is still checked, so replaying a public certificate without its key
-//! cannot pass.
+//! `punktfunk-seat-keeper trust` recorded. The leaf SHA-256 uses the same aws-lc-rs provider
+//! as rustls. CertificateVerify is still checked, so replaying a public certificate without
+//! its key cannot pass.
 
 use std::sync::{Arc, Mutex};
 

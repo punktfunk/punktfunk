@@ -1,19 +1,19 @@
-//! Android Adaptive Performance Framework (ADPF) — CPU performance hints for the decode thread.
+//! Android Adaptive Performance Framework (ADPF) — CPU performance hints for the hot threads.
 //!
 //! ADPF lets a latency-critical app tell the platform "these threads run a repeating workload with
-//! this per-cycle deadline, and here's how long they *actually* took." The kernel's CPU governor
-//! (on Qualcomm Snapdragon in particular — its ADPF backend is among the most responsive) then keeps
-//! those threads on the fast cores at high clocks instead of migrating them to a little core or
-//! down-clocking between frames. For a stream client the win is on the in-process hot path we
-//! control — the `pf-decode` feed/drain/present loop — *not* the hardware codec itself (that decodes
+//! this per-cycle deadline, and here's how long they *actually* took." The platform then adjusts
+//! those threads' core placement and clocks toward the target, instead of migrating them to a
+//! little core or down-clocking between frames. For a stream client the win is on the in-process
+//! hot path we control — the pump, the `pf-decode` feed/drain/present loop, audio and mic (the set
+//! `NativeClient::hot_thread_ids` returns) — *not* the hardware codec itself (that decodes
 //! in the mediacodec service, a separate process we can't hint); keeping our loop from being
 //! scheduled late directly trims the jitter between "AU received" and "buffer released to the
 //! Surface." It complements the codec-side `operating-rate`/`priority` hints, which push the codec's
 //! own clocks.
 //!
-//! The `APerformanceHint_*` API arrived in NDK **API level 33**. minSdk is 31, so we CANNOT link the
-//! symbols directly: a `libpunktfunk_android.so` carrying an unresolved
-//! `APerformanceHint_createSession` import fails to load on API 31/32 devices
+//! The `APerformanceHint_*` API arrived in NDK **API level 33**. minSdk is 28, so we CANNOT link
+//! the symbols directly: a `libpunktfunk_android.so` carrying an unresolved
+//! `APerformanceHint_createSession` import fails to load on API 28-32 devices
 //! (`System.loadLibrary` throws) even if the code path is never taken. Instead we resolve the
 //! entry points from `libandroid.so` with `dlsym` at runtime — absent on < 33 ⇒
 //! [`HintSession::create`] returns `None` and the decode loop simply runs without hints.
@@ -120,7 +120,7 @@ impl HintSession {
     /// `None` when ADPF is unavailable (device API < 33) or the platform declines — the caller then
     /// runs unhinted (a no-op, not an error). `prefer_performance` (the experimental low-latency
     /// mode) additionally biases the governor away from power efficiency (API 35+); off, the
-    /// session runs with the platform default, as it did before the overhaul.
+    /// session runs with the platform default.
     pub fn create(target_ns: i64, tids: &[i32], prefer_performance: bool) -> Option<Self> {
         if target_ns <= 0 || tids.is_empty() {
             return None;
@@ -182,8 +182,8 @@ impl HintSession {
         unsafe { (self.api.report)(self.session, actual_ns) };
     }
 
-    /// Update the per-frame target (e.g. after a mid-session refresh-rate change). Unused today —
-    /// the decode thread restarts on renegotiation — but kept for that path.
+    /// Update the per-frame target (e.g. after a mid-session refresh-rate change). Nothing calls
+    /// it: the target stays the one [`HintSession::create`] set.
     #[allow(dead_code)]
     pub fn update_target(&self, target_ns: i64) {
         if target_ns <= 0 {

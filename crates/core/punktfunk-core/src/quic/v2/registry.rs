@@ -1,9 +1,11 @@
 //! Every number on the `punktfunk/2` wire, in one file.
 //!
-//! Frame types, stream types, datagram kinds, feature bits and close codes are allocated here,
-//! each with a doc line; a message's field tags live in the module named after it. Two branches
-//! that take the same number then conflict in this file instead of on the wire. A number is
-//! never reused for a second meaning: a peer that skips an unknown one cannot tell two apart.
+//! Frame types, stream types, datagram kinds, feature bits and stream stop codes are allocated
+//! here, each with a doc line; a message's field tags live in the module named after it, and a
+//! close code beside its user ([`crate::reject`] for refusals) with a row in `tests::CODES`. Two
+//! branches that take the same number then conflict in this file instead of on the wire. A
+//! number is never reused for a second meaning: a peer that skips an unknown one cannot tell two
+//! apart.
 //!
 //! `tests::every_number_is_tabled` fails until a new constant is in its table, and
 //! `tests::numbers_are_unique` until it differs from its neighbours.
@@ -20,7 +22,7 @@ pub const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-punktfunk/2 media";
 pub const UNKNOWN_MAX_BODY: usize = 64 * 1024;
 
 // Frame types. Handshake 0x01–0x0F, pairing 0x10–0x1F, session control 0x20–0x3F,
-// clipboard 0x40–0x4F, input stream 0x50–0x5F.
+// clipboard 0x40–0x4F, input 0x50–0x5F.
 
 /// `client → host`, first frame: everything the client knows about itself and its ask.
 pub const MSG_CLIENT_HELLO: u64 = 0x01;
@@ -108,8 +110,9 @@ pub const MSG_CLIP_FETCH: u64 = 0x43;
 /// Transfer stream, answer: status and size, then the bytes until FIN.
 pub const MSG_CLIP_FETCH_HDR: u64 = 0x44;
 
-/// Control stream: one input edge — a key press or release — that must not be lost, in order
-/// with the others. The body is the event's own encoding.
+/// Control stream: one input edge ([`crate::quic::InputEdge`]) — a key or mouse-button press or
+/// release, or a character of text — that must not be lost, in order with the others. The body
+/// is the event's own encoding.
 pub const MSG_INPUT_EVENT: u64 = 0x50;
 /// `client → host`, control stream: a captured pad's USB serial and feature replies, before its
 /// arrival (`PadIdentity`).
@@ -197,7 +200,8 @@ pub const DGRAM_AUDIO: u64 = 0x01;
 pub const DGRAM_INPUT_STATE: u64 = 0x02;
 /// Client → host receive state: each report window, and an open ask repeated a few times.
 pub const DGRAM_FEEDBACK: u64 = 0x03;
-/// Clock probe and echo.
+/// Reserved for clock probe and echo; nothing sends or reads it. Clock rounds ride the control
+/// stream ([`MSG_CLOCK_PROBE`], [`MSG_CLOCK_ECHO`]).
 pub const DGRAM_CLOCK: u64 = 0x04;
 /// Host → client rumble.
 pub const DGRAM_RUMBLE: u64 = 0x05;
@@ -234,9 +238,10 @@ pub const FEATURE_PAD_WRITES: u32 = 33;
 /// Both ends: the client reads `ServerHello`'s profile echo and follows a `Redirect`, and the
 /// host resolves `ClientHello`'s profile. A host redirects only a client that sets it.
 pub const FEATURE_PROFILES: u32 = 34;
-/// Both ends: a sealed media packet leaves its whole 30-byte header in the clear, bound as
-/// associated data, so the receiver opens each shard straight into its frame. Without it only
-/// the tag and packet number are clear.
+/// Both ends: a sealed media packet leaves its whole header
+/// ([`V2_HEADER_LEN`](crate::packet::V2_HEADER_LEN) bytes) in the clear, bound as associated
+/// data, so the receiver opens each shard straight into its frame. Without it only the tag and
+/// packet number are clear.
 pub const FEATURE_CLEAR_PLACEMENT: u32 = 35;
 /// Both ends, beside [`FEATURE_STREAM_CONFIG`]: an epoch's `StreamConfig` may change codec, bit
 /// depth, colour or chroma, and the client rebuilds its decoder at that epoch's first frame. The
@@ -251,7 +256,9 @@ pub const FEATURE_AUDIO_EPOCH: u32 = 37;
 pub const FEATURE_SCREENS: u32 = 38;
 /// Both ends: a finger or continuous scroll may carry
 /// [`SCROLL_FLAG_AXIS_UNITS`](crate::input::scroll::SCROLL_FLAG_AXIS_UNITS), and a host that
-/// injects wheel clicks counts it at Qt's 10 units a click instead of 60 DIP.
+/// injects wheel clicks counts it at
+/// [`SCROLL_AXIS_UNITS_PER_DETENT`](crate::input::scroll::SCROLL_AXIS_UNITS_PER_DETENT) a click
+/// instead of [`SCROLL_DIP_PER_DETENT`](crate::input::scroll::SCROLL_DIP_PER_DETENT).
 pub const FEATURE_SCROLL_AXIS_UNITS: u32 = 39;
 /// Both ends: the client's display shows full-range SDR as studio range (Qualcomm's display
 /// HAL), so the host encodes SDR at studio range. HDR follows [`FEATURE_STUDIO_RANGE_HDR`]. The

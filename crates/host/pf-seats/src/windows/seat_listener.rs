@@ -40,7 +40,7 @@ const NOT_LOOPBACK: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::
 /// Writes nothing that already matches, so live seat sessions see no change.
 pub(super) fn ensure(host_path: &Path) -> Result<(), String> {
     if !cfg!(target_arch = "x86_64") {
-        // ARM64 would need an ARM64X build for its emulated x64 processes.
+        // Windows 11 on ARM64 would need an ARM64X build for its emulated x64 processes.
         return Ok(());
     }
     let dll = deploy(host_path)?;

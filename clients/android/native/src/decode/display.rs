@@ -17,8 +17,8 @@ use crate::sys::now_monotonic_ns;
 /// State shared between the decode loop and the `AMediaCodec` `OnFrameRendered` callback (which
 /// fires on a codec-internal thread): rendered frames awaiting their render timestamp, so the HUD
 /// gets the spec's `display` stage (decoded→displayed) and the `capture→displayed` end-to-end
-/// headline (`design/stats-unification.md` — this replaces Android's v1 `capture→decoded`
-/// endpoint whenever the platform delivers render callbacks).
+/// headline (`design/stats-unification.md`; without render callbacks the headline stays
+/// `capture→decoded`).
 pub(super) struct DisplayTracker {
     stats: Arc<crate::stats::VideoStats>,
     /// Live host-minus-client clock offset (ns) for the skew-corrected end-to-end sample —
@@ -31,16 +31,16 @@ pub(super) struct DisplayTracker {
     /// must not know about audio, and the audio thread cannot see the glass).
     ///
     /// Published RAW. The HUD shaves the OS present floor off its shown display / end-to-end
-    /// numbers (`StatsOverlay.osFloorMs` — metrics report what Punktfunk controls), but sound has
+    /// numbers (`shave_os_floor`, set in `session/planes.rs`), but sound has
     /// to reach the ear when the light reaches the eye, and a floor-shaved reference would place
     /// audio a whole latch period early on every device. Presentation policy, not physics.
     video_e2e: Arc<AtomicU64>,
-    /// Always-on latch/display accumulator for the presenter's 1 Hz `pf-present` line —
-    /// independent of the HUD gate, so a HUD-off A/B stays measurable from logcat.
+    /// Always-on latch/display accumulator for the presenter's 1 Hz `pf.present` line —
+    /// independent of the HUD gate, so a HUD-off run stays measurable from logcat.
     meter: Arc<super::sink::PresentMeter>,
     /// `(pts_us, (decoded_real_ns, released_real_ns))` of frames released with `render = true`, in
     /// release order, awaiting their callback. Pushed on EVERY render (no HUD gate — the ring is
-    /// a 64-tuple bound and the latch metric wants to exist when nobody is watching).
+    /// bounded by `RENDERED_CAP` and the latch metric wants to exist when nobody is watching).
     rendered: Mutex<VecDeque<(u64, (i128, i128))>>,
 }
 
@@ -77,14 +77,14 @@ impl DisplayTracker {
 /// Register [`on_frame_rendered`] on the codec (`AMediaCodec_setOnFrameRenderedCallback`,
 /// **API 33** — "Available since Android T" per the NDK header; only the *Java* listener dates
 /// back further). That sits above the API-28 floor, so the entry point is dlsym-resolved at
-/// runtime like [`try_set_frame_rate`] — hard-linking it (as 0.9.0 shipped) made
-/// `System.loadLibrary` fail on every pre-Android-13 device, taking down all of `NativeBridge`.
+/// runtime like [`try_set_frame_rate`]: hard-linking it would make `System.loadLibrary` fail
+/// on every pre-Android-13 device, taking down all of `NativeBridge`.
 /// The `ndk` wrapper has no binding and the call needs the raw codec pointer, which is what the
 /// vendored crate's public `as_ptr` patch is for. Returns the userdata pointer holding a leaked
 /// `Arc<DisplayTracker>` refcount; the caller MUST reclaim it with [`release_render_callback`]
 /// AFTER dropping the codec (`AMediaCodec_delete` is what guarantees no further callback can
 /// fire). `None` (nothing to reclaim) if the symbol is absent (API < 33) or the platform refused —
-/// the HUD then simply has no `display` stage, exactly the pre-callback behaviour.
+/// the HUD then simply has no `display` stage.
 pub(super) fn install_render_callback(
     codec: &MediaCodec,
     tracker: &Arc<DisplayTracker>,
@@ -108,10 +108,9 @@ pub(super) fn install_render_callback(
             crate::sym::<SetOnFrameRenderedFn>(lib, c"AMediaCodec_setOnFrameRenderedCallback")
         else {
             // No confirmed present ⇒ no `display` stage AND no reference for the audio plane's A/V
-            // sync, which then stays inert and leaves the ring exactly as it was. The release
-            // instant is NOT substituted: releases target a future vsync, so it runs a whole latch
-            // period (8-21 ms measured) ahead of glass — well outside the loop's deadband, i.e. it
-            // would place audio early on every frame while looking like it was working.
+            // sync, which then stays inert. The release instant is NOT substituted: releases
+            // target a future vsync, so it runs a latch period ahead of glass — well outside the
+            // loop's deadband — and would place audio early on every frame.
             log::info!(
                 "decode: no render callback on this API level (<33) — no display stage, no A/V sync"
             );
@@ -180,7 +179,7 @@ unsafe extern "C" fn on_frame_rendered(
         pts_us,
     );
     let pts_ns = pts_us.saturating_mul(1000);
-    // Always-on half: the presenter's pf-present line reads these with the HUD off.
+    // Always-on half: the presenter's pf.present line reads these with the HUD off.
     t.meter
         .note_latch(paired.and_then(|(_, r)| crate::stats::sane_us(displayed_ns - r)));
     // Above the HUD gate: the audio plane steers by `video_e2e`. Only the stats lock waits for it.

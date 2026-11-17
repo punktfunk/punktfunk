@@ -189,8 +189,10 @@ pub fn link_facts_of(iface: &str) -> LinkFacts {
         ifm_count: 0,
         ifm_ulist: std::ptr::null_mut(),
     };
-    // SAFETY: `req` is the ioctl's documented in/out record, sized and NUL-terminated here;
-    // `ifm_ulist` is null so the kernel fills counts only. The fd outlives the call.
+    // SAFETY: the request code is XNU's SIOCGIFMEDIA32: the kernel copies 40 bytes in and out,
+    // inside `req`'s 48, and the name is NUL-terminated. Its list pointer is bytes 36..40,
+    // padding here, not `ifm_ulist`; a 32-bit address lies in a 64-bit process's 4 GiB page
+    // zero, so a list copy faults instead of landing. The fd outlives the call.
     let rc = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFMEDIA, &mut req) };
     if rc != 0 {
         return LinkFacts::default();

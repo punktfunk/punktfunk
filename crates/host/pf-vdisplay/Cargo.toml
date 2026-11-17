@@ -1,10 +1,10 @@
-# Virtual-display orchestration (plan §W6): the on-demand client-sized headless output — per-compositor
-# Linux backends (KWin zkde-screencast, wlroots swaymsg, Mutter RemoteDesktop, Hyprland) and the
-# Windows IddCx/pf-vdisplay driver backend — behind one VirtualDisplay trait, plus the mode-conflict
-# admission registry and the DDC/CI panel control. Extracted into a subsystem crate; depends on the
-# shared leaves (pf-frame's DXGI identity, pf-win-display's CCD helpers, pf-gpu, pf-paths), never on
-# an encoder, capture/inject or the orchestrator (the display lifecycle events invert to a
-# host-registered sink).
+# Virtual-display orchestration (plan §W6): the on-demand client-sized headless output —
+# per-compositor Linux backends (KWin zkde-screencast, wlroots swaymsg, Mutter RemoteDesktop,
+# Hyprland, gamescope, niri, Umbriel) and the Windows IddCx/pf-vdisplay driver backend — behind one
+# VirtualDisplay trait, plus the mode-conflict admission registry and the DDC/CI panel control.
+# A subsystem crate: depends on the shared leaves (pf-frame's DXGI identity, pf-win-display's CCD
+# helpers, pf-gpu, pf-paths), never on an encoder, capture/inject or the orchestrator (the display
+# lifecycle events invert to a host-registered sink).
 [package]
 name = "pf-vdisplay"
 version.workspace = true
@@ -39,10 +39,10 @@ hex = "0.4"
 
 [dev-dependencies]
 # The `#[ignore]`d on-glass cases drive the manager/backend through code paths whose only account of
-# what they chose is `tracing`. A bare test harness installs no subscriber, so those runs were blind:
-# `live_a_failed_first_isolate_is_recovered_by_adopting_the_next` could see the panel stay dark but
-# not whether the adoption arm fired, or whether the dark-desk backstop ran and failed. Dev-only, so
-# the shipped host's dependency closure through this crate is unchanged.
+# what they chose is `tracing`, and a bare test harness installs no subscriber. This one lets
+# `live_a_failed_first_isolate_is_recovered_by_adopting_the_next` see whether the adoption arm
+# fired and whether the dark-desk backstop ran and failed. Dev-only, so the shipped host's
+# dependency closure through this crate is unchanged.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # `proc`'s process-group tree guard is Unix-wide, not Linux-only: the module is compiled on every
@@ -64,7 +64,7 @@ wayland-client = "0.31"
 wayland-scanner = "0.31"
 wayland-backend = "0.3"
 # wayland-scanner emits `bitflags::bitflags!` for the KDE output-device protocol's bitfield enums
-# (kde-output-device-v2 `capability`/`flags`); needs the crate in scope (kwin_output_mgmt.rs).
+# (kde-output-device-v2 `capability`/`flags`); needs the crate in scope (kwin/mgmt.rs).
 bitflags = "2"
 # Umbriel re-lights a returning head over `zwlr_output_manager_v1` (umbriel/output_mgmt.rs).
 # Already in the host's closure through pf-inject.
@@ -87,7 +87,7 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     # The single-instance mutex is created with an explicit SDDL DACL and its owner is checked, so
     # a lower-privileged process (the LocalService plugin runner) can neither open it nor squat the
-    # name unnoticed — see manager/instance.rs (security-review 2026-08-05 L-16).
+    # name unnoticed — see manager/instance.rs.
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Devices_DeviceAndDriverInstallation",

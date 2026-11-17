@@ -1,15 +1,14 @@
 //! The settings screen. Every control writes straight back to the persisted [`Settings`]
 //! (there is no Apply step), via the small [`setting_combo`]/[`setting_toggle`] builders.
 //!
-//! **Structure mirrors the Apple client's 2026-07 settings revamp** (its
-//! `SettingsCategory` + `SettingsView+Sections.swift`), so the two desktop clients read the
-//! same way: General = session/app behavior, Display = everything about the picture,
-//! Input = touch/keyboard/mouse, Audio, Controllers, About. Each field carries its
-//! explanation DIRECTLY under it ([`described`]) rather than only on hover — the same move
-//! Apple made, for the same reason (guidance nobody hovers for is guidance nobody reads).
+//! **Structure mirrors the Apple client's settings** (its `SettingsCategory` +
+//! `SettingsView+Sections.swift`), so the clients read the same way: General = session/app
+//! behavior, Display = everything about the picture, Input = touch/keyboard/mouse, Audio,
+//! Controllers, About. Each field carries its explanation DIRECTLY under it
+//! ([`described_labeled`], [`described_overridable`]) rather than only on hover — the same
+//! move Apple made, for the same reason (guidance nobody hovers for is guidance nobody reads).
 //! Wording is shared verbatim wherever the setting means the same thing on both platforms;
-//! where the BEHAVIOR differs the text is deliberately Windows-specific (the forwarded-
-//! controller picker especially: Apple forwards one pad, this client forwards them all).
+//! where the BEHAVIOR differs the text is deliberately Windows-specific.
 
 mod about;
 mod audio;
@@ -65,7 +64,7 @@ pub(super) fn commit(
         return;
     }
     // The file, not the snapshot, here too: the preset's effective values derive from `base`,
-    // and another process (session resize, console UI, Decky) may have moved a global.
+    // and another process (session resize, console UI, the CLI) may have moved a global.
     let base = {
         let mut s = ctx.settings.lock().unwrap();
         *s = Settings::load();
@@ -99,7 +98,7 @@ pub(crate) fn update_preset(
 /// preset's Host screen row lists) and re-probe this device's hardware in the background.
 /// Called from the navigation handlers that (re)enter this page, never per render pass.
 /// `ctx.settings` is loaded once at process start and this process is not the file's only
-/// writer (a spawned session, the console UI and Decky save too), so without this the page
+/// writer (a spawned session, the console UI and the CLI save too), so without this the page
 /// opens on values another process already replaced, which "jump" the moment a row is touched
 /// and `commit`'s rebase pulls the file in.
 pub(crate) fn refresh_snapshot(ctx: &Arc<AppCtx>) {
@@ -180,7 +179,7 @@ fn primary_mode() -> Option<punktfunk_core::Mode> {
     } else {
         60
     };
-    // DEVMODEW cuts 59.94 Hz to 59: the display path states the rate it cut.
+    // DEVMODEW cuts 59.94 Hz to 59 (Windows 7 and later): the display path states the rate it cut.
     let mhz = primary_refresh_mhz()
         .filter(|m| m.abs_diff(whole.saturating_mul(1000)) < 1000)
         .unwrap_or(whole.saturating_mul(1000));
@@ -273,7 +272,7 @@ pub(super) fn active_preset(scope: &str) -> Option<StreamPreset> {
         .flatten()
 }
 
-// NOTE: the row builders no longer set the widget's own `.header` — the row label is
+// NOTE: the row builders do not set the widget's own `.header` — the row label is
 // rendered by [`described_overridable`]/[`described_labeled`], because the Overridden pill
 // must sit BETWEEN the label and the input, and a widget-embedded header allows nothing
 // between itself and its box.
@@ -347,9 +346,9 @@ fn committer<T: 'static>(
 
 /// One field a preset can override: [`described_labeled`] plus, while the preset in scope
 /// overrides the row's key, the Overridden marker whose Reset is the only way back to
-/// inheriting. Captions sit below their control, as on every Windows Settings page and the
-/// Apple client. A control's edit pins the key ([`commit`]); WinUI raises no change event on
-/// a no-op re-selection, so "not overridden" needs the Reset.
+/// inheriting. Captions sit below their control, as in the Apple client. A control's edit pins
+/// the key ([`commit`]); WinUI raises no change event on a no-op re-selection, so "not
+/// overridden" needs the Reset.
 fn described_overridable(
     cx: &Cx,
     row: &rows::Row,
@@ -410,8 +409,8 @@ fn described_overridable(
     .into()
 }
 
-/// The row's label line — what the widgets' `.header` used to render, moved out so the
-/// Overridden pill can sit between label and input with ONE consistent gap everywhere.
+/// The row's label line, drawn here and not as the widget's `.header`, so the Overridden
+/// pill can sit between label and input with ONE consistent gap everywhere.
 fn row_label(label: &str) -> View {
     text(label)
         .horizontal_alignment(HorizontalAlignment::Left)
@@ -438,9 +437,8 @@ fn described_labeled(pal: &Palette, label: &str, control: impl Into<View>, capti
 }
 
 /// A settings sub-section heading. Deliberately NOT the shared [`section`] helper: that one
-/// carries a 2px left inset (fine over the hosts/licenses lists it was written for), which
-/// here left every heading hanging one nudge right of the card edge below it. Flush left, so
-/// heading and card share one line.
+/// carries a 2px left inset, which would hang every heading one nudge right of the card
+/// edge below it. Flush left, so heading and card share one line.
 fn group_heading(pal: &Palette, label: &str) -> View {
     text(label)
         .font_size(12.0)
@@ -454,8 +452,7 @@ fn group_heading(pal: &Palette, label: &str) -> View {
 /// One settings group: an optional sub-section label, a card of fields, and an optional
 /// form-level note under it (Apple's Section header/footer). Groups stack down the page.
 /// A group with NO fields renders NOTHING — several groups pass an empty list in preset
-/// scope (Decoding, Library: device facts, never per preset), and a heading over an empty
-/// card read as a bug.
+/// scope (device facts, never per preset), and a heading over an empty card reads as a bug.
 fn group(
     pal: &Palette,
     header: Option<&str>,
@@ -486,7 +483,7 @@ fn group(
 
 /// A section's advanced rows: under an Advanced heading while Show advanced is on or this
 /// preset overrides one of them; otherwise one button naming how many hold a changed value,
-/// which shows them. Nothing when none changed.
+/// which shows them. Nothing when none changed, or in a preset's scope.
 fn advanced_group(cx: &Cx, fields: Vec<View>, changed: usize, overridden: bool) -> Vec<View> {
     if cx.s.show_advanced || overridden {
         return group(cx.pal, Some(client::prefs_advanced()), fields, None);
@@ -545,7 +542,7 @@ impl Cx<'_> {
     }
 }
 
-/// The sidebar's sections in the Apple client's order: tag, title message, Lucide mark.
+/// The sidebar's sections: tag, title message, Lucide mark.
 const SECTIONS: [(&str, Label, &str); 8] = [
     ("general", client::prefs_category_general, "settings"),
     ("display", client::prefs_category_display, "maximize"),
@@ -614,7 +611,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
         set_custom_scale: &set_custom_scale,
         set_reset: &set_reset,
     };
-    // The selected section's content, grouped exactly like the Apple client's categories
+    // The selected section's content, grouped like the Apple client's categories
     // (SettingsCategory + SettingsView+Sections.swift). Each section builds only its own rows.
     let groups: Vec<View> = match section {
         "display" => display::display_section(&cx),
@@ -645,7 +642,7 @@ pub(crate) fn settings_page(shell: &Shell) -> View {
     let scope_bar = preset_sheet::scope_bar(&cx, active.as_ref(), &set_scope, &set_edit);
 
     // The content column carries the section entrance and the category title, so the title
-    // shares the cards' left edge; no max-width, as the pane already takes a third.
+    // shares the cards' left edge; no max-width: the 320 px pane already narrows it.
     let titled: Vec<View> = std::iter::once(
         text(title)
             .font_size(28.0)

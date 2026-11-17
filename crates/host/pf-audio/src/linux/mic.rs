@@ -53,9 +53,9 @@ struct MicRingShared {
 impl PwMicSource {
     /// A 1- or 2-channel source under a caller-chosen `node.name`, so isolation can
     /// pin nested apps (`PULSE_SOURCE`) to this session's uplink.
-    /// `None` = shared `punktfunk-mic`. PipeWire 1.4 never assigns a driver to
-    /// a non-default `Audio/Source` recorded by target — per-session mic needs
-    /// the 1.6 daemon; on 1.4 the election losers read silence.
+    /// `None` = shared `punktfunk-mic`. On PipeWire 1.4.10 a non-default `Audio/Source`
+    /// recorded by target gets no driver, and 1.6 drives it: per-session mic needs 1.6, and
+    /// on 1.4.10 the election losers read silence.
     pub fn open_named(channels: u32, source_name: Option<&str>) -> Result<PwMicSource> {
         anyhow::ensure!(
             matches!(channels, 1 | 2),

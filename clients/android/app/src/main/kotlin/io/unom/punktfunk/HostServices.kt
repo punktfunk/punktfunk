@@ -302,8 +302,9 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
         paired { native.pair(address, port, identity, pin, deviceName) }
 
     /**
-     * Asks for access with no PIN and waits for the host's operator, pinned to [pinHex] (empty ⇒
-     * trust on first use). Never streams. Blocking, up to ~185 s.
+     * Asks for access with no PIN and waits for the host's operator, pinned to [pinHex]. An empty
+     * [pinHex] fails at once: a host with no fingerprint pairs by PIN. Never streams. Blocking, up
+     * to ~185 s.
      */
     fun requestAccess(
         address: String,

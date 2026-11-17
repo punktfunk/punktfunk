@@ -277,11 +277,10 @@ impl StreamState {
     /// A fresh frame from the capturer: provenance bookkeeping, the stamp correction on a
     /// display faster than the stream, the source-cadence estimate, and the park re-arm.
     fn on_frame(&mut self, f: crate::capture::CapturedFrame, t_cap: std::time::Instant) {
-        // Only a real SOURCE frame is evidence of source progress: a cursor-only
-        // regeneration re-encodes the previous desktop image at a new pointer
-        // position — encoded and sent like any frame, but never fed to the cadence
-        // estimate, new-frame diagnostics, or capture-rebuild reset (a regenerated
-        // cursor over one stashed texture is how a dead path used to look healthy).
+        // Only a real SOURCE frame is evidence of source progress: a cursor-only regeneration
+        // re-encodes the previous desktop image at a new pointer position. It is sent like any
+        // frame but never feeds the cadence estimate, new-frame diagnostics, or capture-rebuild
+        // reset: regens over one stashed texture would make a dead path look healthy.
         let source = f.provenance.origin == pf_frame::FrameOrigin::Source;
         self.live.frame = f;
         #[cfg(target_os = "linux")]

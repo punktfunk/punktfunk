@@ -2,13 +2,9 @@
 # Install the published .debs on every supported apt distro, in a pristine image, the way a user
 # would — repo key, sources.list line, `apt-get install`.
 #
-# WHY THIS EXISTS: nothing in deb.yml ever installed a package it built. Two facts survived a long
-# time in that blind spot, in opposite directions:
-#   * `punktfunk-host` installed cleanly on Debian 13 for months while docs-site said Debian was
-#     unsupported and unverified.
-#   * `punktfunk-gamescope` was missing from the apt registry across two releases, while the docs
-#     told Debian/Ubuntu users to `apt install` it.
-# Both are what a five-minute install check catches.
+# WHY THIS EXISTS: building a .deb says nothing about whether the apt registry serves it or apt
+# can install it. A package missing from the registry, or one that installs where the docs say it
+# does not, only shows in a real install.
 #
 # Usage:  bash scripts/ci/deb-install-smoke.sh
 #   PF_APT_DISTRIBUTION   stable | canary   (default: stable)
@@ -27,11 +23,12 @@ REPO_URL="https://git.unom.io/api/packages/unom/debian"
 # there, and it is deliberately NOT asserted absent — that would turn every future improvement into
 # a red build. The omissions and their reasons:
 #   ubuntu:24.04   no client    — built on 26.04, floors at libc6 >= 2.43 (noble has 2.39)
-#                  no gamescope — noble's wayland is 1.22.0; the vendored wlroots needs >= 1.23.1,
-#                                 so the binary cannot even load there
-#   debian:trixie  no client    — same libc6 >= 2.43 floor (trixie has 2.41), plus GTK4 >= 4.20
-# Debian 12 (bookworm) is absent entirely: glibc 2.36 is below the host's 2.39 floor, so nothing
-# we ship installs there and there is nothing to smoke-test.
+#                  no gamescope — needs libavif16 >= 1.2.1 and libinput10 >= 1.26.0 (noble has
+#                                 1.0.4 and 1.25.0)
+#   debian:trixie  no client    — same libc6 >= 2.43 floor (trixie has 2.41), plus libadwaita
+#                                 >= 1.8 (trixie has 1.7)
+# Debian 12 (bookworm) is absent: glibc 2.36 is below the host's 2.39 floor; only web and
+# scripting install there.
 MATRIX=(
   "ubuntu:24.04|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats"
   "ubuntu:26.04|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats punktfunk-client punktfunk-gamescope"

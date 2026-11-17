@@ -14,17 +14,15 @@
 #                         (A 26.04-built host .deb is uninstallable on 24.04 — the reason this job
 #                         exists; see packaging/debian/README.md.)
 #   build-publish-gamescope
-#                       — the patched `punktfunk-gamescope`, on DEBIAN 13. It lived in the host job
-#                         until 2026-08 and never once succeeded there: noble's wayland is 1.22.0
-#                         and the vendored wlroots floors it at 1.23.1, so v0.26.0 and v0.27.0 both
-#                         shipped without the package while the docs told apt users to install it.
+#                       — the patched `punktfunk-gamescope`, on DEBIAN 13; one .deb serves
+#                         Debian 13 and Ubuntu 26.04 (ci/gamescope-trixie.Dockerfile).
 #   smoke-install       — installs what was just published, from the registry, in pristine
-#                         ubuntu:24.04 / ubuntu:26.04 / debian:trixie images. Nothing here used to
-#                         install a package it built, which is how both of the above survived.
+#                         ubuntu:24.04 / ubuntu:26.04 / debian:trixie images.
 #
-# Both compute VERSION identically (scripts/ci/pf-version.sh is deterministic per commit), so the
-# host and client packages always share a version line. The release-attach helpers are race-safe
-# (ensure_release create-or-fetch; upsert_asset only conflicts on same-name), so the jobs run parallel.
+# The client and host builders compute VERSION identically (scripts/ci/pf-version.sh is
+# deterministic per commit), so those packages always share a version line; gamescope derives its
+# own. The release-attach helpers are race-safe (ensure_release create-or-fetch; upsert_asset only
+# conflicts on same-name), so the jobs run parallel.
 #
 # Registry (public, unom org): https://git.unom.io/unom/-/packages
 # Box setup (once):  see packaging/debian/README.md
@@ -34,7 +32,7 @@ name: deb
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
 # cancel each other). Keeps a busy push cadence from piling ~10 queued runs per commit onto the
-# runner fleet. Gitea honors this for push triggers (PR triggers: see gitea#35933).
+# runner fleet. Gitea applies it to push and pull_request runs alike.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -45,7 +43,7 @@ on:
     branches: [main]
     # Scope canary builds to what this artifact is built FROM — a docs-only or
     # web-only push should not light up the whole fleet. Applies to branch pushes;
-    # tag runs are matched by `tags:` (proven by flatpak/windows-msix releases).
+    # tag runs are matched by `tags:`.
     paths:
       - 'crates/client/**'
       - 'crates/codec/pf-bitstream/**'
@@ -146,9 +144,8 @@ on:
       - 'ci/install-bun.sh'
       - '.gitea/workflows/deb.yml'
     # Single project version: a `vX.Y.Z` tag is THE release for every platform (see
-    # docs-site channels.md). The old version-shadow (a client tag shipping a host package
-    # that outranked rolling builds) is now structurally impossible — main publishes to the
-    # `canary` apt distribution, tags to `stable`, so the two never share a version line.
+    # docs-site channels.md). main publishes to the `canary` apt distribution, tags to
+    # `stable`, so the two never share a version line.
     tags: ['v*']
   workflow_dispatch:
 
@@ -163,8 +160,8 @@ env:
   AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
   # CMake-driven C/C++ through the same cache (aws-lc-sys, the vendored libopus). Workflow level
-  # is safe — it names no triple; the CC_*/CXX_* half is per-job below, because the arm64 leg's
-  # image needs its own CC_x86_64 wrapper. See ci.yml's `rust` job for the full note.
+  # is safe — it names no triple; the CC_*/CXX_* half is per-job below, because the arm64 leg runs
+  # in the cross image and keeps that image's compiler env. See ci.yml's `rust` job.
   CMAKE_C_COMPILER_LAUNCHER: sccache
   CMAKE_CXX_COMPILER_LAUNCHER: sccache
   # sccache and incremental compilation are mutually exclusive; CI wants the shared
@@ -178,8 +175,8 @@ jobs:
       image: 192.168.1.58:5010/punktfunk-rust-ci:latest
     timeout-minutes: 90
     env:
-      # ⚠ Job-scoped, never workflow-scoped: build-publish-client-arm64 runs in the cross image,
-      # whose own CC_x86_64_unknown_linux_gnu=pf-host-cc must survive. See ci.yml's `rust` job.
+      # ⚠ Job-scoped, never workflow-scoped: build-publish-client-arm64 runs in the cross image
+      # and keeps that image's compiler env. See ci.yml's `rust` job.
       CC_x86_64_unknown_linux_gnu: sccache cc
       CXX_x86_64_unknown_linux_gnu: sccache c++
       # Prebuilt Skia from disk, never github.com; see ci/skia-binaries.sh.
@@ -222,9 +219,9 @@ jobs:
       - name: Prebuilt Skia (no-op once the image bakes it)
         run: sh ci/skia-binaries.sh x86_64-unknown-linux-gnu
 
-      # The cargo-home (registry/git) cache IS shared with ci.yml — those are pure downloads,
-      # profile-independent, and deduping them across the fleet is the whole point. The target
-      # cache is NOT; see below.
+      # cargo-home (registry/git) keys start `cargo-home-`. That restore-keys prefix also matches
+      # ci.yml's `cargo-home-ci-` entries, so an exact miss can restore one. Those are pure
+      # downloads, profile-independent. The target cache is per profile; see below.
       - name: Cache keys
         run: echo "rustc=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_ENV"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -262,22 +259,18 @@ jobs:
           # FOUR binaries ship in the client .deb, so all four are built here: the GTK shell,
           # punktfunk-client-session (the Vulkan/Skia streamer the shell execs for a connect),
           # punktfunk-cli (the headless `punktfunk` front-end), and pf-update (the root helper
-          # behind `punktfunk-client --apply-update`). build-client-deb.sh installs all four;
-          # leaving punktfunk-cli out here made it fall over on `install: No such file or
-          # directory`, because its build-if-missing guard only tested the first two and so decided
-          # everything was already built. The HOST is built separately in the build-publish-host
-          # job (Ubuntu 24.04 image).
+          # behind `punktfunk-client --apply-update`). build-client-deb.sh installs all four and
+          # builds only when one is missing, so a restored target must be built first. The HOST
+          # is built separately in the build-publish-host job (Ubuntu 24.04 image).
           cargo build --release --locked \
             -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli -p pf-update
 
       # ── The web console, built ONCE per (web+sdk content, bun) rather than once per job ────────
-      # This bundle was being rebuilt six times on every push — ci.yml, here, both RPM legs, arch,
-      # and the docker app image — at ~2.5 min each, for output that is a pure function of web/,
-      # sdk/ and l10n/messages/. windows-host.yml has cached it this way for a while; this is the same arrangement for
-      # the Linux packaging legs, sharing one key family so a hit in one warms the others.
+      # The bundle is a pure function of web/, sdk/ and l10n/messages/. deb.yml, rpm.yml and
+      # arch.yml share one key family, so a hit in one warms the others.
       #
       # The bun version is IN THE KEY. Each builder image installs its own bun (rust-ci, fedora-rpm
-      # and arch-ci each run the bun.sh installer at image-build time), so without it a bundle built
+      # and arch-ci each run ci/install-bun.sh at image-build time), so without it a bundle built
       # by one image's bun could be shipped by a job running a different one. They are usually the
       # same version and do share; when they diverge, they simply stop sharing instead of silently
       # mixing.
@@ -305,13 +298,12 @@ jobs:
           sh ci/install-bun.sh
           export PATH="$HOME/.bun/bin:$PATH"
           cd web
-          # --ignore-scripts, like every other web install in CI (ci.yml, web-screenshots.yml,
-          # windows-host.yml, the SDK installs). This was the ONE site still running lifecycle
-          # scripts, and web's `postinstall` is `bun2nix -o bun.nix` — a Nix codegen step this job
-          # neither consumes nor commits, whose only effect here is to make the install depend on
-          # bun2nix resolving. `build` re-runs its own `prebuild` codegen regardless.
+          # --ignore-scripts, like every other web install in CI. web's `postinstall` is
+          # `bun2nix -o bun.nix` — a Nix codegen step this job neither consumes nor commits, whose
+          # only effect here is to make the install depend on bun2nix resolving. `build` re-runs
+          # its own `prebuild` codegen regardless.
           # Retried: bun's download-and-extract is single-shot, and a truncated tarball reads as
-          # `Fail extracting tarball` (ci.yml's web job has the measurement).
+          # `Fail extracting tarball` (see ci.yml's web job).
           bash ../scripts/ci/retry.sh 3 bun install --frozen-lockfile --ignore-scripts
           bun run build
           if ! grep -q 'Bun\.serve' .output/server/index.mjs; then
@@ -328,8 +320,7 @@ jobs:
       # scripts treat a missing web/.output as "build it yourself", which is right for a local run
       # and wrong here: it would silently turn a broken cache restore into a slow, quiet rebuild, or
       # — with the build step skipped and the restore empty — into a package with no console at all.
-      # windows-host.yml shipped exactly that in 0.22.1/0.22.2 (an unset WEB_OUTPUT_DIR behind a
-      # single Write-Host), which is why its equivalent step throws too. Fail loudly instead.
+      # Fail loudly instead.
       - name: The console must exist (cache hit or fresh build)
         run: |
           if [ ! -f web/.output/server/index.mjs ]; then
@@ -357,8 +348,7 @@ jobs:
           bash scripts/ci/assert-payload-parity.sh --self-test
           bash scripts/ci/assert-payload-parity.sh dist/punktfunk-client_*.deb
 
-      # Visibility only. With the target cache now actually saving release artifacts (see the
-      # cache key note above), this is how a regression in that arrangement becomes visible:
+      # Visibility only. The target cache saves release artifacts (see the cache key note above);
       # a run that suddenly reports thousands of misses is a cache that stopped restoring.
       - name: sccache stats (visibility only)
         if: always()
@@ -411,8 +401,8 @@ jobs:
   # ---------------------------------------------------------------------------------------------
   # The HOST .deb — built on Ubuntu 24.04 (noble), so it installs on Ubuntu 24.04 LTS through
   # 26.04 (see the file header + packaging/debian/README.md). Runs in
-  # parallel with build-publish and publishes to the SAME distribution/component; both version steps
-  # run `pf-version.sh --format deb`, so host and clients share a version line.
+  # parallel with build-publish and publishes to the SAME distribution/component; its version step
+  # runs the same `pf-version.sh --format deb`, so host and clients share a version line.
   build-publish-host:
     runs-on: ubuntu-24.04
     container:
@@ -460,10 +450,8 @@ jobs:
         with:
           path: target
           # Own key: this target dir is built against 24.04's glibc/toolchain and must NOT share
-          # ci.yml's 26.04 target cache (mixing would poison both). It is also the only job using
-          # this prefix, so — unlike the amd64/arm64 pairs above — it has always been able to save
-          # and restore its own release artifacts. `-release-` is spelled out anyway so the whole
-          # file reads consistently and nobody "unifies" it back into a shared key later.
+          # ci.yml's 26.04 target cache (mixing would poison both). It is the only job using this
+          # prefix; `-release-` is spelled out so the whole file reads consistently.
           key: cargo-target-noble-release-v1-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-target-noble-release-v1-${{ env.rustc }}-
       - name: Drop a partial target restore
@@ -482,23 +470,21 @@ jobs:
           PUNKTFUNK_BUILD_VERSION: ${{ env.VERSION }}   # stamped into the binary (build.rs)
         run: |
           git config --global --add safe.directory "$PWD"
-          # Same features the old combined build used: --nvenc (direct-SDK NVENC, real RFI on NVIDIA;
-          # NVENC/CUDA is dlopen'd — no link dep, so this image needs no libcuda stub) + --vulkan-encode
-          # (raw VK_KHR_video_encode_h265 on AMD/Intel, pure ash).
+          # Features: nvenc (direct-SDK NVENC, real RFI on NVIDIA; NVENC/CUDA is dlopen'd — no link
+          # dep, so this image needs no libcuda stub) + vulkan-encode (raw VK_KHR_video_encode_h265
+          # on AMD/Intel, pure ash).
           #
           # punktfunk-tray is deliberately NOT in this invocation — build-deb.sh builds it separately,
           # and that split is load-bearing (see the identical note in the RPM spec / Arch PKGBUILD):
           # cargo unifies features across one build, so co-building the tray with the host pulls the
           # host's ashpd -> zbus/tokio onto the tray's shared zbus and the tray panics at every launch
           # with "there is no reactor running, must be called from the context of a Tokio 1.x runtime".
-          # It WAS listed here, which is why only the .deb shipped a crashing tray while the RPM and
-          # Arch packages — which already split it — were fine.
           #
           # punktfunk-encode-worker IS in this invocation: it is the capability-carrying PyroWave
           # encode worker that ships next to the host in /usr/bin, and build-deb.sh only builds it
           # if the artifact is missing — building it here keeps it on the same sccache pass as the
-          # host. Unlike the tray it shares the host's dependency graph by design (v1 accepts that
-          # the worker shares the host dependency graph), so feature unification here is harmless.
+          # host. Unlike the tray it shares the host's dependency graph by design, so feature
+          # unification here is harmless.
           #
           # punktfunk-seats is the seat supervisor's binary. punktfunk-host already links its
           # library and pf-inject, so this adds no feature unification, only the one executable.
@@ -511,18 +497,17 @@ jobs:
           # The seat supervisor, a separate .deb the host depends on.
           VERSION="$VERSION" bash packaging/debian/build-seats-deb.sh
 
-      # Visibility only — placed here, right after the last compile, rather than at the end of the
-      # job: the gamescope gate below must stay the final step (see its own note).
+      # Visibility only, right after the last compile.
       - name: sccache stats (visibility only)
         if: always()
         run: sccache --show-stats
 
       # Read the capability matrix out of the BUILT .deb before it is published. dpkg carries no
       # capability metadata — the postinst applies them — so this reads the postinst that will
-      # actually run on a user's box, plus the payload. 0.26.0-1 granted the host cap_sys_nice=ep
-      # from exactly that postinst and killed every KDE desktop session while every board stayed
-      # green: host must carry NOTHING, worker exactly cap_sys_nice=ep. `--self-test` first so a
-      # guard that can no longer fail takes the job down instead of waving the release through.
+      # actually run on a user's box, plus the payload. A capability on the host hides it from
+      # KWin and kills every KDE desktop session (scripts/ci/assert-cap-matrix.sh): host must carry
+      # NOTHING, worker exactly cap_sys_nice=ep. `--self-test` first so a guard that can no
+      # longer fail takes the job down instead of waving the release through.
       - name: Assert the capability matrix (host .deb)
         run: |
           bash scripts/ci/assert-cap-matrix.sh --self-test
@@ -574,10 +559,10 @@ jobs:
   # and the client's real refresh rate instead of a hardcoded 60 Hz. Same reasoning as the RPM leg
   # in rpm.yml: without a package, a Debian/Ubuntu box has no route to it except compiling by hand.
   #
-  # Its own job, on Debian 13: the oldest apt distro the tree builds on, so one .deb serves Debian 13
-  # and Ubuntu 26.04. Debian 13 is below wlroots 0.20's floors, so the build script links pinned
-  # wayland, libdrm, xkbcommon and pixman into the compositor; the WSI layer keeps the system
-  # libwayland-client. A failure here fails the job, never a `::warning::`.
+  # Its own job, on Debian 13; one .deb serves Debian 13 and Ubuntu 26.04. Debian 13 is below
+  # wlroots 0.20's floors, so the build script links pinned wayland, libdrm, xkbcommon and pixman
+  # into the compositor; the WSI layer keeps the system libwayland-client. A failure here fails
+  # the job, never a `::warning::`.
   build-publish-gamescope:
     runs-on: ubuntu-24.04
     container:
@@ -598,7 +583,7 @@ jobs:
 
       # CACHED on packaging/gamescope/** alone — it depends on nothing else in this repo, so a
       # normal push restores a binary instead of spending ~10 minutes on someone else's tree.
-      # Keyed `-trixie-` so the noble cache entries (which only ever held misses) can't be hit.
+      # Keyed `-trixie-`, so a binary built on another distro is never restored here.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: gamescope
         with:
@@ -609,11 +594,12 @@ jobs:
       # is a real regression in the tree or the pin.
       - name: Build the patched gamescope
         if: steps.gamescope.outputs.cache-hit != 'true'
-        # `--extra-fallback libdisplay-info` is what makes ONE .deb serve both Debian 13 and
-        # Ubuntu 26.04. Built against the distro's copy, the package picks up
+        # Vendoring libdisplay-info is what makes ONE .deb serve both Debian 13 and Ubuntu 26.04
+        # (the build script's mandatory fallbacks include it; `--extra-fallback` repeats it).
+        # Built against the distro's copy, the package picks up
         # `Depends: libdisplay-info2 (>= 0.2.0)` on trixie — and Ubuntu 26.04 carries
-        # libdisplay-info **3** (0.3.0), so apt refuses it there ("Depends libdisplay-info2 …" —
-        # measured, not predicted). gamescope vendors the library as a submodule, so linking the
+        # libdisplay-info **3** (0.3.0), so apt refuses it there ("Depends libdisplay-info2 …").
+        # gamescope vendors the library as a submodule, so linking the
         # vendored copy drops the dependency entirely. Same reasoning the build script already
         # applies to wlroots: a binary we SHIP must not follow the build host's shared libraries.
         run: |
@@ -627,9 +613,8 @@ jobs:
           # beside the compositor, which is the only route to an HDR10 swapchain for a nested game.
           mkdir -p gs-cache && cp -a gs-stage/. gs-cache/
 
-      # The binary must RUN, not merely link: `--version` is what the old job used as its ship
-      # gate, and it is the cheapest proof that the static-libstdc++ trick and the vendored wlroots
-      # actually produced a working compositor.
+      # The binary must RUN, not merely link: `--version` is the cheapest proof that the
+      # static-libstdc++ trick and the vendored wlroots actually produced a working compositor.
       - name: Build the .deb
         run: |
           gs-cache/usr/bin/punktfunk-gamescope --version
@@ -682,10 +667,9 @@ jobs:
       # Shared compile cache (sccache -> RustFS S3 over the LAN). Baked into the builder
       # images; this heals the job while the running :latest predates the bake.
       #
-      # NOTE this job deliberately sets no CC_x86_64_unknown_linux_gnu: the cross image points it
-      # at a wrapper that keeps host-side build-script probes off the arm64 include dirs. The
-      # target-side compiles go through CC_aarch64_unknown_linux_gnu (also set by the image) and
-      # are not sccache-wrapped.
+      # NOTE this job sets no CC_x86_64_unknown_linux_gnu (ci.yml's `rust` job says why not to
+      # set it workflow-wide). The target-side compiles go through CC_aarch64_unknown_linux_gnu,
+      # which the image sets, and are not sccache-wrapped.
       - name: sccache (no-op once the image bakes it)
         run: sh scripts/ci/ensure-sccache.sh
 
@@ -793,12 +777,8 @@ jobs:
           key: cargo-target-arm64-release-v1-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}
 
   # ---------------------------------------------------------------------------------------------
-  # Does the thing we just published actually INSTALL? Nothing in this repo asked that before, and
-  # the cost of not asking was two independent, long-lived facts nobody knew:
-  #   * `punktfunk-host` has installed cleanly on Debian 13 for a long time — while docs-site said
-  #     "Debian isn't a supported target … nobody has verified it".
-  #   * `punktfunk-gamescope` was missing from apt entirely across two releases.
-  # Both are exactly what a five-minute install check catches, so it is now a job.
+  # Does the thing we just published actually INSTALL? A package missing from the registry, or
+  # one a supported distro cannot install, is what a five-minute install check catches.
   #
   # It runs on the RUNNER (no `container:`) and drives docker directly — the same access
   # docker.yml's image builds use — because the check must happen in a pristine distro image, not
@@ -834,7 +814,7 @@ jobs:
       # The support matrix, asserted rather than asserted-in-prose. Each row names the packages
       # that MUST install on that distro; anything absent from the row is expected not to and is
       # not checked here (the client's glibc 2.43 floor keeps it off 24.04 and Debian 13 —
-      # see docs-site/content/docs/(guide)/(install)/debian.mdx).
+      # see the matrix comment in scripts/ci/deb-install-smoke.sh).
       - name: Install from the apt registry on every supported distro
         run: bash scripts/ci/deb-install-smoke.sh
         env:

@@ -75,9 +75,9 @@ pub(crate) fn package_sid(id: &str) -> Result<String> {
 }
 
 /// The capability that carries `id`'s folder and key ACEs, as `S-1-15-3-1024-…`: what
-/// `DeriveCapabilitySidsFromName` returns for the profile name. Never the package SID: a
-/// package ACE without `ALL APPLICATION PACKAGES` stops Chromium's sandboxed GPU process
-/// loading the DLLs under it, so a granted Steam or Epic folder would break that launcher.
+/// `DeriveCapabilitySidsFromName` returns for the profile name. Never the package SID: with a
+/// package ACE on a Steam folder outside Program Files, steamwebhelper's sandboxed GPU process
+/// fails to load its DLLs.
 pub(crate) fn files_capability_sid(id: &str) -> String {
     use sha2::{Digest, Sha256};
     let name: Vec<u8> = profile_name(id)

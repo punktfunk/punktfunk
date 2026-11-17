@@ -171,7 +171,8 @@ impl SkiaOverlay {
 
 impl Drop for SkiaOverlay {
     /// The run loop quiesces the queue before drop. Views + Skia surfaces (which
-    /// free their VkImages) can then go. Field order drops slots before DirectContext.
+    /// free their VkImages) can then go. The loop takes the slots here, so their surfaces
+    /// drop before `gpu` (declared first) drops the DirectContext.
     fn drop(&mut self) {
         if let Some(gpu) = &mut self.gpu {
             for slot in self.slots.iter_mut().flat_map(Option::take) {
@@ -223,7 +224,7 @@ impl Overlay for SkiaOverlay {
             ),
             &get_proc,
             // Must be the presenter's declared version, never `None`.
-            // `None` leaves Skia's `fMaxAPIVersion` at 0, so Skia calls
+            // `None` leaves Skia's `fMaxAPIVersion` at 0, so Skia takes
             // `vkEnumerateInstanceVersion()` (the loader's ceiling, not ours)
             // and validates a newer table against a 1.3 instance.
             Some(skvk::Version::from(shared.api_version)),
@@ -598,7 +599,7 @@ impl Overlay for SkiaOverlay {
             draw_hint_pill(canvas, fonts, text, ctx.width, ctx.height, alpha, scale);
         }
 
-        // Ring on top. Needs console fonts, which `--connect` never loads.
+        // Ring on top.
         if ring_key != 0 {
             let dt = ring_dt(&mut self.ring_drawn_at);
             if let Some(fonts) = self.fonts.as_ref() {
@@ -692,9 +693,10 @@ impl SkiaOverlay {
         }
         let gpu = self.gpu.as_mut().expect("init ran");
         if let Some(old) = self.slots[i].take() {
-            // SAFETY: the view belongs to the slot being replaced. Sampling of this
-            // slot ended two presents ago (ring alternates; presenter waits its fence
-            // before each record), so the GPU is done with it.
+            // SAFETY: the view belongs to the slot being replaced, not the one last handed
+            // out. Each present waits the previous submit's fence before it records, so the
+            // GPU is done with this slot once a later present has submitted; a `Busy`
+            // glass-gate frame submits nothing.
             unsafe { gpu.device.destroy_image_view(old.view, None) };
         }
         let info = skia_safe::ImageInfo::new(
@@ -817,7 +819,7 @@ pub(crate) fn exit_hint(
 }
 
 /// Mid-stream resize cover: full-screen scrim + spinner + "Resizing…". The overlay
-/// cannot sample the video to blur it, so an opaque scrim hides the stretched
+/// cannot sample the video to blur it, so a dark scrim covers the stretched
 /// in-between frame instead.
 fn draw_resize_scrim(
     canvas: &Canvas,

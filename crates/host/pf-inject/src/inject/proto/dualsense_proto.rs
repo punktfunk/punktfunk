@@ -60,7 +60,8 @@ pub mod btn1 {
     pub const R3: u8 = 0x80;
 }
 /// `buttons[2]`: PS, touchpad click, mute. Edge Fn/back occupy bits 4–7 (`DS_EDGE_BUTTONS_*` /
-/// SDL `SDL_GAMEPAD_BUTTON_PS5_*`); plain DS5 leaves those reserved. Kernel: `BTN_TRIGGER_HAPPY1..4`.
+/// SDL `SDL_GAMEPAD_BUTTON_PS5_*`); plain DS5 leaves those reserved. Kernel (7.2+):
+/// `BTN_TRIGGER_HAPPY1..4`.
 pub mod btn2 {
     pub const PS: u8 = 0x01;
     pub const TOUCHPAD: u8 = 0x02;
@@ -398,10 +399,11 @@ impl DsEncoder {
 }
 
 /// Adaptive-trigger status the game reads back: report `0x01` struct offsets 41 (R2) and 42
-/// (L2), high nibble = status, low nibble = the zone the trigger stops in. A game that arms a
-/// Weapon effect fires on the 1 → 2 transition, so a pad that leaves these zero swallows every
-/// shot while adaptive triggers are on. Only the official modes move the nibble; the firmware
-/// derives it from the armed effect and the trigger position, and so does this.
+/// (L2), high nibble = status, low nibble = a zone of the armed effect (Weapon's stop, the
+/// others' start). A game that arms a Weapon effect fires on the 1 → 2 transition, so a pad
+/// that leaves these zero swallows every shot while adaptive triggers are on. Only the official
+/// modes move the nibble; the firmware derives it from the armed effect and the trigger
+/// position, and so does this.
 ///
 /// Contract, from Nielk1's `TriggerEffectGenerator` (the effect factories' own documentation):
 /// Feedback and Vibration "report 0 before the effect and 1 when in the effect"; Weapon reports
@@ -469,8 +471,8 @@ impl DsTriggers {
 }
 
 impl TriggerFb {
-    /// Status nibble over stop zone for the current trigger position. With no effect armed a
-    /// real pad reports zone 9, the end of travel.
+    /// Status nibble over an effect zone (Weapon's stop, the others' start) for the current
+    /// trigger position. With no effect armed a real pad reports zone 9, the end of travel.
     fn status_byte(&mut self, pos: u8) -> u8 {
         if self.zones == 0 {
             return 0x09;
@@ -522,8 +524,8 @@ pub(crate) fn pack_touch(dst: &mut [u8], t: &Touch, w: u16, h: u16) {
 pub struct DsFeedback {
     pub hidout: Vec<HidOutput>,
     /// `(low, high)` motor levels when the report carried them. This parser widens 8-bit motors
-    /// by `<< 8` (`0..=0xFF00`). The Windows backend uses `× 257` and reaches `0xFFFF`. Both
-    /// narrow with `>> 8` to 255 — do not "fix" one to match the other
+    /// by `<< 8` (`0..=0xFF00`). The 8BitDo parser and the Windows XUSB backend use `× 257` and
+    /// reach `0xFFFF`. Both narrow with `>> 8` to 255 — do not "fix" one to match the other
     /// ([`crate::uhid_manager::PadFeedback::rumble`] sees both).
     pub rumble: Option<(u16, u16)>,
     /// Output-report ring overflowed this poll: pending reports were discarded and feedback is
@@ -570,9 +572,8 @@ pub mod out_report {
 /// lightbar, player LEDs and the mic-mute LED are typed; trigger blocks and audio-control are
 /// forwarded raw.
 ///
-/// Bluetooth `0x31` is accepted too: libScePad writes it to any pad whose output report
-/// exceeds 48 bytes, as the Edge's does. Its sequence and tag bytes are skipped; the CRC is
-/// not checked.
+/// Bluetooth `0x31` is accepted too: libScePad writes it to the Edge, whose output report is
+/// 64 bytes. Its sequence and tag bytes are skipped; the CRC is not checked.
 ///
 /// Gated on valid-flags: writers set only the bits they mean to change and zero the rest, so
 /// an ungated parse would turn a rumble write into lightbar-off + triggers-off.

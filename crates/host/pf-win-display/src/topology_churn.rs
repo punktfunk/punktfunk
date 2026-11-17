@@ -2,15 +2,14 @@
 //! WP10 item 5).
 //!
 //! The exclusive-topology reassert (`pf-vdisplay` manager) opens a window before it
-//! evicts or restores displays. The IDD-push descriptor follower (`pf-capture`) skips
-//! samples while [`held`] is true: a reassert bounce is a transient mode, and acting
-//! on it recreates the capture ring at a mode the recovery is about to undo. The
-//! generation-keyed recovery rebuild (`restart_presentation_in_place`) is not gated — only
-//! passive following is.
+//! evicts or restores displays. The IDD-push depth pin (`pf-capture`) drops its samples
+//! while [`held`] is true: a reassert bounce is a transient mode, and acting on it re-opens
+//! the encoder at a mode the recovery is about to undo. The capture health classifier reads
+//! the same latch and reports a rebuild, not a stall.
 //!
 //! [`hold`] is a deadline, not a flag: it self-expires so a holder that dies mid-churn
 //! cannot wedge following off. [`release`] expires early when the watchdog sees a
-//! stable topology. The plan keeps this latch until the transaction path has a fault test.
+//! stable topology.
 //!
 //! On top of the latch, a mutation runs as a [`Txn`]: [`begin`] opens the hold for the
 //! transaction's deadline and names it; [`finish`] records the outcome and bumps
@@ -104,7 +103,7 @@ pub fn begin(reason: &'static str, deadline: Duration) -> Txn {
 }
 
 /// Close a transaction. `Changed` — and only `Changed` — bumps [`generation`]; a deadline that
-/// already passed downgrades any outcome to `Unknown` (the mutation may still land later, and a
+/// already passed downgrades `Changed` to `Unknown` (the mutation may still land later, and a
 /// later snapshot reconciles it). The hold is NOT released here: the swap-chain bounce a
 /// topology write causes follows the write, and the deadline covers it.
 pub fn finish(txn: Txn, outcome: Outcome) -> Finished {

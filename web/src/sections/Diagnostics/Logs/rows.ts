@@ -5,13 +5,13 @@ import type { LogEntry } from "@/api/gen/model/logEntry";
  * One row model for every producer, so the viewer has a single timeline instead of a stream plus a
  * table of attachments.
  *
- * The insight this rests on: a client bundle is not a foreign artifact. `clients/session`'s
- * `ring_layer` formats each line as `<ISO8601-Z> <LEVEL> <target> <msg>` — the same four fields as
- * a host `LogEntry`, only serialized as text instead of JSON — and it does so in **wall clock**
- * precisely "so a bundle correlates with the host log it lands next to". Parsing it back into rows
- * is therefore recovering structure the client already had, not inventing it, and it buys the view
- * the whole feature exists for: the client's stall and the host's account of the same second, on
- * one screen.
+ * The insight this rests on: a client bundle is not a foreign artifact. `pf_client_core::logring`'s
+ * `RingLayer` formats each line as `<ISO8601-Z> <LEVEL> <target> <msg>` — the same four fields as
+ * a host `LogEntry`, only serialized as text instead of JSON — and it stamps **wall clock** so a
+ * bundle correlates with the host log beside it. Parsing it back into rows is therefore
+ * recovering structure the client already had, not inventing it, and it buys the view the whole
+ * feature exists for: the client's stall and the host's account of the same second, on one
+ * screen.
  */
 
 /** Source ids. Devices get one each, so a chip can address a single bundle. */
@@ -77,10 +77,10 @@ const BUNDLE_LINE =
 /**
  * A bundle's text as rows.
  *
- * **Fails soft, by design.** Only the desktop session shell installs the ring layer today; the
- * Apple, Android and webOS legs are still open and will not emit this shape when they land. A line
- * that does not parse is therefore kept verbatim as its own row rather than dropped — an
- * unrecognized format degrades to "a log you can still read and search", never to a blank pane.
+ * **Fails soft, by design.** The desktop, Apple and Android clients write the shape above; a
+ * client that writes another gets no structure from it. A line that does not parse is kept
+ * verbatim as its own row rather than dropped — an unrecognized format degrades to "a log you
+ * can still read and search", never to a blank pane.
  * The same path carries the bundle's header line and its `… N older lines evicted …` note, which
  * are prose and were never meant to parse.
  */

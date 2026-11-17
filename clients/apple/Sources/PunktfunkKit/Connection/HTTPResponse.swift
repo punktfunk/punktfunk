@@ -7,7 +7,7 @@
 //
 // It does need to find where a response ENDS without waiting for the peer to hang up, because the
 // connection is reused across a grid's worth of poster fetches (`messageLength`). Both framings
-// hyper emits are handled: `Content-Length`, and `Transfer-Encoding: chunked` for the art proxy.
+// hyper emits are handled: `Content-Length`, and `Transfer-Encoding: chunked` for a streamed body.
 //
 // Deliberately free of any Network.framework / PunktfunkCore dependency: pure bytes-in,
 // value-out, so it can be unit-tested (and typechecked) on its own.
@@ -140,7 +140,7 @@ enum HTTPResponseParser {
         return Head(status: status, headers: headers, bodyStart: headEnd + 4)
     }
 
-    /// Index just past the CRLFCRLF that ends the header block.
+    /// Index of the CRLFCRLF that ends the header block.
     private static func findHeaderEnd(_ b: Bytes) -> Int? {
         guard b.count >= 4 else { return nil }
         for i in 0...(b.count - 4) where b[i] == 0x0D && b[i + 1] == 0x0A
@@ -174,8 +174,8 @@ enum HTTPResponseParser {
         }
     }
 
-    /// `Transfer-Encoding: chunked` decoding. hyper streams the art proxy this way, so this is a
-    /// live path, not defensive dead code.
+    /// `Transfer-Encoding: chunked` decoding: hyper frames a streamed body this way. The art
+    /// proxy answers with a sized body, so it goes out with `Content-Length`.
     static func decodeChunked(_ data: Data) throws -> Data {
         try data.withUnsafeBytes { try decodeChunked($0.bindMemory(to: UInt8.self)) }
     }

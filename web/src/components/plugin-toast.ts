@@ -1,5 +1,5 @@
-// A plugin UI used to announce itself by appearing in the sidebar. Pins replaced that
-// (design/web-console-overhaul.md §4.1), so a fresh install now says where it went once.
+// A plugin UI does not add itself to the sidebar (pins do, design/web-console-overhaul.md §4.1),
+// so a fresh install says where it went once.
 //
 // Driven by the plugin directory rather than by the install job: a plugin installed from the
 // CLI, or from another browser tab, deserves the same line, and the directory is where "a

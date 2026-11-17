@@ -24,7 +24,7 @@ final class HideForMeTests: XCTestCase {
     }
 
     /// The library's "Hidden for <name>" button exists exactly where the offer does: a host or
-    /// profile without the flag keeps today's toolbar.
+    /// profile without the flag keeps the plain toolbar.
     func testTheHiddenButtonFollowsTheOffer() throws {
         let cases = try XCTUnwrap(SharedVector.load("hide-for-me-vectors.json")["offer"] as? [[String: Any]])
         for c in cases {
@@ -102,7 +102,7 @@ final class HideForMeTests: XCTestCase {
     }
 
     /// A row with no `person` is an old host's: it reads false and crosses the console bridge
-    /// without the key, as before. One that says so carries it across.
+    /// without the key. One that says so carries it across.
     func testAnOldHostsRowCrossesTheBridgeUnchanged() throws {
         let old = #"{"id": "a1", "display_name": "Kid", "owner": false, "unlock": "none"}"#
         let row = try JSONDecoder().decode(ListedProfile.self, from: Data(old.utf8))
@@ -123,7 +123,7 @@ final class HideForMeTests: XCTestCase {
     }
 
     /// The entry follows Favorite, only where a profile is named, never on the desktop tile; with
-    /// none the menu is today's.
+    /// none the menu has no hide entry.
     func testTheTitleMenuOffersHideOnlyWhereTheHostSaysSo() {
         func acts(_ id: String, _ hides: String?) -> [LibraryShelf.Act] {
             LibraryShelf.acts(

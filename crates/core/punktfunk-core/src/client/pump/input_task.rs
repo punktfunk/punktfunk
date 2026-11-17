@@ -2,25 +2,23 @@
 //!
 //! Toward `HOST_CAP_GAMEPAD_STATE`, per-transition gamepad events fold into seq-stamped
 //! `GamepadSnapshot`s. The datagram plane drops, reorders, and sheds oldest-first at the 4 KiB
-//! send cap. Snapshots heal on the next send; seq drops stale reorders; a 100 ms refresh of
-//! every touched pad bounds loss to one interval. A snapshot that changes buttons goes out
-//! again with the same seq ([`EDGE_REPEATS`]), so a lost press heals within milliseconds.
-//! Keyboard/mouse/touch pass through. An older host keeps the legacy per-transition gamepad
-//! events. `HOST_CAP_PAD_AUDIO` gates flags bits 8/9; without it the whole flags word is the
-//! pad index.
+//! send cap, so a lost edge would leave a held trigger stuck until the next change. Snapshots
+//! heal on the next send; seq drops stale reorders; a 100 ms refresh of every touched pad bounds
+//! loss to one interval (the host's rumble lease renewal is the same idea), and one that changes
+//! buttons goes out again within milliseconds ([`EDGE_REPEATS`]). Keyboard/mouse/touch pass
+//! through. An older host keeps the legacy per-transition gamepad events. `HOST_CAP_PAD_AUDIO`
+//! gates flags bits 8/9; without it the whole flags word is the pad index. Events already queued
+//! behind the one just received fold into the same snapshot, so a pad report an embedder pushes
+//! as one event per axis leaves as one datagram. The drain never waits.
 //!
-//! Events already queued behind the one just received fold into the same snapshot: an
-//! embedder pushes one pad report as one event per axis, and a datagram per axis was six
-//! per report on a stick being moved. The drain never waits, so nothing is delayed for it.
+//! A full controller-mouse pad ([`super::super::pad_mouse`]) bypasses the fold: its host
+//! snapshot stays neutral and alive on the refresh, and its events become pointer, scroll and
+//! key events. A touchpad-mode pad folds as usual except its touchpad click; its touchpads, like
+//! a full pad's, arrive as contacts and move the pointer.
 //!
-//! A full controller-mouse pad ([`super::super::pad_mouse`]) bypasses the fold: its host snapshot
-//! stays neutral and alive on the refresh, and its events become pointer, scroll and key events.
-//! A touchpad-mode pad folds as usual except its touchpad click; its touchpads, like a full
-//! pad's, arrive as contacts and move the pointer.
-//!
-//! Every datagram passes [`send_granted`]: what the live grants refuse never goes out. The host
-//! drops the same classes; the gate runs after the controller-mouse fold, so those pads need
-//! only the pointer grant.
+//! Every datagram passes the live grants ([`granted`]): what they refuse never goes out. The
+//! host drops the same classes; the gate runs after the controller-mouse fold, so those pads
+//! need only the pointer grant.
 
 use super::super::pad_mouse::{PadMouse, TICK};
 use super::super::pad_touch::Contact;

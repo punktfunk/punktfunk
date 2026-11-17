@@ -8,10 +8,9 @@
 //! each call, so a Moonlight-compat toggle adds the gamestream firewall line
 //! with no cache to invalidate.
 //!
-//! Row `why` texts match the sh installer verbatim so a default still names
-//! the usbip-attach grant and that each client opts in.
+//! Row `why` texts name the usbip-attach grant on a default, and that each client opts in.
 //!
-//! Pin `lines()`. Evidence: `design/installer-v2.md`.
+//! Evidence: `design/installer-v2.md`.
 
 use console::measure_text_width;
 use pf_l10n::tools as t;
@@ -297,7 +296,7 @@ impl Screen {
         }
     }
 
-    /// Editor prompt: the sh installer's text, verbatim.
+    /// The editor prompt's hint for a row.
     pub fn why(field: Field) -> &'static str {
         match field {
             Field::Components => t::setup_row_components_hint(),
@@ -313,7 +312,7 @@ impl Screen {
         }
     }
 
-    /// Golden and plain-mode text of the screen.
+    /// The screen as plain text: title, one line per row, then the actions.
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![self.title()];
         let rule = "─".repeat(63);

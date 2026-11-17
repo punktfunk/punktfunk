@@ -299,7 +299,7 @@ mod tests {
             (1920, 1080)
         ));
         assert!(!any_output_size_is(&[], (1920, 1080)));
-        // Unanimity would have blocked it — the regression this predicate replaces.
+        // Unanimity would block it: the same pair classifies as Ambiguous.
         assert_eq!(
             classify_output_size(&[stray, session]),
             BoxOutputSize::Ambiguous
@@ -318,7 +318,7 @@ mod tests {
             gamescope_output_size(&argv("gamescope --output-width 800 --output-height 600")),
             Some((800, 600))
         );
-        // getopt_long also takes `--flag=value`, the spelling `heads` already reads.
+        // getopt_long also takes `--flag=value`, which `flag_value` reads for every caller.
         assert_eq!(
             gamescope_output_size(&argv("gamescope --output-width=800 --output-height=600")),
             Some((800, 600))

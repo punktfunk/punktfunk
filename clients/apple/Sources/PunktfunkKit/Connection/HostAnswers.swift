@@ -9,9 +9,9 @@ extension LibraryClient {
     /// a refused certificate. Anything else short of a readable 200 is a miss.
     static let refusals: Set<Int> = [401, 403, 404]
 
-    /// What this host lets THIS device do to it (sleep, restart, shut down) from
-    /// `GET /api/v1/actions`, or nil when the host didn't answer. Only the permitted rows: the
-    /// host alone judges whether this device's access carries the Host-power grant.
+    /// What this host lets THIS device run, from `GET /api/v1/actions`, or nil when the host
+    /// didn't answer. Only the permitted rows: the host alone judges whether this device's
+    /// access carries the grant an action needs.
     public static func actionsIfAnswered(_ target: MgmtTarget) async -> [HostAction]? {
         actionsAnswer(try? await send("/api/v1/actions", to: target))
     }

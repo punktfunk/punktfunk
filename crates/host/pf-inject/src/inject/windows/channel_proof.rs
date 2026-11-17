@@ -155,12 +155,12 @@ fn proof_from_reply(reply: &[u8], expect: u32, rejected: &mut Option<&'static st
 /// thing this proof is trying to earn.
 ///
 /// Shape is not enough: a Deck serves its one unnumbered feature for *any* requested id, so the
-/// `0x85` probe returns Steam attribute bytes that parse as a proof and fail on magic. Returning
-/// that first answer stopped the search while the real proof sat one transport away.
+/// `0x85` probe returns Steam attribute bytes that parse as a proof and fail on magic. A rejected
+/// answer therefore does not end the search: the real proof may sit one transport away.
 fn ask_feature(h: HANDLE, expect_pad_index: u32) -> Result<u32> {
     // HidD_{Get,Set}Feature reject a buffer shorter than `FeatureReportByteLength`. PS identities
     // land on 64 (63 + report id); the Deck's unnumbered 64-byte feature is reported as 65
-    // (payload + the reserved report-id slot). Hardcoding 64 failed every correctly-enumerated Deck.
+    // (payload + the reserved report-id slot), so the length comes from the caps, 64 the floor.
     let buf_len = feature_report_len(h).unwrap_or(64).max(64);
     let mut rejected = None;
 

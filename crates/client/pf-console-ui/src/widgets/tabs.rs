@@ -8,8 +8,7 @@ use skia_safe::{Canvas, Rect};
 /// Strip band height, including air under the pills before the first row.
 pub const TAB_STRIP_H: f64 = 46.0;
 
-/// Pill row inside the band: top 2, height 30; the remaining 14 is air below.
-/// Published so a backdrop (library focus wash) uses the row, not the 46 band.
+/// Pill row inside the band: top 2, height 30; the rest of the band is air below.
 pub const TAB_PILL_TOP: f64 = 2.0;
 pub const TAB_PILL_H: f64 = 30.0;
 
@@ -74,9 +73,8 @@ pub(crate) fn text_tab(
     fonts.draw(canvas, label, x, y, W::Bold, size, ink);
 }
 
-/// Each pill's width and the run's total, device px. Shared with
-/// [`TabStrip::width`]: a trailing-aligned caller needs the width before draw,
-/// and a second copy of this arithmetic would disagree with the drawn edge.
+/// Each pill's width and the run's total, device px. Shared with [`TabStrip::width`], so a
+/// caller that trailing-aligns the run measures the edge `render` draws.
 fn pill_widths(labels: &[&str], fonts: &Fonts, k: f64) -> (Vec<f64>, f64) {
     let size = PILL_TEXT * k;
     let widths: Vec<f64> = labels
@@ -129,7 +127,7 @@ impl TabStrip {
 
     /// Draw the tabs on the leading edge of `rect`'s top band, the text on [`Frame::edge`].
     /// `focused` is D-pad focus (no-shoulder remote): the plate stands behind the current tab.
-    #[allow(clippy::too_many_arguments)] // same render signature as MenuList
+    #[allow(clippy::too_many_arguments)] // shaped like MenuList::render
     pub fn render(
         &mut self,
         canvas: &Canvas,

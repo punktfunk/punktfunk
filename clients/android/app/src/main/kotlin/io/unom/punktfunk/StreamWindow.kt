@@ -120,8 +120,8 @@ internal fun Display.streamPanelFps(hz: Float, size: Pair<Int, Int>? = null): In
  * `DisposableEffect`, whose lifetime it shares exactly.
  *
  * Two entry points rather than one because the order is load-bearing: [attach] runs before the
- * session's input peripherals are built, [pinDisplay] after, and both sit where they always did.
- * Nothing here reads Compose state or writes any, which is what lets it be a plain class.
+ * session's input peripherals are built, [pinDisplay] after. Nothing here reads Compose state or
+ * writes any, which is what lets it be a plain class.
  */
 internal class StreamWindow(
     private val activity: MainActivity?,
@@ -130,7 +130,6 @@ internal class StreamWindow(
     private val composeView: View,
     private val lowLatencyMode: Boolean,
     private val isTv: Boolean,
-    /** The negotiated stream refresh (0 = unknown / older native lib). */
     /** The stream's exact rate in hertz, 59.94 where the host delivers that; 0 = unknown. */
     private val streamHz: Float,
     /** The negotiated stream size, landscape; null when unknown. */
@@ -142,15 +141,14 @@ internal class StreamWindow(
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
 
     /**
-     * Wi-Fi locks held for the stream's duration — BOTH of them, unconditionally (Moonlight does
-     * the same). Without an effective lock, Wi-Fi power save batches downlink delivery into
-     * beacon-interval clumps: hundreds of ms of latency mush, sawtoothing bitrate, and periodic
-     * whole-frame loss when the AP's power-save buffer overflows (all observed live on a phone).
-     *  - FULL_LOW_LATENCY (API 29+) is the only lock that actually disables power save on modern
-     *    Android; it needs the app foreground + screen on, which a stream always is.
-     *  - FULL_HIGH_PERF covers older releases — it is deprecated AND a documented no-op on recent
-     *    Android, which is exactly why it can't be the only lock (a lesson learned: holding just
-     *    HIGH_PERF left power save fully active on Android 13+).
+     * Wi-Fi locks held for the stream's duration — BOTH of them, unconditionally. Without an
+     * effective lock, Wi-Fi power save batches downlink delivery into beacon-interval clumps:
+     * latency mush, sawtoothing bitrate, and whole-frame loss when the AP's power-save buffer
+     * overflows.
+     *  - FULL_LOW_LATENCY (API 29+) turns power save off and, where supported, the radio's
+     *    low-latency mode on. It needs the app foreground + screen on, which a stream always is.
+     *  - FULL_HIGH_PERF covers API 28 and, through API 33, keeps power save off when the
+     *    low-latency lock lapses (background, screen off). API 34 serves it as FULL_LOW_LATENCY.
      * Non-reference-counted: one explicit acquire/release each.
      */
     private val wifiLocks: List<WifiManager.WifiLock> = run {
@@ -241,9 +239,8 @@ internal class StreamWindow(
     /** Window state the stream wants from its first frame, before any peripheral exists. */
     fun attach() {
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        // acquire() ENFORCES the WAKE_LOCK permission (manifest) — and a failed acquire MUST be
-        // loud: a silent runCatching hid the missing permission for weeks (dumpsys wifi showed
-        // low_latency_active_time_ms=0 across every "locked" stream).
+        // acquire() ENFORCES the WAKE_LOCK permission (manifest), so a failed acquire MUST be
+        // loud: a silent runCatching would leave power save on with nothing in the log.
         wifiLocks.forEach { lock ->
             runCatching { lock.acquire() }.onFailure { e ->
                 Log.w("punktfunk", "WifiLock acquire failed — power save stays ON: $lock", e)
@@ -252,7 +249,7 @@ internal class StreamWindow(
         wifiHandler.post(pollWifiLink)
         // HDMI Auto Low-Latency Mode: ask the display to drop its post-processing (game mode) —
         // the biggest panel-side latency win on the TV boxes. No-op where ALLM isn't supported. API
-        // 30+. Part of the experimental low-latency stack.
+        // 30+. Only in low-latency mode.
         if (lowLatencyMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window?.setPreferMinimalPostProcessing(true)
         }
@@ -294,7 +291,8 @@ internal class StreamWindow(
      * own size when the stream is that size ([pickStreamMode]). [detach] and leaving the foreground
      * drop the pin. The decoder's own `ANativeWindow_setFrameRate` hint still aligns vsync, but it is
      * advisory — some OEM refresh governors ignore it outright and would leave a 120 Hz session on a
-     * 60/90 Hz panel. TV boxes skip the pin: the native side actively drives the HDMI mode there.
+     * 60/90 Hz panel. TV boxes skip the pin: the native frame-rate vote drives the HDMI mode
+     * there (a non-seamless switch only in low-latency mode).
      *
      * Also takes pointer events off the vsync batch and votes the app's render rate up, both of
      * which the stream pays a frame of latency for otherwise.
@@ -314,10 +312,10 @@ internal class StreamWindow(
         }
         // Vote the app's RENDER rate up to the stream's (API 35+). The mode pin above governs the
         // panel, but the platform separately down-rates a quiet app's choreographer stream
-        // (frame-rate categories: a non-animating UI reads as "normal" = 60) — observed on-glass
-        // as 16.6 ms vsync callbacks on a 120 Hz panel, which would pace the presenter at half
-        // rate. The native side also subdivides onto the panel grid, so this vote is the belt to
-        // that braces. Reset to no-preference on the way out.
+        // (frame-rate categories: a non-animating UI reads as "normal" = 60) — 16.6 ms vsync
+        // callbacks on a 120 Hz panel would pace the presenter at half rate. The native side
+        // also subdivides onto the panel grid, so this vote is the belt to that braces. Reset to
+        // no-preference on the way out.
         if (Build.VERSION.SDK_INT >= 35 && streamHz > 0f) {
             composeView.requestedFrameRate = streamHz
         }

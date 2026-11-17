@@ -4,7 +4,7 @@
 //! decides before Welcome / RTSP so the client gets a typed answer, not a
 //! mid-build failure:
 //!
-//! * `separate` — fresh display at the requested mode (Linux default).
+//! * `separate` — fresh display at the requested mode (the default).
 //! * `join` — admit onto the live display: its mode, compositor, route and colour
 //!   (Welcome carries the real mode). A joiner that can't take an HDR display, or the format
 //!   of a capture it shares ([`joined_format`]), is refused. A connect inside another's
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use crate::policy::{self, ModeConflict};
 
-/// Half the native handshake's 10 s: the first connect registers inside its own handshake.
+/// Half the native `HANDSHAKE_TIMEOUT`: the first connect registers inside its own handshake.
 pub const JOIN_WAIT: Duration = Duration::from_secs(5);
 
 /// The display a live session streams, which a `join` session takes as its own.
@@ -288,9 +288,8 @@ pub fn admit(
     mode: (u32, u32, u32),
     stop: Arc<AtomicBool>,
 ) -> (Admission, Reservation) {
-    // The table lock covers `decide` and the row only: the budget check below takes
-    // `manager::snapshot`, which stalls on DDC/SetupAPI, and every connect and mgmt read waits
-    // on this table.
+    // The table lock covers `decide` and the row only: every connect and mgmt read waits on
+    // this table, so the budget check below runs after it is released.
     let conflict = effective_conflict(req_identity);
     let (decision, reservation) = admit_under(conflict, req_identity, mode, stop);
 
@@ -332,8 +331,7 @@ pub fn admit(
             );
             return (Admission::Reject(why), reservation);
         }
-        // No encoder-headroom gate: the encoders live in the driver's WUDFHost now, and the
-        // host-side session counter it used to read never moves.
+        // No encoder-headroom gate: the encoders live in the driver's WUDFHost.
     }
     (decision, reservation)
 }
@@ -507,8 +505,8 @@ pub fn publish_mode(stop: &Arc<AtomicBool>, mode: (u32, u32, u32)) {
     }
 }
 
-/// Is this identity streaming right now? Asked before the host pre-warms that seat: a live
-/// session already owns its planes, and a second compositor under the same id fights for them.
+/// Is this identity streaming right now? A live session already owns its planes, and a second
+/// compositor under the same id fights for them.
 pub fn has_live_session(identity: [u8; 32]) -> bool {
     table()
         .lock()

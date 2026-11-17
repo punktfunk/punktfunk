@@ -1,4 +1,4 @@
-// The two decisions that ended the 2026-08-14 rebuild loop, driven with a synthetic clock.
+// The two decisions that stop a rebuild loop, driven with a synthetic clock.
 //
 // The loop's shape, for the plant-the-defect cases below: the voice-processing engine fails to
 // start (~1.9 s spent trying), the fallback comes up, and its own HAL fallout retriggers the
@@ -12,7 +12,7 @@ import XCTest
 final class AudioRebuildPolicyTests: XCTestCase {
     // MARK: - RebuildBackoff
 
-    /// The first trigger of a session keeps the old behaviour: the burst-coalescing debounce.
+    /// The first trigger of a session waits only the burst-coalescing debounce.
     func testFirstTriggerWaitsOnlyTheDebounce() {
         var backoff = RebuildBackoff()
         XCTAssertEqual(backoff.delay(now: 1000), RebuildBackoff.debounce)
@@ -32,7 +32,7 @@ final class AudioRebuildPolicyTests: XCTestCase {
         XCTAssertEqual(backoff.chain, 0)
     }
 
-    /// THE FIELD LOOP, against the real constants: a trigger 0.6 s after every rebuild, ten
+    /// The looping recovery, against the real constants: a trigger 0.6 s after every rebuild, ten
     /// minutes long. The flat 0.5 s floor produced a rebuild every ~2.5 s — ~240 audio gaps.
     /// The ladder must cut that by an order of magnitude and settle at the floor cap.
     func testAChainedLoopBacksOffToTheFloorCap() {

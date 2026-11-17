@@ -107,7 +107,7 @@ pub const HID_STRING_INDEX_CHANNEL_PROOF: u32 = 0x5046;
 pub const IOCTL_PF_GET_CHANNEL_PROOF: u32 = 0x8000_3F80;
 
 /// Whether a driver serves its channel proof as its HID serial-number string.
-/// `true` for `pf_mouse` only — its serial (`PFMOUSE00`) is inert. Pad serials are what SDL
+/// `true` for `pf_mouse` only — nothing else reads its serial. Pad serials are what SDL
 /// and Steam dedup on; Steam mangles a pad's displayed name over serial format alone.
 pub const fn proof_is_serial_string(pad_kind_is_mouse: bool) -> bool {
     pad_kind_is_mouse
@@ -240,7 +240,8 @@ pub const BOOT_MAGIC: u32 = 0x5442_4650;
 pub fn xusb_boot_name(index: u8) -> String {
     alloc::format!("Global\\pfxusb-boot-{index}")
 }
-/// `Global\pfds-boot-<index>` — DualSense / DualShock 4 bootstrap mailbox ([`PadBootstrap`]).
+/// `Global\pfds-boot-<index>` — `pf_gamepad` bootstrap mailbox ([`PadBootstrap`]), whatever
+/// identity the pad serves.
 pub fn pad_boot_name(index: u8) -> String {
     alloc::format!("Global\\pfds-boot-{index}")
 }
@@ -300,7 +301,7 @@ pub struct XusbShm {
     /// static value is not an error.
     pub driver_heartbeat: u32,
     /// Pad index (host-stamped before the magic). The driver checks it against
-    /// `pszDeviceLocation` so a cross-pad delivery is rejected. Carved from v1 reserved space.
+    /// `pszDeviceLocation` so a cross-pad delivery is rejected.
     pub pad_index: u32,
     pub _reserved1: [u8; 20],
 }
@@ -343,11 +344,12 @@ pub struct OutSlot {
     pub data: [u8; 64],
 }
 
-/// DualSense / DualShock 4 shared section ([`PAD_SHM_SIZE`] = 4096). Bytes `0..256` are the
-/// v2 layout ([`PAD_SHM_LEGACY_SIZE`]); `0..1024` are v2.1 ([`PAD_SHM_V21_SIZE`]). Host writes
-/// `input`; driver publishes output into the legacy `output` slot (every host generation reads
-/// it) and, when `out_ring_ver` is stamped, into the lossless `out_ring`. The single slot
-/// coalesces — a rumble-stop overwritten inside one poll is gone (`design/rumble-root-fix.md`).
+/// `pf_gamepad` shared section, for every identity ([`PAD_SHM_SIZE`] = 4096). Bytes `0..256`
+/// are the v2 layout ([`PAD_SHM_LEGACY_SIZE`]); `0..1024` are v2.1 ([`PAD_SHM_V21_SIZE`]).
+/// Host writes `input`; driver publishes output into the legacy `output` slot (every host
+/// generation reads it) and, when `out_ring_ver` is stamped, into the lossless `out_ring`. The
+/// single slot coalesces — a rumble-stop overwritten inside one poll is gone
+/// (`design/rumble-root-fix.md`).
 ///
 /// Tail extension, not a [`GAMEPAD_PROTO_VERSION`] bump: bootstrap fails closed on a version
 /// mismatch (no pad at all), the wrong failure for a feedback-quality fix. An old host never
@@ -368,17 +370,19 @@ pub struct PadShm {
     pub out_seq: u32,
     /// Driver-written output: rumble / lightbar / player-LEDs / adaptive triggers.
     pub output: [u8; 64],
-    /// HID identity — [`DEVTYPE_DUALSENSE`] / [`DEVTYPE_DUALSHOCK4`].
+    /// HID identity: one of the `DEVTYPE_*` values.
     pub device_type: u8,
     pub _pad0: [u8; 3],
     /// [`GAMEPAD_PROTO_VERSION`] while mapped. `0` = no driver — the host health check keys off it.
     pub driver_proto: u32,
-    /// Bumped by the driver's ~125 Hz timer each tick — advances whenever loaded, game or not.
+    /// Bumped on every housekeeping pass of the driver's timer (`PUMP_EVERY_N_TICKS` in
+    /// `pf-gamepad`) — advances whenever loaded, game or not.
     pub driver_heartbeat: u32,
     /// Pad index (host-stamped before the magic) — see [`XusbShm::pad_index`].
     pub pad_index: u32,
-    /// Host-stamped `1` ⇔ this section carries `out_ring` and the host drains it. Zeroed
-    /// section + old host never writes it, so `0` tells a new driver to stay legacy-only.
+    /// Host-stamped ring version: non-zero ⇔ this section carries `out_ring` and the host
+    /// drains it; `2` is the v2.2 long ring. Zeroed section + old host never writes it, so `0`
+    /// tells a new driver to stay legacy-only.
     pub out_ring_ver: u32,
     /// Driver-bumped AFTER writing `out_ring[ring_head % len]`. Overflow is `head - tail >= len`:
     /// at `len` the next write is already landing in the reader's oldest slot.
@@ -1149,7 +1153,7 @@ mod tests {
     }
 
     /// `hid-playstation` refuses a pad whose MAC another holds, box-wide: a seat's pads differ
-    /// from the box's own and from another seat's at every index. Seat 0 keeps today's bytes.
+    /// from the box's own and from another seat's at every index. Seat 0 keeps the reply as is.
     #[test]
     fn a_seat_marks_its_pads_apart() {
         let mac = |devtype: u8, index: u8, seat: u16| {

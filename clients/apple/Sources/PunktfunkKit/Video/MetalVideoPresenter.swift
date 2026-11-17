@@ -23,9 +23,7 @@ private let presenterLog = ClientLog(category: "presenter")
 /// HDR reference white (BT.2408 "HDR Reference White"): the absolute luminance, in nits, that the
 /// PQ signal's diffuse white sits at. Passed to `CAEDRMetadata.hdr10(opticalOutputScale:)`, it anchors
 /// 203-nit diffuse white at EDR 1.0 (the display's SDR-white level) and lets the system tone-map the
-/// brighter highlights into the panel's headroom. This is the missing anchor that made the old HDR path
-/// render "way too bright" (no `edrMetadata` → no reference-white anchoring); a LARGER value renders
-/// dimmer.
+/// brighter highlights into the panel's headroom. A LARGER value renders dimmer.
 ///
 /// ⚠️ One half of a pair: hosts map SDR into the PQ container at the same 203 nits (gamescope's
 /// `SDR_REFERENCE_WHITE_NITS`). A host-side SDR brightness setting deliberately moves SDR off it.
@@ -100,8 +98,8 @@ let hdrDrawable = hdrDrawableFormat(
 
 /// Linear EDR values exceed 1, so `linear` takes half-float, as `CurveTarget`'s HDR queue does.
 /// PQ fits 10 bits, the pairing Apple documents for HDR10, except where `halfFloatPQ`: Apple TVs
-/// older than the A15 show the 10-bit PQ layer at half rate. `PUNKTFUNK_HDR_DRAWABLE=16|10` picks
-/// the PQ drawable for an A/B.
+/// before the A15 (an A12 shows 20–40 of 60 fps on the 10-bit PQ layer; A10X is unmeasured).
+/// `PUNKTFUNK_HDR_DRAWABLE=16|10` picks the PQ drawable for an A/B.
 func hdrDrawableFormat(linear: Bool, env: String?, halfFloatPQ: Bool) -> MTLPixelFormat {
     if linear { return .rgba16Float }
     switch env {
@@ -766,7 +764,7 @@ public final class MetalVideoPresenter {
     }
 
     /// Set the layer's pixel format + colour config for SDR or HDR through `writeLayer`, on
-    /// `configure`'s thread. EDR is requested on macOS + iOS. tvOS lacks
+    /// `configure`'s thread. EDR is requested on macOS + iOS. The tvOS 27.0 SDK lacks
     /// `wantsExtendedDynamicRangeContent`, `edrMetadata` and `CAEDRMetadata`; it has
     /// `CALayer.toneMapMode` from tvOS 18, which this presenter does not set. A bare PQ
     /// colour-space tag composites untone-mapped into an SDR output, so without an HDR output
@@ -969,9 +967,9 @@ public final class MetalVideoPresenter {
         slots > 0 && value <= done + UInt64(slots)
     }
     /// The planes a latch names reach the GPU by resource ID, so they must be resident on the
-    /// latch queue: this set holds every surface `latchTextures` wrapped. nil before iOS 18, or
-    /// without Metal 3 — no latching there. Typed `AnyObject` because a stored property
-    /// cannot be conditionally available; the readers cast under the same check.
+    /// latch queue: this set holds every surface `latchTextures` wrapped. nil before iOS 18,
+    /// tvOS 18 or macOS 15, or without Metal 3 — no latching there. Typed `AnyObject` because a
+    /// stored property cannot be conditionally available; the readers cast under the same check.
     private lazy var latchResidency: AnyObject? = {
         guard #available(iOS 18, tvOS 18, macOS 15, *),
               device.supportsFamily(.metal3), let queue = latchQueue

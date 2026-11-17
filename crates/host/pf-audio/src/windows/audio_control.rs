@@ -2,7 +2,7 @@
 //!
 //! The two jobs must land on different endpoints — WASAPI loopback recaptures
 //! whatever the mic writes, so sharing a cable is an infinite echo. Assignment
-//! lives in the pure [`wiring_plan`](super::wiring_plan) module; this crate
+//! lives in the pure [`wiring_plan`](super::wiring_plan) module; this module
 //! enumerates, applies the plan, and logs. [`wire_now`] runs on every mic/capture
 //! (re)open because endpoints churn (boot registration, hotplug, driver installs).
 //!
@@ -17,7 +17,7 @@
 //! ([`release_idle_sink`]), so Windows never picks the silent sink by itself.
 //!
 //! Default writes go through undocumented `IPolicyConfig` (the call `mmsys.cpl`
-//! makes; neither crate exposes it). `audio.output_mode = follow_default` still
+//! makes; neither crate exposes it). `audio_output_mode = follow_default` still
 //! computes the plan — the mic needs a target — but skips the default writes.
 
 use super::wiring_plan::{self, plan, plan_with_formats, Endpoint, MixFormat, Wiring};
@@ -33,7 +33,7 @@ use wasapi::Direction;
 /// Shared-mode capture requests 48 kHz f32 with autoconvert, so WASAPI will
 /// silently downmix a voice-carrier (mono / 24 kHz). One `IAudioClient`
 /// activation per endpoint, only during a wiring pass. Every failure maps to
-/// `None`: the plan treats unknown as non-narrowing, matching pre-format boxes.
+/// `None`: the plan treats unknown as non-narrowing.
 /// The hidden Speakers cannot activate; their stored device format answers
 /// instead, since the shared engine runs at that format's rate and width.
 pub fn mix_format_of(ep: &Endpoint) -> Option<MixFormat> {
@@ -245,10 +245,6 @@ fn pad_render_ids(renders: &[Endpoint]) -> Vec<String> {
         .collect()
 }
 
-/// Enumerate, plan, apply default-device writes (unless `follow_default`), return the
-/// assignment. `park_defaults` is true only from desktop-audio capture open: that parks
-/// playback on the loopback sink and recording on the virtual mic. The idle mic pump
-/// passes false — it must neither silence speakers nor steal the default microphone.
 /// Set once a wait has timed out: minting succeeded but MMDevice never listed the result, so
 /// every later pass would pay the ceiling for endpoints that are not coming.
 static MINTED_NEVER_LISTED: std::sync::atomic::AtomicBool =
@@ -277,7 +273,8 @@ fn enumerate_including_minted(with_hidden_sink: bool) -> (Vec<Endpoint>, Vec<End
         }
         (renders, captures)
     };
-    // 500 ms ceiling: measured appearance is ~12 ms, and the caller is on the session-open path.
+    // Ten tries 50 ms apart (450 ms of sleep plus enumeration): measured appearance is ~12 ms,
+    // and the caller is on the session-open path.
     let attempts = if MINTED_NEVER_LISTED.load(Ordering::Relaxed) {
         1
     } else {
@@ -368,6 +365,10 @@ impl PlanInputs {
     }
 }
 
+/// Enumerate, plan, apply default-device writes (unless [`keep_default_devices`]), return the
+/// assignment. `park_defaults` is true only from desktop-audio capture open: that parks
+/// playback on the loopback sink and recording on the virtual mic. The idle mic pump
+/// passes false — it must neither silence speakers nor steal the default microphone.
 /// COM-initialized thread. Logged only when the assignment changes.
 pub fn wire_now_full(park_defaults: bool) -> WiredPlan {
     recover_orphaned_default();

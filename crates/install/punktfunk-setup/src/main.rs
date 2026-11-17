@@ -1,8 +1,8 @@
 //! The CLI: flags, env twins, the TTY probe, and the mode dispatch.
 //!
-//! Same flags, same env twins, same exit codes as `scripts/install.sh` (0 done, 1
-//! unsupported system or a step failed, 2 bad usage), plus `--host`/`--client` and
-//! the demo flags that are outside it.
+//! Exit codes: 0 done, 1 unsupported system or a step failed, 2 bad usage, as
+//! `scripts/install.sh` documents. That stub execs this binary with every argument and
+//! `PUNKTFUNK_INSTALL_*` variable untouched, so this parser owns the whole interface.
 //!
 //! No TTY behaves exactly like `--yes`. Probe by opening `/dev/tty`: in a container
 //! or under a service the node exists but open returns ENXIO, so `-r`/`-w` still
@@ -69,7 +69,7 @@ PUNKTFUNK_INSTALL_PUNKTFUNK_GROUP, PUNKTFUNK_INSTALL_LINGER, PUNKTFUNK_INSTALL_C
 PUNKTFUNK_INSTALL_OMARCHY_SETUP, PUNKTFUNK_INSTALL_MGMT_PORT, PUNKTFUNK_INSTALL_WEB_BIND
 (1/0 for the flags)."#;
 
-/// 2 is bad usage, matching the sh installer's contract.
+/// 2 is bad usage, as `scripts/install.sh` documents.
 const BAD_USAGE: u8 = 2;
 
 /// `--web-bind` / its env twin. A value [`parse_web_bind`] refuses fails the run, so a typo
@@ -98,7 +98,7 @@ fn env_flag(env: &Env, key: &str) -> Option<bool> {
 }
 
 fn parse(args: Vec<String>, env: &Env) -> Result<Cli, (u8, String)> {
-    // Env first, then flags overwrite — the same order as the sh installer.
+    // Env first, then flags overwrite.
     let mut cli = Cli {
         pins: Pins {
             channel: env
@@ -367,8 +367,8 @@ fn resolve_facts(
         })
 }
 
-/// The version floor. It sits after the uninstall dispatch: a box below it must still be
-/// able to clean up. A confirm floor asks, and without a terminal its default no stands.
+/// The version floor. An uninstall passes it: a box below it must still be able to clean up.
+/// A confirm floor asks, and without a terminal its default no stands.
 fn gate_floor(
     ui: &dyn Reporter,
     facts: &Facts,

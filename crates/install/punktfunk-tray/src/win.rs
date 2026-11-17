@@ -48,7 +48,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::status::{Poller, TrayStatus};
 use crate::win_theme;
 
-/// Enter/Space on the icon: `NIN_SELECT | NINF_KEY`. The windows crate exports only `NIN_SELECT`.
+/// Enter/Space on the icon: `NIN_SELECT | NINF_KEY`. windows 0.62 has no `NIN_KEYSELECT`.
 const NIN_KEYSELECT: u32 = NIN_SELECT | 0x1;
 
 /// Poller thread posts this when status changes. Do not touch UI TLS from that thread.
@@ -140,7 +140,7 @@ fn log(msg: &str) {
 ///
 /// The name being taken is the answer, however it is taken. `CreateMutexW` asks for full access,
 /// which a mutex created at a higher integrity level (or by another user in this session) refuses
-/// with `ERROR_ACCESS_DENIED` — reading that as "no tray" is what put two icons in one session.
+/// with `ERROR_ACCESS_DENIED` — reading that as "no tray" would put two icons in one session.
 /// `SYNCHRONIZE` is allowed up, so the open below still sees it. The handle is deliberately
 /// leaked: it holds the name for this process's life. `punktfunk-host`'s `windows/tray.rs`
 /// opens the same name — keep the two literals in step.
@@ -360,8 +360,8 @@ fn update_icon(hwnd: HWND, add: bool) -> bool {
     }
 }
 
-/// Toast on the idle → streaming edge. Windows 11 renders `NIF_INFO` as a native toast
-/// under the AUMID; a plain exe does not need WinRT. UI thread, on `WMAPP_STATUS`.
+/// Toast on the idle → streaming edge. Windows 11 shows `NIF_INFO` as a banner notification;
+/// a plain exe needs no WinRT. UI thread, on `WMAPP_STATUS`.
 fn notify_on_connect(hwnd: HWND) {
     let status = app().status().clone();
     let now: u8 = if status.is_streaming() { 2 } else { 1 };

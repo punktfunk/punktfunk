@@ -84,8 +84,8 @@ const Automation: FC = () => {
 	} | null>(null);
 	const [confirming, setConfirming] = useState(false);
 
-	// Seed once. Unlike the display card there is no re-seed-when-clean dance: nothing else in the
-	// console writes hooks, so the server value cannot move underneath an edit.
+	// Seed once: nothing else in the console writes hooks, so the server value cannot move
+	// underneath an edit.
 	const server = query.data?.hooks;
 	useEffect(() => {
 		if (hooks === null && server) setHooks(server);

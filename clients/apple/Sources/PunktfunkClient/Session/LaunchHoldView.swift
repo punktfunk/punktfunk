@@ -68,11 +68,8 @@ struct LaunchHoldView: View {
         GeometryReader { geo in
             let layout = Layout(size: geo.size)
             let from = startRect(layout.cover, geo)
-            // The pair is laid out, not positioned. Every attempt to place the card by offset
-            // or `position` was undone by the turn: a geometry effect re-anchors what it
-            // transforms to its parent's origin, so anything carrying one lands in the corner.
-            // A real stack cannot be argued with, and the flight rides on top of it as a delta
-            // that is zero once the card is home.
+            // The pair is laid out by the stack; the flight rides on it as a delta that is zero
+            // once the card is home.
             ZStack {
                 backdrop(geo.size)
                     .opacity(landed ? 1 : 0)
@@ -82,8 +79,8 @@ struct LaunchHoldView: View {
                         .frame(width: layout.cover.width, height: layout.cover.height)
                         // Flattened first: the poster inside is a flexible view, and a
                         // projection applied over one resolves its anchor against the whole
-                        // window instead of the card, which is what kept parking it in the
-                        // corner. A compositing group gives the turn a definite thing to turn.
+                        // window instead of the card. A compositing group gives the turn a
+                        // definite thing to turn.
                         .compositingGroup()
                         // One full turn on the way over, around the card's own vertical axis.
                         .rotation3DEffect(
@@ -115,11 +112,10 @@ struct LaunchHoldView: View {
             if loader == nil {
                 loader = Self.hostLoader(host)
             }
-            // Armed a frame later, deliberately. This view is INSERTED — by the session's
-            // overlay, and by the preview harness — and a state change made while that
-            // insertion is still being committed rides the same transaction, which SwiftUI
-            // is free to apply without animating. Opacity survived that; the geometry did
-            // not, so the flight came out as a plain fade. One frame's wait separates them.
+            // Armed 40 ms later, deliberately. This view is INSERTED — by the session's
+            // overlay, and by the shot harness — and a state change made while that insertion
+            // is still being committed rides the same transaction, which SwiftUI is free to
+            // apply without animating: opacity survives that, the geometry does not.
             try? await Task.sleep(nanoseconds: 40_000_000)
             landed = true
         }
@@ -274,7 +270,7 @@ struct LaunchHoldView: View {
                     .padding(.top, 4)
             }
             if let download {
-                // The wait has a length now: a bar where the spinner was. No Show stream — there
+                // The wait has a length: a bar in place of the spinner. No Show stream — there
                 // is no stream until the files are in.
                 Group {
                     if let fraction = download.fraction {

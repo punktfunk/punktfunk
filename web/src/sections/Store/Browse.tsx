@@ -199,8 +199,8 @@ export const BrowseTab: FC<{
 								? m.store_no_match()
 								: failedSources.length > 0
 									? // An all-sources-failed catalog is a SUCCESSFUL request that happens to
-										// carry nothing, so "no plugins available" was the console reporting a
-										// broken fetch as an empty store. Name the sources that failed.
+										// carry nothing, so "no plugins available" would report a broken fetch as
+										// an empty store. Name the sources that failed.
 										m.store_all_sources_failed({
 											sources: failedSources.map((f) => f.name).join(", "),
 										})
@@ -266,11 +266,9 @@ const PLATFORM_LABELS: Record<string, string> = {
 };
 
 /**
- * `CardContent` zeroes its top padding (`pt-0`/`sm:pt-0`) because it normally sits under a
- * `CardHeader` that already supplies it — these cards have no header, so the top padding
- * has to come back explicitly, at BOTH breakpoints. `p-card` alone does not do it: `card`
- * is a custom `--spacing-*` token, which tailwind-merge does not recognise as a spacing
- * value and therefore never dedupes against `pt-0`, leaving the longhand to win.
+ * These cards have no header, so their `CardContent` is the first child and keeps its top inset
+ * (`INSET_AFTER_SIBLING` in `components/ui/card.tsx`). tailwind-merge keeps `p-card` beside the
+ * base `p-padding-card`, which the stylesheet emits later, so only the top takes `--spacing-card`.
  */
 const HEADERLESS_CARD_PADDING = "p-card pt-card sm:pt-card";
 

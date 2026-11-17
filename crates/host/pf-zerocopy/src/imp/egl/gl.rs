@@ -1,4 +1,4 @@
-//! GL FFI and shaders for [`super`]'s EGL zero-copy blit: `libGL`/`libgbm` entry points,
+//! GL FFI and shaders for [`super`]'s EGL zero-copy blit: `libGL` entry points,
 //! fullscreen-triangle sources (BGRA swizzle, NV12 / YUV444 BT.709 convert), and compile
 //! helpers. The importer and de-tiling passes live in [`super`].
 
@@ -211,7 +211,7 @@ pub(crate) unsafe fn compile_program_with(frag: &[u8]) -> Result<u32> {
 mod tests {
     use super::*;
 
-    /// Full range is byte for byte the shader 0.45 shipped; studio scales every plane into
+    /// Full range pins the exact unscaled shader source; studio scales every plane into
     /// 16..235 / 16..240.
     #[test]
     fn the_sources_follow_the_range() {

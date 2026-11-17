@@ -3,8 +3,7 @@
 //! needs; `clients/apple` is the client there.
 //!
 //! Nothing here may depend on a UI toolkit. Frames reach the screen through `session`'s
-//! `SessionHandle` channels and `video`'s `DecodedImage` (RGBA, dmabuf fds, or a decoded
-//! VkImage).
+//! `SessionHandle` channels and `video`'s `DecodedImage`.
 //!
 //! Audio is the one per-OS swap: `audio.rs` (PipeWire) vs `audio_wasapi.rs` (WASAPI),
 //! selected by `#[path]` so the session pump only names `crate::audio`. `keymap` stays
@@ -21,7 +20,8 @@ pub mod audio;
 // Playback counters both audio backends publish. Atomics only: the PipeWire callback is the graph's realtime loop.
 #[cfg(desktop)]
 pub mod audio_vitals;
-// Priority for threads that feed the device callbacks (decode, pad-audio, WASAPI). rtkit / Realtime portal on Linux, MMCSS on Windows.
+// Priority for the client's hot threads: the audio feeders (decode, pad-audio, WASAPI) and the
+// video path. rtkit / Realtime portal on Linux, MMCSS on Windows.
 #[cfg(desktop)]
 pub mod audio_rt;
 // mDNS browse of `_punktfunk._udp`. Android folds the same events behind its JNI poll.
@@ -84,7 +84,8 @@ pub mod host_text;
 // Which host screen this device streams (`design/screen-pick.md`); ureq stays desktop-gated.
 #[cfg(portable)]
 pub mod display_targets;
-// Log ring (note/render, std only) on every platform. `send_to_host` stays desktop-gated; Android posts via OkHttp (`SkiaConsole.sendLogs`).
+// Log ring (note/render, std only) on every platform. `send_to_host` stays desktop-gated;
+// Android posts via OkHttp (`SendLogs`).
 #[cfg(portable)]
 pub mod logring;
 // `punktfunk://` grammar (`design/client-deep-links.md`). One parser/emitter, held to the Swift/Kotlin ports by a shared vector file.
@@ -97,7 +98,7 @@ pub mod start;
 #[cfg(desktop)]
 pub mod orchestrate;
 // Session grant snapshot, overlay chip, and AccessUpdate toast (`design/per-client-access.md`).
-// Presentation only; Apple/Android mirror the rules. Gated with session: macOS has no punktfunk-core to name the grants.
+// Presentation only; Apple/Android mirror the rules.
 #[cfg(desktop)]
 pub mod access;
 // Host OS-identity from mDNS `os=` TXT: sanitize + icon-walk order. Apple/Android mirror it rather than link it.

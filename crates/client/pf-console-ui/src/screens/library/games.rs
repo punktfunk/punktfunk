@@ -213,7 +213,7 @@ impl LibraryScreen {
             }
             let items: Vec<Item> = match section {
                 Section::Desktops => {
-                    // This shelf's host first: its tile led the grid.
+                    // This shelf's host first.
                     let mut hosts: Vec<&HostRow> = paired_hosts(ctx.hosts).collect();
                     hosts.sort_by_key(|h| !self.own(h));
                     if !hosts.iter().any(|h| self.own(h)) {

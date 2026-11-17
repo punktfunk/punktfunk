@@ -64,8 +64,7 @@ class ScreenshotTest {
     ) {
         compose.mainClock.autoAdvance = false
         compose.setContent { ShotTheme { if (statusBar) ShotStatusFrame(content) else content() } }
-        // 1.6 s, not 0.8: a ModalBottomSheet's entrance spring is still mid-rise at 0.8 s and the
-        // add-host sheet's Connect button was captured half below the frame.
+        // 1.6 s, not 0.8: a ModalBottomSheet's entrance spring is still mid-rise at 0.8 s.
         compose.mainClock.advanceTimeBy(1600)
         captureScreenRoboImage("$out/phone-$name.png")
     }
@@ -118,7 +117,8 @@ class ScreenshotTest {
     @Config(sdk = [36], qualifiers = "w800dp-h360dp-xxhdpi")
     fun streamBannerTouch() = shootRoot("stream-banner-touch", statusBar = false) { StreamBannerScene(pad = false) }
 
-    // The companion panel at an Ayn Thor lower screen's size (1240×1080 at about 420 dpi).
+    // The companion panel at an Ayn Thor lower screen's dp size (1240×1080 at about 420 dpi),
+    // drawn at xxhdpi.
     @Test
     @Config(sdk = [36], qualifiers = "w472dp-h411dp-xxhdpi")
     fun companionStats() = shootRoot("companion-stats", statusBar = false) {

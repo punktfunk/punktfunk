@@ -91,15 +91,15 @@ impl PanelGrid {
     }
 }
 
-/// Gains are shift counts (`1 >> n` per frame). Fixed-point i64 so every
+/// Gains are shift counts (2^-n per frame). Fixed-point i64 so every
 /// client and the offline harness compute the same due times; no float on a
 /// present path. Starting values: proportional time-constant of tens of frames,
 /// integral an order slower, cushion a few MADs of residual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CadenceTuning {
-    /// Proportional: `1 >> offset_shift` of the residual per frame.
+    /// Proportional: 2^-offset_shift of the residual per frame.
     pub offset_shift: u8,
-    /// Integral on the per-frame rate (skew): `1 >> skew_shift`.
+    /// Integral on the per-frame rate (skew): 2^-skew_shift of the residual.
     pub skew_shift: u8,
     /// EMA of |residual|.
     pub jitter_shift: u8,
@@ -161,7 +161,7 @@ impl CadenceTuning {
 /// on the client judder metric.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CadenceHealth {
-    /// Since last [`CadenceClock::reset`].
+    /// Since [`CadenceClock::new`]; [`CadenceClock::reset`] keeps counting.
     pub frames: u64,
     /// Due time already past when the frame became presentable — cushion too small.
     pub late: u64,
@@ -874,7 +874,7 @@ mod tests {
         );
     }
 
-    // Import the real type — a paraphrase once "confirmed" a non-bug.
+    // The sim below drives the real `CadenceClock`; a paraphrase of it can confirm a non-bug.
 
     /// Round consecutive present spacings to whole panel periods; ‰ that are
     /// not the modal count.

@@ -104,8 +104,9 @@ class ClipboardSync(
                 pendingFetch = -1
                 val text = parts.getOrNull(2)?.takeIf { it.isNotEmpty() } ?: return
                 lastFromHost = text
-                // Android 10+ refuses clipboard writes from the background; a refusal must be
-                // visible in the log, or "clipboard sync stopped" has nothing to point at.
+                // Android checks focus only for clipboard reads (AOSP 10 through main), so a
+                // background write goes through. A throw here must reach the log, or
+                // "clipboard sync stopped" has nothing to point at.
                 runCatching { cm.setPrimaryClip(ClipData.newPlainText("Punktfunk", text)) }
                     .onFailure { Log.w("ClipboardSync", "setPrimaryClip refused", it) }
             }

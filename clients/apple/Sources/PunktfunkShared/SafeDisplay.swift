@@ -3,18 +3,16 @@
 // An iPhone clips the picture in HARDWARE: the sensor housing (notch / Dynamic Island) and the four
 // rounded corners eat whatever the stream draws underneath them. The session view is deliberately
 // edge-to-edge (ContentView's `.ignoresSafeArea()` on iOS) and the presenter aspect-FITS the host
-// mode into it, so which pixels survive is decided entirely by the mode's aspect ratio:
+// mode into it (`VideoFit.fit`, the default), so its aspect ratio decides which pixels survive:
 //
-//   * A 16:9 mode on a 19.5:9 phone pillarboxes, and those black bars land exactly on the unsafe
-//     regions. That is why 1080p has always "just worked" and never needed a setting.
-//   * The device's NATIVE mode has the screen's own aspect ratio, so it fills every pixel —
-//     including the ones behind the housing and under the corner radii. That is the mode that
-//     loses its corners, and the reason this file exists.
+//   * A 16:9 mode on a 19.5:9 phone pillarboxes, and the black bars land on the unsafe regions.
+//   * The device's NATIVE mode has the screen's own aspect ratio, so it fills every pixel,
+//     including the ones behind the housing and under the corner radii: it loses its corners.
 //
 // So the fix needs no layout change and no input change: ask the host for a mode that is narrower
 // by the safe-area insets, and the existing aspect-fit centres it inside the safe region. Pointer
 // input keeps mapping correctly for free, because `hostPoint(from:)` derives the video rect from
-// the live host mode (`AVMakeRect(aspectRatio:insideRect:)`) instead of assuming full-bleed.
+// the live host mode (`VideoFit.place`) instead of assuming full-bleed.
 //
 // The formula is Moonlight's (its settings' resolution table carries the same row): full native
 // height, width reduced by the left+right safe-area insets. Width-only is not a simplification —
@@ -28,15 +26,15 @@ import CoreGraphics
 import Foundation
 
 public enum SafeDisplay {
-    /// The host rejects odd dimensions and anything under 320×200 (`validate_dimensions` in
-    /// `pf-encode-core`), so the computed mode is even-floored and clamped exactly like `RenderScale`.
+    /// The host rejects odd dimensions (`validate_dimensions` in `pf-encode-core`), so the
+    /// computed mode is even-floored and clamped to at least 320×200 like `RenderScale`.
     public static let minWidth = 320
     public static let minHeight = 200
 
     /// A portrait top inset at or above this many points means a sensor housing rather than a
-    /// status bar. Notched and Dynamic Island iPhones report 44–59 pt; a plain status bar (older
-    /// iPhones, every iPad) reports 20–24 pt. Used only by [`sideInsetPoints`] and only when the
-    /// horizontal insets are unavailable — see there for why that case exists at all.
+    /// status bar. Notched and Dynamic Island iPhones report 44 pt or more; a plain status bar
+    /// (older iPhones, every iPad) reports 20–24 pt. Used only by [`sideInsetPoints`] and only when
+    /// the horizontal insets are unavailable — see there for why that case exists at all.
     public static let housingTopInsetThreshold: Double = 40
 
     /// The per-side inset, in points, that the **landscape** stream will be subject to — which is

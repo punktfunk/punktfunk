@@ -1,7 +1,7 @@
 //! `punktfunk` — the headless client CLI (design/client-architecture-split.md §4).
 //!
 //! One console-subsystem binary over the same brain the GUI shells use, so a script gets the
-//! same behaviour a click does — including wake-then-connect, which the Linux shell's old
+//! same behaviour a click does — including wake-then-connect, which the Linux shell's
 //! exec-style `--connect` never had. It is a FRONT-END, not the brain: policy lives in
 //! `pf_client_core`, and the shells call the same functions in-process rather than shelling
 //! out to this. That is the whole point of the split — if the GUI shelled out for connects,
@@ -45,9 +45,9 @@ mod cli {
 
     const PROBE_TIMEOUT: Duration = Duration::from_millis(2500);
 
-    /// The handshake budget `--request-access` runs on. Matches the host's `PENDING_APPROVAL_WAIT`
-    /// — the connect is PARKED for that long while an operator decides, so anything shorter would
-    /// give up while the approval prompt is still on their screen.
+    /// The handshake budget `--request-access` runs on: just over the host's
+    /// `PENDING_APPROVAL_WAIT`. The connect is PARKED for that long while an operator decides, so
+    /// anything shorter would give up while the approval prompt is still on their screen.
     const REQUEST_ACCESS_TIMEOUT_SECS: u64 = 185;
 
     const USAGE: &str = "\
@@ -556,7 +556,7 @@ from the config directory for a true factory reset."
             "speed-test" => speed_test(&rest),
             "network-check" => network_check(&rest),
             "presets" => presets(&rest, false),
-            // Before the rename `profiles` listed presets; a bare call and `list` still do.
+            // `profiles` also lists presets, its pre-rename job: a bare call and `list` do.
             "profiles" => match positional(&rest, 0).as_deref() {
                 None | Some("list") if !has(&rest, "--pick") => presets(&rest, true),
                 _ => profiles_cmd(&rest),
@@ -613,21 +613,19 @@ from the config directory for a true factory reset."
             .unwrap_or(DISCOVER_DEFAULT_SECS)
             .min(DISCOVER_MAX_SECS);
         let found = pf_client_core::discovery::discover_for(Duration::from_secs_f64(secs));
-        // `read`, not `load`: this verb never hands a record's id back, so it has no business
-        // MINTING one. `load` would mint ids for a pre-mint store and save them, racing the
-        // `hosts list` a caller is very likely running at the same moment (the Decky panel issues
-        // both together) — after which the ids one of them already handed out no longer resolve.
+        // `read`, not `load`: this verb has no business MINTING ids. `load` would mint them for
+        // a pre-mint store and save them, racing the `hosts list` a caller is very likely running
+        // at the same moment (the Decky panel issues both together) — after which the ids one of
+        // them already handed out no longer resolve.
         let known = KnownHosts::read();
         let rows: Vec<(
             &pf_client_core::discovery::DiscoveredHost,
             Option<&KnownHost>,
         )> = found.iter().map(|d| (d, match_saved(&known, d))).collect();
-        // The one write this verb does make, and why it doesn't contradict the above: an advert
-        // is the only place a host's wake MAC is ever published, and this verb is the only one
-        // the Decky panel runs that ever sees one. Without it a Deck in Gaming Mode never learns
-        // a MAC at all and Wake-on-LAN cannot fire, with nothing to show for it (#322).
-        // `learn_from_advert` mints nothing either, and writes only when an advert genuinely
-        // taught the record something new — so a steady-state panel refresh touches no disk.
+        // The one write this verb makes: an advert is the only place a host's wake MAC is
+        // published, and this is the only verb that sees one. Without it Wake-on-LAN cannot fire
+        // on a Deck in Gaming Mode. `learn_from_advert` mints no id and writes only when the
+        // advert taught the record something new, so a steady-state panel refresh touches no disk.
         for (d, saved) in &rows {
             if let Some(k) = saved {
                 trust::learn_from_advert(&k.fp_hex, &k.addr, k.port, d);
@@ -1052,8 +1050,8 @@ from the config directory for a true factory reset."
     }
 
     /// `wake <host-ref> [--wait]` — a magic packet, and with `--wait` the bounded wake-and-wait
-    /// the console runs (`orchestrate::wake_by_probe`: a packet every 6 s, a probe every
-    /// second, 90 s budget).
+    /// the console runs (`orchestrate::wake_by_probe`: a packet every `WAKE_RESEND_SECS`, a probe
+    /// every second, `WAKE_TIMEOUT_SECS` budget).
     fn wake(args: &[String]) -> u8 {
         let Some(reference) = positional(args, 0) else {
             eprintln!("usage: punktfunk wake <host-ref> [--wait]");
@@ -1065,8 +1063,8 @@ from the config directory for a true factory reset."
         };
         let host = &known.hosts[i];
         if host.mac.is_empty() {
-            // A MAC is learned from the host's mDNS advert, never from a connect — say so, since
-            // "connect to it once" sent at least one Deck owner looking in the wrong place (#322).
+            // A MAC is learned from the host's mDNS advert, never from a connect, so the message
+            // names `discover` rather than "connect to it once".
             eprintln!("no Wake-on-LAN address known for {} — run `punktfunk discover` while it's awake (the Deck panel does this every time it opens) so the client learns it from the host's advert", host.name);
             return UNRESOLVED;
         }
@@ -1121,7 +1119,7 @@ from the config directory for a true factory reset."
             return NEEDS_INTERACTION;
         }
         // The port this host actually serves its library on — learned from its advert and saved,
-        // falling back to 47990. Reaching for the constant here is what broke a moved port.
+        // else `DEFAULT_MGMT_PORT`. Reaching for the constant here would break a moved port.
         match library::fetch_games(
             &host.addr,
             host.effective_mgmt_port(),
@@ -1333,7 +1331,7 @@ from the config directory for a true factory reset."
                 println!("{label} failed — {e}");
                 return CONNECT_FAILED;
             }
-            // `set_pick` read the host's rows back; a miss lists none rather than the old check.
+            // `set_pick` reads the host's rows back; a miss lists none, not the rows checked above.
             t = display_targets::cached(fp).unwrap_or_default();
         }
         if has(args, "--json") {
@@ -1678,9 +1676,9 @@ from the config directory for a true factory reset."
     ///
     /// `persist_paired` records the host as *paired* when the child reports ready. Only
     /// `launch --request-access` passes true: there, the host parked the connect until an
-    /// operator approved this device, so `Ready` IS the approval arriving — the same thing
-    /// `SpawnOpts::persist_paired` means in the GTK shell. Every other launch records nothing,
-    /// which is correct: a plain connect proves reachability, not a new trust decision.
+    /// operator approved this device, so `Ready` IS the approval arriving. Every other launch
+    /// records nothing, which is correct: a plain connect proves reachability, not a new trust
+    /// decision.
     fn run_plan(plan: ConnectPlan, exec: bool, persist_paired: bool) -> u8 {
         let Some(fp) = plan.host.pin() else {
             eprintln!(
@@ -1689,8 +1687,7 @@ from the config directory for a true factory reset."
             );
             return NEEDS_INTERACTION;
         };
-        // Wake first when the host is asleep and we know how to reach it. This is the thing the
-        // old exec-style CLI never did: it fired a packet at best and dialled into the void.
+        // Wake first when the host is asleep and we know how to reach it.
         if plan.wake
             && !trust::probe_one(
                 &plan.host.addr,
@@ -1854,8 +1851,9 @@ from the config directory for a true factory reset."
 
     /// `speed-test <host-ref>` — measure the real data plane and print what it recommends.
     /// Deliberately does NOT apply the result: which layer a bitrate belongs in is a decision
-    /// the GUI makes with the user (bound preset vs global, design §5.3), and a CLI silently
-    /// rewriting a preset would be the surprise that rule exists to prevent.
+    /// the GUI makes with the user (bound preset vs global, design/client-settings-profiles.md
+    /// §5.3), and a CLI silently rewriting a preset would be the surprise that rule exists to
+    /// prevent.
     fn speed_test(args: &[String]) -> u8 {
         let client = match probe_client(args, "speed-test", false) {
             Ok(c) => c,
@@ -2073,8 +2071,6 @@ from the config directory for a true factory reset."
         }
     }
 
-    /// `reset` — forget this device's saved hosts and stream settings. The identity (and so the
-    /// hosts' record of this device) is deliberately NOT touched: re-pairing is the user's call.
     /// `device-code`: the code a waiting request shows, which the host's console shows beside
     /// it. A first run makes the identity, so the code is the one the request will carry.
     fn device_code(args: &[String]) -> u8 {
@@ -2097,6 +2093,8 @@ from the config directory for a true factory reset."
         OK
     }
 
+    /// `reset` — forget this device's saved hosts and stream settings. The identity (and so the
+    /// hosts' record of this device) is deliberately NOT touched: re-pairing is the user's call.
     fn reset() -> u8 {
         if !is_tty() {
             eprintln!("refusing to reset without a terminal to confirm on");
@@ -2257,7 +2255,7 @@ from the config directory for a true factory reset."
             assert_eq!(split_host_port("desk:nope"), ("desk:nope".into(), 9777));
         }
 
-        /// Every advertised verb documents itself — a USAGE line without a help entry is a
+        /// Each verb listed here documents itself — a USAGE line without a help entry is a
         /// promise `help <verb>` breaks. The overview and each entry must also name the verb.
         #[test]
         fn every_usage_verb_has_help() {

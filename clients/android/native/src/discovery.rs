@@ -105,9 +105,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeDiscoveryPo
     _this: JObject<'local>,
     handle: jlong,
 ) -> JString<'local> {
-    // `with_env` subsumes the `jni_guard` this used to carry: it catches panics at the boundary and
-    // `LogErrorAndDefault` logs then yields `JString::default()` — the null reference the old
-    // `std::ptr::null_mut()` default returned. Kotlin still sees a null String on failure.
+    // `with_env` catches panics at the boundary and `LogErrorAndDefault` logs then yields
+    // `JString::default()`, a null reference: Kotlin sees a null String on failure.
     env.with_env(|env| -> jni::errors::Result<JString<'local>> {
         let out = DISCOVERIES
             .get(handle)

@@ -2,9 +2,8 @@
 //
 // An AVAudioEngine stops itself when its output hardware changes and never restarts on its own, so
 // everything downstream of these notifications is dead code if the notification never arrives. The
-// rebuild itself needs a live session to exercise (and so a host, which does not build on macOS),
-// but the wiring does not — and the wiring is where a silent failure costs a session all of its
-// audio, which is exactly the shape of the bug this watcher exists to fix.
+// rebuild itself needs a live session to exercise, but the wiring does not — and the wiring is
+// where a silent failure costs a session all of its audio.
 
 import AVFoundation
 import XCTest
@@ -80,7 +79,7 @@ final class AudioDeviceWatcherTests: XCTestCase {
     /// The backstop, against the real HAL: move the system's default output device — the thing that
     /// happens when AirPods come out of an ear — and require that the session hears about it. This
     /// is the trigger the recovery leans on for the voice-processing engine, whose own notification
-    /// behaviour cannot be verified here (no Mac in this project's fleet can initialize VPIO).
+    /// behaviour this test does not reach.
     /// Skips while anything plays on the default output: the move would hop that audio.
     func testTheDefaultOutputDeviceMovingReachesTheOwner() throws {
         guard let original = AudioDevices.defaultOutputDevice() else {

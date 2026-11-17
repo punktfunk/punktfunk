@@ -1,8 +1,8 @@
 //! The AV1 receiver rule on the desktop decoders, as Android and Apple run it: after a loss no
 //! access unit reaches the decoder until an IDR, the host's anchor, or an error-resilient wave
 //! start. Every frame between loads its entropy state from the lost picture and parses as
-//! garbage; AMD's VCN hangs on such a stream. The concealer points a wave start that names the
-//! lost picture at a held one, so the wave still heals.
+//! garbage; RADV hangs a Radeon 780M's VCN on such a stream. The concealer points a wave start
+//! that names the lost picture at a held one, so the wave still heals.
 //!
 //! Strict: only the Vulkan host waves on AV1, and it codes each wave start error-resilient.
 //! A wave start that is not asks for a keyframe.

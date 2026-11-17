@@ -1,8 +1,8 @@
-// SC2 framing: the report-id prepend on the way up (the 2026-06-09 root cause — a GATT
-// characteristic VALUE carries no id byte, and without re-prepending 0x45 an id-keyed consumer
-// drops ~every frame), the OUTPUT strip+trim and FEATURE 0x01-strip on the way down, and the
-// wire-constant pins against the regenerated C header (GamepadWireTests pattern: a Swift-side
-// edit that drifts from the Rust contract fails CI).
+// SC2 framing: the report-id prepend on the way up (a GATT characteristic VALUE carries no id
+// byte, and without re-prepending 0x45 an id-keyed consumer drops every frame), the OUTPUT
+// strip+trim and FEATURE 0x01-strip on the way down, and the wire-constant pins against the
+// regenerated C header (GamepadWireTests pattern: a Swift-side edit that drifts from the Rust
+// contract fails CI).
 
 import PunktfunkCore
 import XCTest
@@ -15,7 +15,7 @@ final class Sc2FramingTests: XCTestCase {
     func testStateSizedPayloadGetsThe0x45Prepend() {
         // The live shape: a 45-byte TritonMTUNoQuat_t payload → a 46-byte id-first frame.
         var payload = [UInt8](repeating: 0, count: 45)
-        payload[0] = 0xE5 // seq — the byte the queue used to mistake for a report id
+        payload[0] = 0xE5 // seq — the byte an id-keyed consumer would mistake for a report id
         let framed = Sc2Device.frameIncoming(payload)
         XCTAssertEqual(framed.count, 46)
         XCTAssertEqual(framed[0], Sc2Device.idStateBLE)
@@ -42,8 +42,7 @@ final class Sc2FramingTests: XCTestCase {
         let write = Sc2Device.outputWrite(frame: rumble)
         XCTAssertEqual(write?.charUUID, "100f6cb5-1735-4313-b402-38567131e5f3")
         XCTAssertEqual(write?.payload, Array(rumble[1...]))
-        // 0x82 — Steam's ping/test buzz — rides B7 with a 3-byte payload (the historical
-        // mis-route regression: it failed while pointed at B5).
+        // 0x82 — Steam's ping/test buzz — rides B7 with a 3-byte payload.
         let buzz: [UInt8] = [0x82, 0x03, 0x01, 0xFF]
         let buzzWrite = Sc2Device.outputWrite(frame: buzz)
         XCTAssertEqual(buzzWrite?.charUUID, "100f6cb7-1735-4313-b402-38567131e5f3")
@@ -131,7 +130,7 @@ final class Sc2FramingTests: XCTestCase {
             zip(Sc2Device.enableLizard, Sc2Device.disableLizard).filter { $0 != $1 }.count, 1)
     }
 
-    // MARK: - Wire-constant pins against the regenerated C header (ABI v27)
+    // MARK: - Wire-constant pins against the C header
 
     func testWireConstantsMatchTheCABIVerbatim() {
         // The up-path datagram: [0xCC][0x04][pad][len][data…].

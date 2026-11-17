@@ -1,8 +1,8 @@
 //! Virtual-monitor mode lists and OS identity for the `pf-vdisplay` driver: what a monitor
 //! advertises, which id names it, and the timing numbers behind one `(width, height, refresh)`.
 //!
-//! Lives here, not in the driver: the driver only builds under the WDK, so this arithmetic had
-//! no test on any machine. Integer-only and free of OS types — the driver stamps the results
+//! Lives here, not in the driver: the driver only builds under the WDK, and this crate tests on
+//! any host. Integer-only and free of OS types — the driver stamps the results
 //! into its `wdk_sys` / `iddcx` structs and keeps nothing else.
 
 use alloc::vec;
@@ -129,10 +129,6 @@ pub struct SignalInfo {
 /// `refresh · width · height`, integer sync rationals, total == active. Monitor (description)
 /// and target (scan-out) modes differ ONLY in `v_sync_freq_divider`, which the caller passes
 /// (0 / 1 per the DDI contract).
-///
-/// Until 2026-07 the monitor side used the virtual-display-rs legacy math instead — a
-/// WIDTH-LESS pixel rate (`rr·(h+4)²+1000`) and a deliberately fractional vSync — so the OS
-/// saw two disagreeing descriptions of the same tuple, one physically meaningless.
 ///
 /// The hSync numerator is computed in u64 and saturated: an unchecked `refresh · height`
 /// past u32 would panic → abort the extern-"C" mode DDI in a debug build.

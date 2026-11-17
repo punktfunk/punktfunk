@@ -32,7 +32,7 @@ pub const GRANT_LAUNCH: u32 = 0x20;
 /// `power.*` (sleep/reboot/shutdown) on the mgmt cert lane (`design/host-actions.md`).
 /// Not a datagram; [`classify`] is untouched. Machine power only — never plugin actions.
 pub const GRANT_POWER: u32 = 0x40;
-/// Pause and remove a title's download on the mgmt cert lane (`design/plugin-downloads.md`).
+/// Pause and remove a title's download on the mgmt cert lane.
 /// Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
 pub const GRANT_MANAGE_GAMES: u32 = 0x80;
 /// Choosing the screen this device streams and what the host's monitors do meanwhile: its
@@ -136,7 +136,7 @@ impl GrantClass {
 /// Grant class for one `0xC8` input event.
 ///
 /// Exhaustive, no wildcard: a new [`InputKind`] is a compile error until
-/// classified. Do not add `_ =>`. Mic (`0xCA`), DualSense (`0xCC`), and pen
+/// classified. Do not add `_ =>`. Mic (`0xCB`), DualSense (`0xCC`), and pen
 /// are plane-gated before decode (Mic / Gamepad / Pointer by construction).
 pub fn classify(kind: InputKind) -> GrantClass {
     match kind {

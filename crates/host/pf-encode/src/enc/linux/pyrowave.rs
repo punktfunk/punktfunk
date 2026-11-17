@@ -1,7 +1,8 @@
 //! PyroWave host encoder: intra-only CDF 9/7 wavelet over a private Vulkan 1.3
 //! compute device (`pyrowave-sys`). Every frame is a keyframe, so IDR/RFI recovery
-//! is unused. Opt-in via `PUNKTFUNK_ENCODER=pyrowave`; no shipping client decodes
-//! this until `CODEC_PYROWAVE` negotiation lands.
+//! is unused. Opened only for a session that negotiated `CODEC_PYROWAVE`;
+//! `PUNKTFUNK_ENCODER=pyrowave` pins that codec for a client with no preference
+//! (`Resolved::pinned_codec`).
 //!
 //! `pyrowave_create_device` retains the original instance/device create-infos for
 //! the device's lifetime — [`DeviceHold`] pins them. Frames enter as capture dmabufs
@@ -12,13 +13,15 @@
 //! on either input. Ingest, CSC and encode record into one command buffer
 //! (`pyrowave_device_set_command_buffer`).
 //!
-//! The AU is one pyrowave packet (boundary = buffer size), `keyframe = true`, through
-//! the normal FEC/packetizer path. Evidence: `design/pyrowave-codec-plan.md`.
+//! The AU is one pyrowave packet (boundary = buffer size), or under wire chunking one packet
+//! per block in shard-sized windows; `keyframe = true`, through the normal FEC/packetizer path.
+//! Evidence: `design/pyrowave-codec-plan.md`.
 // `unsafe_op_in_unsafe_fn` off: this file is pyrowave-sys + ash calls. Clearing it
 // means deleting markers with no caller contract, not wrapping each call.
 #![allow(unsafe_op_in_unsafe_fn)]
 
-// Every unsafe block in this module carries a `// SAFETY:` proof (parent module enforces it).
+// Every unsafe block in this module carries a `// SAFETY:` proof (the workspace denies
+// `clippy::undocumented_unsafe_blocks`).
 
 use super::vk_csc::{bind_rgb, csc_layout, csc_push, CursorPlane, WordsCache};
 use super::vk_reframe::Reframe;
@@ -578,9 +581,7 @@ pub struct PyroWaveEncoder {
     /// wait on this being non-empty: a never-submitted fence starts unsignaled and
     /// would read as wedged.
     inflight: VecDeque<InFlight>,
-    /// Submitted-but-not-polled cap. Still 1: a pyrowave `Encoder` cannot hold two
-    /// frames (single wavelet/scratch; `Impl::encode` discards with UNDEFINED). Never
-    /// exceeds `SLOTS`.
+    /// Submitted-but-not-polled cap. Never exceeds `SLOTS`.
     max_inflight: usize,
 
     width: u32,

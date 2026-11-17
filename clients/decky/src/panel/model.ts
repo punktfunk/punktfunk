@@ -7,7 +7,8 @@ import type { HostView } from "../hosts/model";
 
 export type RowStatus = "online" | "offline" | "offline-wakes";
 
-/** Whether a host answers now. An offline host with a MAC wakes when a launch dials it. */
+/** Whether a host answers now. An offline host with a MAC is woken by a launch when the client's
+ *  auto-wake is on. */
 export function rowStatus(v: HostView): RowStatus {
   if (v.online) return "online";
   return v.wakeable ? "offline-wakes" : "offline";

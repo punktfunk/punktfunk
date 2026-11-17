@@ -1,4 +1,4 @@
-// One control per setting kind, plus the few settings that need their own.
+// One control per setting kind.
 //
 // Every control writes one value and nothing else: the page saves on change, the host answers with
 // the new state, and that answer is what renders next. Text and numbers keep a local draft and

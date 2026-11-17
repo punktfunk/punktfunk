@@ -1,10 +1,7 @@
 // The Steam Controller 2 protocol tables: the per-report characteristic map, the stripped-length
-// table against `clients/shared/sc2-vectors.json`, the
-// feature-command bytes (hardware-confirmed 2026-06-08), the state parser and the WIRE_MAP —
-// all pure statics on `Sc2Device` (the DualSenseHIDTests convention: pin the wire layout
-// without a physical pad). Plus the escape-chord invariant mirror (GamepadEscapeChordTests
-// pattern): `Sc2Capture` re-declares the chord because the original is main-actor-isolated,
-// and the two must not drift.
+// table against `clients/shared/sc2-vectors.json`, the feature-command bytes, the state parser
+// and the WIRE_MAP — all pure statics on `Sc2Device` (the DualSenseHIDTests convention: pin the
+// wire layout without a physical pad).
 
 import XCTest
 
@@ -12,8 +9,7 @@ import XCTest
 
 final class Sc2DeviceTests: XCTestCase {
     func testOutputCharUUIDIsIdPlus0x35() {
-        // Valve routes output report id 0xNN to characteristic 100F6C<NN+0x35> (verified
-        // per-actuator on-device 2026-06-09).
+        // Valve routes output report id 0xNN to characteristic 100F6C<NN+0x35>.
         XCTAssertEqual(Sc2Device.outputCharUUID(id: 0x80), "100f6cb5-1735-4313-b402-38567131e5f3")
         XCTAssertEqual(Sc2Device.outputCharUUID(id: 0x81), "100f6cb6-1735-4313-b402-38567131e5f3")
         XCTAssertEqual(Sc2Device.outputCharUUID(id: 0x82), "100f6cb7-1735-4313-b402-38567131e5f3")
@@ -55,7 +51,7 @@ final class Sc2DeviceTests: XCTestCase {
 
     func testOnlyTheDonglePIDsAreAPuck() {
         // Decides the declared wire kind AND whether wireless-status reports are authoritative —
-        // getting this backwards tears the wire slot down on a wired pad (Android's on-glass bug).
+        // getting this backwards tears the wire slot down on a wired pad.
         XCTAssertTrue(Sc2Device.isDongle(pid: Sc2Device.pidDongleProteus))
         XCTAssertTrue(Sc2Device.isDongle(pid: Sc2Device.pidDongleNereid))
         XCTAssertFalse(Sc2Device.isDongle(pid: Sc2Device.pidWired))

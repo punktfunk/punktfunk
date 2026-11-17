@@ -15,8 +15,7 @@
 // What actually goes wrong if you change it: the `<< 6` PLACEMENT is the load-bearing part —
 // dropping it (writing `code10 / 65535.0`) is 64x too dark, i.e. a black picture, which is at
 // least obvious. Writing `code10 / 1023.0` instead is only ~0.1% high (65472 vs 65535 full
-// scale) and is genuinely harmless; it is wrong, not dangerous. Verified by round-trip on RADV
-// 2026-07-28: fed (160,160,800) 10-bit codes, decoded back (159,158,796).
+// scale) and is genuinely harmless; it is wrong, not dangerous.
 //
 // Rebuild: glslangValidator -V rgb2yuv10.comp -o rgb2yuv10.spv   (vendored beside this file)
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -48,8 +47,8 @@ vec3 srcTexel(ivec2 p) {
 // 10-bit code value -> the normalized float that stores it in the high bits of a 16-bit texel.
 const float CODE10 = 64.0 / 65535.0;
 
-// The session's range, a pipeline specialization constant: full (the default, whose arithmetic
-// is unchanged) or studio (Y 64..940, CbCr 64..960). PyroWave sets none and stays full.
+// The session's range, a pipeline specialization constant: full (the default) or studio
+// (Y 64..940, CbCr 64..960). PyroWave sets none and stays full.
 layout(constant_id = 0) const bool FULL_RANGE = true;
 
 // BT.2020 non-constant-luminance in 10-bit code values. Full range, then studio:

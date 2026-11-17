@@ -9,7 +9,7 @@
 //! The host channel is the sealed pad channel (design/gamepad-channel-sealing.md): the section
 //! (`pf_driver_proto::gamepad::XusbShm`) is unnamed, reached only through a handle the host
 //! duplicated into this WUDFHost, bootstrapped over the `Global\pfxusb-boot-<i>` mailbox. Its
-//! unsafe surface lives in `pf_umdf_util`, so the only `unsafe` here is WDF setup FFI.
+//! unsafe surface lives in `pf_umdf_util`, so the only `unsafe` here is WDF FFI.
 //!
 //! A periodic WDF timer owns the channel pump (adoption, re-delivery, host-gone) and completes
 //! the pended `WAIT_FOR_INPUT` requests, so the IOCTL path reads the cached view and never
@@ -53,13 +53,15 @@ const IOCTL_XUSB_GET_INFORMATION_EX: u32 = 0x8000_E3FC;
 
 /// Our own private IOCTL (NOT part of xusb22): answer the host's **channel proof** — which process
 /// is serving this devnode — so the host learns its duplication target from the device stack instead
-/// of from the LocalService-writable bootstrap mailbox (see `pf_driver_proto::gamepad::ChannelProof`
-/// for why that distinction is the whole security property). Any local caller may ask; the answer is
-/// a pid and two version numbers, none of them secret, and it is only worth anything to a process
-/// that can already duplicate handles into us.
+/// of from the LocalService-writable bootstrap mailbox (see the channel-proof note in
+/// `pf_driver_proto::gamepad` for why that distinction is the whole security property). Any
+/// local caller may ask; the answer is a pid, the pad index and two protocol constants, none of
+/// them secret, and it is only worth anything to a process that can already duplicate handles
+/// into us.
 const IOCTL_PF_GET_CHANNEL_PROOF: u32 = pf_driver_proto::gamepad::IOCTL_PF_GET_CHANNEL_PROOF;
 
-// Xbox 360 wired identity (what GET_INFORMATION reports). 0x0103 unblocks SET_STATE (vibration).
+// Xbox 360 wired identity (what GET_INFORMATION reports); XInputSetState reaches the driver at
+// 0x0103.
 const XUSB_VID: u16 = 0x045E;
 const XUSB_PID: u16 = 0x028E;
 const XUSB_VERSION: u16 = 0x0103;
@@ -98,8 +100,7 @@ static CHANNEL: ChannelClient = ChannelClient::new();
 
 /// Host liveness as observed by the timer's last pump: the mailbox-name existence IS the signal
 /// (`pf_umdf_util::channel`). The IOCTL path consults this instead of pumping, so a vanished host
-/// still reads as a neutral pad within one timer tick (≤8 ms) — the detach semantics the per-IOCTL
-/// pump used to provide instantly.
+/// still reads as a neutral pad within one timer tick (≤8 ms).
 static HOST_LIVE: AtomicBool = AtomicBool::new(false);
 
 /// This pad's channel config (magic/size/pad_index offset + our logger).
@@ -117,7 +118,7 @@ fn channel_cfg() -> ChannelConfig {
 
 // The bring-up file log. OPT-IN — debug builds, or the `PFXUSB_DEBUG_LOG` env var — so a RELEASE
 // driver never writes the file and never traps into the debugger. Path, sink and the gate live
-// in `pf_umdf_util::log`, one copy for all four drivers.
+// in `pf_umdf_util::log`, one copy for every driver.
 pf_umdf_util::file_log!("pfxusb-driver.log", "PFXUSB_DEBUG_LOG");
 
 #[unsafe(export_name = "DriverEntry")]
@@ -181,8 +182,8 @@ extern "C" fn evt_device_add(_driver: WDFDRIVER, mut device_init: PWDFDEVICE_INI
     }
 
     // Manual queue for the ASYNC input wait (`IOCTL_XUSB_WAIT_FOR_INPUT`), completed by the timer.
-    // Classic XInput falls back to GET_STATE polling when it is declined; WGI/GameInput poll
-    // asynchronously and never admit a device that declines it.
+    // Classic XInput falls back to GET_STATE polling when it is declined; WGI and GameInput read
+    // the pad through these waits.
     // SAFETY: `device` is the live device just created.
     let wait_queue = match unsafe { skeleton::create_manual_queue(device) } {
         Ok(q) => q,
@@ -283,18 +284,15 @@ fn touch_driver_marks(data: &MappedView) {
 
 /// Publish a game's rumble (from SET_STATE) into the DATA section for the host to forward.
 ///
-/// Serialized and Release-published, because IOCTLs arrive concurrently and neither property held
-/// before. `seq` was a read-modify-write across the two motor bytes: two `SET_STATE` calls could
-/// both read the same value and both write back `seq + 1`, so the host — which treats an unchanged
-/// seq as "nothing new" — saw one bump for two writes and skipped a level entirely. A skipped
-/// **stop** is the one that hurts: the pad keeps buzzing until the host's ~2.5 s idle force-off
-/// notices the game went quiet, which is where the bound on this bug comes from.
+/// Serialized by [`SECTION_PUBLISH`], because IOCTLs arrive concurrently: each call bumps
+/// `rumble_seq` exactly once. The host treats an unchanged seq as "nothing new", so a lost bump
+/// skips a level. A skipped **stop** is the one that hurts: the pad keeps buzzing until the
+/// host's ~2.5 s idle force-off (`RUMBLE_IDLE_TIMEOUT`) notices the game went quiet.
 ///
-/// The seq store is Release for the same reason as `pf-gamepad`'s `out_seq`: the host loads it with
-/// Acquire and documents that as ordering its read of the motor bytes ("the driver bumps
-/// `rumble_seq` AFTER writing the rumble bytes", `gamepad_windows.rs`). A plain write gives that
-/// Acquire nothing to pair with, so the guarantee the host's comment claims did not exist in either
-/// direction — the host could read a fresh seq against stale motor levels on a weakly-ordered core.
+/// The seq store is Release: the host loads it with Acquire to order its read of the motor bytes
+/// ("the driver bumps `rumble_seq` AFTER writing the rumble bytes", `gamepad_windows.rs`). A
+/// plain write gives that Acquire nothing to pair with, so the host could read a fresh seq
+/// against stale motor levels on a weakly-ordered core.
 fn publish_rumble(data: Option<&MappedView>, large: u8, small: u8) {
     let Some(v) = data else { return };
     let _publish = SECTION_PUBLISH
@@ -372,12 +370,10 @@ extern "C" fn evt_io_device_control(
     // contract `Request::new` requires. From here everything is safe (the token owns completion).
     let request = unsafe { Request::new(request) };
 
-    // The CACHED data view, gated on the timer's host-liveness read. This path used to call
-    // `CHANNEL.pump()` — a mailbox open+map+close+unmap plus two heap allocs — on EVERY XInput
-    // poll, per pad; the periodic timer owns the pump now (adoption, re-delivery, host-gone), and
-    // a vanished host reads as a neutral pad within one 8 ms tick. The heartbeat mark still
-    // advances per serviced IOCTL, so the host keeps seeing the GAME-visible polling path move,
-    // not the timer.
+    // The CACHED data view, gated on the timer's host-liveness read: the periodic timer owns the
+    // pump (adoption, re-delivery, host-gone), so a poll never opens the mailbox, and a vanished
+    // host reads as a neutral pad within one 8 ms tick. The heartbeat mark still advances per
+    // serviced IOCTL: the host sees the GAME-visible polling path move, not the timer.
     let data = if HOST_LIVE.load(Ordering::Relaxed) {
         CHANNEL.data()
     } else {
@@ -437,7 +433,7 @@ extern "C" fn evt_io_device_control(
                 return;
             }
         }
-        // Still declined: the guide-button wait has no state of ours to signal on.
+        // Declined: the guide-button wait has no state of ours to signal on.
         IOCTL_XUSB_WAIT_GUIDE_BUTTON => STATUS_INVALID_DEVICE_REQUEST,
         other => {
             dbglog!("[pf-xusb] unhandled IOCTL 0x{other:08x} in={input_len} out={output_len}");

@@ -391,8 +391,8 @@ pub(super) fn share(
     })
 }
 
-/// This binary, as the seat unit can name it. After an upgrade replaced the file, the link names
-/// the new one with a ` (deleted)` suffix.
+/// This binary, as the seat unit can name it. A binary an upgrade replaced reads as its path
+/// plus ` (deleted)`; the suffix is dropped to name the file now at that path.
 fn this_binary() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let path = exe.to_str()?;

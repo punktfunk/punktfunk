@@ -5,12 +5,11 @@
 # Why this exists: a Rust cdylib links fine with dangling undefined symbols (lld only rejects them
 # under --no-undefined, which rustc does not pass), so a hard import of an above-floor NDK entry
 # point sails through `cargo ndk --platform 28` and only explodes at `System.loadLibrary` on every
-# device below the symbol's introduction level — 0.9.0 shipped exactly this
-# (AMediaCodec_setOnFrameRenderedCallback, API 33) and bricked the client on all pre-Android-13
-# devices. Above-floor entry points must be dlsym-resolved at runtime instead (see
-# decode::try_set_frame_rate / decode::install_render_callback / adpf). This script makes the
-# violation a build failure. Wired into clients/android/kit/build.gradle.kts after each cargo-ndk
-# build (local + CI).
+# device below the symbol's introduction level (AMediaCodec_setOnFrameRenderedCallback is API 33,
+# so a hard import would stop the client loading on every pre-Android-13 device). Above-floor
+# entry points must be dlsym-resolved at runtime instead (see decode::try_set_frame_rate /
+# decode::install_render_callback / adpf). This script makes the violation a build failure.
+# Wired into clients/android/kit/build.gradle.kts after each cargo-ndk build (local + CI).
 #
 # Usage: check-android-jni-imports.sh <ndk-dir> <jniLibs-dir> <api-level>
 set -eu

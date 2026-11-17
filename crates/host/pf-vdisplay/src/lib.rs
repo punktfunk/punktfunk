@@ -113,8 +113,8 @@ pub enum Compositor {
     /// gamescope — spawned headless at the client's size/refresh; capture its PipeWire node.
     Gamescope,
     /// Hyprland — `hyprctl output create` + xdph ScreenCast. Distinct from
-    /// [`Wlroots`]: it kept the wlr client protocols after dropping wlroots, so
-    /// virtual-input is shared but IPC and portal are not. `design/hyprland-support.md`.
+    /// [`Wlroots`]: it serves the wlr client protocols without wlroots (0.42+), so
+    /// virtual-input is shared but IPC and portal are not.
     Hyprland,
     /// niri — `CreateVirtualOutput` over its JSON IPC socket. Only a niri that serves that
     /// request can host (the biri fork today); `design/niri-support.md`.
@@ -176,8 +176,8 @@ impl Compositor {
         )
     }
 
-    /// Starts a device's screen at its own scale. Mutter and niri: KWin and Windows remember
-    /// each device's scale themselves.
+    /// Starts a device's screen at its own scale: Mutter and niri. Windows remembers each
+    /// device's scale itself; KWin gives every virtual output streamed alone one shared scale.
     pub fn applies_device_scale(self) -> bool {
         matches!(self, Compositor::Mutter | Compositor::Niri)
     }
@@ -324,8 +324,8 @@ fn compositor_from_pin(v: &str) -> Option<Compositor> {
 /// Serializes this crate's process-env reads against its env writers.
 ///
 /// The host writes no session variable: the live session is stored in
-/// [`pf_host_config::session`]. The one writer left is a test (`routing.rs`),
-/// and the lock keeps its `set_var` off the readers that run beside it.
+/// [`pf_host_config::session`]. Nothing in this crate calls `set_var`; a writer wraps it
+/// in [`with_env_lock`] to stay off the readers that run beside it.
 pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Run `f` with [`ENV_LOCK`] held. Wrap any session-setup `set_var`/`remove_var`.
@@ -554,7 +554,8 @@ pub fn open_for(
         let _ = compositor;
         // `ensure_available` waits out a D0 re-register (wake-from-sleep) and
         // reloads a hostless-zombie adapter (devnode present, interface gone).
-        // `.context` appends; a replacement "not installed" hid mid-resume.
+        // `.context` appends to its reason; replacing it with "not installed" would hide a
+        // driver that is still coming back from resume.
         use anyhow::Context as _;
         driver::ensure_available().context(
             "pf-vdisplay driver interface not available — the pf-vdisplay IddCx driver is not \
@@ -617,8 +618,9 @@ pub fn open_mirror(compositor: Compositor, connector: &str) -> Result<Box<dyn Vi
 }
 
 /// Is `compositor` up and able to create a virtual output right now?
-/// KWin checks the privileged `zkde_screencast` global. The others have no
-/// equivalent pre-flight; `Ok(())` means try `create`.
+/// KWin checks the privileged `zkde_screencast` global; Hyprland, niri and Umbriel check that
+/// their IPC answers. Gamescope, Mutter and wlroots have no pre-flight; `Ok(())` means try
+/// `create`.
 pub fn probe(compositor: Compositor) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -867,7 +869,7 @@ pub fn gamescope_splash_client() -> anyhow::Result<()> {
 ///
 /// Settled **before spawn** — punktfunk/1 Welcome fixes bit depth and cannot
 /// take it back. Both terms must hold: the resolved binary offers 10-bit PQ
-/// capture (`--version` banner, once per process), and this host **spawns**
+/// capture (`--version` banner, kept once it answers), and this host **spawns**
 /// gamescope rather than attaching (`PUNKTFUNK_GAMESCOPE_NODE` inherits
 /// someone else's flags). A host-managed `gamescope-session-plus` / SteamOS
 /// session counts as a spawn: we own `GAMESCOPE_BIN`.

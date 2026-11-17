@@ -1,10 +1,8 @@
 // The video-capability byte, which is a wire promise: every bit says the decoder and the
 // present path can take what the host is then free to send.
 //
-// Depth and HDR used to be one ask — the client sent 10-bit only alongside HDR10, so an SDR
-// desktop always arrived at 8-bit and gradients banded. They are separate now, and the pair
-// that must not drift is "HDR without the depth": the host would upgrade the stream and hand
-// the decoder Main10 the client never claimed.
+// Depth and HDR are separate asks. The pair that must not drift is "HDR without the depth":
+// the host would upgrade the stream and hand the decoder Main10 the client never claimed.
 
 import XCTest
 

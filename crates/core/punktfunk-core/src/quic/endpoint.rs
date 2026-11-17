@@ -65,7 +65,7 @@ fn stream_transport_idle(
     t.datagram_send_buffer_size(crate::config::DATAGRAM_SEND_BUFFER);
     // Probe to the 1500-MTU IPv4 UDP payload (1472), not quinn's 1452: settle at
     // the ceiling proves the path carries full-size video; settle below sizes it.
-    // Stock 1452 made a healthy path and a constrained one look the same.
+    // Stock 1452 would make a healthy path and a constrained one look the same.
     let mut mtud = quinn::MtuDiscoveryConfig::default();
     // Probe to the sealed jumbo datagram so settle can prove a jumbo path; grow
     // stays proof-gated (`native/wire_mtu.rs`). The ceiling is per-endpoint, so it

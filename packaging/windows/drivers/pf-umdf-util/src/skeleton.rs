@@ -1,8 +1,7 @@
 //! The WDF skeleton every punktfunk HID driver stands on: `DriverEntry`, the default parallel
 //! queue, the manual queue pended reads wait in, and the periodic timer that completes them.
-//! Three drivers carried a copy each; the zeroed-config traps (a parallel queue presents ZERO
-//! requests unless told otherwise, a timer's attributes must inherit or WDF refuses it) now
-//! land once.
+//! Shared so the zeroed-config traps (a parallel queue presents ZERO requests unless told
+//! otherwise, a timer's attributes must inherit or WDF refuses it) are handled once.
 
 use wdk_sys::{
     NTSTATUS, PCUNICODE_STRING, PDRIVER_OBJECT, PFN_WDF_DRIVER_DEVICE_ADD,

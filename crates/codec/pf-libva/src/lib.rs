@@ -4,9 +4,8 @@
 //! Its own crate for two reasons. [`pf_vaapi`] declares `#![forbid(unsafe_code)]` —
 //! that is the contract making its parameter-buffer half testable on any OS — and
 //! this is unsafe FFI, so it cannot live there. And both the client's decode rung and
-//! the host's VAAPI encoder need the same dlopen, the same node-selection rule and the
-//! same entrypoint question; two copies would answer them differently, which is how a
-//! decoder ends up on a different GPU than the presenter.
+//! the host's VAAPI encoder need the same dlopen, the same display bring-up and the
+//! same entrypoint question; two copies would answer them differently.
 //!
 //! A missing libva is a clean `Err`, never a link error: the decode and encode ladders
 //! both fall through it. Empty off Linux.
@@ -14,7 +13,7 @@
 #![cfg(target_os = "linux")]
 
 use std::os::fd::AsRawFd as _;
-/// An H.264 encode session driven with `pf-vaapi`'s parameter buffers.
+/// An H.264 or HEVC encode session driven with `pf-vaapi`'s parameter buffers.
 pub mod encode;
 /// The VideoProc context that turns capture pictures into encoder input.
 pub mod vpp;
@@ -56,7 +55,7 @@ pub type VaBufferId = c_uint;
 pub const VA_STATUS_SUCCESS: VaStatus = 0;
 /// Also the "no surface" sentinel in a slot table. 0 is a plausible `VASurfaceID`.
 pub const VA_INVALID_ID: c_uint = 0xffff_ffff;
-/// The only picture structure this rung's envelope contains.
+/// The picture structure every context here is created with.
 pub const VA_PROGRESSIVE: c_uint = 0x0001;
 
 /// `VAGenericValue`: 16 bytes, value at offset 8, align 8 (`pf-vaapi/layout-probe.c`).
@@ -184,18 +183,19 @@ pub struct Libva {
         unsafe extern "C" fn(VaDisplay, VaContextId, *mut VaBufferId, c_int) -> VaStatus,
     pub end_picture: unsafe extern "C" fn(VaDisplay, VaContextId) -> VaStatus,
     pub sync_surface: unsafe extern "C" fn(VaDisplay, VaSurfaceId) -> VaStatus,
-    /// Buffer-specific encode completion (libva >= 1.9); `None` keeps the surface fallback.
+    /// Buffer-specific encode completion (VA-API 1.9, libva 2.9+); `None` keeps the
+    /// surface fallback.
     pub sync_buffer: Option<unsafe extern "C" fn(VaDisplay, VaBufferId, u64) -> VaStatus>,
     /// Non-blocking half of `sync_surface`: the surface's `VASurfaceStatus` out.
     pub query_surface_status: unsafe extern "C" fn(VaDisplay, VaSurfaceId, *mut c_int) -> VaStatus,
     pub export_surface_handle:
         unsafe extern "C" fn(VaDisplay, VaSurfaceId, c_uint, c_uint, *mut c_void) -> VaStatus,
-    /// Encode reads its bitstream back through a mapped coded buffer; decode has no
-    /// use for either, so both arrived with the encoder.
+    /// Encode reads its bitstream back through a mapped coded buffer, and
+    /// [`Display::map_image`] maps a derived image.
     pub map_buffer: unsafe extern "C" fn(VaDisplay, VaBufferId, *mut *mut c_void) -> VaStatus,
     pub unmap_buffer: unsafe extern "C" fn(VaDisplay, VaBufferId) -> VaStatus,
     /// Writing pixels into a surface without a dmabuf: derive its image, map, fill.
-    /// The encoder's real ingest is a dmabuf import; this is how tests make frames.
+    /// A CPU capture's staging upload goes this way, and so do the tests' frames.
     pub derive_image: unsafe extern "C" fn(VaDisplay, VaSurfaceId, *mut c_void) -> VaStatus,
     pub destroy_image: unsafe extern "C" fn(VaDisplay, u32) -> VaStatus,
     pub query_config_attributes: unsafe extern "C" fn(
@@ -332,10 +332,9 @@ pub struct Display {
     pub version: (c_int, c_int),
 }
 
-// SAFETY: the display is created and used from ONE thread (the pump), and `Send` only
-// permits MOVING that ownership. libva is not safe for concurrent calls on one
-// display, which is why `Sync` is deliberately absent: every path into it goes through
-// `&mut NativeVaapiDecoder`, and that is the serialisation.
+// SAFETY: the display is created and used from ONE thread, and `Send` only permits
+// MOVING that ownership. libva is not safe for concurrent calls on one display, which
+// is why `Sync` is deliberately absent: its one owner's thread is the serialisation.
 unsafe impl Send for Display {}
 
 /// PCI vendor of a render node in Vulkan `vendorID` units. A platform or
@@ -449,7 +448,7 @@ impl Display {
                 let e = va.err("vaInitialize", status);
                 // Unusable but still allocated; terminate so the driver state goes too.
                 (va.terminate)(display);
-                // Callers already name the node; putting it in the error printed it twice.
+                // Callers name the node, so the error leaves it out.
                 return Err(e);
             }
             Ok((display, node, (major, minor)))
@@ -848,7 +847,7 @@ fn dmabuf_size(fd: std::os::fd::BorrowedFd<'_>) -> Result<u32> {
 
 impl Drop for Display {
     fn drop(&mut self) {
-        // SAFETY: `self.display` was initialised in `open_node` and nothing else
+        // SAFETY: `self.display` was initialised in `probe` and nothing else
         // terminates it; `Drop` runs once. The node fd is dropped AFTER this, which is
         // the order libva requires — it holds the fd, it does not own it.
         unsafe { (self.va.terminate)(self.display) };

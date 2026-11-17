@@ -1,6 +1,6 @@
 //! Controllers: the connected pads as cards, each drawn as itself at rest, the keyboards and
 //! mice the host sees folded into one card, and on Android a last "Not showing?" card that
-//! opens the grants and tests only the host can perform ([`super::grants`]). The fourth tab.
+//! opens the grants and tests only the host can perform ([`super::grants`]). The third tab.
 //!
 //! Cards are one focus row that glides to keep the focused card in view and takes a
 //! finger's swipe. OK, or a hold, on a pad opens its menu ([`super::pad_menu`]): the live
@@ -9,8 +9,8 @@
 //! often enumerate as something else, so each card's identity line is the support answer.
 //!
 //! A rumble pulse on a real device stays with the host via
-//! [`crate::model::ConsoleCmd::PadAction`]; the
-//! desktop has no device handle, so it lists pads and nothing more.
+//! [`crate::model::ConsoleCmd::PadAction`]; only a host that holds the device offers the
+//! pulse (`can_rumble`).
 //! Seat order joins when `seats.rs` lands (`console-ui-redesign.md` §2).
 
 use super::input_test::{art_for, draw_pad, Drawing};
@@ -690,7 +690,7 @@ mod tests {
     }
 
     /// OK, or a hold, on a pad the host can test or pulse opens its menu; Right reaches the
-    /// next pad. A TV has neither, so OK thuds there.
+    /// next pad. The browser has neither, so OK thuds there.
     #[test]
     fn ok_or_a_hold_on_a_pad_opens_its_menu() {
         let pads = [pad("DualSense", true), pad("Edge", true)];

@@ -156,7 +156,7 @@ fn object_owner_sid(h: HANDLE) -> Option<String> {
 /// Narrow on purpose: this decides sibling host vs squat. A `S-1-5-32-`
 /// prefix or any `S-1-5-21-…` domain account reclassifies a non-admin
 /// squatter as one of ours. LocalService (`S-1-5-19`) and NetworkService
-/// (`S-1-5-20`) are excluded: the plugin runner is forced to LocalService,
+/// (`S-1-5-20`) are excluded: a console host's plugin runner is LocalService,
 /// so a name owned by it is a plugin, not a host.
 fn is_privileged_sid(sid: &str) -> bool {
     matches!(sid, "S-1-5-18" | "S-1-5-32-544") || sid.starts_with("S-1-5-80-")

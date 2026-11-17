@@ -179,8 +179,8 @@ pub(crate) struct HomeScreen {
     bump: Spring,
     /// Last-seen tile keys. Discovery churns the list; focus follows the key.
     keys: Vec<String>,
-    /// Tiles at their drawn size, culled ones included: a direction reaches past the
-    /// edge, and a pointer hits the (0.88) side-tile size, not its neighbour's.
+    /// Tiles at their drawn size, lift and entrance included, culled ones too: a direction
+    /// reaches past the edge, and a pointer hits the card as drawn, not its neighbour's.
     tree: Tree,
     /// Mount entrance. `None` until the first frame (no clock in the constructor)
     /// and again once finished. [`Self::entrance_armed`] stops it re-arming.
@@ -1416,8 +1416,8 @@ mod tests {
     }
 
     /// Up from the row is the tab strip's. Down reaches the card's verbs, which run on OK;
-    /// the last is the card's whole menu, also the hold (Secondary) a remote reaches by
-    /// holding OK.
+    /// the last is Details. The hold (Secondary), which a remote reaches by holding OK, opens
+    /// the card's whole menu instead.
     #[test]
     fn down_reaches_the_verbs_and_every_verb_is_one_press_away() {
         let mut settings = ctx_settings();

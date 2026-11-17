@@ -4,18 +4,19 @@
 //! Two decode-driven backoffs at a similar rate latch the cap. On a clean
 //! full-rate window past the decoder's warm-up the bands park at
 //! [`DECODE_HOLD_PCT`] of the budget and retreat a notch at
-//! [`DECODE_RETREAT_PCT`]. Every step — a retreat, a ×0.7 the decode verdict
-//! named, a lift on the cap's clock — is kept only if the decoder's latency
-//! follows the rate against its level at the rate the step left; one that does
-//! not stands the headroom driver down. A retreat is answered against the
-//! level where its run began: a notch shrinks with the rate and a decoder's
-//! fixed cost does not, so a last notch alone can read as nothing on a decoder
-//! that answered every one before it. A decoder that keeps up from above its
-//! period is a [`Pipeline`]: one notch reads what the rate adds to its
-//! latency, and the bands judge that. A ×0.7 the keyframe asks named is kept
-//! only if the asks stop at the new rate; one they outlive comes back, and the
-//! verdict reads no asks until they stop. A mode switch resets all of it to
-//! [`DecodeKnee::default`].
+//! [`DECODE_RETREAT_PCT`]. A retreat or a ×0.7 the decode verdict named is kept
+//! only if the decoder's latency follows the rate against its level at the rate
+//! the step left; one that does not stands the headroom driver down. A lift on
+//! the cap's clock that costs the decoder its headroom is undone. A retreat is
+//! answered against the level where its run began: a notch shrinks with the
+//! rate and a decoder's fixed cost does not, so a last notch alone can read as
+//! nothing on a decoder that answered every one before it. A decoder that keeps
+//! up from above its period is a [`Pipeline`]: one notch reads what the rate
+//! adds to its latency, and the bands judge that. One that declares room for
+//! half again the stream's pixel rate is taken as one from the start, until it
+//! sheds its queue. A ×0.7 the keyframe asks named is kept only if the asks stop
+//! at the new rate; one they outlive comes back, and the verdict reads no asks
+//! until they stop. A mode switch resets all of it to [`DecodeKnee::default`].
 
 use super::{Rate, StepAnswer, ANSWER_PCT, BAD_WINDOWS_TO_DECREASE, DECODE_CAP_SIMILAR_DIV};
 use crate::abr::cap::{LearnedCap, Level, StandDown, StepProbe};
@@ -58,10 +59,26 @@ struct Pipeline {
     line_us: Option<i64>,
     /// A step has been judged on it.
     stepped: bool,
+    /// Taken on the decoder's word ([`DecodeKnee::declare_spare`]), not yet on readings.
+    declared: bool,
 }
 
 impl Pipeline {
+    /// A pipeline on the decoder's word, with nothing read yet.
+    fn declared() -> Pipeline {
+        Pipeline {
+            seen_us: i64::MAX,
+            declared: true,
+            ..Pipeline::default()
+        }
+    }
+
     fn proven(&self) -> bool {
+        self.declared || self.measured()
+    }
+
+    /// Proven on readings over the period.
+    fn measured(&self) -> bool {
         self.over >= PIPELINE_WINDOWS
     }
 
@@ -71,14 +88,15 @@ impl Pipeline {
     /// a reading only lowers what was seen.
     fn note(&mut self, reading: Option<i64>, spoiled: bool, budget_us: i64) {
         match reading {
-            Some(mean_us) if self.proven() => self.seen_us = self.seen_us.min(mean_us),
-            Some(mean_us) if mean_us >= budget_us => {
-                self.seen_us = if self.over == 0 {
+            Some(mean_us) if self.proven() || mean_us >= budget_us => {
+                self.seen_us = if self.over == 0 && !self.declared {
                     mean_us
                 } else {
                     self.seen_us.min(mean_us)
                 };
-                self.over += 1;
+                if mean_us >= budget_us {
+                    self.over = self.over.saturating_add(1);
+                }
             }
             Some(_) => *self = Pipeline::default(),
             None if spoiled && !self.proven() => *self = Pipeline::default(),
@@ -86,10 +104,11 @@ impl Pipeline {
         }
     }
 
-    /// The latency no rate removes, once proven.
+    /// The latency no rate removes, once proven and read.
     fn floor_us(&self) -> Option<i64> {
         self.proven()
             .then(|| self.seen_us.min(self.line_us.unwrap_or(i64::MAX)))
+            .filter(|&floor_us| floor_us < i64::MAX)
     }
 
     /// A step from `from` to `at`, `(kbps, µs)` each, that the decoder
@@ -159,7 +178,8 @@ pub(in crate::abr) struct DecodeKnee {
     /// second backoff sits at ×0.7 — not a knee sample, and must not erase
     /// the reference.
     pub(super) climb_since_backoff: bool,
-    /// A retreat or a cap lift waiting for the decoder's answer.
+    /// A step waiting for its answer at the new rate: a retreat, a cap lift, or
+    /// a ×0.7 the decoder or its keyframe asks named.
     pub(super) probe: Option<DecodeProbe>,
     /// The rate a retreat run left and that rate's level, which answer every
     /// notch of the run. A rate above it starts a new run.
@@ -175,6 +195,8 @@ pub(in crate::abr) struct DecodeKnee {
     level: Level,
     /// Whether this decoder keeps up from above its period, and its floor.
     pipeline: Pipeline,
+    /// It shed its queue under a declared spare capacity: the word counts for nothing here.
+    spare_refuted: bool,
     /// Windows with decoded frames in them since the mode began.
     decoded_windows: u32,
 }
@@ -194,6 +216,7 @@ impl Default for DecodeKnee {
             asks: StandDown::new(),
             level: Level::default(),
             pipeline: Pipeline::default(),
+            spare_refuted: false,
             decoded_windows: 0,
         }
     }
@@ -547,6 +570,14 @@ impl DecodeKnee {
             && budget_us.is_some_and(|b| full_rate(w, b));
         self.level
             .note(v.decode_mean_us.filter(|_| clean), rate_kbps);
+        if w.backlog && self.pipeline.declared && !self.pipeline.measured() {
+            self.pipeline = Pipeline::default();
+            self.spare_refuted = true;
+            tracing::info!(
+                "adaptive bitrate: the decoder shed its queue under the spare capacity it \
+                 declares — judged on its whole latency from here"
+            );
+        }
         if let Some(budget_us) = budget_us {
             let reading = v.decode_mean_us.filter(|_| clean && !w.backlog);
             let proven = self.pipeline.proven();
@@ -559,6 +590,23 @@ impl DecodeKnee {
                      pipeline, judged on what the rate adds"
                 );
             }
+        }
+    }
+
+    /// Whether the decoder declares room for half again this stream's pixel rate. One that
+    /// does and still reads near the period is not working a picture at a time: that
+    /// latency is its pipeline's, and the bands judge what the rate adds over the lowest
+    /// reading. A shed queue refutes the word for the mode; a withdrawn word is forgotten
+    /// unless readings over the period have proven the pipeline since.
+    pub(in crate::abr) fn declare_spare(&mut self, spare: bool) {
+        if spare && !self.spare_refuted && !self.pipeline.proven() {
+            self.pipeline = Pipeline::declared();
+            tracing::info!(
+                "adaptive bitrate: the decoder declares spare capacity — judged on what the \
+                 rate adds to its latency"
+            );
+        } else if !spare && self.pipeline.declared && !self.pipeline.measured() {
+            self.pipeline = Pipeline::default();
         }
     }
 

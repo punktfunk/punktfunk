@@ -10,8 +10,7 @@ use super::*;
 /// it can run that many frames of libopus PLC (`decode` with empty input) first.
 ///
 /// Reorders and duplicates conceal nothing (no reorder buffer). A gap is capped at
-/// [`MAX_CONCEAL_MS`]; past that, libopus PLC has faded to silence and the ring underrun path
-/// takes over.
+/// [`MAX_CONCEAL_MS`]; the rest of it is left to the ring underrun path.
 #[derive(Debug)]
 pub struct AudioGapTracker {
     last_seq: Option<u32>,
@@ -59,7 +58,8 @@ impl AudioGapTracker {
         Self::default()
     }
 
-    /// Cap seq-gap PLC at 50 ms of `frame_us`. [`new`](Self::new) is the Opus 5 ms default.
+    /// Cap seq-gap PLC at [`MAX_CONCEAL_MS`] of `frame_us`. [`new`](Self::new) is the Opus 5 ms
+    /// default.
     pub fn new_at_frame_us(frame_us: u32) -> Self {
         let mut t = Self::new();
         t.set_frame_us(frame_us);

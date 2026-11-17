@@ -12,7 +12,7 @@
 //!
 //! Evidence: `design/display-management.md`. Tests cover preset expansion,
 //! [`DisplayPolicy::effective`], and [`KeepAlive`] linger. The store follows
-//! `gpu.rs`: private dir, temp-write + atomic rename, in-memory rollback
+//! `pf_gpu::GpuPrefStore`: private dir, temp-write + atomic rename, in-memory rollback
 //! on a failed write.
 
 use std::collections::BTreeMap;
@@ -89,9 +89,8 @@ fn resolve_linger(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Topology {
-    /// Resolved at acquire ([`super::effective_topology`]): exclusive on
-    /// Windows and auto-detected Linux desktop; extend under an explicit
-    /// `PUNKTFUNK_COMPOSITOR` pin.
+    /// Resolved at acquire ([`super::resolve_topology`]): exclusive, or extend under an
+    /// explicit `PUNKTFUNK_COMPOSITOR` pin.
     #[default]
     Auto,
     /// Add the virtual display(s); leave physical outputs alone.
@@ -132,8 +131,8 @@ pub enum Identity {
     PerClientMode,
 }
 
-/// Arrangement in desktop space. Computed only in `layout::arrange`:
-/// `/display/state` and (Linux, KWin only) position apply both consume it.
+/// Arrangement in desktop space. Computed only in `layout::arrange`: `/display/state`, the
+/// Windows manager and Linux position apply (KWin, Hyprland, sway, niri) consume it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum LayoutMode {
@@ -174,8 +173,8 @@ pub enum GameSession {
     /// or the live desktop on KWin/Mutter/wlroots).
     Auto,
     /// Own headless gamescope at the client's mode, game only. Degrades to
-    /// `auto` when gamescope is missing. The default: KWin and Mutter virtual
-    /// outputs carry no HDR, and gamescope does.
+    /// `auto` when gamescope is missing. The default: KWin 6.8 and Mutter 51 virtual
+    /// outputs carry no HDR; the patched gamescope does.
     #[default]
     Dedicated,
 }
@@ -363,7 +362,7 @@ pub struct DisplayPolicy {
     /// a dual-boot box keeps its fingerprint and changes its IP).
     ///
     /// Written only through `/display/clients/{fp}`; the host-wide PUT refuses
-    /// a `clients` key outright, so a stale console cannot round-trip the
+    /// a non-empty `clients` key, so a stale console cannot round-trip the
     /// whole map back over a change it never saw.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub clients: BTreeMap<String, ClientOverlay>,
@@ -809,11 +808,7 @@ impl DisplayPolicy {
     /// uses it so arranging stays orthogonal to every other axis.
     ///
     /// Consumes and returns the WHOLE policy rather than rebuilding one from
-    /// [`EffectivePolicy`]. The old shape took the five orthogonal fields as
-    /// arguments and named every field it kept, so each field added since had
-    /// to be remembered at this one site or arranging silently cleared it —
-    /// which is how saving a layout used to drop a capture pin. Now anything
-    /// not named here survives, which is the safe direction.
+    /// [`EffectivePolicy`], so a field this function does not name survives.
     pub fn with_manual_layout(mut self, positions: BTreeMap<String, Position>) -> DisplayPolicy {
         // Expand BEFORE switching to `Custom`: on a named preset the struct's
         // own axes are whatever was last written, and `Custom` is what makes
@@ -834,8 +829,8 @@ impl DisplayPolicy {
     }
 }
 
-/// Named-preset expansion; `None` for [`Preset::Custom`]. `presets_match_doc`
-/// guards the table.
+/// Named-preset expansion; `None` for [`Preset::Custom`]. The table is
+/// `design/display-management.md` §4.3.
 pub fn preset_fields(preset: Preset) -> Option<EffectivePolicy> {
     let base = |keep_alive, topology, mode_conflict, identity, layout_mode| EffectivePolicy {
         keep_alive,
@@ -962,8 +957,8 @@ impl DisplayPolicyStore {
                 }
                 Self::parse(&path, &bytes)
             }
-            // Exists-but-unreadable (EACCES, EIO) is not unconfigured: folding
-            // it into silent `None` reverted the console to defaults with no log.
+            // Exists-but-unreadable (EACCES, EIO) also runs on defaults, but never silently: the
+            // warn says the configured policy is not in force.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
                 tracing::warn!(path = %path.display(),
@@ -1327,7 +1322,7 @@ fn on_a_seat(conflict: ModeConflict) -> ModeConflict {
 /// seat's own. It never mirrors, keeps lit or powers off a real monitor, and never routes a game
 /// to a session of its own. A second device shares the occupant's screen when the box would let
 /// it join, and is refused otherwise (`contract_policy`). Linger, topology
-/// and identity stay the unconfigured host's, as they always were on a seat.
+/// and identity stay the unconfigured host's ([`DisplayPolicyStore::configured`] is `None`).
 pub fn seat_contract() -> DisplayPolicy {
     DisplayPolicy {
         mode_conflict: ModeConflict::Join,
@@ -1389,7 +1384,7 @@ struct CatalogRead {
 /// Lenient catalog-read shape: every axis defaulted.
 ///
 /// Persist needs this (older entries, hand-dropped keys). The mgmt API
-/// must stay strict: `#[serde(default)]` on [`EffectivePolicy`] turned
+/// must stay strict: `#[serde(default)]` on [`EffectivePolicy`] would turn
 /// `{"name":"Kiosk","fields":{}}` into a 201. Private, `Deserialize`-only,
 /// reached only from [`parse_catalog`]. Gain a field when
 /// [`EffectivePolicy`] does; the `From` is exhaustive so a forgotten axis
@@ -1517,8 +1512,8 @@ fn salvage_entries(
 
 /// Parse **entry-wise**. Pure so recovery is unit-tested.
 ///
-/// Whole-document `from_slice::<Vec<CustomPreset>>` made one bad entry
-/// empty the catalog; the next create then renamed that empty vector over
+/// Whole-document `from_slice::<Vec<CustomPreset>>` would let one bad entry
+/// empty the catalog, and the next create would rename that empty vector over
 /// the file. A bad entry costs itself; `lossy` tells the caller the disk
 /// still holds more than we understood.
 fn parse_catalog(bytes: &[u8]) -> CatalogRead {
@@ -1979,9 +1974,8 @@ mod tests {
     }
 
     /// File contract, not PUT. Older hosts' documents load with missing
-    /// axes at defaults. PUT `/display/settings` is a whole-object replace,
-    /// so omitting `capture_monitor` currently clears the pin. A merge DTO
-    /// belongs in the mgmt handler; this type stays as asserted here.
+    /// axes at defaults. The PUT keeps the keys it omits by merging in the
+    /// mgmt handler (`a_host_wide_put_keeps_every_key_it_omits`).
     #[test]
     fn serde_defaults_fill_a_partial_document() {
         let p: DisplayPolicy =
@@ -2979,8 +2973,7 @@ mod tests {
             assert_eq!(p.cap_mode(None, (3840, 2160, 120)), (3840, 2160, 120));
         }
 
-        /// An unreadable cap must not silently grant everything, nor silently grant
-        /// nothing — it is refused at the door and the device stays uncapped.
+        /// An unparsable cap is dropped on write, not stored: `cap_mode_or` reads it as no cap.
         #[test]
         fn an_unparsable_cap_is_not_stored() {
             let mut p = DisplayPolicy::default();
@@ -3033,8 +3026,7 @@ mod tests {
             assert_eq!(p.keep_monitors, vec!["DP-1", "HDMI-A-2"]);
         }
 
-        /// Arranging must not clear what it does not mention — the trap the
-        /// old six-argument rebuild kept falling into.
+        /// Arranging must not clear what it does not mention.
         #[test]
         fn arranging_a_layout_keeps_every_overlay() {
             let p = host().with_manual_layout(BTreeMap::new());

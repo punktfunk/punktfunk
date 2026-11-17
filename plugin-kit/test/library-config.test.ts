@@ -106,7 +106,7 @@ describe("S2 — JSON Schema derivation for __config", () => {
 		);
 		expect(p.enabled.default).toBe(true);
 		expect(p.artSource.default).toBe("both");
-		// A CHECKED schema (Int is String-plus-a-check) keeps its annotations on the property itself.
+		// A CHECKED schema (Int is Number-plus-a-check) keeps its annotations on the property itself.
 		expect(p.pollMinutes).toMatchObject({
 			default: 15,
 			title: "Poll interval (minutes)",
@@ -218,7 +218,7 @@ describe("__config wire contract", () => {
 			expect(res.status).toBe(200);
 			const body = (await res.json()) as { schema: unknown; value: unknown };
 			// Both keys are ALWAYS present and never `undefined` — the console decodes this shape,
-			// and an omitted-vs-null field is the wire trap that bit the rom-manager 0.3.1 release.
+			// and an omitted-vs-null field is a wire trap.
 			expect(body).toHaveProperty("schema");
 			expect(body).toHaveProperty("value");
 			expect(body.schema).not.toBeNull();
@@ -236,8 +236,8 @@ describe("__config wire contract", () => {
 				}),
 			);
 			expect(res.status).toBe(200);
-			// The file holds exactly what was authored — the five defaulted fields are NOT written,
-			// which is what keeps a future change to a default from being silently pinned.
+			// The file holds exactly what was authored — the four other defaulted fields are NOT
+			// written, which is what keeps a future change to a default from being silently pinned.
 			expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
 				enabled: false,
 			});

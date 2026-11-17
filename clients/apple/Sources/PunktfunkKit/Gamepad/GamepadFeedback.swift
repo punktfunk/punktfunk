@@ -61,9 +61,10 @@ public final class GamepadFeedback {
     /// The raw-report sink for `.hidRaw` events — the Steam Controller 2 capture's
     /// `Sc2Capture.onHidRaw(pad:kind:data:)`, registered by the session owner. Guarded by
     /// `routingLock` (set on the main actor, read on the drain thread). Routed WITHOUT the
-    /// main-actor hop the led/trigger path takes: Steam replays rumble at a 25–40 ms cadence,
-    /// the sink filters by pad itself, and its GATT write hops to the BLE queue anyway. nil
-    /// (no capture registered) drops the event — the shape every unroutable feedback takes.
+    /// main-actor hop the led/trigger path takes: the Triton protocol re-sends rumble every
+    /// ~40 ms (SDL's driver), the sink filters by pad itself, and its GATT write hops to the BLE
+    /// queue anyway. nil (no capture registered) drops the event — the shape every unroutable
+    /// feedback takes.
     private var hidRawSink: ((_ pad: UInt8, _ kind: UInt8, _ data: [UInt8]) -> Void)?
 
     /// Opt-in device mirror (`DefaultsKey.rumbleOnDevice`, iPhone only): rumble the host
@@ -274,8 +275,8 @@ public final class GamepadFeedback {
     private var hasNoTarget: Bool { withRouting { rumbleByPad.isEmpty && hidRawSink == nil } }
 
     /// Register (or clear) the `.hidRaw` sink — the session owner wires `Sc2Capture.onHidRaw`
-    /// here beside starting the capture, and clears it BEFORE stopping either side (the
-    /// Android teardown order: unhook → feedback.stop → capture.stop).
+    /// here beside starting the capture, and clears it BEFORE stopping either side, as Android's
+    /// teardown does.
     public func setHidRawSink(
         _ sink: ((_ pad: UInt8, _ kind: UInt8, _ data: [UInt8]) -> Void)?
     ) {
@@ -284,7 +285,7 @@ public final class GamepadFeedback {
 
     private func render(_ ev: PunktfunkConnection.HidOutputEvent) {
         // Raw SC2 reports stay on the drain thread — no GameController profile is touched, and
-        // the main-actor hop would only add latency to Steam's 25–40 ms rumble resends.
+        // the main-actor hop would only add latency to rumble's ~40 ms resends.
         if case let .hidRaw(pad, kind, data) = ev {
             let sink = withRouting { hidRawSink }
             // Controller rumble off plays Steam's rumble report as a stop, like every pad's.
@@ -356,11 +357,10 @@ public final class GamepadFeedback {
     private func reset(_ controller: GCController?) {
         guard let c = controller else { return }
         c.playerIndex = .indexUnset
-        // Put the lightbar out too. This class is what turned it on (see the `Led` and
-        // `PlayerLeds` arms), and every DS write is valid-flag-selective, so a colour the game
-        // set stays lit in firmware after the stream ends — back at the launcher, or for a pad
-        // that merely left the forwarded set. A DS4 is cleared incidentally because its player
-        // indicator IS the lightbar; a DualSense is not.
+        // Put the lightbar out too: this class turned it on (`.led`, `.playerLEDs`), and every
+        // DS write is valid-flag-selective, so a game's colour stays lit in firmware after the
+        // stream or once the pad leaves the forwarded set. A DS4 has no player LEDs; a
+        // DualSense's sit apart from its lightbar.
         c.light?.color = GCColor(red: 0, green: 0, blue: 0)
         if let ds = c.extendedGamepad as? GCDualSenseGamepad {
             ds.leftTrigger.setModeOff()

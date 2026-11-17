@@ -33,10 +33,10 @@ jobs:
   announce:
     runs-on: ubuntu-24.04
     steps:
-      # SHA-pinned, unlike the plain `@v4` the build workflows use: this job holds
-      # UPDATE_MANIFEST_KEY — the Ed25519 key every host pins to decide whether an update is real —
-      # and a tag is mutable, so whoever can move it runs code in front of that key. Same style as
-      # the appleboy pins in deploy-services.yml; the trailing comment is the release it resolves to.
+      # SHA-pinned, not by tag: this job holds UPDATE_MANIFEST_KEY — the Ed25519 key every host
+      # pins to decide whether an update is real — and a tag is mutable, so whoever can move it
+      # runs code in front of that key. Same style as the appleboy pins in deploy-services.yml;
+      # the trailing comment is the release it resolves to.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Publish the SIGNED stable update manifest — the moment every host's update check learns
@@ -90,8 +90,8 @@ jobs:
             exit 1
           }
           # The operator copies this leaf hash from the Windows signing-job log, not from the
-          # replaceable release asset. Schema-1 clients already enforce this field, so the first
-          # secure rollout protects old clients that do not understand authenticode_subject.
+          # replaceable release asset. Schema-1 clients already enforce this field, so it also
+          # protects old clients that do not understand authenticode_subject.
           LEAF_SHA="$(printf '%s' "$INPUT_AUTHENTICODE_SHA256" | tr 'A-F' 'a-f')"
           if ! printf '%s' "$LEAF_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
             echo "ERROR: authenticode_sha256 must be the 64-hex signing-job value" >&2
@@ -101,9 +101,10 @@ jobs:
             echo "ERROR: set AUTHENTICODE_SUBJECT to the stable signing certificate CN" >&2
             exit 1
           fi
-          # Azure Trusted Signing chains to the Microsoft Identity Verification Root CA 2020, which
-          # the Mozilla bundle does not carry, so the root is vendored and pinned; the timestamp
-          # chain roots there too. The pin is what keeps a verified signature past the 3-day leaf.
+          # Azure Artifact Signing chains to the Microsoft Identity Verification Root CA 2020,
+          # which the Mozilla bundle does not carry, so the root is vendored and pinned; the
+          # timestamp chain roots there too. The pin keeps a verified signature past the 3-day
+          # leaf.
           ROOT=ci/certs/microsoft-identity-verification-root-2020.pem
           VERIFY="$(osslsigncode verify \
             -CAfile "$ROOT" -TSA-CAfile "$ROOT" \

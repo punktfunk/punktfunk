@@ -6,9 +6,10 @@
 //! (no Auto/env). [`route_decision`] pins a live pad to its owning manager so a later declared
 //! kind cannot duplicate it.
 //!
-//! `degrade_if_no_uhid`, `physical_steam_product_present`, and `degrade_steam_on_conflict`
-//! are cfg-split linux/other. Linux clippy does not see the non-linux copies; re-verify on
-//! Windows when those arms change.
+//! `degrade_if_no_uhid`, `degrade_steam_on_conflict` and `warn_if_ds_inhibit_storm` are
+//! cfg-split linux/other; `degrade_xbox_identity` and `degrade_missing_driver_identity`
+//! windows/other. One OS's clippy does not see the other's copies; re-verify there when those
+//! arms change.
 
 use super::*;
 
@@ -49,9 +50,9 @@ pub(super) fn resolve_pad_kind(kind: GamepadPref, steam_force: bool) -> GamepadP
 ///
 /// `linux`/`windows` are the host OS. Every kind has a Linux and a Windows backend, the two
 /// Switch 2 pads folding to the Switch Pro on Windows; other wishes fold to Xbox 360 (never an
-/// error — a session without rich pads still streams). Steam Controller 2 is Linux UHID and Windows
-/// DEVTYPE_TRITON; the SC2 Puck has a native Linux identity and folds onto the wired one on
-/// Windows.
+/// error — a session without rich pads still streams). Steam Controller 2 is Linux usbip (UHID
+/// its fallback) and Windows DEVTYPE_TRITON; the SC2 Puck has a native Linux identity and folds
+/// onto the wired one on Windows.
 ///
 /// Compile-time OS flags only. The Windows XUSB backend un-varies Xbox identity at runtime;
 /// that fold is [`degrade_xbox_identity`], not this function.
@@ -74,7 +75,7 @@ fn pick_gamepad(pref: GamepadPref, env: Option<&str>, linux: bool, windows: bool
         GamepadPref::DualSenseEdge if linux || windows => GamepadPref::DualSenseEdge,
         // Linux UHID hid-nintendo (≥ 5.16); Windows UMDF device type 8.
         GamepadPref::SwitchPro if linux || windows => GamepadPref::SwitchPro,
-        // Linux: UHID passthrough under 28DE:1302; no kernel driver, Steam Input consumes hidraw.
+        // Linux: 28DE:1302 over usbip, UHID fallback; no kernel driver, Steam Input reads hidraw.
         GamepadPref::SteamController2 if linux => GamepadPref::SteamController2,
         GamepadPref::SteamController2 if windows => GamepadPref::SteamController2,
         // 28DE:1304's seven interfaces have a native Linux synthesis only.
@@ -246,9 +247,9 @@ fn steam_backend_product(pref: GamepadPref) -> Option<u16> {
 /// (`28DE:1205`) — Steam Input drives distinct controllers side by side.
 ///
 /// HID dirs are `BUS:VID:PID.INST`. Skip our own pads (`HID_UNIQ=FVPF…`,
-/// [`steam_proto::deck_serial`]). Skip `/devices/virtual/` and `vhci_hcd`: usbip/gadget
-/// presents a real USB device, so a detaching or concurrent session pad would look
-/// physical and fold the next Deck session.
+/// [`steam_proto::deck_serial`](crate::inject::steam_proto::deck_serial)). Skip
+/// `/devices/virtual/` and `vhci_hcd`: usbip/gadget presents a real USB device, so a
+/// detaching or concurrent session pad would look physical and fold the next Deck session.
 #[cfg(target_os = "linux")]
 fn physical_steam_product_present(product: u16) -> bool {
     let needle = format!(":28DE:{product:04X}");

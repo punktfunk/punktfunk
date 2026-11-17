@@ -1,15 +1,14 @@
-// The device-switch regression, end to end against a real session.
+// The output-device switch, end to end against a real session.
 //
 // An AVAudioEngine does not follow the audio hardware: when the output device changes under a
-// running engine it STOPS ITSELF and stays stopped. Nothing restarted it, so a stream whose
-// output moved mid-session — AirPods taken out of an ear, a headset unplugged, the default
-// changed in System Settings — played silence from that moment on: nothing on the speakers the
-// system had just moved to, and nothing in the AirPods when they went back in, since that is a
-// second stop rather than a recovery. Only restarting the whole stream brought audio back.
+// running engine it stops itself and stays stopped. A stream whose output moves mid-session —
+// AirPods taken out of an ear, a headset unplugged, the default changed in System Settings —
+// needs `SessionAudio` to rebuild its engines on the device the system moved to, and again
+// when the device returns, which is a second stop rather than a recovery.
 //
 // This drives the real `SessionAudio` against the loopback host and moves the system's default
-// output device out from under it, twice — out and back, the exact shape of the field report.
-// Playback-only (mic off): it is the render side that died, and a mic would drag the microphone
+// output device out from under it, twice: out and back.
+// Playback-only (mic off): it is the render side that stops, and a mic would drag the microphone
 // permission and the voice processor into a test that is about neither.
 //
 // Driven by clients/apple/test-loopback.sh, like its LoopbackIntegrationTests siblings.
@@ -74,8 +73,8 @@ final class AudioDeviceSwitchTests: XCTestCase {
             host: "127.0.0.1", port: port, width: 1280, height: 720, refreshHz: 60,
             bitrateKbps: 50_000)
         let audio = SessionAudio(connection: conn)
-        // "" speaker UID = follow the system default, which is what the report was running and
-        // the only configuration a default-device change is supposed to move.
+        // "" speaker UID = follow the system default, the only configuration a default-device
+        // change moves.
         audio.start(
             speakerUID: "", micUID: "", micChannel: 0, micEnabled: false, echoCancel: false)
         defer {
@@ -95,8 +94,7 @@ final class AudioDeviceSwitchTests: XCTestCase {
                 + "report: no sound on the device the system moved to, until the stream is "
                 + "restarted")
 
-        // And back: the second half of the report, where putting the AirPods back in produced a
-        // second stop rather than a recovery.
+        // And back: the device returning is a second stop, which the session recovers from too.
         XCTAssertEqual(setDefaultOutput(original), noErr)
         XCTAssertTrue(
             waitForPlayback(audio, on: original, timeout: 10),

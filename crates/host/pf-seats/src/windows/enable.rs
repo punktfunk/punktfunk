@@ -65,7 +65,7 @@ const QUERY_LIMIT: Duration = Duration::from_secs(180);
 pub(super) const DOCTOR_BUDGET: Duration = Duration::from_secs(240);
 const INSTALL_LIMIT: Duration = Duration::from_secs(900);
 const TOOL_LIMIT: Duration = Duration::from_secs(300);
-/// The keeper's own handshake gives up after 15 s.
+/// How long the keeper's `trust` may run; its own handshake gives up after 15 s.
 const KEEPER_LIMIT: Duration = Duration::from_secs(60);
 /// The role's install state, then licensing and a GPU as `0`/`1` flags, on the last line. A role
 /// the cmdlet can't read is `Unknown`, after the cmdlet's error. `Available`, a role not
@@ -476,8 +476,8 @@ const LICENSING: &str = "$ErrorActionPreference='SilentlyContinue'; \
     '{0}|{1}' -f $days, $servers";
 
 /// How long Remote Desktop still runs without a licence server, for the doctor, until `deadline`.
-/// Windows Server signs seats in for 120 days without one. `None` when Windows doesn't say; a
-/// query that fails or runs out of time is a warning.
+/// Windows Server (2016-2025) signs seats in for 120 days without one. `None` when Windows
+/// doesn't say; a query that fails or runs out of time is a warning.
 pub(super) fn licensing_row(deadline: Instant) -> Option<Diagnostic> {
     let lines = time_left(deadline)
         .ok_or_else(|| "the doctor's time is up".to_owned())
@@ -671,8 +671,9 @@ fn store_versions() -> Vec<String> {
         .collect()
 }
 
-/// Whether Windows' own Remote Desktop display driver is dated after ours: the newer date wins
-/// the seat's display, and a seat on Microsoft's never streams. `None` when either is unreadable.
+/// Whether Windows' own Remote Desktop display driver is dated no earlier than ours: the newer
+/// date wins the seat's display, and a seat on Microsoft's never streams. `None` when either is
+/// unreadable.
 pub(super) fn inbox_display_driver_newer(host_path: &Path) -> Option<bool> {
     let ours = driver_ver(&package_dir(host_path).join(PACKAGE[0]))?;
     let windows = driver_ver(Path::new(&pf_paths::windows_dir(r"INF\rdpidd.inf")))?;
@@ -1222,7 +1223,7 @@ mod tests {
              Set-NetFirewallRule -RemoteAddress '10.0.5.0/255.255.255.0','LocalSubnet';"
         ));
         assert!(script.contains("@('RemoteDesktop-UserMode-In-TCP','{guid-1}') -notcontains"));
-        // With no record every rule opens, as before the scopes were kept.
+        // With no record every rule opens.
         assert!(restore_script(&[]).contains("@() -notcontains $_.Name"));
     }
 

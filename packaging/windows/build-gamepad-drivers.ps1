@@ -1,17 +1,18 @@
 <#
 .SYNOPSIS
-  Build + sign the punktfunk virtual-gamepad UMDF drivers (pf-gamepad = DualSense/DualShock 4/Edge/Deck, pf-xusb =
-  Xbox 360 / XInput) FROM SOURCE, in CI, and stage them for the host installer. The gamepad analogue of
-  build-pf-vdisplay.ps1 - replaces the checked-in prebuilt binaries (packaging/windows/gamepad-drivers/)
-  so the .dll/.inf/.cat stay in lockstep with the source and never go stale.
+  Build + sign the punktfunk virtual-gamepad UMDF drivers (pf-gamepad = the HID pad identities,
+  pf-xusb = Xbox 360 / XInput) FROM SOURCE, in CI, and stage them for the host installer. The
+  gamepad analogue of build-pf-vdisplay.ps1 - the .dll/.inf/.cat are built from the current source
+  on every run, so they stay in lockstep with it.
 
 .DESCRIPTION
-  Both drivers are members of the in-tree drivers workspace (packaging/windows/drivers/), so one
-  `cargo build --release` builds the whole workspace (this shares wdk-sys/wdk-build + the bindgen pin with
-  pf-vdisplay). Then, per driver: CLEAR the FORCE_INTEGRITY PE bit, sign the .dll, stampinf a DriverVer
-  into the INF; then Inf2Cat both catalogs and sign them. Both drivers share ONE self-signed cert (or a
-  supplied DRIVER_CERT secret) + ONE exported .cer - the layout `punktfunk-host.exe driver install
-  --gamepad` consumes (per-driver .inf/.cat/.dll + one shared punktfunk-driver.cer).
+  Every driver here is a member of the in-tree drivers workspace (packaging/windows/drivers/), so
+  one `cargo build --release` builds the whole workspace (this shares wdk-sys/wdk-build + the
+  bindgen pin with pf-vdisplay). Then, per driver: CLEAR the FORCE_INTEGRITY PE bit, sign the .dll,
+  stampinf a DriverVer into the INF; then Inf2Cat the catalogs and sign them. The drivers share ONE
+  self-signed cert (or a supplied DRIVER_CERT secret) + ONE exported .cer - the layout
+  `punktfunk-host.exe driver install --gamepad` consumes (per-driver .inf/.cat/.dll + one shared
+  punktfunk-driver.cer).
 
   Output (-Out): pf_gamepad.{dll,inf,cat} + pf_xusb.{dll,inf,cat} + pf_mouse.{dll,inf,cat} +
   pf_touchpad.{dll,inf,cat} + punktfunk-driver.cer. (pf_mouse is the resident virtual HID pointer
@@ -69,7 +70,8 @@ if (-not $env:LIBCLANG_PATH -and (Test-Path 'C:\Program Files\LLVM\bin\libclang.
 # X: root, so a target kept between CI runs never sees two checkout paths.
 $triple = if ($Arch -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
 $stampArch = if ($Arch -eq 'arm64') { 'arm64' } else { 'amd64' }
-$catOs = if ($Arch -eq 'arm64') { '10_NI_ARM64' } else { '10_X64' }   # both floor at 22H2 (22621)
+# Inf2Cat OS: Windows 10 x64, or Windows 11 22H2 Arm64.
+$catOs = if ($Arch -eq 'arm64') { '10_NI_ARM64' } else { '10_X64' }
 $rel = Join-Path $DriversDir "target\$triple\release"
 
 # --- 1. build (release) - one build covers the whole workspace --------------------------------
@@ -88,7 +90,7 @@ $signtool = Find-SdkTool 'signtool.exe'
 $stampinf = Find-SdkTool 'stampinf.exe'
 $inf2cat = Find-SdkTool 'Inf2Cat.exe' 'x86'
 
-# --- 3. signing cert (supplied stable pfx OR fresh self-signed; shared by both drivers) -------
+# --- 3. signing cert (supplied stable pfx OR fresh self-signed; shared by every driver) ------
 # FAIL CLOSED on a real release, same rule as the host/MSIX pack scripts. The fallback below mints
 # a cert per BUILD, and the installer trusts whatever .cer ships in the bundle - so the signature
 # proves nothing about origin, and each upgrade adds another self-signed root CA to the user's
@@ -137,7 +139,7 @@ foreach ($d in $drivers) {
     if ($LASTEXITCODE -ne 0) { throw "stampinf ($($d.inf)) failed ($LASTEXITCODE)" }
 }
 
-# --- 5. Inf2Cat both catalogs (one pass over -Out), then sign each -----------------------------
+# --- 5. Inf2Cat the catalogs (one pass over -Out), then sign each ------------------------------
 & $inf2cat /driver:$Out /os:$catOs /uselocaltime | Out-Null
 foreach ($d in $drivers) {
     $sCat = Join-Path $Out $d.cat

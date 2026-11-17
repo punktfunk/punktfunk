@@ -2,15 +2,12 @@
 //
 // The host publishes every lifecycle transition on `GET /api/v1/events` as SSE — client
 // connect/disconnect, session and stream start/end, pairing decisions, display create/release,
-// library/store/plugin changes, update availability, host start/stop. Nothing consumed it: the
-// console learned about all of it by asking again on ten separate timers, so a change was up to
-// 5 s stale, two pages could disagree with each other while you looked at them, and the Library
-// page — which polls not at all — never noticed a newly installed game until a full reload.
+// library/store/plugin changes, update availability, host start/stop.
 //
 // This subscribes once for the whole app and invalidates exactly the queries an event affects.
 // It does NOT carry data into the cache: the REST snapshots stay the source of truth, and an event
 // only says "this is stale now". That keeps the wire format additive-only (a kind we don't know
-// costs us nothing) and means a missed event degrades to the polling behaviour we already had.
+// costs us nothing) and means a missed event degrades to whatever polling a page has.
 //
 // Transport notes:
 //   - Same-origin, so the sealed session cookie rides along and the BFF injects the mgmt bearer;
@@ -149,9 +146,8 @@ const INVALIDATES = {
  *
  * `refetchType: "all"` rather than the default `"active"`: an event says the HOST changed, so every
  * cached copy is wrong, whether or not a mounted component happens to be observing it right now.
- * The default only refetches queries with a live observer, which silently did nothing for a page
- * that had just been re-rendered — the cache stayed marked-stale-but-unfetched and the screen kept
- * showing the old answer.
+ * The default only refetches queries with a live observer and leaves the rest marked stale but
+ * unfetched.
  */
 function invalidate(qc: QueryClient, queryKey: readonly unknown[]): void {
 	qc.invalidateQueries({ queryKey, refetchType: "all" });
@@ -166,9 +162,9 @@ function resyncAll(qc: QueryClient): void {
 // The activity log.
 //
 // The same frames that drive invalidation are also, in themselves, the answer to "what has this
-// host been doing?" — a question the console could not answer at all. Nothing else records this:
-// the REST snapshots describe the present, and the host's own log is a developer artifact, not a
-// narrative. So keep a small in-memory ring alongside the cache work.
+// host been doing?" Nothing else records this: the REST snapshots describe the present, and the
+// host's own log is a developer artifact, not a narrative. So keep a small in-memory ring
+// alongside the cache work.
 //
 // Deliberately NOT persisted and deliberately bounded: it is a live tail for someone watching, not
 // an audit trail, and a page load starts fresh from whatever the ring replays.
@@ -181,7 +177,7 @@ const activityListeners = new Set<() => void>();
  * True once this page load's replay has been applied, or its deadline passed. Before that the
  * feed is not empty, it is unknown — so a card rendered from it waits instead of mounting empty
  * and filling a moment later. Mounted together with its rows, the card animates the same way on
- * every path (reload, navigation, a slow status query); mounted early, it depended on timing.
+ * every path (reload, navigation, a slow status query).
  */
 let activityReady = false;
 
@@ -223,13 +219,12 @@ export function useActivityReady(): boolean {
 // ---------------------------------------------------------------------------------------------
 // The connection is a module-level singleton, refcounted, NOT a per-component resource.
 //
-// It has to be. The subscription is app-lifetime, but the component that asks for it is not:
-// during hydration TanStack Start mounts the app shell and discards it again ~15 ms later
-// (measured), which ran an effect cleanup with no matching re-mount. Tied to that effect, the
-// stream opened, closed, and never came back — the console looked subscribed and received nothing.
+// The subscription is app-lifetime, but the component that asks for it is not: its effect can be
+// cleaned up and run again (StrictMode does so in development). Tied to that effect, each cycle
+// would reconnect and replay the ring.
 //
-// So: `open()` hands out a reference and only the LAST release closes the socket, after a short
-// grace period, so a remount inside that window re-attaches to the live stream instead of
+// So: `useHostEvents` takes a reference and only the LAST `release` closes the socket, after a
+// short grace period, so a remount inside that window re-attaches to the live stream instead of
 // reconnecting. `EventSource` handles reconnection itself and replays with `Last-Event-ID`, which
 // the SSE route forwards.
 // ---------------------------------------------------------------------------------------------
@@ -245,11 +240,10 @@ const CLOSE_GRACE_MS = 10_000;
 /** False until the host's `live` marker: frames before it are ring replay, not news. */
 let live = false;
 
-// A connection replays the host's whole ring before `live`: 161 frames in 43 ms on a real host, 114
-// of them `library.changed`. Handled one at a time, all of it ran in a single 600 ms task — every
-// frame rendered the feed and evicted a row whose exit animation never got a frame, so the card
-// grew to 157 rows, and every frame invalidated its queries, so /library was fetched 109 times on
-// one reload. The replay is held instead and applied ONCE: one render, each query invalidated once.
+// A connection replays the host's whole ring before `live`. Handled frame by frame, each one would
+// render the feed and invalidate its queries, so a reload would refetch /library once per
+// `library.changed` in the ring. The replay is held instead and applied ONCE: one render, each
+// query invalidated once.
 let replayed: ActivityEntry[] = [];
 const replayedKeys = new Map<string, readonly unknown[]>();
 let replayedResync = false;
@@ -390,8 +384,8 @@ function parseEntry(kind: string, ev: Event): ActivityEntry | null {
 /**
  * Tell the operator a device is knocking, wherever they are in the console.
  *
- * The pending list is on one page, and until now nothing said a request had arrived unless you
- * were already looking at it — worst on a phone, where that page is several taps away.
+ * Only Home and the Devices page show a waiting request, so without this nothing says one has
+ * arrived on any other page.
  *
  * The action is a plain navigation rather than a router push: this module is not a component and
  * has no router to reach. It costs a page load, on a button someone pressed on purpose.

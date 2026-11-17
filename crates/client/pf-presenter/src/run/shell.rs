@@ -37,7 +37,7 @@ impl Shell {
             "io.unom.punktfunk"
         };
         sdl3::hint::set("SDL_APP_ID", app_id);
-        // SDL picks XWayland where the compositor lacks `wp_fifo_v1` (KWin before 6.4, Mutter
+        // SDL picks XWayland where the compositor lacks `fifo-v1` (KWin before 6.4, Mutter
         // before 48); the native lane and colour management need the Wayland surface. SDL
         // refuses the hint when the environment names a driver. Gamescope's socket is left to
         // SDL. Another compositor's inside gamescope, where the session's restart failed, never is.
@@ -92,7 +92,7 @@ impl Shell {
                 Some((x, y)) => b.position(x, y),
                 None => b.position_centered(),
             };
-            // HIGH_PIXEL_DENSITY: backbuffer in the panel's real pixels. Without it SDL
+            // HIGH_PIXEL_DENSITY: backbuffer in the panel's real pixels. Without it SDL 3.4
             // leaves a Wayland surface at buffer scale 1, so a fractionally scaled output
             // builds the swapchain in points. The flag only widens `size_in_pixels()`;
             // `size()` stays logical (persisted size and SDL mouse coords).
@@ -340,7 +340,7 @@ fn stream_window_rect(
 }
 
 impl Shell {
-    /// This pass's overlay: expire the access toast, settle an End game, hold or release the
+    /// This pass's overlay: expire the session notice, settle an End game, hold or release the
     /// screen saver, gather the console's facts once and render its frame, then tell the
     /// damage tracker what changed. Browse needs the console, so a frame error is fatal there.
     pub(super) fn overlay_tick(&mut self, stream: &mut Option<StreamState>) -> Result<()> {
@@ -472,7 +472,7 @@ pub(super) fn native_mode_of(window: &sdl3::video::Window) -> Option<Mode> {
 }
 
 /// `mode` at the rate Windows states for the window's monitor, where that is within a hertz
-/// of SDL's: SDL reads whole hertz there and guesses the fraction.
+/// of SDL's: SDL reads whole hertz there and snaps it to the nearest DXGI mode.
 #[cfg(windows)]
 fn at_stated_rate(window: &sdl3::video::Window, mode: Mode) -> Mode {
     match crate::win32::window_refresh_mhz(window) {
@@ -521,7 +521,7 @@ pub(super) fn apply_capture(
     if !window.set_keyboard_grab(grab) && grab {
         // The one refusal SDL reports is a missing mechanism. Said once per process: the
         // answer never changes mid-session. Under gamescope that is expected (it has no
-        // shortcuts of its own) so it stays at debug rather than warning once per stream.
+        // shortcuts of its own) so it stays at debug rather than a warning.
         static SAID: AtomicBool = AtomicBool::new(false);
         if !SAID.swap(true, Ordering::Relaxed) {
             let err = sdl3::get_error();
@@ -557,12 +557,13 @@ pub(super) fn overlay_scale(display_scale: f32, pref: f32) -> f32 {
     (base * pref).clamp(0.5, 4.0)
 }
 
-/// How long an access toast holds the pill slot. The chip keeps the standing truth.
+/// How long a session notice (an access change, a host action's answer) holds the pill
+/// slot. The chip keeps the standing truth.
 pub(super) const ACCESS_NOTICE_S: u64 = 6;
 
-/// Capture hint (`ui_stream` parity — the words the user reads while released): one field per
-/// keyboard shortcut that moves the capture or ends the stream, the pad's way out in place of
-/// mouse mode and stats. An action with no key has no field.
+/// Capture hint, the words the user reads while released: one field per keyboard shortcut
+/// that moves the capture or ends the stream, the pad's way out in place of mouse mode and
+/// stats. An action with no key has no field.
 pub(super) fn capture_hint(pad: bool, shortcuts: &Shortcuts) -> String {
     use pf_l10n::desktop as d;
     let key = |slot| shortcuts.hint(&Action::Slot(slot), Device::Keyboard);
@@ -583,7 +584,7 @@ pub(super) fn capture_hint(pad: bool, shortcuts: &Shortcuts) -> String {
 mod tests {
     use super::*;
 
-    /// The desktop's defaults read as the words the capture hint always had.
+    /// The desktop's defaults read as the default chords in the capture hint.
     #[test]
     fn the_default_capture_hint_names_the_default_chords() {
         use pf_l10n::{client as c, desktop as d};

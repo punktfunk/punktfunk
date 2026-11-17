@@ -6,9 +6,8 @@
 //! Elevated (the host installer), the dir is created with an explicit SDDL — owner
 //! Administrators, SYSTEM + Administrators only, protected, inherited — so it passes the
 //! host's `ensure_admin_only_source` by construction: driver staging and the password temp
-//! file are served from it. Unelevated (the per-user client, M4) it is a plain dir under
-//! LOCALAPPDATA. Cleanup is left to a later run: a process cannot delete the directory it
-//! runs from.
+//! file are served from it. Unelevated (the per-user client) it is a plain dir under
+//! LOCALAPPDATA. The parent removes the dir once the child has exited, best effort.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,8 +42,9 @@ pub fn relaunch_if_packed() -> Option<ExitCode> {
     })
 }
 
-// The one raw spawn outside `SystemRunner`: this is the self-extractor re-running itself,
-// not a plan step — no demo or test fake can stand in for it, which is what the fence guards.
+// A raw spawn outside `SystemRunner`: the self-extractor re-running itself, and the `icacls`
+// that re-owns its root. Neither is a plan step a demo or test fake can stand in for, which is
+// what the fence guards.
 #[allow(clippy::disallowed_methods)]
 fn extract_and_run(exe: &Path, data: &[u8], payload: &[u8]) -> Result<ExitCode, String> {
     let root = fresh_root()?;

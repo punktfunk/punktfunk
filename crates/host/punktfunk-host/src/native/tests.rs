@@ -881,7 +881,7 @@ fn a_refused_mode_switch_is_counted() {
 }
 
 /// A keyframe ask leaves as a feedback datagram and the host answers it: the synthetic
-/// source's IDR is ten ordinary frames.
+/// source's IDR is `DEFAULT_IDR_PCT` of an ordinary frame.
 #[test]
 fn a_keyframe_ask_rides_the_feedback_datagram() {
     let _registry = crate::session_status::tests::registry_lock();
@@ -1145,7 +1145,7 @@ fn a_host_without_a_ramp_keeps_the_single_burst() {
 }
 
 /// Toward a host that serves the ramp, the ceiling is what the ramp proved and the clean
-/// round runs at half of it, with its own loss and jitter.
+/// round runs at `health::clean_rate_kbps` of it, with its own loss and jitter.
 #[test]
 fn the_clean_round_runs_under_the_ceiling_over_a_session() {
     let _registry = crate::session_status::tests::registry_lock();
@@ -1837,7 +1837,8 @@ fn a_pkf1_client_pairs_and_is_told_to_update() {
     host.join().unwrap().unwrap();
 }
 
-/// Short expiry: Welcome advertises grants + remaining; deadline closes typed (`0x69`).
+/// Short expiry: Welcome advertises grants + remaining; deadline closes typed
+/// (`ACCESS_EXPIRED_CLOSE_CODE`).
 #[test]
 fn access_expiry_advertises_and_closes_typed() {
     let _registry = crate::session_status::tests::registry_lock();
@@ -1989,7 +1990,8 @@ fn access_edit_pushes_updates_and_expire_now_closes() {
     host.join().unwrap().unwrap();
 }
 
-/// Launch without the grant: typed 0x6A before handshake. Same device without launch is admitted.
+/// Launch without the grant: typed `LAUNCH_NOT_PERMITTED_CLOSE_CODE` before handshake. Same
+/// device without launch is admitted.
 #[test]
 fn launch_refused_without_grant_but_session_admitted() {
     let _registry = crate::session_status::tests::registry_lock();
@@ -2681,7 +2683,7 @@ fn password(secret: &str, stay: bool, enroll: Option<Vec<u8>>) -> v2msg::Profile
 /// from the device the QUIC handshake authenticated, under its pairing name, and only `unlocked`
 /// is redirected, with `Pending` while a cold start runs. Each refusal reaches each client
 /// generation as CONTRACT §5 says, and a supervisor that is down or hangs is a plain refusal.
-/// The other rows are placed as before, with nothing asked.
+/// The other rows are placed with nothing asked.
 #[test]
 fn a_person_s_own_account_opens_only_on_the_supervisor_s_word() {
     let _registry = crate::session_status::tests::registry_lock();
@@ -3103,8 +3105,8 @@ fn kid_seat(port: u16) -> Heard {
     }
 }
 
-/// An open profile opens as it always has: the box's own session plays here and a seat's profile
-/// goes to its seat, with nothing asked of the device.
+/// An open profile opens with nothing asked of the device: the box's own session plays here and
+/// a seat's profile goes to its seat.
 #[test]
 fn an_open_profile_opens_on_every_session_path() {
     let _registry = crate::session_status::tests::registry_lock();

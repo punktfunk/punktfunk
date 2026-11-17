@@ -477,8 +477,9 @@ fn nvenc_ltr_soak() {
 }
 
 /// The wave soak ([`crate::smoke_pattern::WaveSoak`], its `PF_WAVE_*` knobs) on the D3D11
-/// session: a fresh texture per frame, 10-bit as R10G10B10A2. `wave-soak.ps1` maps each
-/// close and the drift after it from the dumped view.
+/// session: a fresh texture per frame, 10-bit as R10G10B10A2. The full stream and the view
+/// without the lost frames land in `PUNKTFUNK_SMOKE_DIR`, for mapping each close and the drift
+/// after it.
 ///
 /// `cargo test -p pf-encode-win --features nvenc nvenc_wave_soak -- --ignored --nocapture`
 #[test]
@@ -752,8 +753,7 @@ fn nvenc_reconfigure_no_idr() {
 
 /// Check that `nvEncReconfigureEncoder` accepts a changed `splitEncodeMode` with
 /// `resetEncoder=0` and emits no IDR on D3D11. Also checks `query_caps` latches
-/// `NUM_ENCODER_ENGINES` and that an over-ask (3-way split on a 2-engine card)
-/// is why the clamp exists. Reports rather than asserts: both outcomes are findings.
+/// `NUM_ENCODER_ENGINES`. Reports rather than asserts: both outcomes are findings.
 #[test]
 #[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX Windows box"]
 fn nvenc_split_reconfigure_in_place() {
@@ -917,8 +917,8 @@ fn nvenc_444_on_glass_probe() {
 
 /// Codec-advertisement probe against the real driver. Every NVENC GPU encodes H.264
 /// (`false` means enumeration is broken). Must be stable: one cached answer drives
-/// every negotiation. `--release` is required on Windows: debug `/OPT:NOREF` keeps
-/// the sdk crate's unused lazy loader and its NvEncodeAPI imports (LNK2019).
+/// every negotiation. `--release` is required on Windows: a debug link keeps the sdk crate's
+/// unused lazy loader and its NvEncodeAPI imports (LNK2019).
 #[test]
 #[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX box (.173)"]
 fn nvenc_codec_probe_reports_real_gpu_support() {

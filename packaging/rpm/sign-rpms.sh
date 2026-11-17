@@ -19,11 +19,10 @@
 # Usage (in rpm.yml, after build-rpm.sh): RPM_GPG_PRIVATE_KEY=... bash packaging/rpm/sign-rpms.sh
 #
 # Takes the RPMs to sign as arguments, defaulting to `dist/*.rpm`. The argument form exists because
-# punktfunk-gamescope is built LATER in the job than the host RPMs — it is a ~10-minute C++ build
-# behind its own cache — so it misses the main signing pass entirely and needs a second one just
-# for itself. It shipped unsigned into a `gpgcheck=1` repo that way, which made
-# `dnf install punktfunk-gamescope` fail with "The package is not signed" for every Fedora/Nobara
-# user: the package was in the channel and still uninstallable.
+# punktfunk-gamescope is built LATER in the job than the host RPMs, behind its own cache, so it
+# misses the main signing pass and needs a second one just for itself (rpm.yml). An unsigned
+# package in a `gpgcheck=1` repo is in the channel and still uninstallable: `dnf install` fails
+# with "The package is not signed".
 set -euo pipefail
 
 # Default target, and a real glob rather than a literal when nothing matched.

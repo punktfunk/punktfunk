@@ -291,8 +291,8 @@ pub const SEAT_DISCONNECT_MARK: &str = "disconnect-mark";
 const DISCONNECT_MARK_LIFE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Whether a [`SEAT_DISCONNECT_MARK`]'s text excuses the drop of a connection that began at
-/// `since`: its time is at or after `since` and at most 30 s before `now`. A mark from before the
-/// connection began belongs to an earlier one.
+/// `since`: its time is at or after `since` and at most `DISCONNECT_MARK_LIFE` before `now`. A
+/// mark from before the connection began belongs to an earlier one.
 pub fn mark_excuses_drop(
     mark: &str,
     since: std::time::SystemTime,

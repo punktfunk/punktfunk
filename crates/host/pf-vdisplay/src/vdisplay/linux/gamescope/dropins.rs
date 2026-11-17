@@ -12,9 +12,9 @@ fn headless_shim_dir() -> std::path::PathBuf {
 /// PATH shim: rewrite SteamOS's hardcoded panel args to headless at `PF_W`/`PF_H`/`PF_HZ`.
 /// `PF_HZ` is [`game_hz`] on `-r` only — it must not change the negotiated resolution.
 ///
-/// The session reads gamescope's ready line (`-R`) for 3 s, and its unit fails at 5 s without
-/// it. A headless start can take longer, so the shim takes the line on its own pipe for up to
-/// [`HEADLESS_READY_SECS`] and does what the session would: hand the line on, write
+/// SteamOS 3.8's session reads gamescope's ready line (`-R`) for 3 s, and its unit fails at 5 s
+/// without it. A headless start can take longer, so the shim takes the line on its own pipe for
+/// up to [`HEADLESS_READY_SECS`] and does what the session would: hand the line on, write
 /// `gamescope-environment`, notify systemd. It reads a second at a time and stops once gamescope
 /// is gone, so a start that dies fails the unit at once.
 fn headless_shim_body(bin: &str) -> String {
@@ -154,7 +154,7 @@ pub(super) fn remove_steamos_dropin() -> bool {
 }
 
 /// Autologin-unit bind drop-in. Must live in `$XDG_RUNTIME_DIR`, not `$HOME`: it applies to the
-/// whole `gamescope-session-plus@` template, and both paths it names are tmpfs. A `$HOME` copy
+/// whole `gamescope-session-plus@` template, and every source it binds is tmpfs. A `$HOME` copy
 /// survives a reboot that deletes its sources, and a missing bind source fails Game Mode outright.
 pub(super) fn session_plus_dropin_path() -> std::path::PathBuf {
     let base = crate::session::runtime_dir();
@@ -295,7 +295,7 @@ mod tests {
 
     /// Runs the shim over a stand-in gamescope at `<tmp>/<sub>/gamescope`, with a session `-R`
     /// fifo when `ready`. Returns its exit status, how long it ran, and the scratch directory.
-    /// `bash` reads the shim, as in the sandbox tests: no `execve` of a file just written.
+    /// `bash` reads the shim, so no `execve` meets a file just written.
     fn run_shim(
         tag: &str,
         sub: &str,
@@ -376,7 +376,7 @@ mod tests {
     /// The shim answers for a gamescope slower than the session's 3 s ready wait.
     /// gamescope writes its ready line in pieces under load. A `read -t 1` that times out
     /// mid-line keeps the partial input, and the next read must continue that line, not start
-    /// a new one: `DISPLAY=7` instead of `:7` was the symptom.
+    /// a new one, which would give `DISPLAY=7` instead of `:7`.
     #[test]
     fn headless_shim_keeps_a_ready_line_split_across_a_timeout() {
         use std::os::unix::fs::PermissionsExt;

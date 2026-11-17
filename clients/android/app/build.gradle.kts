@@ -11,7 +11,7 @@ plugins {
 
 android {
     namespace = "io.unom.punktfunk"
-    compileSdk = 37 // Android 17 — required by androidx.core 1.19.0.
+    compileSdk = 37 // Android 17 — the minCompileSdk core-ktx declares.
     // The NDK whose llvm-strip strips the packaged .so. Unset, AGP looks for its own default
     // NDK and packages the library unstripped when that one is not installed.
     ndkVersion = providers.gradleProperty("punktfunk.ndkVersion").get()
@@ -32,8 +32,8 @@ android {
         minSdk = 28
         // Android 17: targeting 37 makes Local Network Protection MANDATORY — all LAN traffic (the
         // QUIC dial, mDNS, WoL, the library fetch) is blocked until the user grants the
-        // ACCESS_LOCAL_NETWORK runtime permission. ConnectScreen owns that request/rationale flow;
-        // don't bump past 37 without re-checking the next release's behavior changes.
+        // ACCESS_LOCAL_NETWORK runtime permission, which App asks for on entry. Don't bump past 37
+        // without re-checking the next release's behavior changes.
         targetSdk = 37
         val vCode = (props.getProperty("VERSION_CODE") ?: System.getenv("VERSION_CODE"))
         versionCode = vCode?.toInt() ?: 1
@@ -147,13 +147,12 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
 
-    // Real backdrop blur for the floating console legends (RenderEffect on API 31+, a translucent
-    // scrim below). The gamepad UI's frosted pills sample + blur whatever scrolls behind them.
+    // Backdrop blur (RenderEffect on API 31+, a translucent scrim below). No source file imports
+    // it.
     implementation("dev.chrisbanes.haze:haze:2.0.1")
 
-    // Android TV components (we target phone + TV) land in the TV-UI milestone:
-    //   implementation("androidx.tv:tv-material:1.1.0")
-    // The manifest already declares leanback so the scaffold installs on TV.
+    // The TV UI is the gamepad console (console/); nothing uses androidx.tv:tv-material.
+    // The manifest declares leanback so the app installs on TV.
 
     // --- CI screenshot harness (Roborazzi on the JVM via Robolectric — no emulator/GPU). The
     // screenshot tests render the real Compose UI with mock state; never load the JNI core, so the
@@ -200,11 +199,7 @@ tasks.withType<Test>().configureEach {
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     // -PexcludeScreenshots drops the Roborazzi scenes so the PR gate can run the whole suite.
     // They share this source set but are a release-artifact job (android-screenshots.yml, v* tags):
-    // 24 @Test that write PNGs and assert nothing, and a minute nobody owes on every push.
-    // Without this the gate had to be an allowlist, which silently rotted in both directions —
-    // five patterns naming classes deleted with the Compose console, and six live classes that
-    // gated nothing. Gradle only fails when the WHOLE filter set matches nothing, so neither
-    // half was ever reported.
+    // their @Test methods write PNGs and assert nothing.
     if (project.hasProperty("excludeScreenshots")) {
         filter { excludeTestsMatching("io.unom.punktfunk.screenshots.*") }
     }

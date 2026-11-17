@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch headless Sway on the NVIDIA box for the punktfunk M0 capture spike.
+# Launch headless Sway on an NVIDIA box for punktfunk capture.
 #
 # Runs on the user's *shared* session bus (NOT a private dbus-run-session) so that the
 # ScreenCast portal (xdg-desktop-portal-wlr) and the punktfunk host share one bus. After this

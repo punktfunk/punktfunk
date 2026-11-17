@@ -72,8 +72,8 @@ const MAX_DEVICES: u8 = 16;
 const DRIVER_STALE: Duration = Duration::from_secs(1);
 /// The worker's tick: channel pump, fence read, readiness, held repeats.
 const SERVICE_TICK: Duration = Duration::from_millis(20);
-/// Windows lifts a contact it hears nothing of for 150 ms, and a still one then clicks as a
-/// tap; 100 ms of silence is safe. A held pad goes out again after this long.
+/// Windows 11 (26200) lifts a contact it hears nothing of for 150 ms, and a still one then
+/// clicks as a tap; 100 ms of silence is safe. A held pad goes out again after this long.
 const HOLD_REPEAT: Duration = Duration::from_millis(50);
 const DOORBELL_RETRY: Duration = Duration::from_secs(1);
 
@@ -417,10 +417,11 @@ impl Slots {
     }
 }
 
-/// Scan Time: the client's capture time in 100 µs, wrapping. Windows takes finger speed from
-/// its steps (measured: arrival spacing changes nothing), so a report never repeats the last
-/// one, and inside a touch never undercuts it: such a stamp (a doubted state and its lift share
-/// one) goes out one tick later. A touch after an idle pad starts from the client's time.
+/// Scan Time: the client's capture time in 100 µs, wrapping. Windows 11 (26200) takes finger
+/// speed from its steps (measured: arrival spacing changes nothing), so a report never repeats
+/// the last one, and inside a touch never undercuts it: such a stamp (a doubted state and its
+/// lift share one) goes out one tick later. A touch after an idle pad starts from the client's
+/// time.
 #[derive(Default)]
 struct ScanTime {
     /// The latest state's capture time.

@@ -740,7 +740,7 @@ fn a_display_the_registry_does_not_own_passes_through() {
     });
 }
 
-/// Hyprland and sway keep the named head in the pool and give each session its own
+/// Hyprland, sway and niri keep the named head in the pool and give each session its own
 /// cast of it, which closes before the lease lets the head go.
 #[test]
 fn a_session_cast_closes_before_its_lease() {

@@ -2,17 +2,19 @@
 //! Decoded images are sampled in place — no FFmpeg, copies, imports, or a second device.
 //! H.264, H.265, and AV1; NV12, P010, or 8/10-bit two-plane 4:4:4.
 //!
-//! Admission and stream shape are [`crate::video::native_vulkan_gate`] and
+//! Admission and stream shape are [`crate::video_caps::native_vulkan_gate`] and
 //! [`NativeVulkanDecoder::new`]; a refusal falls through the ladder in [`crate::video`].
-//! The backend is `Send` and not `Sync`. [`submit_queues_collide`] takes the shared
-//! queue lock when decode and graphics share an externally synchronized queue.
+//! The backend is `Send` and not `Sync`. [`queue_lock_for`] picks the shared queue lock
+//! when [`submit_queues_collide`]: decode and graphics share one queue family and queue.
 //!
 //! A delivered [`NativeVkFrame`] pins its pool slot until [`NativeReleaseGuard`] drops
-//! after present retires. [`Codec::release_frame`] also waits the status verdict;
+//! after present retires. [`NativeVulkanDecoder::settle_statuses`] calls
+//! [`Codec::release_frame`] only once the frame's status is settled too;
 //! teardown waits [`TEARDOWN_BUDGET`] before destroying the pools.
 //! Failed or unreadable status queries are rung errors. Integrity concealment drops
 //! the picture unshown and raises [`NativeVulkanDecoder::take_recovery_request`].
-//! `Ok(None)` is buffering or an H.265 RASL skip — never a post-failure keyframe wait.
+//! `Ok(None)` is buffering, an H.265 RASL skip, or a wait for the next IDR after a
+//! failure; the wait raises the recovery request too, so it never clears the demotion streak.
 //! AV1 may decode hidden frames but exposes at most one displayable frame per
 //! [`NativeVulkanDecoder::decode`].
 
@@ -124,7 +126,7 @@ impl pf_vkdecode::QueueLock for NativeQueueLock {
 /// Codecs pf-vkdecode can decode, named ash-free so `video.rs` can pick from the wire
 /// codec without this module knowing wire bits.
 ///
-/// Membership here is not admission: `video::native_vulkan_gate` decides whether `auto`
+/// Membership here is not admission: `video_caps::native_vulkan_gate` decides whether `auto`
 /// may pick a codec. Changing that list does not belong here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCodec {
@@ -137,7 +139,7 @@ pub(crate) enum NativeCodec {
 /// are codec-agnostic: the three [`DecodedVkFrame`] surfaces match. Forwarders stay
 /// identical per arm so dispatch cannot change the hardware-verified H.264 path.
 // Unboxed against `large_enum_variant`: one of these lives in the session's
-// `Box<NativeVulkanDecoder>`. Boxing would add a per-AU indirection for ~1.7 KB.
+// `Box<NativeVulkanDecoder>`. Boxing would add a per-AU indirection to save the arms' size gap.
 #[allow(clippy::large_enum_variant)]
 enum Codec {
     H264(VkH264Decoder),
@@ -150,8 +152,8 @@ impl Codec {
     /// RASL skip after an open-GOP join, never an error.
     ///
     /// Post-failure re-anchor waits are `Err` (`PlanError::AwaitingIdr` /
-    /// `VkDecodeError::AwaitingKeyAv1`). `Ok(None)` would clear the demotion streak
-    /// once per frame and strand a silent rung.
+    /// `VkDecodeError::AwaitingKeyAv1`); `NativeVulkanDecoder::decode` reads them with
+    /// `awaits_idr` and pairs the idle `Ok(None)` with a recovery request.
     ///
     /// AV1's AU is a temporal unit: first displayable picture here, the rest via
     /// [`Self::take_ready`].
@@ -223,7 +225,7 @@ impl Codec {
         }
     }
 
-    /// A completion waiter on this decoder's device (this crate names no `ash` type).
+    /// A completion waiter on this decoder's device (the signature names no `ash` type).
     fn done_waiter(
         &self,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
@@ -345,8 +347,8 @@ impl AuOutcome {
 /// Integrity (missing reference, `frame_num` gap, truncated AU) means the plan used a
 /// substitute: drop the picture unshown and request a re-anchor. Spec-legal envelope
 /// signals (`H265PlanWarning::NonZeroReorder`, `PlanWarning::Mmco5Rebase`) are fully
-/// planned; `NonZeroReorder` fires on SPS activation (opening IDR and every ABR IDR),
-/// so treating it as concealment hitches every renegotiation. Only integrity drops.
+/// planned; `NonZeroReorder` fires when an activated SPS signals reordering, so
+/// treating it as concealment would release that picture unshown. Only integrity drops.
 ///
 /// AV1 has no reorder envelope and no MMCO; every warning is damage.
 /// [`pf_vkdecode::Av1PlanWarning::is_integrity`] is exhaustive so a new warning cannot
@@ -546,8 +548,8 @@ fn picture_format(codec: &str, stream: crate::video::StreamFormat) -> Result<vk:
 ///
 /// `false`: punktfunk hosts encode desktop capture (grain off), and grain is an added
 /// capability, never a replacement — probing `true` would refuse every grain-less
-/// device. A grain stream still fails at the first AU via `ensure_state` (sequence
-/// header, never softened), same backstop as a level above `maxLevelIdc`.
+/// device. A grain stream is checked at its first AU by `ensure_state` (sequence
+/// header, never softened) and fails there on a device that cannot decode grain.
 const AV1_PROBE_FILM_GRAIN: bool = false;
 
 /// Worst-case delivered-but-unreleased frames the client pipeline holds at once.
@@ -565,7 +567,6 @@ const PIPELINE_HOLD: usize = 7;
 /// per temporal unit). A frame waiting `MAX_DELIVERABLE` AUs burns
 /// `2 * (MAX_DELIVERABLE + 1)` slots unread; overrun reads as `Failed` and
 /// [`NativeVulkanDecoder::settle_statuses`] attributes it to `driver_failed`.
-/// At this depth the wait is ~4 of 17.
 ///
 /// H.265 bumping can produce a burst; AV1 spec admits one shown frame per temporal
 /// unit, so this is defence against a non-conformant stream. Oldest-first drop: the
@@ -597,7 +598,7 @@ pub(crate) struct NativeVulkanDecoder {
     /// Stream damage; host should re-anchor. Drained into the shared `want_keyframe`.
     want_recovery: bool,
     /// `PUNKTFUNK_AU_FAULT`. Armed here so a faulted AU is byte-identical to a lossy
-    /// network delivery; other backends cannot see a typo'd variable.
+    /// network delivery; only this rung injects.
     fault: Option<pf_vkdecode::AuFault>,
     /// Intel on i915: the GEM wait that keeps the media engine clocked (`wait_timeline`).
     #[cfg(target_os = "linux")]
@@ -612,15 +613,16 @@ unsafe impl Send for NativeVulkanDecoder {}
 
 impl NativeVulkanDecoder {
     /// Build over the presenter's device for the negotiated `codec`, already admitted
-    /// by `video::native_vulkan_gate`. The decoder re-checks the family's codec op:
+    /// by `video_caps::native_vulkan_gate`. The decoder re-checks the family's codec op:
     /// a video session for an operation the family cannot run is UB, not an error.
     ///
     /// Sessions and pools are lazy from the first AU, so stream shape is checked here
     /// against Welcome. A mid-stream format miss is an error streak that demotes past
     /// this rung, often to software. A construction failure walks the ladder instead.
     ///
-    /// Level above `maxLevelIdc`, SPS/sequence disagreeing with Welcome, and AV1 film
-    /// grain ([`AV1_PROBE_FILM_GRAIN`]) still fail at first decode.
+    /// An SPS or sequence header that disagrees with Welcome still fails at first
+    /// decode, as does AV1 film grain ([`AV1_PROBE_FILM_GRAIN`]) on a device that
+    /// cannot decode it.
     /// H.264 is not probed: envelope is fixed 8-bit 4:2:0; the never-delivered arm
     /// is the backstop on the hardware-verified path.
     pub(crate) fn new(
@@ -638,8 +640,9 @@ impl NativeVulkanDecoder {
         // per-codec decode extensions. Decoders re-check the family's
         // `videoCodecOperations` — same fact `native_vulkan_gate` and `vk/setup.rs` use.
 
-        // Intel's media engine idles at 100 MHz and i915 raises it only for its own GEM
-        // wait, so this rung waits every decode through one, on the exported ring.
+        // Intel's media engine idles at its floor clock, and i915 boosts it only for a
+        // blocking wait on its own fence such as `I915_GEM_WAIT`, never a syncobj wait;
+        // so this rung waits every decode through one, on the exported ring.
         #[cfg(target_os = "linux")]
         let boost = (vk.vendor_id == crate::video::VENDOR_INTEL && vk.dmabuf_import)
             .then(pf_dmabuf::i915_boost::I915Boost::open)
@@ -804,10 +807,10 @@ impl NativeVulkanDecoder {
     /// AV1 may decode several frames (hidden ones never reach this ledger). Extra
     /// displayable pictures wait in [`Self::deliverable`], bounded by [`MAX_DELIVERABLE`].
     ///
-    /// `Ok(Some)` is display-ready. `Ok(None)` is buffer, H.265 RASL skip, or
-    /// concealment (output released unshown, [`Self::take_recovery_request`] raised).
-    /// `Err` is decoder trouble (Vulkan/session, unresolved AV1 ref, keyframe wait,
-    /// or a prior-frame `RESULT_STATUS` Failed) — streak/demotion may act.
+    /// `Ok(Some)` is display-ready. `Ok(None)` is buffer, H.265 RASL skip, concealment
+    /// (output released unshown), or a wait for the next IDR after a failure; the last
+    /// two raise [`Self::take_recovery_request`]. `Err` is decoder trouble (Vulkan/session,
+    /// unresolved AV1 ref, or a prior-frame `RESULT_STATUS` Failed) — streak/demotion may act.
     ///
     /// Decode this AU first so planner state advances even if a prior frame's status
     /// is Failed; otherwise a recovery IDR lands on a skipped AU and a phantom gap.
@@ -890,7 +893,7 @@ impl NativeVulkanDecoder {
                 // Typed, so the ladder can read a device fact off the chain.
                 Err(anyhow::Error::new(e).context("decode"))
             }
-            // Decoder, not stream: streak-eligible, same volume as libavcodec ref-miss.
+            // Decoder, not stream: streak-eligible.
             AuOutcome::StatusFailed => Err(self.status_error(verdicts)),
             AuOutcome::Concealed => {
                 warnings.warn_concealment(integrity.len());
@@ -976,13 +979,13 @@ impl NativeVulkanDecoder {
         native
     }
 
-    /// Intel on i915: the decode wait is the media clock boost, and its GEM wait covers
-    /// the whole bitstream ring, so the pump waits each AU at once rather than one behind.
     /// Wake the pump as each shipped decode completes: the `Rung` hook, with the thread.
     pub(crate) fn set_decode_wake(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
         self.waiter = self.dec.done_waiter(wake);
     }
 
+    /// Intel on i915: the decode wait is the media clock boost, and its GEM wait covers
+    /// the whole bitstream ring, so the pump waits each AU at once rather than one behind.
     pub(crate) fn boosted(&self) -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -1254,8 +1257,8 @@ mod tests {
             value: 7,
             poc: 5,
             is_idr: true,
-            // Both set: dropping the recovery mark would reinstate the 500 ms freeze
-            // on every intra-refresh session, and `false` would hide it.
+            // Both set: a dropped recovery mark leaves every intra-refresh session's freeze
+            // to run to `REANCHOR_FREEZE_MAX`, and `false` would hide it.
             recovery: pf_vkdecode::RecoveryMark {
                 sei_here: true,
                 is_recovery_point: true,
@@ -1560,7 +1563,7 @@ mod tests {
 
         // Queue at bound plus pipeline hold must fit in HOLD_HEADROOM; otherwise
         // the bound caps memory without preventing `NoFreeSlot`. Pinned to
-        // pf-vkdecode's constant so a hardcoded depth fails the build.
+        // pf-vkdecode's constant so a hardcoded depth fails this test.
         assert!(
             MAX_DELIVERABLE + PIPELINE_HOLD <= pf_vkdecode::HOLD_HEADROOM as usize,
             "a queue of {MAX_DELIVERABLE} on top of the pipeline's {PIPELINE_HOLD} \
@@ -1712,8 +1715,8 @@ mod tests {
 
     /// Concealment is integrity warnings, not any warning.
     ///
-    /// `NonZeroReorder` fires on SPS activation (opening IDR and every ABR IDR).
-    /// Treating it as concealment releases that IDR unshown at every renegotiation.
+    /// `NonZeroReorder` fires when an activated SPS signals reordering. Treating it as
+    /// concealment would release the activating picture unshown.
     #[test]
     fn a_spec_legal_envelope_warning_is_not_concealment() {
         use pf_vkdecode::H265PlanWarning as H265;

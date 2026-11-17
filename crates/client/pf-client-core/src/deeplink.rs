@@ -872,10 +872,6 @@ mod tests {
         assert_eq!(parse(&link.to_url()).unwrap().host, link.host);
     }
     /// A port is reported only when it was WRITTEN, and an IPv6 literal keeps its colons.
-    ///
-    /// Seven hand-rolled `rsplit_once(':')` splitters read `::1` as host `:` port `1`; the
-    /// three callers that must tell "no port" from "port 9777" apart used to hand-roll that
-    /// distinction too.
     #[test]
     fn split_host_port_reports_whether_a_port_was_written() {
         use super::split_host_port as split;
@@ -888,7 +884,7 @@ mod tests {
             split("192.168.1.50:47990"),
             Some(("192.168.1.50".into(), Some(47990)))
         );
-        // A bare IPv6 is all address, colons and all — the case every rsplit got wrong.
+        // A bare IPv6 is all address, colons and all — `rsplit_once(':')` reads `::1` as port 1.
         assert_eq!(split("::1"), Some(("::1".into(), None)));
         assert_eq!(split("[::1]"), Some(("::1".into(), None)));
         assert_eq!(split("[::1]:9777"), Some(("::1".into(), Some(9777))));

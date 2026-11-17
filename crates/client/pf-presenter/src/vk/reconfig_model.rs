@@ -10,7 +10,7 @@
 //! swapchain. A lane state means the swapchain and its surface are torn down. A failed build
 //! leaves no swapchain standing either; the next frame rebuilds. Minimized is a zero extent.
 //!
-//! Pinned by the table tests below; each row names the fix or sweep finding it holds.
+//! Pinned by the table tests below.
 
 /// Who presents into the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

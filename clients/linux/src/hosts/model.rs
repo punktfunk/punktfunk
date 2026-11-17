@@ -57,7 +57,7 @@ pub struct CardModel {
     /// Unique among the cards: the host's key, then a pinned card's preset id.
     pub key: String,
     pub name: String,
-    /// `addr:port`, for the tooltip and a discovered card's second line.
+    /// `addr:port`, for the card's tooltip.
     pub address: String,
     /// The advertised OS chain, for the tile's mark.
     pub os: String,

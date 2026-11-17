@@ -1,5 +1,5 @@
-//! Per-pad dedup for the 0xCD HID-output plane, shared by DualSense, DS4, and Deck
-//! managers via [`crate::uhid_manager`].
+//! Per-pad dedup for the 0xCD HID-output plane, kept for every pad by
+//! [`crate::uhid_manager`].
 //!
 //! A game packs rumble, lightbar, LEDs, and adaptive triggers into one report, so
 //! an unchanged rich field is re-sent on every rumble tick. This forwards a field
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 /// Interval for re-emitting latched 0xCD state when the game's value has not changed.
 ///
 /// Dedup plus unreliable datagrams: a dropped change is never produced again.
-/// 1000 ms bounds the stale window; ≤4 datagrams/pad/s sits under rumble's ~120 ms refresh.
+/// 1000 ms bounds the stale window; ≤6 datagrams/pad/s sits under rumble's ~120 ms refresh.
 const RENEW_EVERY: Duration = Duration::from_millis(1000);
 
 /// Last-forwarded 0xCD values. Value kinds dedup; `TrackpadHaptic` and `HidRaw` always fire.
