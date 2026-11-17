@@ -110,7 +110,7 @@ pub enum Punktfunk1Source {
     /// [`SynthAbrShape`] is what it encodes, how long it holds the first frame back, and
     /// what it answers a keyframe ask with.
     SyntheticAbr(SynthAbrShape),
-    /// Virtual display at the requested mode → NVENC.
+    /// Virtual display at the requested mode → the encoder `pf_encode` resolves for this host.
     Virtual,
     /// A moving test picture through the software H.264 encoder, unbounded. No display and no
     /// GPU: what a headless host serves so a real client can be proved against it.
@@ -137,7 +137,7 @@ pub struct Punktfunk1Options {
     pub pairing_pin: Option<String>,
     /// Tests: store path. `None` = the default config path.
     pub paired_store: Option<std::path::PathBuf>,
-    /// Disconnect-detection latency. `None` = core default (8 s). From
+    /// Disconnect-detection latency. `None` = `endpoint::DEFAULT_IDLE_TIMEOUT`. From
     /// `PUNKTFUNK_IDLE_TIMEOUT_MS`; ≥1 s floor, keep-alive scales so a live session
     /// never false-closes.
     pub idle_timeout: Option<std::time::Duration>,
@@ -184,7 +184,7 @@ pub fn run(opts: Punktfunk1Options) -> Result<()> {
         .enable_all()
         .build()
         .context("tokio runtime")?;
-    // Standalone CLI arms at startup from the flags (PIN is logged). `serve --native` arms on demand.
+    // Standalone CLI arms at startup from the flags (PIN is logged). `serve` arms on demand.
     let np = Arc::new(NativePairing::load_with(
         opts.paired_store.clone(),
         opts.pairing_pin.clone(),
@@ -649,12 +649,13 @@ fn install_shutdown_restore() {
 /// Bound the control phase; an unfinished handshake would otherwise wedge the host.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Wait after `stop` before [`serve_session`] abandons the stream thread.
-/// Capture-loss rebuild is 40 s; a cold pipeline-build can take ~10 s. 90 s leaves headroom.
+/// Wait after `stop` before [`stream_session`] abandons the stream thread. Longer than a
+/// capture-loss rebuild's `encode_recovery::REBUILD_BUDGET`, though shorter than gamescope's
+/// `GAMESCOPE_REBUILD_BUDGET`; a cold pipeline-build can take ~10 s.
 const STREAM_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// Resolves once `stop` has been set for [`STREAM_STOP_GRACE`].
-/// Polled: `stop` is a plain flag shared with blocking threads (500 ms, one relaxed load).
+/// Polled: `stop` is a plain flag shared with blocking threads (500 ms, one load).
 async fn stop_overdue(stop: &AtomicBool) {
     while !stop.load(Ordering::SeqCst) {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -740,8 +741,9 @@ fn resolve_audio_channels(requested: u8) -> u8 {
 
 use crate::audio::AudioCapSlot;
 
-/// Park an unpaired knock for console Approve. QUIC keep-alive (4 s, under 8 s idle) holds
-/// the path; approval streams with no reconnect. Under the pending TTL (10 min).
+/// Park an unpaired knock for console Approve. QUIC keep-alive (under the idle timeout,
+/// `endpoint::stream_transport_idle`) holds the path; approval streams with no reconnect.
+/// Under the pending TTL (`native_pairing::approval::PENDING_TTL`).
 const PENDING_APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// How often a parked `punktfunk/2` knock is told the host is still deciding.
@@ -856,7 +858,7 @@ pub(crate) async fn wait_for_approval(
 }
 
 /// A QUIC handshake that closes code 0 with no control stream is a reachability probe
-/// (`--reachable` / hosts-page pips). Log at debug, not warn.
+/// (`punktfunk reachable` / hosts-page pips). Log at debug, not warn.
 pub(crate) enum Served {
     Session,
     ProbeClose,
@@ -1693,7 +1695,8 @@ fn session_lanes(host: &SessionHost, who: &Admitted, n: &handshake::Negotiated) 
     // What `DELETE /session/{id}` and its siblings act on. `ceiling` is the pairing's own
     // mask: a live re-point clamps to it, so the console never grants past the pairing.
     let controls = crate::session_status::SessionControls {
-        // One relaxed load per event; the lifecycle task is the only writer after admission.
+        // One relaxed load per event. Written by `access_lifecycle` and by the console's
+        // re-point (`SessionControls::set_grants`).
         grants: Arc::new(AtomicU32::new(who.grants)),
         ceiling: Arc::new(AtomicU32::new(who.grants)),
         muted: Arc::new(AtomicBool::new(false)),

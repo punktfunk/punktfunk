@@ -7,8 +7,9 @@
 //!
 //! Keys are only added. `PF_STREAM_SCHEMA` bumps if an existing key's meaning
 //! changes. Current: `PF_STREAM=1`, `SCHEMA=1`, `WIDTH`, `HEIGHT`, `REFRESH`,
-//! `HDR`, `SESSIONS`, `CLIENT` (primary = oldest live, single-quoted). Writes
-//! are temp+rename; a mid-update source always sees a complete prior file.
+//! `HDR`, `SESSIONS`, `CLIENT`, `PROFILE_ID`, `PROFILE` (primary = oldest live;
+//! strings single-quoted). Writes are temp+rename; a mid-update source always
+//! sees a complete prior file.
 //!
 //! Both serving planes announce. One file, so `SESSIONS>1` means the mode
 //! describes only the primary. Mode is the start negotiation; a mid-stream

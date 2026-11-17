@@ -1,6 +1,6 @@
 //! Uninstall-time sweep of MEDIA-class audio DEVNODEs this host minted.
 //!
-//! `punktfunk-host driver uninstall --audio` (Inno `[UninstallRun]`). DEVNODEs
+//! `punktfunk-host driver uninstall --audio` (`punktfunk-setup`'s uninstall plan). DEVNODEs
 //! persist across restarts by design ([`minted`](super::minted),
 //! [`pad_endpoint`](super::pad_endpoint)); uninstall must still remove them.
 //! Match owner markers, never names — our instances share VALVE streaming-audio
@@ -43,7 +43,7 @@ pub struct Removed {
 
 /// Unpark defaults, then sweep minted DEVNODEs.
 ///
-/// Stuck devices are counted, never fatal: a non-zero exit aborts the uninstaller.
+/// Stuck devices are counted, never fatal.
 pub fn purge() -> Result<Removed> {
     // Restore first: the parked default may still point at a device this sweep is about to delete.
     // Windows would re-pick by its own ranking, not the operator's original device.

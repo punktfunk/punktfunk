@@ -1,12 +1,14 @@
 //! Win32 clipboard format ↔ portable wire MIME conversions
 //! (`design/clipboard-and-file-transfer.md` §3.5). No `windows` crate, so the
-//! conversions compile and unit-test on every host. [`super::windows`] is the
+//! conversions also compile and unit-test on Linux. [`super::windows`] is the
 //! only production caller (`GetClipboardData` / `SetClipboardData`).
 //!
 //! * `CF_UNICODETEXT` (UTF-16LE + NUL) ↔ `text/plain;charset=utf-8`
 //! * `"HTML Format"` (CF_HTML, UTF-8 + ASCII header) ↔ `text/html`
 //! * `"Rich Text Format"` (raw RTF) ↔ `text/rtf`
-//! * `"PNG"` (raw PNG) ↔ `image/png` — identity, handled by the backend.
+//! * `"PNG"` / `"JFIF"` / `"GIF"` ↔ `image/png` / `image/jpeg` / `image/gif` — identity,
+//!   handled by the backend.
+//! * `CF_DIB` → `image/png` ([`dib_to_png`]); PNG/JPEG/GIF → `CF_DIB` ([`image_to_dib`]).
 
 /// `CF_UNICODETEXT` HGLOBAL → UTF-8. `raw` is the `GlobalSize` buffer: little-endian
 /// UTF-16. The first `0x0000` ends the string; `GlobalSize` can exceed that terminator.

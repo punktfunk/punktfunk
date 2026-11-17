@@ -70,7 +70,7 @@ impl Job {
 pub(super) struct ChildProcess {
     process: OwnedHandle,
     pid: u32,
-    /// Outside any job: dropping the handle terminates the process.
+    /// A session child ends when its handle drops, in a job or not. The keeper ends with its job.
     kill_on_drop: bool,
 }
 

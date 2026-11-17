@@ -134,8 +134,8 @@ pub fn move_toplevel_to_output(
         Compositor::Wlroots => wlroots::move_to_output(id, output),
         Compositor::Niri => niri::desktop::move_to_output(id, output),
         Compositor::Umbriel => umbriel::desktop::move_to_output(id, output),
-        // No `_` arm. KWin/Mutter/gamescope/Windows never list, so nothing
-        // here has an id to move.
+        // No `_` arm. KWin and Mutter name no window's head, gamescope and Windows
+        // list nothing, and `places_windows` is false for all four.
         Compositor::Kwin | Compositor::Mutter | Compositor::Gamescope | Compositor::Windows => {
             anyhow::bail!("{} cannot move a window", compositor.id())
         }
@@ -181,7 +181,7 @@ pub fn toplevels_token(compositor: Compositor) -> Option<u64> {
         Compositor::Hyprland => hyprland::window_gen(),
         Compositor::Niri => niri::desktop::window_gen(),
         // No `_` arm. sway and Umbriel have an IPC subscribe, but the host runs no
-        // reader on either; the rest have no list to watch.
+        // reader on either; KWin and GNOME are read whole, the rest list nothing.
         Compositor::Wlroots
         | Compositor::Umbriel
         | Compositor::Kwin

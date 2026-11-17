@@ -60,7 +60,8 @@ pub struct CaptureHealth {
     /// The driver encoder's own state word: `closed` / `open` / `encoding` / `wedged`.
     /// `None` until the first `SET_ENCODE`.
     pub encoder_state: Option<&'static str>,
-    /// The backend the driver opened (`nvenc` / `amf` / `qsv` / `pyrowave`); `None` as above.
+    /// The backend the driver opened, as `pf_driver_proto::encode::backend::NAMES` spells it;
+    /// `None` as above.
     pub backend_opened: Option<&'static str>,
     /// Encode threads the driver abandoned after a wedge. Two opens the driver cycle.
     pub detached: u32,
@@ -163,7 +164,8 @@ pub trait Capturer: Send {
 /// synthetic source has no offer to convict and waits its own way whatever is asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FirstFrame {
-    /// The source's full wait: 10 s for a Linux pixel source, 20 s for a remote encoder.
+    /// The source's full wait, which each source sets (PipeWire's `FIRST_FRAME_BUDGET`, a
+    /// remote encoder's `FIRST_FRAME`).
     Default,
     /// At most this long; expiry judges the offer as `Default`'s does.
     Within(Duration),
@@ -395,7 +397,7 @@ pub struct SessionFacts {
 /// What the host asks a [`RemoteEncoder`] to open — the session plan as `SET_ENCODE` numbers it.
 #[derive(Clone, Copy, Debug)]
 pub struct DriverEncodeParams {
-    /// 1 H264, 2 HEVC, 3 AV1, 4 PyroWave.
+    /// As `pf_driver_proto::encode::codec` numbers it.
     pub codec: u32,
     /// `0` 4:2:0, `1` 4:4:4.
     pub chroma: u32,
@@ -425,7 +427,7 @@ pub struct DriverEncodeParams {
     pub slices: u32,
     /// Slice-chunk target; `0` = whole access units.
     pub wire_chunk_bytes: u32,
-    /// Ordered preference, 0-terminated: 1 NVENC, 2 AMF, 3 QSV, 4 PyroWave.
+    /// Ordered preference, 0-terminated, as `pf_driver_proto::encode::backend` numbers it.
     pub backends: [u32; 4],
     /// First `wire_seq` the driver stamps — the host's current `au_seq`.
     pub wire_seq_base: u32,
@@ -501,7 +503,7 @@ impl DriverEncodeParams {
 pub type GamescopeCursorTargets =
     std::sync::Arc<dyn Fn() -> Vec<(String, Option<String>)> + Send + Sync>;
 
-/// v5 hardware-cursor channel (`IOCTL_SET_CURSOR_CHANNEL`). Host-built so this
+/// Hardware-cursor channel (`IOCTL_SET_CURSOR_CHANNEL`). Host-built so this
 /// crate never reaches the orchestrator; on IOCTL success the driver owns the
 /// handle duplicated into WUDFHost. `Some` opts in: the capturer creates
 /// the cursor section only when the host hands a sender; a plain session
@@ -518,7 +520,7 @@ pub type CursorChannelSender = std::sync::Arc<
 #[cfg(target_os = "windows")]
 pub type CursorForwardSender = std::sync::Arc<dyn Fn(bool) -> Result<()> + Send + Sync>;
 
-/// v7 in-driver encode open (`IOCTL_SET_ENCODE`) — same facade contract as
+/// In-driver encode open (`IOCTL_SET_ENCODE`) — same facade contract as
 /// `CursorChannelSender`: the driver adopts the request's handle values iff the
 /// IOCTL succeeds. Once per encoder generation.
 pub type SetEncodeSender = std::sync::Arc<
@@ -529,7 +531,7 @@ pub type SetEncodeSender = std::sync::Arc<
         + Sync,
 >;
 
-/// v7 one-shot encoder control (`IOCTL_ENCODE_CTL`): the `Encoder` calls the
+/// One-shot encoder control (`IOCTL_ENCODE_CTL`): the `Encoder` calls the
 /// stream loop makes, forwarded by the driver proxy.
 pub type EncodeCtlSender =
     std::sync::Arc<dyn Fn(&pf_driver_proto::encode::EncodeCtlRequest) -> Result<()> + Send + Sync>;

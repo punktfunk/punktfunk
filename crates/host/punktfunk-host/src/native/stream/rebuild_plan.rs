@@ -147,7 +147,7 @@ pub(super) struct Epilogue {
 /// and display request. The frame open on the wire stays the running encoder's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Rollback {
-    /// The stall is announced as a pipeline gap (44692a0dc).
+    /// The stall is announced as a pipeline gap.
     pub(super) gap: bool,
     pub(super) tell: Option<Tell>,
     /// The session ends: nothing is left to stream.

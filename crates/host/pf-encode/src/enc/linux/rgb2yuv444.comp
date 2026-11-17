@@ -2,7 +2,7 @@
 // RGB(A) -> full-res Y + FULL-res interleaved CbCr (BT.709 full range): the 4:4:4 twin of
 // rgb2yuv.comp — one invocation per pixel, no chroma box filter, no siting. Same coefficients
 // byte-for-byte (the wavelet clients' planar CSC decodes both layouts identically), same
-// cursor-as-metadata blend, same source-edge clamp for the 32-aligned coded extent.
+// cursor-as-metadata blend, same source-edge clamp.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D rgb;                  // packed RGB input (sampled; BGRA import ok)
 layout(binding = 1, r8)  uniform writeonly image2D yImg;    // full-res Y

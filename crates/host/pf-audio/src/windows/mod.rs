@@ -13,7 +13,7 @@ pub mod audio_probe;
 // minted, audio_probe and devnode_cleanup — only one of which provisions pads.
 pub mod devnode_api;
 // Uninstall sweep of every audio devnode the providers (and the probe) mint.
-// `driver uninstall --audio` / installer [UninstallRun].
+// `driver uninstall --audio`, from `punktfunk-setup`'s uninstall plan.
 pub mod devnode_cleanup;
 // Minted "Punktfunk Speakers/Microphone": our instances of Valve's streaming-audio
 // drivers. Wiring-plan tier-0.
@@ -36,9 +36,9 @@ pub(super) fn probe_capture_rate() -> CaptureRate {
     audio_control::probe_capture_rate()
 }
 
-/// Capture thread runs `audio_control::wire_now` before resolving the endpoint — a
-/// fresh plan per open, Windows endpoints churn — and parks default playback on the
-/// plan's loopback sink (silent on the host) until this capturer is dropped.
+/// Capture thread runs `audio_control::wire_now_full` before resolving the endpoint — a
+/// fresh plan per open, Windows endpoints churn — and, unless `keep_default_devices`, parks
+/// default playback on the plan's loopback sink until the last capture ends.
 pub(super) fn open_audio_capture(channels: u32, rate_hz: u32) -> Result<Box<dyn AudioCapturer>> {
     wasapi_cap::WasapiLoopbackCapturer::open(channels, rate_hz)
         .map(|c| Box::new(c) as Box<dyn AudioCapturer>)

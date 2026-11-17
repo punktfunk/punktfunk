@@ -203,7 +203,7 @@ fn install(plugins: &std::path::Path, id: &str, reads: &str) {
 
 /// On a seat a plugin of its own runner reads its manifest and grants from the seat's own
 /// folder, never the box's for a plugin of the same id; a plugin the seat doesn't have reads
-/// the box's copy as before. A grant names only a folder the seat's account can list. The
+/// the box's copy. A grant names only a folder the seat's account can list. The
 /// operator and the person grant on a made seat, the person alone on a person's own account.
 #[tokio::test]
 async fn a_seat_s_own_plugin_reads_its_own_grants() {

@@ -1,15 +1,15 @@
-//! Slot-family RFI recovery **policy** for the three backends that answer a loss
-//! with a re-reference to a known-good older frame instead of an IDR: native AMF
-//! (user-LTR bitfield), native QSV (`mfxExtRefListCtrl` LTR), and Vulkan Video
-//! (app-owned DPB slot table).
+//! Slot-family RFI recovery **policy** for the backends that answer a loss with a
+//! re-reference to a known-good older frame instead of an IDR: AMF and QSV (the two-slot
+//! [`crate::ltr::LtrMirror`]), Vulkan Video (app-owned DPB slot table) and native VAAPI
+//! (the libva session's slot ring).
 //!
 //! Policy only. Callers feed **currently-trusted** `(slot, wire)` pairs and apply
 //! the returned taints through their own persistent marker. How a force is applied
-//! and how distrust is stored (AMF clears the mirror slot, QSV sets `ltr_tainted`,
-//! Vulkan blanks `slot_wire` to `-1`) stays in the backend; the caller-side filter
-//! is what makes those schemes equivalent under one pure function.
+//! and how distrust is stored (`LtrMirror` sets its `tainted` flag, Vulkan blanks
+//! `slot_wire` to `-1`, VAAPI calls the session's `distrust`) stays in the backend; the
+//! caller-side filter is what makes those schemes equivalent under one pure function.
 //!
-//! Decline is also the backend's: AMF/QSV drop an un-consumed `pending_force`;
+//! Decline is also the backend's: `LtrMirror` and VAAPI drop a queued force;
 //! Vulkan leaves `pending_loss` armed so frame-build can re-pick or force an IDR.
 //! Do not harmonize them here. NVENC's range policy is
 //! [`super::nvenc_core::plan_range_recovery`].
@@ -90,7 +90,7 @@ pub fn pick_recovery(
 }
 
 /// Newest trusted `wire` strictly older than the loss. Ties keep the first
-/// `refs` entry (callers feed ascending slot order; the backends used `>`).
+/// `refs` entry (callers feed ascending slot order).
 /// Vulkan re-picks at frame-build against the table as it stands then.
 pub fn pick_anchor(refs: &[(usize, i64)], loss_first: i64) -> Option<(usize, i64)> {
     let mut best: Option<(usize, i64)> = None;
@@ -102,8 +102,8 @@ pub fn pick_anchor(refs: &[(usize, i64)], loss_first: i64) -> Option<(usize, i64
     best
 }
 
-/// Frames back a confirmed long-term reference may reach on a two-slot LTR backend (AMF,
-/// QSV): Vulkan Video's DPB depth. Past it the frame takes the chain.
+/// Frames back a confirmed long-term reference may reach on an LTR backend (AMF, QSV,
+/// NVENC): Vulkan Video's DPB depth. Past it the frame takes the chain.
 pub const LTR_ACKED_REACH: i64 = 8;
 
 /// One frame's long-term step while the encoder holds confirmed references: force the newest
@@ -145,7 +145,7 @@ pub fn mark_slot(trusted: &[bool], next: usize) -> usize {
 /// order hints reach 127 back) and a round trip at 240 fps.
 pub const KEEP_REACH: i64 = 64;
 /// Frames a candidate waits before it becomes the pin when the client sends no
-/// confirmations: the two-slot LTR cadence AMF and QSV kept before [`Kept`].
+/// confirmations.
 pub const KEEP_ROTATE: i64 = 8;
 
 /// The two pictures a backend keeps out of its ring so a loss finds an anchor however long
@@ -656,7 +656,7 @@ mod tests {
         assert_eq!(pick_anchor(&view(&[-1; 8]), 5), None);
         // `wire == loss_first` is inside the corrupt window: strictly older only.
         assert_eq!(pick_anchor(&view(&[9, 8]), 9), Some((1, 8)));
-        // Tie keeps the first `refs` entry — the backends used `>`, not `>=`.
+        // Tie keeps the first `refs` entry: `>`, not `>=`.
         assert_eq!(pick_anchor(&[(2, 7), (5, 7)], 9), Some((2, 7)));
         assert_eq!(pick_anchor(&[], 9), None);
     }

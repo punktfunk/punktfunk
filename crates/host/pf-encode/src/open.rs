@@ -11,8 +11,8 @@ use anyhow::Result;
 use pf_frame::{CapturedFrame, PixelFormat};
 
 /// Open the encoder `resolved` names, for `params`. `params.cuda` is GPU frames from the NVIDIA
-/// zero-copy path, derived by the caller from the first captured frame; otherwise packed RGB/BGR
-/// CPU frames. The crate's env knobs are read here, once per open.
+/// zero-copy path, derived by the caller from the first captured frame; otherwise dmabuf or CPU
+/// frames. The crate's env knobs are read here, once per open.
 pub fn open_video(resolved: &Resolved, params: OpenParams) -> Result<Box<dyn Encoder>> {
     let knobs = Knobs::from_env();
     let (inner, backend) = open_video_backend(
@@ -162,9 +162,9 @@ impl Encoder for TrackedEncoder {
     }
 }
 
-/// No backend clamps a bitrate of 0: an AMF rebuild fails its `TargetBitrate`
+/// Not every backend clamps a bitrate of 0: an AMF rebuild fails its `TargetBitrate`
 /// and NVENC's bisect lands at 10 Mbps. One floor here, at the trait boundary,
-/// matching the host's own 500 kbps ABR floor.
+/// matching `MIN_BITRATE_KBPS` in the ABR budget.
 pub const MIN_BITRATE_BPS: u64 = 500_000;
 
 /// What a session asks [`open_video`] for.
@@ -193,7 +193,7 @@ pub struct OpenParams {
 }
 
 /// Open the platform encoder. The display label is the branch that opened
-/// (`nvenc`/`vaapi`/`vulkan`/`amf`/`qsv`/`software`), including internal
+/// (`nvenc`/`vaapi-native`/`vulkan`/`pyrowave`/`software`), including internal
 /// fallbacks (Vulkan Video → VAAPI). Feeds the mgmt live-session record.
 fn open_video_backend(
     resolved: &Resolved,

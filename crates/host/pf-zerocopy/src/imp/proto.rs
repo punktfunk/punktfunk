@@ -183,7 +183,8 @@ pub enum Reply {
 pub struct BufferDesc {
     pub width: u32,
     pub height: u32,
-    /// `cuIpcGetMemHandle` blob (Y or BGRx). Always 64 bytes.
+    /// `cuIpcGetMemHandle` blob (Y or BGRx), always
+    /// [`CU_IPC_HANDLE_SIZE`](super::cuda::CU_IPC_HANDLE_SIZE) bytes.
     pub y_handle: Vec<u8>,
     pub y_pitch: usize,
     /// NV12 only: interleaved chroma `(handle, pitch)`.

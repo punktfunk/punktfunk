@@ -838,8 +838,8 @@ impl Drop for TritonUsbip {
 }
 
 impl TritonUsbip {
-    /// Attach a wired SC2 via `vhci_hcd` (root + module; [`super::usbip::attach_device`]).
-    /// `index` varies only the serial.
+    /// Attach a wired SC2 via `vhci_hcd` ([`super::usbip::attach_device`]). `index` picks the
+    /// staged identity ([`identity_for`]) and the canned serial and unit id.
     pub fn open(index: u8) -> Result<TritonUsbip> {
         let hello = Hello {
             kind: UsbKind::SteamController2,
@@ -936,7 +936,7 @@ impl TritonUsbip {
     }
 }
 
-/// Idle `0x42` state — what the wired endpoint streams before the first write.
+/// Idle `0x42` state: what a pad serves before its first write, and once after [`STALE`].
 fn neutral_report() -> InputReport {
     let mut report = InputReport {
         len: TRITON_STATE_LEN as u8,

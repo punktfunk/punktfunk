@@ -161,8 +161,8 @@ fn injector_service_thread(
     let mut slot = InjectorSlot::default();
     let mut warped_gen = crate::aim().generation;
     while let Some(batch) = slot.next_batch(&rx) {
-        // Read the published backend from its `RwLock`, not `getenv`: `setenv` on connect raced
-        // this hot path. A pin never follows; its target can only die.
+        // `default_backend` reads the published backend from its `RwLock`, not `getenv`
+        // (`SESSION_BACKEND` says why). A pin never follows; its target can only die.
         let want = pin.is_none().then(default_backend);
         if let Some(want) = want {
             slot.follow(want);

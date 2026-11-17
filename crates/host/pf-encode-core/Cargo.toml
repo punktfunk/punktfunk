@@ -1,7 +1,7 @@
 # The `Encoder` contract and what the Linux and Windows backends share: the encoder knobs, the
 # slot-RFI and loss-recovery policy, the direct-NVENC session and the PyroWave wire framing.
-# Speaks pf-frame only, so pf-encode (Linux) and pf-encode-win (Windows, inside the IddCx driver)
-# both build on it without QUIC or GPU inventory.
+# Speaks pf-frame and pf-driver-proto only, so pf-encode (Linux) and pf-encode-win (Windows,
+# inside the IddCx driver) both build on it without QUIC or GPU inventory.
 [package]
 name = "pf-encode-core"
 version.workspace = true

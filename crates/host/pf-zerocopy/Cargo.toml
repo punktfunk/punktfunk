@@ -1,6 +1,6 @@
-# The Linux GPU zero-copy plumbing (plan §9 / §W6), extracted into a leaf crate so the shared
-# frame vocabulary (pf-frame `FramePayload::Cuda`), the encode backends (CUDA copies/context),
-# and the capture import machinery can all reach it WITHOUT the host orchestrator in between.
+# The Linux GPU zero-copy plumbing, a leaf crate so the shared frame vocabulary (pf-frame
+# `FramePayload::Cuda`), the encode backends (CUDA copies/context), and the capture import
+# machinery can all reach it WITHOUT the host orchestrator in between.
 # Content is Linux-only; the crate compiles to an empty lib elsewhere so dependents can carry a
 # plain (non-target-gated) dependency.
 [package]

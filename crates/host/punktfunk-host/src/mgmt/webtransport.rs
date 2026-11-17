@@ -38,8 +38,8 @@ pub(crate) struct WebTransportInfo {
     /// validation with no useful error.
     allow_pooling: bool,
     /// Hex ECDSA-P256-SHA256 signature (ASN.1 DER) by the host's long-lived native identity over
-    /// `"punktfunk-wt-cert-v1:" + cert_hash_sha256`. Absent when that identity is the legacy RSA
-    /// pair. A browser that has paired MUST check this; one that has not cannot, and does not.
+    /// `"punktfunk-wt-cert-v1:" + cert_hash_sha256`. Absent when that identity is not a P-256
+    /// key. A browser that has paired MUST check this; one that has not cannot, and does not.
     #[serde(skip_serializing_if = "Option::is_none")]
     cert_hash_sig: Option<String>,
     /// Base64 DER of the native identity's leaf certificate — the key that verifies

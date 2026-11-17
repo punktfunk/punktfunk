@@ -4,7 +4,7 @@
 //! (`PEN_FLAG_INVERTED`/`ERASER`), hover — plus a `PT_TOUCH` device for wire touches
 //! (`SendInput` touch is a no-op).
 //!
-//! Synthetic pointer state goes stale in ~100 ms (`design/apollo-comparison.md`), so
+//! Synthetic pointer state goes stale in ~100 ms (`design/pen-tablet-input.md`), so
 //! each device re-asserts the last frame every [`REFRESH_MS`] while in range / held.
 //! `CreateSyntheticPointerDevice` needs Win10 1809+; [`crate::pen_supported`] probes it.
 //!
@@ -448,7 +448,7 @@ fn free_slot(contacts: &[Contact]) -> u32 {
     slot
 }
 
-/// Windows can inject at most this many simultaneous synthetic touch contacts.
+/// Most simultaneous touch contacts: the `maxCount` the device is created with.
 const MAX_CONTACTS: usize = 10;
 
 struct TouchShared {

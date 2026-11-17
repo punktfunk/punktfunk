@@ -33,7 +33,7 @@ pub const DOOR_GROUP: &str = "punktfunk-door";
 const MAX_CONNECTIONS: usize = 8;
 /// A client sends its whole frame at once; one that doesn't within this is not a client.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-/// A start takes up to 90 s on the server, so a client waits longer than that.
+/// A start waits up to `START_TIMEOUT` (`linux/mod.rs`) on the server, so a client waits longer.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 /// A Flatpak install downloads hundreds of megabytes.
 const FLATPAK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -456,9 +456,7 @@ mod tests {
         assert!(waited >= Duration::from_secs(30 + 90), "{waited:?}");
     }
 
-    /// A list over a real socket answers with the empty ledger, and a second bind on a live
-    /// socket is refused. Peer credentials need Linux, so the exchange runs on the client side
-    /// of `answer` only.
+    /// A second bind on a live socket is refused.
     #[test]
     fn a_second_supervisor_cannot_take_a_live_socket() {
         let temp = tempfile::tempdir().unwrap();

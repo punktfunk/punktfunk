@@ -144,15 +144,15 @@ struct Live {
 pub struct NativePairingStatus {
     pub armed: bool,
     pub pin: Option<String>,
-    /// Seconds left. `None` = no expiry (CLI `--allow-pairing`).
+    /// Seconds left. `None` = no expiry (the `punktfunk1-host` start-up arm).
     pub expires_in_secs: Option<u64>,
     pub paired_clients: u32,
 }
 
 impl NativePairing {
-    /// Load the trust store. `store_path = None` uses the default path. `arm_at_start` (CLI
-    /// `--allow-pairing` / `--require-pairing`) arms immediately with `fixed_pin` or a random
-    /// PIN and no expiry.
+    /// Load the trust store. `store_path = None` uses the default path. `arm_at_start` (the
+    /// standalone `punktfunk1-host` CLI) arms immediately with `fixed_pin` or a random PIN and
+    /// no expiry.
     pub fn load_with(
         store_path: Option<PathBuf>,
         fixed_pin: Option<String>,
@@ -543,7 +543,8 @@ impl NativePairing {
     /// Wait [`RECONNECT_GRACE`], then drop a "this session" record if this last-out
     /// is still the latest and the device did not come back. `session_started` and
     /// this waiter share the `live` lock so a reconnect cannot land between the live
-    /// check and the remove. Lock order is live → store → watch.
+    /// check and the remove. The store lock is innermost: `live` and the watch map each take
+    /// it, never the reverse.
     async fn drop_session_only_after_grace(&self, fp_hex: &str, last_out: u64) {
         // A seat host reads the box's store; the box drops the record.
         if self.store.read_only() {
@@ -758,7 +759,7 @@ impl NativePairing {
 
 #[cfg(test)]
 mod tests {
-    /// Knocks in these tests come from the couch unless a test says otherwise. `None` now
+    /// Knocks in these tests come from the couch unless a test says otherwise. `None`
     /// classifies as WAN, which refuses a bare approve — that is the point of the rule.
     const LAN_KNOCK: std::net::IpAddr =
         std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 44));
@@ -1326,7 +1327,7 @@ mod tests {
     /// The address table the admission rules read. Anything not on a network the operator
     /// already let the peer onto is WAN, and an address we could not read is WAN too.
     /// A page server's header makes a knock strict whatever it names: a LAN peer naming a LAN
-    /// address, `unknown` and garbage alike. No header classifies the peer as before.
+    /// address, `unknown` and garbage alike. No header classifies the peer by its own address.
     #[test]
     fn a_relayed_knock_is_strict_whatever_it_names() {
         let wan: IpAddr = "203.0.113.5".parse().unwrap();

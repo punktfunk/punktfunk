@@ -69,8 +69,8 @@ impl RawTimer {
 /// cycles: a cycle that only serves a frame callback or the cursor delivers no frame, and a
 /// commit right behind it must not wait an interval for it. The producer's node is sync in
 /// the graph, so its paint runs inside the cycle and this stream wakes with the frame the
-/// same cycle. Every field is a `Cell`: `trigger_done` can land inside `schedule` when a
-/// trigger has to close a cycle the producer never finished.
+/// same cycle. Every field but `interval` is a `Cell`: `trigger_done` can land inside
+/// `schedule` when a trigger has to close a cycle the producer never finished.
 pub(super) struct Pacer {
     pub(super) stream: std::cell::Cell<*mut pw::sys::pw_stream>,
     interval: std::time::Duration,
@@ -207,7 +207,7 @@ impl Pacer {
     }
 }
 
-/// The stream events pipewire-rs 0.9 has no builder for: RequestProcess and `trigger_done`.
+/// The stream events pipewire-rs 0.10 has no builder for: RequestProcess and `trigger_done`.
 /// Both callbacks run on the loop thread. Dropping removes the hook, before the pacer.
 pub(super) struct RequestListener {
     hook: Box<spa::sys::spa_hook>,

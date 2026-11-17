@@ -191,7 +191,8 @@ const WAITER_READY_LIMIT: Duration = Duration::from_secs(5);
 
 pub(super) struct ApprovalQueue {
     pending: Mutex<PendingState>,
-    /// Fired when a fingerprint is paired or a pending knock is denied/dropped.
+    /// Fired when a fingerprint is paired, a pending knock is denied, or a re-knock supersedes
+    /// a parked one.
     changed: Notify,
     #[cfg(test)]
     waiter_ready_generation: AtomicU64,

@@ -462,9 +462,9 @@ async fn a_preflight_is_answered_and_never_allows_credentials() {
         .is_none());
 }
 
-/// `/local/summary` is admitted by network position alone, so the same-origin policy was the
-/// only thing keeping a page off it. A host that serves browsers must still not stamp it: a
-/// page on a machine that trusts the host certificate reaches loopback like anything else.
+/// `/local/summary` is admitted from loopback on the tray token, which a standard local account
+/// may read. A host that serves browsers must still not stamp it: a page on a machine that
+/// trusts the host certificate reaches loopback like anything else.
 #[tokio::test]
 async fn the_loopback_lane_is_never_readable_cross_origin() {
     use axum::http::header;
@@ -516,7 +516,7 @@ async fn a_host_with_no_browser_plane_stamps_nothing() {
         .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
         .is_none());
 
-    // And the preflight is not answered either — `require_auth` refuses it, as it did before.
+    // And the preflight is not answered either — `require_auth` refuses it.
     let preflight = axum::http::Request::builder()
         .method("OPTIONS")
         .uri("/api/v1/library")

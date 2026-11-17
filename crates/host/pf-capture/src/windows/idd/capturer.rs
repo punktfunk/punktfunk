@@ -171,8 +171,8 @@ impl IddPushCapturer {
     }
 }
 
-/// A sustained ~2 fps stretch closed: per-hole lines gate on prior active flow, so this is the
-/// stretch's one line past its first hole.
+/// A degraded stretch closed ([`Recovery`]): per-hole lines gate on prior active flow, so this
+/// is the stretch's one line past its first hole.
 fn log_degraded(r: &Recovery) {
     let arrival = r.arrival_ms();
     tracing::info!(

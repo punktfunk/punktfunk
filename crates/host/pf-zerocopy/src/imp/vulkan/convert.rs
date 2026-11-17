@@ -38,7 +38,8 @@ const FRAMES: usize = 4;
 
 /// How `convert_img.comp` reads a LINEAR packed-RGB dmabuf as words: its `lin_fmt`, the first
 /// pixel's word, and the row stride in words. `None` samples the image: a tiled buffer, a
-/// fourcc the shader does not unpack, or a layout that is not word-aligned.
+/// fourcc the shader does not unpack, a layout that is not word-aligned, or a stride short of
+/// a row.
 fn linear_words(s: &ConvertSrc) -> Option<(u32, u32, u32)> {
     let fmt = match s.fourcc {
         drm::XR24 | drm::AR24 => 1,
@@ -105,9 +106,9 @@ pub(super) struct ConvertState {
 impl ConvertState {
     /// Every handle, CUDA-free; the caller has idled the device.
     pub(super) unsafe fn destroy(&mut self, d: &ash::Device, pool: vk::CommandPool) {
-        // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // SAFETY: raw Vulkan on this bridge's own device. The caller idled it (or, after a failed
+        // build, submitted nothing), so no pass uses these handles; each is destroyed once and
+        // `self` is not used again.
         unsafe {
             for (_, s) in self.srcs.drain() {
                 s.alloc.destroy(d);
@@ -135,13 +136,13 @@ impl ConvertState {
 }
 
 impl VkBridge {
-    /// Build the convert pipeline once. Needs the modifier-import extensions the device
-    /// advertised at bring-up; without them the convert lane is unavailable and the caller
-    /// falls back to the import path.
+    /// Build the convert pipeline once. Needs the modifier import and timeline export the
+    /// device advertised at bring-up; without them the convert lane is unavailable and the
+    /// caller falls back to the import path.
     unsafe fn ensure_convert(&mut self) -> Result<()> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // outlives the call. A failed build is destroyed whole by `ConvertState::destroy`; no
+        // pass has been submitted yet.
         unsafe {
             if self.conv.is_some() {
                 return Ok(());
@@ -193,8 +194,8 @@ impl VkBridge {
     /// per-frame sets, command buffers, timeline and sampler.
     unsafe fn build_convert(&self, st: &mut ConvertState) -> Result<()> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // outlives the call. Each handle lands in `st` as it is made, so the caller destroys a
+        // partial build.
         unsafe {
             let d = &self.device;
             let bindings = [
@@ -331,8 +332,8 @@ impl VkBridge {
     /// buffer. Replaces an earlier import under the same id. Takes the fd.
     pub fn register_slot(&mut self, id: u32, fd: OwnedFd, size: u64) -> Result<()> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // outlives the call, each fallible step destroys what it created, and `device_wait_idle`
+        // retires the work before a replaced import is freed.
         unsafe {
             self.ensure_convert()?;
             let d = &self.device;
@@ -400,9 +401,8 @@ impl VkBridge {
     /// Drop every slot import: the host rebuilt its ring.
     pub fn forget_slots(&mut self) {
         if let Some(st) = self.conv.as_mut() {
-            // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-            // outlives the call, each fallible step destroys what it created, and the fence wait
-            // retires the work before any handle it used is freed.
+            // SAFETY: raw Vulkan on this bridge's own device; `device_wait_idle` retires every
+            // submitted pass before an import is freed.
             unsafe {
                 let _ = self.device.device_wait_idle();
                 for (_, s) in st.slots.drain() {
@@ -414,9 +414,9 @@ impl VkBridge {
 
     /// Upload a straight-alpha RGBA8 cursor bitmap (tight rows). Kept until the next serial.
     pub fn set_cursor(&mut self, serial: u64, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
-        // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // SAFETY: raw Vulkan on this bridge's own device. The copy reads `need` bytes of `rgba`
+        // (length checked first) into a buffer of at least `need`, after `quiesce_convert` retired
+        // every submitted pass.
         unsafe {
             self.ensure_convert()?;
             let need = u64::from(width) * u64::from(height) * 4;
@@ -483,8 +483,8 @@ impl VkBridge {
     /// was ever uploaded: the binding must point at a real buffer).
     unsafe fn ensure_cursor_capacity(&mut self, need: u64) -> Result<()> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // outlives the call, each fallible step destroys what it created, and `device_wait_idle`
+        // retires the work before the old buffer is freed.
         unsafe {
             let st = self.conv.as_mut().expect("convert state");
             if st.cursor.as_ref().is_some_and(|c| c.cap >= need) {
@@ -547,8 +547,8 @@ impl VkBridge {
     /// the pass samples one plane, and those take the plane copy.
     unsafe fn src_image(&mut self, s: &ConvertSrc) -> Result<(vk::Image, vk::ImageView, bool)> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // outlives the call, each fallible step destroys what it created, and `device_wait_idle`
+        // retires the work before a stale image is freed.
         unsafe {
             let shape = (s.fourcc, s.modifier, s.offset, s.stride, s.width, s.height);
             let st = self.conv.as_mut().expect("convert state");
@@ -613,9 +613,8 @@ impl VkBridge {
     pub fn forget_src_image(&mut self, fd: i32) {
         if let Some(st) = self.conv.as_mut() {
             if let Some(old) = st.srcs.remove(&fd) {
-                // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-                // outlives the call, each fallible step destroys what it created, and the fence wait
-                // retires the work before any handle it used is freed.
+                // SAFETY: raw Vulkan on this bridge's own device; `device_wait_idle` retires every
+                // submitted pass before the image is freed.
                 unsafe {
                     let _ = self.device.device_wait_idle();
                     old.alloc.destroy(&self.device);
@@ -635,8 +634,8 @@ impl VkBridge {
         cursor: Option<CursorRect>,
     ) -> Result<u64> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
-        // outlives the call, each fallible step destroys what it created, and the fence wait
-        // retires the work before any handle it used is freed.
+        // outlives the call. `next_pass` waited this command buffer's last value, so it is
+        // re-recordable; the slot's size and the cursor rect's size are checked before the pass.
         unsafe {
             self.ensure_convert()?;
             if out.width == 0 || out.height == 0 || out.width > src.width || out.height > src.height
@@ -966,9 +965,9 @@ impl VkBridge {
 
 /// The copies that place a producer NV12 or P010 in a slot laid out as `out`: luma rows at the
 /// slot pitch, chroma rows from `pitch * plane_rows`. A plane whose stride already equals the slot
-/// pitch is one region; any other is a region per row. The last row copies only `width` bytes,
-/// so a tightly sized buffer is never read past its end. A frame and slot of different sizes
-/// (a resize in flight) copy their common top-left corner.
+/// pitch is one region; any other is a region per row. The last row copies only the row's own
+/// bytes, so a tightly sized buffer is never read past its end. A frame and slot of different
+/// sizes (a resize in flight) copy their common top-left corner.
 fn planar_regions(src: &ConvertSrc, out: &ConvertOut) -> Result<Vec<vk::BufferCopy>> {
     let (off1, stride1) = src
         .plane1
@@ -1085,8 +1084,8 @@ mod tests {
         assert_eq!(slot_bytes(&out(5)), 64 * 4 * 75);
     }
 
-    /// A LINEAR packed frame is read as words at its own stride, whatever the stride; a tiled
-    /// one, or a layout off a word, is sampled.
+    /// A LINEAR packed frame is read as words at its own stride; a tiled one, a layout off a
+    /// word, or a stride short of a row is sampled.
     #[test]
     fn a_linear_source_is_read_as_words() {
         let src = |modifier, offset, stride| ConvertSrc {

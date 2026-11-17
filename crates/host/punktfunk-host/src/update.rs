@@ -432,8 +432,8 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
         if !newer {
             return Err(ApplyError::NothingToApply);
         }
-        // Linux legs resolve artifacts through the package manager. An ARM64 host reads only
-        // its own key: the x64 asset is the wrong exe, not a fallback.
+        // Only the installer leg downloads an asset. An ARM64 host reads only its own key: the
+        // x64 asset is the wrong exe, not a fallback.
         let asset = if cfg!(target_arch = "aarch64") {
             checked.manifest.windows_host_arm64.clone()
         } else {
@@ -482,7 +482,7 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
             }
             #[cfg(target_os = "linux")]
             {
-                let _ = &asset; // unused: Linux legs use the package manager
+                let _ = &asset; // unused: no Linux leg downloads an asset
                 let run = if leg == Leg::SteamosSource {
                     linux::run_apply_steamos(&target_version, serial, &stage)
                         .map_err(jobs::ApplyFailed::from)

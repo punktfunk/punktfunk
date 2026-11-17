@@ -13,8 +13,8 @@
 //! Fields group by lifetime: `facts`, `shared` and `ends` (`facts.rs`) are fixed for the session,
 //! `live` is what a swap replaces, `display` what a rebuild reopens with, `diag` only logs, and
 //! the rest is the loop's own bookkeeping. Field order is teardown order. A per-tick value
-//! (`repeat`, `t_cap`, `owed`) travels in [`Tick`], not here; `tick_stamps` outlives its tick
-//! into the wait after it.
+//! (`repeat`, `t_cap`) travels in [`Tick`], not here; `tick_stamps` outlives its tick into the
+//! wait after it.
 
 use super::cursor::composite_plan;
 #[cfg(target_os = "linux")]
@@ -47,7 +47,8 @@ pub(super) enum Flow {
 
 /// What the wire is owed and when the encoder last answered.
 pub(super) struct AuClock {
-    /// Predicted as `au_seq + inflight.len()`. Encoder-internal counters desync on the first ABR rebuild.
+    /// The wire index the next polled AU carries; a submit predicts its own as
+    /// `au_seq + inflight.len()`. Encoder-internal counters desync on the first ABR rebuild.
     pub(super) au_seq: u32,
     /// A chunked AU's FIRST went out and its LAST has not: `au_seq` still names that frame.
     pub(super) wire_frame_open: bool,
@@ -208,7 +209,7 @@ pub(super) struct Live {
     pub(super) restamp: Option<super::encode::SourceStamps>,
     /// Source can change format/size with no client Reconfigure; in-place encoder reset cannot follow.
     pub(super) enc_src: (pf_frame::PixelFormat, u32, u32),
-    /// Total wire budget (kbps). Only encoder opens convert via [`EncDerive`].
+    /// Total wire budget (kbps). An encoder takes the rate [`EncDerive`] derives from it.
     pub(super) bitrate_kbps: u32,
     /// A rate was handed to this encoder after it opened, so a later read-back
     /// is about that retarget. What a pipeline opened at is the build's own
@@ -288,8 +289,9 @@ pub(super) struct StreamState {
     pub(super) au_rings: bool,
     pub(super) last_real_cap: Option<std::time::Instant>,
 
-    // ---- teardown order, which is field order: the send thread first, so the summary the
-    // registration emits holds its last counters; then game policy, capture, encoder, display ----
+    // ---- teardown order, which is field order: the send thread before the registration, so
+    // the summary it emits holds the thread's last counters; then game policy, capture,
+    // encoder, display ----
     pub(super) _watcher: Option<std::thread::JoinHandle<()>>,
     /// `Some(joined)` on the seat's own session, which follows the seat's mode.
     #[cfg(target_os = "linux")]
@@ -400,8 +402,8 @@ impl StreamState {
     }
 
     /// The further screens `asked` names, on threads of their own once the send thread takes
-    /// frames. They open on the first screen's display request, plan and depth, at the whole
-    /// video's derivation until the set moves the first screen's share.
+    /// frames. They open on the first screen's display request, plan and depth, each at the
+    /// share of the video the set gives it.
     fn screen_set(
         &self,
         asked: Vec<punktfunk_core::quic::v2::msg::Screen>,
@@ -1210,7 +1212,8 @@ fn first_live(
 }
 
 /// Start the send thread on the data plane the ramp hands back, and the hook that queues the
-/// control task's NACKs ahead of its frames. A ramp step in flight finishes first, ≤ 50 ms.
+/// control task's NACKs ahead of its frames. A ramp step in flight finishes first, within
+/// `RAMP_STEP_MAX_MS`.
 /// Depth 3: encode blocks if send falls behind, rather than drop a frame (infinite GOP freeze).
 /// Returns the thread and a sender for the further screens.
 #[allow(clippy::too_many_arguments)]

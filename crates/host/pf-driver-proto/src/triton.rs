@@ -1,5 +1,6 @@
-//! Steam Controller 2 (Triton) wire tables: UMDF driver (answers Steam synchronously) and
-//! host/inject (Linux usbip + tests). Pure byte-packing so it tests on any host.
+//! Steam Controller 2 (Triton) wire tables, shared by the UMDF driver (answers Steam
+//! synchronously) and `pf-inject`'s Linux and Windows pads. Pure byte-packing so it tests on any
+//! host.
 
 /// Feature-1 command bytes of the Valve query dance.
 pub const ID_GET_ATTRIBUTES_VALUES: u8 = 0x83;
@@ -134,13 +135,14 @@ const WIRED_PRODUCT: u32 = 0x1302;
 
 /// Firmware build time (unix epoch) as attribute tag `4` (`ATTRIB_FIRMWARE_BUILD_TIME`) in
 /// the `0x83` reply, mirrored at bytes 4..8 of the `0xF2` firmware-info reply — the two must
-/// agree. `0x6A6D_3700` = 2026-08-01T00:00:00Z. An older synthetic epoch (Feb 2016) made
-/// Steam offer to "update" the virtual pad, forwarding SET_REPORTs toward a real controller.
+/// agree. `0x6A6D_3700` = 2026-08-01T00:00:00Z. A stale epoch makes Steam offer to "update"
+/// the virtual pad, forwarding SET_REPORTs toward a real controller.
 /// Bump when Steam learns a newer shipping firmware and starts prompting again.
 pub const FW_BUILD_TIME: u32 = 0x6A6D_3700;
 
-/// Bit 31 of an out-ring slot's `len` marks a FEATURE set (vs interrupt/output). Only Triton's
-/// producer/consumer interpret it; other devtypes write plain lengths, so the bit is additive.
+/// Bit 31 of an out-ring slot's `len` marks a FEATURE set (vs interrupt/output). Only the Triton
+/// and 2015 Steam Controller identities set it; other devtypes write plain lengths, so the bit is
+/// additive.
 pub const OUT_FEATURE_BIT: u32 = 0x8000_0000;
 #[inline]
 pub const fn out_len(raw: u32) -> u32 {
@@ -151,9 +153,10 @@ pub const fn out_is_feature(raw: u32) -> bool {
     raw & OUT_FEATURE_BIT != 0
 }
 
-/// Wire length (id byte included) of each input report the wired descriptor declares.
-/// hidclass sizes its read buffer from the largest (0x42 → 54) and refuses over-long
-/// completions. `None` = undeclared id, drop it (0x47 is BLE-only, not in the 372-byte descriptor).
+/// Wire length (id byte included) of each vendor-collection input report the wired descriptor
+/// declares. hidclass sizes its read buffer from the largest (0x42 → 54) and refuses over-long
+/// completions. `None` = an id the pad does not relay, drop it: 0x47 is BLE-only, not in the
+/// 372-byte descriptor, and 0x40/0x41 are the descriptor's mouse and keyboard reports.
 pub const fn input_len(report_id: u8) -> Option<usize> {
     match report_id {
         0x42 => Some(54),

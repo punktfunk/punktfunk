@@ -6,8 +6,8 @@
 //! console lists the bundle next to the host export.
 //!
 //! A file store, not `log_capture::ring()`: ingesting a multi-thousand-line
-//! bundle into the host's ~4096-entry ring would evict the host half. The host
-//! log gets one INFO breadcrumb per received bundle instead.
+//! bundle into the host's ring (`log_capture::CAPACITY` entries) would evict the
+//! host half. The host log gets one INFO breadcrumb per received bundle instead.
 //!
 //! Quota: a paired device may upload at will. Only the newest
 //! [`KEEP_PER_DEVICE`] bundles per fingerprint prefix survive; the endpoint
@@ -201,9 +201,8 @@ mod tests {
     use super::*;
 
     fn store() -> (std::sync::Arc<ClientLogStore>, PathBuf) {
-        // pid+timestamp collided: tests run in parallel in one process and can
-        // share a millisecond, then one cleanup deletes the other's live dir.
-        // A process-wide counter is unique regardless of timing.
+        // Tests run in parallel in one process and can share a millisecond, so a
+        // timestamp would let one cleanup delete another's live dir. A counter cannot.
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "pf-client-logs-test-{}-{}",

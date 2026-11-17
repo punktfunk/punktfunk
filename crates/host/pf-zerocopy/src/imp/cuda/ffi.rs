@@ -1,8 +1,8 @@
 //! CUDA Driver API FFI: opaque handles, `cuda.h` structs, the `dlopen`'d `libcuda.so.1`
 //! table ([`CudaApi`] / [`cuda_api`]), `unsafe` `cuXxx` wrappers, and [`ck`].
 //!
-//! No higher-level state. Shared `CUcontext`, device buffers, GL/dmabuf interop, and
-//! cursor blend live in [`super`] and drive this layer.
+//! No higher-level state. Shared `CUcontext`, device buffers and GL/dmabuf interop live in
+//! [`super`] and drive this layer.
 //!
 //! Flattened struct layout is pinned by the `const` asserts below. A transcription slip
 //! compiles and does not crash — the driver reads a pitch, size, or fd from the wrong
@@ -290,7 +290,7 @@ pub(crate) struct CudaApi {
 // Addresses stay valid because `cuda_api` `forget`s the `Library`.
 
 /// Wrapper `CUresult` when `libcuda` is not loaded. Non-zero so `ck()`/`!= 0` treat it as
-/// a driver error; distinct from real `CUDA_ERROR_*` (all < 1000). The driver never returns it.
+/// a driver error. It shares its value with cuda.h's `CUDA_ERROR_UNKNOWN` (999).
 pub(crate) const CU_ERROR_NOT_LOADED: CUresult = 999;
 
 pub(crate) static CUDA_API: OnceLock<Option<CudaApi>> = OnceLock::new();

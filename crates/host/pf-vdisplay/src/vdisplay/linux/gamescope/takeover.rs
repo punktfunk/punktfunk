@@ -725,7 +725,7 @@ fn display_manager_unit_under(base: &std::path::Path) -> Option<String> {
 }
 
 /// Pure DM decision. Runtime guards stay with [`stop_autologin_sessions`]. Flavor is not an
-/// input: a failed DM stop degrades to attach, never to mask-only (that *is* the storm).
+/// input.
 struct DmPlan {
     /// No live gaming instance. Killing leftovers frees no Steam; stopping the DM would kill a desktop.
     skip: bool,
@@ -1076,8 +1076,8 @@ pub(super) fn honor_session_select_switch(adopted_dm: Option<String>) {
         "gamescope: in-stream session-select detected — handing the box's own game mode back and \
          following the desktop session the user selected"
     );
-    // Mask first, while the owed units still name what it covers. Forced SCREEN_* and the bind
-    // stay owed: only the units and the session go.
+    // Lift the mask first, while the owed units still name what it covers. Forced SCREEN_* and the
+    // bind stay owed: only the units and the session go.
     lift_autologin_mask();
     {
         let mut t = takeover();
@@ -1113,8 +1113,8 @@ pub(super) fn take_adopted_dm() -> Option<String> {
     dm
 }
 
-/// Adopted pre-idle takeover only: start the stopped DM, run `os-session-select desktop`, stop
-/// the autologin unit so Relogin enters the desktop. Nothing live stops a DM any more.
+/// Adopted pre-idle takeover only: start the stopped DM, run `os-session-select plasma`, stop
+/// the autologin unit so Relogin enters the desktop. Nothing live stops a DM.
 fn replay_switch_under_restored_dm(dm: &str) {
     if let Err(e) = restore_display_manager(dm) {
         tracing::warn!(
@@ -1216,9 +1216,9 @@ fn parse_listed_units(stdout: &str) -> Vec<(String, String)> {
 }
 
 /// Free Steam. Our `punktfunk-gamescope` unit is not a `@`-instance, so it is never matched.
-/// SIGKILL ([`kill_unit`]) avoids the NVIDIA GPU-context leak. A failed DM stop is `Err` (caller
-/// degrades to attach) — never mask-only; a mask while the DM is up is the relogin storm. So is
-/// a user manager that twice does not list its units.
+/// SIGKILL ([`kill_unit`]) avoids the NVIDIA GPU-context leak. A user manager that twice does
+/// not list its units is `Err`, and so is an idle drop-in that cannot be installed (caller
+/// degrades to attach) — never mask-only; a mask while the DM is up is the relogin storm.
 pub(super) fn stop_autologin_sessions() -> Result<()> {
     // Asked twice: the user manager is busiest right after a relogin.
     let listed = listed_autologin_units()
@@ -1268,7 +1268,7 @@ pub(super) fn stop_autologin_sessions() -> Result<()> {
 /// Long enough that one legitimate login racing teardown cannot trip it.
 const STORM_PROBE_WINDOW: Duration = Duration::from_secs(5);
 
-/// Healthy takeover creates 0 logins/s; a storm is 4–5. An order of magnitude clear of both.
+/// Healthy takeover creates 0 logins/s; a storm is 4–5. 1.0 sits between the two.
 const STORM_LOGINS_PER_SEC: f64 = 1.0;
 
 /// Monotonic login counter: logind names `/run/systemd/sessions/` files after the id.
@@ -1572,7 +1572,7 @@ fn report(site: Site<'_>, verb: &RestoreVerb) {
             unit,
             "restored the TV's autologin gaming session (debounce elapsed, no client)"
         ),
-        // A `--user start` of a gamescope-session-plus unit waits for its Exec to signal, and
+        // A `--user restart` of a gamescope-session-plus unit waits for its Exec to signal, and
         // Steam's own start routinely exceeds the bound. Queued is not failed.
         (S::Autologin(unit), V::StillRunning) => tracing::info!(
             unit,
@@ -1852,9 +1852,9 @@ fn do_restore_tv_session(verify: bool) {
         settle_taken();
         return;
     }
-    // DM-stop takeover ([`dm_plan`]): restore the DM (`reset-failed` then `restart`); its
-    // autologin Exec brings gaming mode back. Do not `--user start` the unit: without a DM
-    // login there is no seat, so gamescope never gets DRM master and the unit goes `failed`.
+    // A DM an older host stopped: restore it (`reset-failed` then `restart`); its autologin
+    // Exec brings gaming mode back. Do not `--user start` the unit: without a DM login there is
+    // no seat, so gamescope never gets DRM master and the unit goes `failed`.
     if let Some(dm) = dm {
         match restore_display_manager(&dm) {
             Ok(()) => {

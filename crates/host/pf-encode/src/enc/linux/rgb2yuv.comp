@@ -4,7 +4,7 @@
 // Optionally blends a straight-alpha RGBA cursor bitmap over the RGB *before* the YUV conversion
 // (so the chroma stays correct) — cursor-as-metadata for the GPU zero-copy paths. The blend is
 // gated by the push constant and touches only the cursor's small rectangle, so a disabled or
-// off-screen cursor costs one compare per invocation.
+// off-screen cursor costs a bounds check per pixel read.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D rgb;                  // packed RGB input (sampled; BGRA import ok)
 layout(binding = 1, r8)  uniform writeonly image2D yImg;    // full-res Y
@@ -31,8 +31,8 @@ vec3 srcTexel(ivec2 p) {
     return vec3(float(w & 0x3FFu), float((w >> 10) & 0x3FFu), float((w >> 20) & 0x3FFu)) / 1023.0;
 }
 
-// The session's range, a pipeline specialization constant: full (the default, whose arithmetic
-// is unchanged) or studio (Y 16..235, CbCr 16..240).
+// The session's range, a pipeline specialization constant: full (the default) or studio
+// (Y 16..235, CbCr 16..240).
 layout(constant_id = 0) const bool FULL_RANGE = true;
 
 float lumaY(vec3 c) {

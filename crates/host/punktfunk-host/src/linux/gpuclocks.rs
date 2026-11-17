@@ -103,7 +103,7 @@ pub struct ClockGuard {
 
 // SAFETY: NVML handles and fn pointers have no thread affinity (NVML is
 // documented thread-safe). The guard is only moved into/out of `pin_refcount`
-// and used under exclusive ownership of that mutex — never shared.
+// and dropped by the one thread that took it out — never shared.
 unsafe impl Send for ClockGuard {}
 
 impl Drop for ClockGuard {

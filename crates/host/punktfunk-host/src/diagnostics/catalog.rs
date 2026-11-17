@@ -1330,7 +1330,7 @@ fn uinput_access() -> HostCheck {
 }
 
 /// On Universal Blue, `usermod -aG input` looks successful and is reverted: `/etc/group` is not
-/// writable state. `packaging/README.md`. Returns the remedy's message id beside it.
+/// writable state. `packaging/bazzite/README.md`. Returns the remedy's message id beside it.
 fn input_group_remedy() -> (&'static str, Remedy) {
     let user = current_user().unwrap_or_else(|| "$USER".to_string());
     if is_universal_blue() {
@@ -1367,8 +1367,8 @@ fn is_universal_blue() -> bool {
 
 fn server_conflict() -> HostCheck {
     let id = ids::SERVER_CONFLICT;
-    // Same cached scan as the tray and Host card. Empty also means "never scanned" (no
-    // GameStream planes); treat that as healthy, matching `LocalSummary.conflicts`.
+    // Same cached scan as the tray and Host card. Empty also means "not scanned yet"; treat
+    // that as healthy, matching `LocalSummary.conflicts`.
     let labels = crate::detect::summary_labels(crate::detect::snapshot());
     if labels.is_empty() {
         return HostCheck::ok(

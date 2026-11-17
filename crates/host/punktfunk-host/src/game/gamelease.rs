@@ -163,8 +163,8 @@ pub struct LeaseShared {
     spec: DetectSpec,
     /// Process tree recognition may look in ([`LeaseRequest::scope_pid`]).
     scope_pid: Option<u32>,
-    /// Seconds-since-boot at launch: adopt floor. `None` = no uptime clock,
-    /// so only detect signals are used.
+    /// Launch instant on the process-start timeline ([`launch_clock`]): adopt
+    /// floor. `None` = no clock, so only detect signals are used.
     launch_stamp: Option<f64>,
     /// Host-spawned child ([`LeaseKind::Child`]). Cleared once reaped.
     child: Mutex<Option<OwnedChild>>,
@@ -349,7 +349,7 @@ pub struct LeaseRequest {
     /// [`LeaseKind::Untracked`]. Pinned to start time at [`open`]
     /// ([`crate::procscan::Scanner::resolve`]).
     pub spawned: Option<u32>,
-    /// Seconds-since-boot from **before** spawn ([`launch_clock`]): adopt
+    /// Process-start-timeline seconds from **before** spawn ([`launch_clock`]): adopt
     /// floor, so a copy already open is not this session. `None` disables
     /// the filter. A reconnect inherits it from [`crate::launchreg`].
     pub launch_stamp: Option<f64>,
@@ -365,7 +365,7 @@ pub struct LeaseRequest {
     /// lease never reports `window`, and a launch hold ends at `running`.
     pub window: Option<WindowSource>,
     /// Where to say this launch died on the spot. `None` leaves the finding in
-    /// the log, as it was before the client could be told.
+    /// the log only.
     pub outcome: Option<OutcomeTx>,
 }
 
@@ -380,8 +380,7 @@ pub struct WindowStage {
 
 /// Where the watcher looks for the game's window.
 pub enum WindowSource {
-    /// The compositor's own window list: Hyprland and sway over IPC, KWin over
-    /// `org_kde_plasma_window_management`, GNOME through punktfunk's shell extension. `stage`
+    /// The compositor's own window list ([`crate::vdisplay::list_all_toplevels`]). `stage`
     /// places the first window, where a head is known and the compositor allows it.
     #[cfg(target_os = "linux")]
     Toplevels {
@@ -396,12 +395,12 @@ pub enum WindowSource {
     Desktop,
 }
 
-/// Seconds since boot for adopt-against. Call **before** spawn
-/// ([`LeaseRequest::launch_stamp`]).
+/// Process-start-timeline seconds for adopt-against ([`crate::procscan::launch_stamp`]).
+/// Call **before** spawn ([`LeaseRequest::launch_stamp`]).
 pub fn launch_clock() -> Option<f64> {
-    // Always delegate: `procscan::launch_stamp` is already `None` with no
-    // matcher. A Linux-only gate skipped the Windows floor, and `find(spec,
-    // None)` then adopted a copy the player already had open.
+    // No platform gate: `procscan::launch_stamp` is already `None` with no matcher.
+    // A platform left without its floor runs `find(spec, None)`, which adopts a copy
+    // the player already had open.
     crate::procscan::launch_stamp()
 }
 
@@ -828,8 +827,7 @@ fn apply_on_window(stage: &WindowStage, win: &crate::vdisplay::Toplevel) {
 }
 
 /// The launch exited on the spot: say so, and un-launch the registry record so
-/// the next attempt starts the title instead of adopting a corpse. That drop is
-/// what turns "needs a host restart" into "press it again".
+/// the next attempt starts the title instead of adopting a corpse.
 ///
 /// Not [`finish`]: nothing ran, so there is no play time to credit and no game
 /// exit to end the session on.
@@ -1761,7 +1759,7 @@ mod tests {
         assert_eq!(scan_scope(false, true, Some(42)), Some(42));
         // A kept session's Lutris/Heroic/custom launch is the host's child, beside gamescope.
         assert_eq!(scan_scope(false, false, Some(42)), None);
-        // No compositor of ours: every other backend keeps the scan it has today.
+        // No compositor of ours: every other backend keeps the unscoped scan.
         assert_eq!(scan_scope(true, true, None), None);
     }
 
@@ -1974,7 +1972,7 @@ mod tests {
         let _ = game.wait();
     }
 
-    /// The one rule that separates the reporter's dead launch from a Proton
+    /// The one rule that separates a dead launch from a Proton
     /// prefix build: a *failing* exit inside the shim window with nothing left
     /// to recognize. A launcher hands off with success and keeps its grace; a
     /// title with detect signals keeps its grace whatever its wrapper did.
@@ -2033,7 +2031,7 @@ mod tests {
             .starts_with("Couldn't start Quail"));
     }
 
-    /// The whole of ask 2 in one place: the client hears `failed`, and the
+    /// A dead launch: the client hears `failed`, and the
     /// record stops covering — so the retry that follows starts the title
     /// instead of adopting the launch that just died.
     #[test]
@@ -2649,9 +2647,8 @@ mod tests {
         assert_eq!(lease.shared().state(), GameState::Running);
     }
 
-    /// The ladder reaps the child it ended. Unreaped, a zombie answered signal 0, so the
-    /// ladder waited the whole grace, and it read as alive to the launch registry, which
-    /// then adopted a corpse on every relaunch until a host restart (#1065).
+    /// The ladder reaps the child it ended. Unreaped, a zombie answers signal 0, so the
+    /// ladder would wait out the whole grace.
     #[cfg(target_os = "linux")]
     #[test]
     fn the_term_ladder_reaps_the_child() {
@@ -2708,8 +2705,8 @@ mod tests {
     }
 
     /// A Steam title is launched with `steam steam://rungameid/…`, and with Steam not already
-    /// up that process becomes the Steam client. Sweeping its subtree made every Steam window
-    /// the game's, so the hold ended on the library window rather than on the game.
+    /// up that process becomes the Steam client. Sweeping its subtree would make every Steam
+    /// window the game's, ending the hold on the library window rather than on the game.
     #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn the_launcher_the_host_started_is_not_the_game_when_the_entry_names_one() {

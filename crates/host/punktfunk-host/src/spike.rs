@@ -1,7 +1,7 @@
 //! One-thread capture → encode → playable file. Optional in-process
 //! `punktfunk_core` host→client loopback of each AU (FEC, packetize, reassemble).
 //!
-//! Not the production host path; that is [`crate::pipeline`]. Sources are a
+//! Not the production host path; that is the native plane's `native::stream`. Sources are a
 //! synthetic BGRx pattern, a Windows synthetic NV12 GPU texture, the xdg
 //! ScreenCast portal, or a platform virtual display.
 //!
@@ -43,7 +43,7 @@ pub struct Options {
     pub fps: u32,
     pub seconds: u32,
     pub codec: Codec,
-    /// Ask for HDR capture and a 10-bit encode. The gate the seat supervisor runs.
+    /// Ask for HDR capture and a 10-bit encode; a display that composes SDR fails the run.
     pub hdr: bool,
     pub bitrate_bps: u64,
     /// Annex-B elementary-stream path (`.h265`/`.h264`/`.obu`).
@@ -84,7 +84,7 @@ pub fn parse_spike(args: &[String]) -> Result<Options> {
                     "synthetic" => Source::Synthetic,
                     "synthetic-nv12" => Source::SyntheticNv12,
                     "portal" => Source::Portal,
-                    // `kwin-virtual` is what this was called when only KWin had one.
+                    // `kwin-virtual` stays an alias: `scripts/validate-encode-worker.sh` passes it.
                     "virtual" | "kwin-virtual" => Source::Virtual,
                     other => {
                         bail!(
@@ -366,7 +366,7 @@ pub fn run(opts: Options) -> Result<()> {
     sink.flush().context("flush output file")?;
 
     // The readiness question this command answers: did the whole chain actually produce
-    // something? A run that captured and encoded nothing has exited 0 until now.
+    // something? A run that encoded nothing exits nonzero.
     if stats.encoded == 0 || stats.bytes_out == 0 {
         anyhow::bail!(
             "capture ran for {}s and the encoder produced no access unit — the display or the \

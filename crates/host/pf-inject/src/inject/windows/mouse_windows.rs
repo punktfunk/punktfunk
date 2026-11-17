@@ -65,8 +65,7 @@ const LAST_SEAT_SLOT: u8 = 15;
 /// `Global\pfmouse-boot-<i>` mailbox, the `pf_mouse_<i>` devnode, its container id — is
 /// machine-wide, so the several hosts on a seats box must each pick a different `i`. A seat's
 /// connector is already unique to it, so it is the index; the console keeps 0. A slot the
-/// display plane would refuse reads as the console, which is what an ordinary host has always
-/// done.
+/// display plane would refuse reads as the console, as it does for an ordinary host.
 fn mouse_index_for_slot(raw: Option<&std::ffi::OsStr>) -> u8 {
     raw.and_then(std::ffi::OsStr::to_str)
         .and_then(|slot| slot.parse::<u8>().ok())
@@ -589,15 +588,15 @@ pub fn spike_hold(secs: u64, relative: bool) -> Result<()> {
     Ok(())
 }
 
-/// Throwaway `pf_mouse_probe` at pad index 9: print which HID IOCTL hidclass
-/// forwards to a UMDF minidriver (`HidD_GetIndexedString` vs `IOCTL_HID_GET_STRING`).
+/// Throwaway `pf_mouse_probe` at index 9: print which HID string call hidclass forwards
+/// to a UMDF minidriver (`HidD_GetIndexedString` or `HidD_GetSerialNumberString`).
 /// The mailbox is LocalService-writable so the pad channel trusts the devnode's
 /// [`pf_driver_proto::gamepad::ChannelProof`] instead. Needs `pf_mouse` installed.
 pub fn channel_proof_probe() -> Result<()> {
     use crate::channel_proof::{self, ProofTransport};
 
-    /// A pad index no real pad uses, so the proof's index check is actually exercised and the
-    /// probe can never be confused with the resident mouse at 0.
+    /// Neither the console's mouse index (0) nor a seat's (12..=15), so the proof's index check
+    /// is actually exercised and the probe is never confused with a resident mouse.
     const PROBE_INDEX: u8 = 9;
 
     println!("creating a throwaway pf_mouse devnode (pad index {PROBE_INDEX})…");

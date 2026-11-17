@@ -216,8 +216,8 @@ struct Shared {
 }
 
 impl Shared {
-    /// Whether the monitor is gone, saying so once. From then on nothing is fed: what the
-    /// capture still delivers is not the source the session was opened on. The verdict
+    /// Whether the monitor is gone, saying so once and dropping the sink and the kept frame.
+    /// What the capture still delivers is not the source the session was opened on. The verdict
     /// stays: a monitor that re-arrives can take the old one's handle and name, and is still
     /// not the one this capture was opened on.
     fn gone(&self, feed: &mut Feed) -> bool {
@@ -346,8 +346,8 @@ impl Drop for Source {
 }
 
 impl Source {
-    /// Open the capture `req` names. Every stage is a call that has hung on some box; the host
-    /// bounds the whole open and ends this process when it runs over.
+    /// Open the capture `req` names. Every stage is a call that can hang; the host bounds the
+    /// whole open and ends this process when it runs over.
     pub fn open(
         req: &proto::OpenSource,
         on_resize: Box<dyn Fn(u32, u32) + Send + Sync>,

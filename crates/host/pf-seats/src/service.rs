@@ -37,8 +37,9 @@ pub struct SeatService<B> {
     backend: B,
     store: LedgerStore,
     ledger: Mutex<Ledger>,
-    /// Held across every create, start, stop, delete, adopt, credential, unlock grant, Enable and
-    /// Disable, but not a Linux password check. Only a call under it adds or drops a row.
+    /// Held across every create, start, stop, delete, adopt, credential, unlock grant, lend,
+    /// take-back, Enable and Disable, but not a Linux password check. Only a call under it adds
+    /// or drops a row.
     ops: Mutex<()>,
     /// Failed password checks and key proofs, per device and per account.
     attempts: Mutex<Attempts>,

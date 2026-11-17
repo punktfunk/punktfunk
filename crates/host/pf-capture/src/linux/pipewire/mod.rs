@@ -47,7 +47,8 @@ struct CaptureOpts {
     allow_zerocopy: bool,
     /// Tiled dmabufs convert via `ImportKind::Tiled444`, not NV12/RGB.
     want_444: bool,
-    /// Offer only 10-bit PQ/BT.2020 as LINEAR dmabufs. SHM cannot: Mutter's
+    /// Offer only 10-bit PQ/BT.2020 dmabufs, with the modifiers
+    /// [`hdr_modifier_offers`](offers::hdr_modifier_offers) lists. SHM cannot: Mutter's
     /// SHM path paints 8-bit ARGB32, and the tiled EGL blit is 8-bit.
     want_hdr: bool,
     /// 10-bit SDR: keep packed RGB (skip the NV12 convert) so direct-NVENC widens 8→10. A
@@ -60,8 +61,8 @@ struct CaptureOpts {
     /// Range of the NV12/P010 pods, PQ included, and of the importer's YUV converts; `false` is
     /// studio.
     full_range: bool,
-    /// Skip buffers until negotiated size matches `preferred` — KWin virtual
-    /// outputs birth a sacrificial mode then renegotiate (`kwin.rs` `create`).
+    /// Skip buffers until negotiated size matches `preferred` — a KWin virtual output
+    /// above 60 Hz births a sacrificial mode, then renegotiates (pf-vdisplay's KWin `create`).
     /// `false` elsewhere: Mutter sizes from negotiation; gamescope fixates.
     expect_exact_dims: bool,
     /// `true` (KWin): `id == 0` means pointer hidden — producer rewrites
@@ -76,8 +77,9 @@ struct CaptureOpts {
     /// Deepest pool the producer serves ([`crate::KWIN_POOL_MAX`]); `None` serves any depth.
     /// A deeper ask for the raw lane stops here.
     pool_max: Option<i32>,
-    /// Offer `maxFramerate = 0/1` so KWin records on its own frame signal
-    /// rather than a millisecond-rounded timer. KWin only; see
+    /// KWin's unpaced offer: `maxFramerate = 0/1` so KWin records on its own frame signal
+    /// rather than a millisecond-rounded timer, or the stream rate for a KWin that states
+    /// millihertz ([`offer_pacing`](offers::offer_pacing)). KWin only; see
     /// [`Knobs::kwin_paced`](crate::knobs::Knobs::kwin_paced).
     unpaced: bool,
     /// Drive the producer as a PipeWire lazy driver when it emits RequestProcess
@@ -122,7 +124,7 @@ struct UserData {
     shared: super::StreamShared,
     cursor_slot: super::CursorSlot,
     importer: super::ImporterCell,
-    /// Raw dmabuf to the encoder instead of a CUDA import (VAAPI).
+    /// Raw dmabuf to the encoder instead of a CUDA import (VAAPI or PyroWave).
     vaapi_passthrough: bool,
     /// The session's encoder is the VA lane on the host's render node, not PyroWave.
     va_import: bool,
@@ -132,12 +134,13 @@ struct UserData {
     import_policy: ImportPolicy,
     /// Arrival-path import memory. The consumer keeps its own.
     import_state: ImportState,
-    /// Rate-limit counter for the latest-frame-only diagnostic (see `.process`).
+    /// Stale CORRUPTED/cursor buffers `.process` skipped; its debug line logs at each power of 2.
     dbg_log_n: u64,
     /// Which clock feeds wire `pts_ns`. Delivery stamps sit downstream of compositor jitter.
     pts: crate::pts_provenance::PtsProvenance,
     pts_reported: std::time::Instant,
-    /// `CLOCK_REALTIME − CLOCK_MONOTONIC`, ns. Re-sampled each 30 s window; clocks drift by µs.
+    /// `CLOCK_REALTIME − CLOCK_MONOTONIC`, ns. Re-sampled each `PTS_REPORT_EVERY`; clocks
+    /// drift by µs.
     rt_minus_mono_ns: i64,
     /// `PUNKTFUNK_CAPTURE_HDR_PTS=0` puts the wire back on the delivery stamp unconditionally.
     hdr_pts_enabled: bool,
@@ -146,7 +149,8 @@ struct UserData {
     /// Raw-passthrough frames that fell through to CPU, by reason. Fresh `UserData` per pipeline.
     passthrough_fallbacks: PassthroughFallbacks,
     cursor: CursorState,
-    /// Sacrificial birth-mode size (kwin.rs `create`). `.process` skips until it matches, then clears.
+    /// Sacrificial birth-mode size (pf-vdisplay's KWin `create`). `.process` skips until it
+    /// matches, then clears.
     expect_dims: Option<(u32, u32)>,
     /// Buffers skipped by `expect_dims` (rate-limits its log).
     gate_skips: u64,

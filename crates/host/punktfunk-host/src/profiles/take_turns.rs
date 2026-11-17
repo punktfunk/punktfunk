@@ -123,8 +123,8 @@ pub(crate) fn seat_now(account: &str) -> (ConsoleAction, TurnSeat) {
 /// card goes back to `Switchable`.
 pub(crate) const SWITCH_TIMEOUT_SECS: i64 = 60;
 
-/// Whether a switch marker written at `marked_unix` for `marked_account` is still in flight for a
-/// connect asking `asked_account`, at `now_unix`. A marker for another account, or one past
+/// Whether `marker`, a switch marker's account and write time, is still in flight for a connect
+/// asking `asked_account`, at `now_unix`. A marker for another account, or one past
 /// [`SWITCH_TIMEOUT_SECS`], is not.
 pub(crate) fn switch_in_flight(
     marker: Option<(&str, i64)>,

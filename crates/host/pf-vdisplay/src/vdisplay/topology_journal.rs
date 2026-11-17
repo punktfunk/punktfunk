@@ -13,8 +13,7 @@
 //! no longer lists stays, and this host runs it again while it lives ([`apply`]): a head may
 //! come back still disabled. Past a few looks it stays for the next pass. A file this version
 //! cannot read is left alone.
-//! Pin the contract with the tests below; the design is
-//! `design/component-health/16-topology-journal.md` (planning).
+//! Pin the contract with the tests below.
 
 use serde::{Deserialize, Serialize};
 
@@ -56,7 +55,7 @@ pub enum TakeoverStep {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Head {
     pub name: String,
-    /// The exact mode to put back where the compositor forgets a disabled head's (KWin).
+    /// The exact mode to put back where the compositor forgets a disabled head's (KWin, Umbriel).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
 }

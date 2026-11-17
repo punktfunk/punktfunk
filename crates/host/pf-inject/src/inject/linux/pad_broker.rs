@@ -910,7 +910,7 @@ mod tests {
     }
 
     /// Only a contract seat marks its PlayStation pads; the box's own host and the owner's row
-    /// keep today's MACs. A seat's mark is its id's, so a restart keeps it.
+    /// keep the box's MACs (seat 0). A seat's mark is its id's, so a restart keeps it.
     #[test]
     fn only_a_contract_seat_marks_its_playstation_pads() {
         use pf_paths::seat::{HostRole, SeatRole};

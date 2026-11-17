@@ -19,7 +19,7 @@ use bytemuck::{Pod, Zeroable};
 
 /// Header magic (`"PFAU"` LE), stamped by the host before the handle is delivered.
 pub const AU_MAGIC: u32 = 0x5541_4650;
-/// AU-section layout version; moved with `PROTOCOL_VERSION` v7 and v9.
+/// AU-section layout version; [`au_readable`] accepts no other.
 pub const AU_VERSION: u32 = 8;
 /// Slots in the table. Fixed: the host allocates exactly this many.
 pub const AU_SLOTS: u32 = 16;
@@ -109,7 +109,8 @@ pub struct AuHeader {
     pub wire_seq_base: u32,
     /// One of the `ENCODER_*` states.
     pub encoder_state: u32,
-    /// Encode threads abandoned after a wedge. Two is the `DriverCycle` threshold.
+    /// Encode threads abandoned after a wedge; `pf_frame::health::classify` reads it for the
+    /// `DriverCycle` escalation.
     pub detached: u32,
     /// QPC of the most recent publish — the stall clock the classifier reads.
     pub last_au_qpc: u64,
@@ -165,8 +166,7 @@ pub struct AuSlot {
     pub flags: u32,
     /// [`FREE`], [`PUBLISHED`] or [`READING`].
     pub state: u32,
-    /// QPC when the driver handed the frame to its encoder. `0` from a driver that
-    /// predates the stamp.
+    /// QPC when the driver handed the frame to its encoder.
     pub qpc_submit: u64,
     /// QPC when the driver wrote this record.
     pub qpc_published: u64,
@@ -212,8 +212,7 @@ pub const fn slot_offset(i: usize) -> usize {
 
 /// Whether a mapped header may be read past its magic: the host's magic, this version, the
 /// layout constants both sides already agree on, and a heap within the caps. Every other
-/// field is an index a writer chose, so `false` means touch nothing — the fail-closed rule
-/// the ring's `check_attach` follows.
+/// field is an index a writer chose, so `false` means touch nothing.
 #[must_use]
 pub const fn au_readable(header: &AuHeader) -> bool {
     header.magic == AU_MAGIC
@@ -561,7 +560,7 @@ mod tests {
             offsets[n - 1] + 1000,
             "bytes keep bumping, slots recycle"
         );
-        // Zero-length chunks and over-heap chunks are answered, never placed wrongly.
+        // An over-heap chunk is refused, never placed wrongly.
         assert_eq!(ring.take(HEAP_MIN_BYTES + 1, &states), None);
     }
 

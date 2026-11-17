@@ -16,8 +16,9 @@ use super::*;
 /// attach / session-plus). See `design/gamemode-and-dedicated-sessions.md`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DisplayOwnership {
-    /// An output on the desktop's compositor (KWin, Mutter, wlroots, Hyprland, Windows). Displays
-    /// of one backend share a group and its restore, and die with the desktop's session epoch.
+    /// An output on the desktop's compositor (KWin, Mutter, wlroots, Hyprland, niri, Umbriel,
+    /// Windows). Displays of one backend share a group and its restore, and die with the
+    /// desktop's session epoch.
     /// Default: a silent backend is owned.
     #[default]
     Owned,
@@ -104,7 +105,8 @@ pub struct VirtualOutput {
     pub win_capture: Option<pf_frame::dxgi::WinCaptureTarget>,
     /// Holds the compositor resource (and its connection/thread) until drop.
     pub keepalive: Box<dyn Send>,
-    /// Registry pools only [`DisplayOwnership::Owned`]; the rest pass through to the capturer.
+    /// Registry pools only [`DisplayOwnership::pooled`] outputs (`Owned`, `Spawned`); the rest
+    /// pass through to the capturer.
     pub ownership: DisplayOwnership,
     /// Generation when [`registry::acquire`](crate::registry::acquire) reused a kept display, so a
     /// first-frame failure can [`registry::mark_failed`](crate::registry::mark_failed) instead of
@@ -256,7 +258,7 @@ pub trait VirtualDisplay: Send {
     #[cfg(target_os = "linux")]
     fn set_session_cast_handoff(&mut self, _enabled: bool) {}
     /// Session-scoped ScreenCast for a named output the registry is lingering.
-    /// Hyprland and sway recast by name; default `None` (the pooled node is already live).
+    /// Hyprland, sway and niri recast by name; default `None` (the pooled node is already live).
     #[cfg(target_os = "linux")]
     fn session_cast_for(&mut self, _name: &str) -> Result<Option<SessionCastParts>> {
         let _ = _name;
@@ -321,7 +323,8 @@ pub trait VirtualDisplay: Send {
     fn set_quit_flag(&mut self, _quit: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
     /// Client panel HDR volume (`Hello::display_hdr`) for the virtual output's EDID (CTA-861.3).
     /// Host apps then tone-map to the panel the stream lands on. `None` = unknown/SDR → default
-    /// EDID. Default no-op: only Windows pf-vdisplay mints per-monitor EDIDs.
+    /// EDID. Default no-op: Windows pf-vdisplay mints per-monitor EDIDs from it and Hyprland
+    /// writes it into its HDR monitor rule.
     fn set_client_hdr(&mut self, _hdr: Option<pf_frame::HdrMeta>) {}
     /// Stream negotiated HDR (10-bit BT.2020/PQ, `bit_depth >= 10` in Welcome). Distinct from
     /// [`set_client_hdr`](Self::set_client_hdr) (panel volume for EDID). Default no-op; gamescope
@@ -350,10 +353,11 @@ pub trait VirtualDisplay: Send {
     /// as "pointer is off the recorded view" is noise there (true on Mutter). See
     /// [`PortalCursorMode::delivers_metadata`](crate::PortalCursorMode::delivers_metadata).
     ///
-    /// `None` (default, every non-portal backend, and before first `create`) means nothing was
-    /// negotiated through xdg ScreenCast: KWin/Mutter/gamescope/Windows use their own protocols.
-    /// wlr, Hyprland and [`mirror`](crate::open_mirror) report this. A pooled reuse or a join
-    /// casts again on this instance, which sets it again, so the answer is never stale.
+    /// `None` (default, and before first `create`) means nothing was negotiated through xdg
+    /// ScreenCast: KWin/Mutter/gamescope/Windows use their own protocols. wlr, Hyprland and
+    /// [`mirror`](crate::open_mirror) report the negotiated mode; niri and Umbriel capture
+    /// directly and always report `Embedded`. A pooled reuse or a join casts again on this
+    /// instance, which sets it again, so the answer is never stale.
     fn last_portal_cursor_mode(&self) -> Option<crate::PortalCursorMode> {
         None
     }
@@ -367,8 +371,8 @@ pub trait VirtualDisplay: Send {
     }
     /// Place the last [`create`](Self::create) at `(x, y)` in desktop space. Registry owns the
     /// group and calls this after `create` (auto-row or console arrangement). Never called for
-    /// origin `(0, 0)`. Default no-op (only KWin positions). Best-effort: failure keeps compositor
-    /// default. See `design/display-management.md`.
+    /// origin `(0, 0)`. Default no-op; KWin, Hyprland, sway and niri position. Best-effort:
+    /// failure keeps compositor default. See `design/display-management.md`.
     fn apply_position(&mut self, _x: i32, _y: i32) {}
     /// Topology restore this [`create`](Self::create) prepared, for the one backend that does not
     /// journal it (gamescope's darken hold). Registry lifts it into the group so it runs once,
@@ -431,7 +435,8 @@ pub trait VirtualDisplay: Send {
     /// May the registry hand this acquire a kept display that already matched every generic
     /// reuse key (backend, isolation, shape, epoch, and the mode unless
     /// [`can_resize_kept`](Self::can_resize_kept))? `identity_slot` and `output_name` are the
-    /// kept display's. Default `true`; Hyprland adds its own rule.
+    /// kept display's. Default `true`; KWin, Mutter, wlroots, Hyprland, niri and Umbriel answer
+    /// through `identity::may_reuse`, the last three also refusing a head with no name.
     fn accepts_kept(&self, _identity_slot: Option<u32>, _output_name: Option<&str>) -> bool {
         true
     }

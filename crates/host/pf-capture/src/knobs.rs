@@ -1,5 +1,6 @@
-//! Every `PUNKTFUNK_*` switch the crate reads. [`Knobs::from_env`] is the crate's only read of
-//! the environment or the settings registry, and each knob keeps its own parser.
+//! Every `PUNKTFUNK_*` switch the crate reads by name. [`Knobs::from_env`] is the crate's only
+//! such read of the environment or the settings registry, and each knob keeps its own parser.
+//! A few switches arrive resolved, through `pf_host_config::config()` and `pf_zerocopy`.
 //!
 //! An `open_*` entry point resolves one [`Knobs`] and hands it down, so a console change
 //! reaches the next session. [`Knobs::process`] is the first resolution, kept for the process:
@@ -68,7 +69,7 @@ pub(crate) struct Knobs {
     #[cfg(target_os = "windows")]
     pub no_rt_gpu: bool,
     /// `PUNKTFUNK_IDD_FLOW`: the DxgKrnl ETW session alone, printing a present-flow line every
-    /// ten seconds. Once per process.
+    /// `FLOW_EVERY`. Once per process.
     #[cfg(target_os = "windows")]
     pub idd_flow: bool,
     /// `PUNKTFUNK_IDD_DIAG`: the IDD capturer's full diagnostics — the micro-probe engine, the

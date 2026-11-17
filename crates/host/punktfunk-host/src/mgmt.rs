@@ -75,8 +75,8 @@ pub(crate) use profiles::{may_wake, start_seat};
 /// Default management port — next to the GameStream block (47984…48010).
 ///
 /// Sunshine's web UI is also 47990, so a Sunshine fork and a GameStream-off
-/// host collide here. Move it via [`publish_endpoint`] / `PUNKTFUNK_MGMT_BIND`;
-/// consumers read the bound port rather than assuming this constant.
+/// host collide here. Move it via `--mgmt-bind` / `PUNKTFUNK_MGMT_BIND`; consumers read
+/// the port [`publish_endpoint`] wrote rather than assuming this constant.
 pub const DEFAULT_PORT: u16 = pf_host_config::listen::MGMT_PORT;
 
 /// Filename [`publish_endpoint`] writes next to `mgmt-token`.
@@ -87,8 +87,8 @@ static EFFECTIVE_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
 /// Bound mgmt port, or `0` when this process has no management API.
 ///
-/// The native handshake puts this in every `Welcome` so a client learns it
-/// on the already-authenticated connection. Same value as the endpoint file.
+/// The native handshake puts this in the `Welcome` of every host but a seat's, so a client
+/// learns it on the already-authenticated connection. Same value as the endpoint file.
 /// `0` is required — advertising [`DEFAULT_PORT`] with no listener is worse
 /// than omitting the port.
 pub fn effective_port() -> u16 {
@@ -154,7 +154,7 @@ fn write_endpoint(dir: &std::path::Path, port: u16) -> std::io::Result<std::path
 }
 
 /// One `KEY=VALUE` line: systemd `EnvironmentFile` and
-/// `windows::service::read_env_file_value`. No quoting; a URL has no `=`.
+/// `windows::service::web::read_env_file_value`. No quoting; a URL has no `=`.
 fn endpoint_line(port: u16) -> String {
     format!("PUNKTFUNK_MGMT_URL=https://127.0.0.1:{port}\n")
 }
@@ -162,7 +162,7 @@ fn endpoint_line(port: u16) -> String {
 #[derive(Clone, Debug)]
 pub struct Options {
     pub bind: SocketAddr,
-    /// Bearer on `/api/v1` except `/health`. `None` is unauthenticated.
+    /// Bearer on `/api/v1` except `/health`. [`run`] refuses `None`.
     pub token: Option<String>,
     /// Scripting-runner bearer: [`auth::plugin_may_access`] only. `None` disables the lane.
     pub plugin_token: Option<String>,
@@ -254,8 +254,8 @@ pub async fn run(
     settings::write_seat_defaults();
     #[cfg(target_os = "windows")]
     crate::windows::background_input::start();
-    // The tray has no supervisor — HKLM `Run` is a sign-in trigger — so
-    // `StopTrays` and a crash leave no icon until the next logon.
+    // HKLM `Run` starts the tray only at sign-in, so without this watch an installer's stop or
+    // a crash leaves no icon until the next logon.
     #[cfg(target_os = "windows")]
     crate::tray::supervise();
 
@@ -320,8 +320,8 @@ pub async fn run(
     ));
     #[cfg(not(windows))]
     drop(plugin_tokens);
-    // Plain HTTP answers only while the plane runs: a host serving no browsers listens exactly
-    // as it did before.
+    // Plain HTTP answers only while the plane runs; a host serving no browsers drops plaintext
+    // peers.
     let plain = browser_plane.then(bootstrap_app);
     if opts.restart_runner {
         crate::plugins::restart_stale_runtime();
@@ -352,7 +352,7 @@ fn bootstrap_app() -> Router {
 }
 
 /// Handler tests call this directly (not only [`run`]).
-#[allow(clippy::too_many_arguments)] // composition root: a param per `MgmtState` field, plus CORS
+#[allow(clippy::too_many_arguments)] // composition root: `MgmtState` fields, CORS, library guard
 fn app(
     state: Arc<AppState>,
     token: Option<String>,
@@ -527,7 +527,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(native::deny_pending_device))
         .routes(routes!(session::stop_session))
         .routes(routes!(session::request_idr))
-        // Per-session forms of the same three verbs; the id-less ones above stay host-wide.
+        // Per-session forms of stop and IDR; the id-less ones above stay host-wide.
         .routes(routes!(session::stop_one_session))
         .routes(routes!(session::request_session_idr))
         .routes(routes!(session::set_session_audio))

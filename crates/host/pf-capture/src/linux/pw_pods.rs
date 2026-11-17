@@ -364,7 +364,8 @@ pub(super) fn build_shm_only_buffers() -> Result<Vec<u8>> {
 /// afford empties the Buffers intersection and the link stalls in
 /// `negotiating` (same trap as `build_cursor_meta_param`'s size).
 ///
-/// `pool_min` is [`crate::POOL_MIN`], or [`crate::KWIN_POOL_MIN`] for KWin.
+/// `pool_min` is [`crate::POOL_MIN`], or [`crate::KWIN_POOL_MIN`] for KWin, deepened on
+/// the raw lane by `pool_ask` (`pipewire/ledger.rs`).
 /// `default` 8 is ~133 ms at 60 Hz / ~33 ms at 240 Hz, past capture→fence
 /// latency with a second frame in flight. `max` 16 caps compositor RAM
 /// (~25 MB per 4K 4:4:4 buffer).
@@ -822,10 +823,6 @@ mod tests {
         );
     }
 
-    /// Pool depth must be a Choice Range. A fixed Int a producer cannot afford
-    /// `unpaced` must put `maxFramerate = 0/1` on the wire: KWin reads a non-zero
-    /// ceiling as "schedule on a timer" and rounds each wait up to a whole
-    /// millisecond. A ceiling that survives here is the jitter we came to remove.
     #[test]
     fn a_capped_offer_carries_the_wire_rate() {
         let bgrx = |pacing| build_dmabuf_format(VideoFormat::BGRx, &[0], None, pacing, true);
@@ -840,6 +837,9 @@ mod tests {
         assert_ne!(capped, unpaced, "90/1 is not 0/1");
     }
 
+    /// `unpaced` must put `maxFramerate = 0/1` on the wire: KWin reads a non-zero
+    /// ceiling as "schedule on a timer" and rounds each wait up to a whole
+    /// millisecond.
     #[test]
     fn the_unpaced_offer_carries_a_zero_max_framerate() {
         let bgrx = |pacing| build_dmabuf_format(VideoFormat::BGRx, &[0], None, pacing, true);
@@ -871,6 +871,7 @@ mod tests {
         );
     }
 
+    /// Pool depth must be a Choice Range. A fixed Int a producer cannot afford
     /// empties the Buffers intersection and stalls the link with no error.
     #[test]
     fn the_dmabuf_pool_request_is_a_range_not_a_fixed_count() {

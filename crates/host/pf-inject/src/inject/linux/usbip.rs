@@ -5,7 +5,8 @@
 //! preconnects and accepts only that TCP 4-tuple before handing the socket to `vhci_hcd`. A
 //! seat host can't write `attach`; the supervisor's pad server serves its device instead and
 //! the seat keeps only the relay. `PUNKTFUNK_USBIP_ATTACH=cli` is an unauthenticated debug
-//! override. Callers degrade to UHID on failure.
+//! override. The Deck, SC1, SC2 and DualSense callers degrade to UHID on failure; Switch 2
+//! has no UHID transport.
 
 use crate::usbip_relay::{
     served, Hello, Incoming, Output, Outputs, Served, MAX_IDENTITY, MAX_MESSAGE,
@@ -686,7 +687,7 @@ fn parse_status_row(line: &str) -> Option<(u16, bool, u32)> {
 /// Kernel `VDEV_ST_NULL`: a free vhci port.
 const VDEV_ST_NULL: u32 = 4;
 
-/// Whether `port` is in use on socket `fd`. An unreadable `status` answers yes, the old detach.
+/// Whether `port` is in use on socket `fd`. An unreadable `status` answers yes, so Drop detaches.
 pub fn vhci_port_holds(port: u16, fd: RawFd) -> bool {
     read_status().map_or(true, |s| s.lines().any(|l| row_holds(l, port, fd)))
 }

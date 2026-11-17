@@ -548,8 +548,8 @@ async fn invoke_display_next(
 const SEATS_END_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Wait for signaled sessions to drop their virtual displays before going under anyway.
-/// Longer than the 1.5 s handshake release grace, short enough a wedged teardown cannot
-/// strand the sleep.
+/// Longer than the handshake's release grace (`RELEASE_CAP` in `native/handshake.rs`), short
+/// enough a wedged teardown cannot strand the sleep.
 const DISPLAY_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 const DISPLAY_DRAIN_TICK: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -576,7 +576,7 @@ fn drain_plan<'a>(displays: impl Iterator<Item = (&'a str, u64)>) -> (Vec<u64>, 
 ///
 /// [`crate::session_status::stop_all_quit`] marks teardown deliberate so the display should
 /// skip linger, but that drop is async and the 1 s reply-flush grace is shorter than the
-/// 1.5 s the same wait gets in `native/handshake.rs`.
+/// `RELEASE_CAP` the same wait gets in `native/handshake.rs`.
 ///
 /// Going under on a still-up display is not a transient. The linger deadline is
 /// `std::time::Instant`; on Linux that clock does not advance while suspended, so the box

@@ -79,7 +79,7 @@ impl PadCadence {
     }
 }
 
-/// `32 - leading_zeros` is `floor(log2(us)) + 1` for `us > 0`; cap at [`BUCKETS`].
+/// `32 - leading_zeros` is `floor(log2(us)) + 1` for `us > 0`; cap at `BUCKETS - 1`.
 fn bucket(us: u32) -> usize {
     if us == 0 {
         return 0;
@@ -154,7 +154,7 @@ mod tests {
                 c.record(1, at(t0, i * 4));
             }
         }
-        // 4 ms → bucket (2048, 4096] µs `_le`; 40 ms → (32768, 65536].
+        // 4 ms → bucket [2048, 4096) µs; 40 ms → [32768, 65536).
         assert_eq!(c.pads[0].percentile_us_le(0.5), Some(4096));
         assert_eq!(c.pads[1].percentile_us_le(0.5), Some(65536));
         assert_eq!(c.pads[0].gaps, 99);

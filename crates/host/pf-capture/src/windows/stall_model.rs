@@ -136,7 +136,7 @@ impl std::fmt::Display for ProbeWindow {
 }
 
 /// What one hole is, from the driver's own clocks. Probes and ETW ride the
-/// report as evidence; they no longer name a class of their own.
+/// report as evidence; they name no class of their own.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum StallVerdict {
     /// No driver telemetry yet: host observation only.

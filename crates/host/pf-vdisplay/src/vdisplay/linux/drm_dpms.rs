@@ -170,9 +170,9 @@ fn enabled(sysfs: &Path, connector: &str) -> Option<bool> {
 /// Shared `ioctl` so there is one `unsafe` to justify, not one per call site.
 fn ioctl<T>(fd: libc::c_int, req: libc::c_ulong, arg: &mut T) -> std::io::Result<()> {
     // SAFETY: `fd` is an open DRM node owned by the caller for the whole call; `req` is one of the
-    // five `_IO`/`_IOWR` codes declared above, each paired with the `T` its size field names (the
-    // const asserts pin that); and `arg` is a live, uniquely-borrowed, `repr(C)` value of that
-    // exact type, so the kernel's read/write of `size_of::<T>()` bytes stays inside it.
+    // five `_IO`/`_IOWR` codes declared above. An `_IOWR` code is paired with the `T` its size
+    // field names (the const asserts pin that), so the kernel's read/write of `size_of::<T>()`
+    // bytes stays inside `arg`, a live, uniquely-borrowed `repr(C)` value; an `_IO` code has none.
     let rc = unsafe { libc::ioctl(fd, req as _, arg as *mut T) };
     if rc < 0 {
         Err(std::io::Error::last_os_error())

@@ -262,7 +262,7 @@ fn check_mirrorable(target: &monitors::PhysicalMonitor, compositor: Compositor) 
         );
     }
     if target.managed {
-        // Only KWin `Virtual-punktfunk` and Hyprland `PF-N` names are ours by construction.
+        // Which names are ours by construction is per compositor: `names_ours_conclusively`.
         // Sway names every headless output `HEADLESS-N`, so a refuse would block a real pin.
         if names_ours_conclusively(compositor) {
             bail!(

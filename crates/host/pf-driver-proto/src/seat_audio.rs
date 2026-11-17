@@ -1,4 +1,4 @@
-//! Seat pad audio: the contract between a seat host and `pf-seat-audio.dll`, the audio endpoint
+//! Seat pad audio: the contract between a seat host and `pf_seat_audio.dll`, the audio endpoint
 //! enumerator a seat's Remote Desktop listener loads.
 //!
 //! For every DualSense the seat host serves, it creates two `Global\` sections named for its
@@ -34,7 +34,8 @@ pub const FRAME_BYTES: usize = CHANNELS * 2;
 pub const RING_FRAMES: u64 = 8192;
 /// The dedicated Remote Desktop listener whose sessions get pad endpoints.
 pub const LISTENER: &str = "punktfunk-tcp";
-/// Its loopback port. The keeper falls back to 3389 when nothing listens here.
+/// Its loopback port. While the listener is not configured, the keeper dials Remote Desktop's
+/// own port instead (`pf-seats` `keeper::rdp_port`).
 pub const LISTENER_PORT: u16 = 3390;
 
 /// `WAVEFORMATEXTENSIBLE`, 4 ch / 48 kHz / 16-bit PCM, mask 0x33: what the endpoint renders.

@@ -1,4 +1,4 @@
-//! Worker-IPC rails shared by every punktfunk worker subprocess
+//! Worker-IPC rails shared by the zerocopy and encode worker subprocesses
 //! (`design/zerocopy-worker-isolation.md`). Two halves, both free of any
 //! worker's vocabulary — message enums live with the worker and stay
 //! independently versioned:
@@ -436,8 +436,8 @@ static REAPER: Mutex<Vec<(Child, Instant)>> = Mutex::new(Vec::new());
 /// sees socket EOF, so `try_wait` alone would keep it forever.
 const REAPER_KILL_DEADLINE: Duration = Duration::from_secs(20);
 
-/// Park a still-running worker. Call from `Drop` after the socket is closed:
-/// the worker sees EOF; the next [`sweep_reaper`] collects it.
+/// Park a still-running worker. Call from `Drop`, ahead of the socket field closing:
+/// the worker then sees EOF; the next [`sweep_reaper`] collects it.
 pub fn park_child(child: Child) {
     REAPER.lock().unwrap().push((child, Instant::now()));
 }

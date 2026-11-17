@@ -387,7 +387,7 @@ fn take_turns_seat(st: &MgmtState, display_name: &str, account: &str) -> SeatPub
 }
 
 /// The seat's state and port, with a placeholder kind that [`seat`] replaces. The `operator`
-/// also reads the Windows account of a seat on an existing one.
+/// also reads the account of a seat on an existing one.
 fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot, operator: bool) -> SeatPublic {
     let port = st.app.native_port.get().copied().unwrap_or(0);
     let unavailable = |(id, why): (&str, &str)| SeatPublic {

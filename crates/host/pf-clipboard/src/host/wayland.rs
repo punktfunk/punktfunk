@@ -6,8 +6,10 @@
 //! `Send + Sync` proxies; only dispatch is single-threaded (wayland-client
 //! contract).
 //!
-//! `open` binds the session's `WAYLAND_DISPLAY` (env already applied by
-//! `vdisplay::apply_session_env`). Missing protocol is `BackendUnavailable`.
+//! `open` connects to the socket pf-vdisplay's `apply_session_env` stored
+//! (`pf_host_config::session::wayland_stream`), or to the process env's while nothing is
+//! stored. A compositor without the protocol fails `open`; `HostClipboard::open` then tries
+//! Mutter.
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, AsRawFd};
@@ -230,8 +232,8 @@ pub struct ClipboardBackend {
 }
 
 impl ClipboardBackend {
-    /// Session env must already be applied (`vdisplay::apply_session_env`).
-    /// Missing protocol: caller reports `BackendUnavailable`.
+    /// Connects to the stored session's socket, or to the process env's `WAYLAND_DISPLAY` while
+    /// nothing is stored. Missing protocol is an error; the caller then tries Mutter.
     pub fn open() -> Result<(
         ClipboardBackend,
         tokio::sync::mpsc::UnboundedReceiver<ClipEvent>,
@@ -432,8 +434,8 @@ fn dispatch_loop(
 /// Ignored live tests. Needs `wl-clipboard` and a `data-control` compositor.
 ///
 /// ```text
-/// WAYLAND_DISPLAY=wayland-1 cargo test -p punktfunk-host --bin punktfunk-host \
-///     -- --ignored --nocapture clipboard::wayland::live
+/// WAYLAND_DISPLAY=wayland-1 cargo test -p pf-clipboard \
+///     -- --ignored --nocapture host::wayland::live
 /// ```
 ///
 /// `open()` missing a backend skips; `--ignored` on a headless runner is a no-op.

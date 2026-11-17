@@ -1,7 +1,7 @@
 //! Where the host session's keyboard layout comes from.
 //!
 //! The key wire is US-positional: a client sends the Windows VK of the
-//! physical key, [`vk_to_evdev`](super::keymap::vk_to_evdev) turns that into
+//! physical key, `pf_inject::vk_to_evdev` turns that into
 //! an evdev code, and the **session keymap** decides the character. Host
 //! layout must match the client's printed layout, or ISO keys scramble
 //! (`#`→`\`, `ä`→`'`, y↔z).
@@ -11,9 +11,10 @@
 //! `XKB_DEFAULT_*`, which no session manager exports. Compiling from empty
 //! names on a configured German box still yields evdev/pc105/us.
 //!
-//! [`system_layout`] reads what the machine recorded. Advisory for backends
-//! whose keymap we do not own (libei/KWin/gamescope — see
-//! [`crate::text_input_supported`]); there it only feeds the diagnostic.
+//! [`system_layout`] reads what the machine recorded. Its callers are the
+//! wlroots virtual keyboard in `pf-inject`, which compiles its keymap from it,
+//! and `pf-vdisplay`'s gamescope (`XKB_DEFAULT_*` for a session it spawns,
+//! `setxkbmap` into an attached Xwayland). No other backend reads it.
 
 use std::path::{Path, PathBuf};
 

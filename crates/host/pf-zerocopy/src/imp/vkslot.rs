@@ -13,9 +13,9 @@
 //!
 //! Cursor frames: [`VkSlotBlend::blend_ref_ordered`] (timeline exported to
 //! CUDA, copy→blend→encode on-device) or [`VkSlotBlend::blend_ref`] (CPU
-//! fence-wait, same as [`super::vulkan::VkBridge`]). No cursor → no Vulkan.
-//! Bring-up failure → plain CUDA surfaces and no cursor (warned once); the
-//! session still starts.
+//! fence-wait, same as [`super::vulkan::VkBridge`]). The encoder opens this device only for a
+//! cursor blend, the raw lane or a reframe. Bring-up failure → plain CUDA surfaces and no
+//! cursor (warned once); the session still starts.
 
 use super::cuda::{self, CUdeviceptr, PlaneLayout};
 use super::vkdev::{self, VkBufferAlloc};
@@ -26,7 +26,8 @@ use std::os::fd::{FromRawFd as _, OwnedFd};
 /// Bitmap edge clamp (px); same value as [`cuda::CURSOR_MAX`] and the capture side.
 pub const CURSOR_MAX: u32 = cuda::CURSOR_MAX;
 
-/// `cursor_blend.comp` MODE count — one pipeline each, indexed by [`SlotFormat::mode`]. Bump with the shader MODE list.
+/// `cursor_blend.comp` MODE count: one pipeline per mode, indexed by [`SlotFormat::mode`]
+/// (P010 has none). Bump with the shader MODE list.
 const PIPELINE_MODES: u32 = 5;
 
 /// Vendored `cursor_blend.comp` SPIR-V. Rebuild: `glslangValidator -V cursor_blend.comp -o cursor_blend.spv`.
@@ -53,7 +54,8 @@ pub enum SlotFormat {
 }
 
 impl SlotFormat {
-    /// The layout's number in `cursor_blend.comp` and `convert_img.comp`.
+    /// The layout's number in `cursor_blend.comp` and `convert_img.comp`. P010 is 5, in neither
+    /// shader: a producer's P010 is copied in (no blend, no reframe).
     pub fn mode(self) -> u32 {
         match self {
             SlotFormat::Argb => 0,
@@ -119,9 +121,9 @@ pub struct VkSlotRef {
 }
 
 /// Per-slot Vulkan objects, freed CUDA-mapping-first. Own command buffer + descriptor set so
-/// ordered blends can be in flight on several slots (a shared set raced the next recording
-/// against a still-executing submit). Bindings are written once: slot buffer is immutable,
-/// cursor staging is shared.
+/// ordered blends can be in flight on several slots (a shared set would race the next
+/// recording against a still-executing submit). Bindings are written once: slot buffer is
+/// immutable, cursor staging is shared.
 struct SlotAlloc {
     buf: VkBufferAlloc,
     /// Allocation size, what a second OPAQUE_FD import ([`VkSlotBlend::slot_fd`]) must cover.
@@ -137,14 +139,14 @@ struct SlotAlloc {
 struct Timeline {
     sem: vk::Semaphore,
     /// `vkWaitSemaphoresKHR` (1.1 device: `VK_KHR_timeline_semaphore`). CPU quiesce for bitmap
-    /// upload and teardown.
+    /// upload and for a failed CUDA-side wait.
     ts: ash::khr::timeline_semaphore::Device,
     /// CUDA import; `signal`/`wait` enqueue on the encode thread's copy stream.
     cuda: cuda::ExternalSemaphore,
     /// Last value handed out. Monotonic, never reused; each ordered blend takes two (copy-done,
     /// then blend-done).
     ticket: u64,
-    /// Last blend-done value an accepted `vkQueueSubmit` will signal. Upload/teardown wait this.
+    /// Last blend-done value an accepted `vkQueueSubmit` will signal. `upload_cursor` waits this.
     /// Advanced only on submit success — a failed submit's value would never signal and a wait
     /// would time out.
     last_blend: u64,
@@ -269,7 +271,7 @@ pub struct VkSlotBlend {
     desc_layout: vk::DescriptorSetLayout,
     pipe_layout: vk::PipelineLayout,
     desc_pool: vk::DescriptorPool,
-    /// One pipeline per [`SlotFormat`], indexed by `mode()` (spec constant).
+    /// One pipeline per blendable [`SlotFormat`] (not P010), indexed by `mode()` (spec constant).
     pipelines: [vk::Pipeline; PIPELINE_MODES as usize],
     /// Host-visible cursor bitmap (CURSOR_MAX²·4, tight rows), persistently mapped.
     cur: VkBufferAlloc,
@@ -476,7 +478,8 @@ impl VkSlotBlend {
                 )
                 .context("create pipeline layout")?;
             // Per-slot sets, freed on ring rebuild (`FREE_DESCRIPTOR_SET`).
-            // 64 is well above encoder POOL (8). 128 descriptors = 2 bindings × 64 sets.
+            // 64 is well above the encoder's ring plus staging slots (2 × `POOL`, in
+            // `nvenc_session.rs`). 128 descriptors = 2 bindings × 64 sets.
             let pool_sizes = [vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(128)];
@@ -680,8 +683,6 @@ impl VkSlotBlend {
         }
     }
 
-    /// Free every slot (encoder teardown). CUDA mappings drop first — `SlotAlloc.cuda`'s `Drop`
-    /// runs before the Vulkan objects are freed below.
     /// A fresh OPAQUE_FD of slot `id`'s memory plus its size, for the zero-copy worker to
     /// import: its fused convert then writes the very bytes NVENC encodes.
     pub fn slot_fd(&self, id: usize) -> Result<(std::os::fd::OwnedFd, u64)> {
@@ -705,6 +706,8 @@ impl VkSlotBlend {
         ))
     }
 
+    /// Free every slot (encoder teardown). CUDA mappings drop first — `SlotAlloc.cuda`'s `Drop`
+    /// runs before the Vulkan objects are freed below.
     pub fn free_slots(&mut self) {
         // Ordered blends (and fence-wait timeouts) can still be on the queue.
         // `device_wait_idle`, not a timeline wait: a submit whose CUDA copy-done
@@ -1022,7 +1025,7 @@ impl VkSlotBlend {
                 .context("submit ordered blend")?;
         }
         let t = self.timeline.as_mut().expect("checked above");
-        // `blend_done` will be signaled; upload/teardown may wait it.
+        // `blend_done` will be signaled; `upload_cursor` may wait it.
         t.last_blend = blend_done;
         if let Err(e) = t.cuda.wait(blend_done) {
             // Blend is in flight but encode would no longer wait it — restore
@@ -1120,8 +1123,7 @@ impl VkSlotBlend {
                     bytemuck::bytes_of(push),
                 );
                 d.cmd_dispatch(cmd, (*gx).max(1), (*gy).max(1), 1);
-                // Each pass reads what the one before wrote. Without a barrier between them
-                // the NVIDIA driver ran the y pass before the x pass it reads.
+                // Each pass reads what the one before wrote, so a barrier orders them.
                 let between = [vk::MemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                     .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)];
@@ -1279,7 +1281,8 @@ impl VkSlotBlend {
                     .create_compute_pipelines(vk::PipelineCache::null(), &info, None)
                     .map_err(|(_, e)| e)
                     .context("create reframe pipeline")?[0];
-                // 64 sets: far above POOL (8) staging × NVENC pairings. 3 buffers each.
+                // 64 sets: far above the encoder's `POOL` (`nvenc_session.rs`) staging × NVENC
+                // pairings. 3 buffers each.
                 let sizes = [vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::STORAGE_BUFFER)
                     .descriptor_count(192)];

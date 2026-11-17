@@ -11,7 +11,8 @@ use std::net::{IpAddr, UdpSocket};
 /// and a reader knows the layer was not sampled rather than silent.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct WireWindow {
-    /// Peak bytes the kernel still held for the data socket, sampled once per frame.
+    /// Peak bytes the kernel still held for the data socket, sampled once per frame only
+    /// under `PUNKTFUNK_PERF` or an armed stats capture; `0` otherwise.
     pub outq_max_kb: u32,
     pub tx_dropped: u64,
     pub tx_errors: u64,

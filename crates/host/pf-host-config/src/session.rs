@@ -8,9 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-/// Env that points a backend at the detected session. `hyprland_signature` / `sway_socket` are
-/// per-spawn (`Command::env`): `hyprctl` / `swaymsg` are children we launch, not process-wide
-/// readers.
+/// Env that points a backend at the detected session. [`export_to`] hands a child only the four
+/// session variables. `hyprland_signature`, `sway_socket` and `niri_socket` record what detection
+/// found; `hyprctl`, `swaymsg` and the niri backend resolve theirs per call in pf-vdisplay's
+/// `session` module.
 #[derive(Clone, Debug, Default)]
 pub struct SessionEnv {
     /// `WAYLAND_DISPLAY` of the live compositor. Detection leaves it `None` for Gaming-attach
@@ -19,15 +20,16 @@ pub struct SessionEnv {
     /// Per-user runtime dir (PipeWire + session bus). Never a world-writable `/tmp`.
     pub xdg_runtime_dir: String,
     pub dbus_session_bus_address: String,
-    /// `XDG_CURRENT_DESKTOP` (KDE/GNOME/sway/Hyprland/gamescope). Drives portal/EIS routing;
-    /// xdph keys Hyprland-specific behavior off `Hyprland`.
+    /// `XDG_CURRENT_DESKTOP`, named by detection per compositor kind; `None` when nothing is
+    /// live. Drives portal/EIS routing; xdph keys Hyprland-specific behavior off `Hyprland`.
     pub xdg_current_desktop: Option<String>,
-    /// `HYPRLAND_INSTANCE_SIGNATURE` (`Some` only on Hyprland). Handed to `hyprctl` per spawn
-    /// so a systemd `--user` host need not inherit the session env.
+    /// `HYPRLAND_INSTANCE_SIGNATURE` (`Some` only on Hyprland). `hyprctl` gets its own at each
+    /// spawn from pf-vdisplay's `hypr_signature`, so a systemd `--user` host need not inherit it.
     pub hyprland_signature: Option<String>,
-    /// `SWAYSOCK` (`Some` only on sway). Same per-spawn handoff. `None` on river.
+    /// `SWAYSOCK` (`Some` only on sway). `swaymsg` resolves its own, as for `hyprland_signature`.
+    /// `None` on river.
     pub sway_socket: Option<String>,
-    /// `NIRI_SOCKET` (`Some` only on niri). The niri backend connects to it in process.
+    /// `NIRI_SOCKET` (`Some` only on niri). The niri backend resolves its own per call.
     pub niri_socket: Option<String>,
 }
 

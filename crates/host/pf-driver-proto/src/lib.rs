@@ -1,6 +1,6 @@
-//! Shared binary contract between the punktfunk host and the `pf-vdisplay` IddCx driver.
+//! Shared binary contracts between the punktfunk host, its Windows drivers and capture worker.
 //!
-//! Two planes:
+//! The `pf-vdisplay` IddCx driver has two planes:
 //! * [`control`] — `DeviceIoControl` (add/remove, adapter pin, keepalive, info, clear-all,
 //!   cursor delivery). Owned and versioned — not the SudoVDA ABI.
 //! * [`encode`] — the video transport. The host creates an unnamed section plus a ready event,

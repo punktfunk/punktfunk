@@ -4,7 +4,8 @@
 //! - Intent (`update-intent.json`): written just before anything irreversible.
 //!   It is the only witness once the installer kills this process.
 //! - Result (`update-result.json`): durable outcome of the last apply, written
-//!   by a failing stage or by boot-time reconciliation.
+//!   by a failing stage, a staged or no-change Linux helper run, the Windows
+//!   service's rollback, or boot-time reconciliation.
 //!
 //! [`reconcile`] once per boot: intent + running the target version ⇒ success;
 //! intent + still the old version after the grace window ⇒ failure with the

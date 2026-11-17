@@ -2,7 +2,7 @@
 //! domain, and here the fixtures they share.
 
 /// Pins the published `KEY=VALUE` line against both consumers: systemd `EnvironmentFile=`
-/// and `windows::service::read_env_file_value`. Re-implements the Windows split so a format
+/// and `windows::service::web::read_env_file_value`. Re-implements the Windows split so a format
 /// change fails here rather than on the platform CI cannot run.
 #[test]
 fn published_endpoint_line_parses_the_way_both_consumers_read_it() {
@@ -25,7 +25,7 @@ fn published_endpoint_line_parses_the_way_both_consumers_read_it() {
     assert!(value.starts_with("https://127.0.0.1:"));
 }
 
-/// The port a reader of the endpoint file dials: the one it names, else the 47990 fallback.
+/// The port a reader of the endpoint file dials: the one it names, else `DEFAULT_PORT`.
 /// A start that changes it is what restarts the plugin runner.
 #[test]
 fn the_published_port_is_the_one_a_reader_dials() {

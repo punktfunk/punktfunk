@@ -10,7 +10,7 @@
 //! native plane they are the two certificate fingerprints. A browser presents no certificate, so
 //! `client_fp` has to come from a key it holds and `host_fp` from the certificate hash it pinned
 //! to connect (`design/web-client-implementation-plan.md`, Phase 3). Resolving them here, from a
-//! connection, is what would have forced a second ceremony.
+//! connection, would force a second ceremony.
 //!
 //! A lapsed or re-armed window mints nothing (`consume_window`; tests at the
 //! foot). Protocol: `punktfunk_core::quic::pake`. Access stored via
@@ -77,7 +77,7 @@ where
 /// `client_fp` and `host_fp` are the SPAKE2 identities: whatever the caller binds this pairing
 /// to. Getting them wrong does not fail loudly — it yields a different key and a MAC mismatch,
 /// which is indistinguishable from a wrong PIN, so the caller owns that decision deliberately.
-// Eight orthogonal inputs, not a struct waiting to happen: the two identities are the whole
+// Seven orthogonal inputs, not a struct waiting to happen: the two identities are the whole
 // point of the signature, and grouping them would hide the decision the caller has to make.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn pair_ceremony<W, R>(
@@ -150,7 +150,7 @@ where
         .map_err(|_| anyhow!("pairing timed out sending the result"))??;
     wire.shutdown().await;
     // 5 s: wait for the client to ACK PairResult before we close. A vanished
-    // peer must not occupy the sequential host.
+    // peer holds this connection no longer than that.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), conn.closed()).await;
     conn.close(0, b"pairing done");
     anyhow::ensure!(verified, "pairing rejected (wrong PIN)");

@@ -1,6 +1,6 @@
-//! Each wave backend's recovery order as it stands, and the proof [`plan_frame`] describes it.
-//! Per backend there is a `Today`, its arbitration copied statement for statement from the
-//! file its doc names, and a `Planned`, the same events through [`plan_frame`] with the policy
+//! Each wave backend's recovery order, and the proof [`plan_frame`] describes it. Per
+//! backend there is a `Today`, its arbitration written out by hand without the planner,
+//! and a `Planned`, the same events through [`plan_frame`] with the policy
 //! and the candidates that backend passes. A table pins named sequences on both; a sweep runs
 //! every short sequence through both. AMF and QSV are checked against the real mirror in
 //! `ltr.rs`.
@@ -74,7 +74,8 @@ fn run(model: &mut dyn Model, events: &str) -> String {
     frames.join(" ")
 }
 
-/// `vulkan_video.rs`: `invalidate_ref_frames`, `record_submit`, `post_submit_bookkeeping`.
+/// `vulkan_video.rs` `invalidate_ref_frames`; `vk_record.rs` `record_submit`,
+/// `post_submit_bookkeeping`.
 struct VulkanToday {
     intra_refresh: Option<u32>,
     first_frame: bool,
@@ -352,7 +353,7 @@ impl Model for VaapiPlanned {
     }
 }
 
-/// `nvenc_session.rs`: `invalidate_ref_frames`, `start_wave`, `encode`, `ltr_step`. The range
+/// `nvenc_session.rs`: `invalidate_ref_frames`, `start_wave`, `encode`, `ltr_peek`. The range
 /// plan's answer is the event: `a` anchors, `l` declines.
 #[derive(Default)]
 pub(crate) struct NvencToday {

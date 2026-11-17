@@ -2,17 +2,19 @@
 //!
 //! HTTPS always, auth always (including loopback). Precedence: env (an operator
 //! override, persisted so every reader agrees) → `<config-dir>` file → generate
-//! 32-byte hex and persist. Files are `KEY=<hex>` at 0600.
+//! 32-byte hex and persist. Those files are `KEY=<hex>` at 0600.
 //!
 //! [`take_env_credentials`] empties those variables out of this process before
 //! anything can inherit them: hooks, games and the plugin runner are our
 //! children, and none of them has business with the admin API.
 //!
-//! Three tokens:
+//! Four token files:
 //! - **`mgmt-token`** (`PUNKTFUNK_MGMT_TOKEN`) — full admin.
 //! - **`plugin-token`** (`PUNKTFUNK_PLUGIN_TOKEN`) — `mgmt::auth::plugin_may_access`.
 //!   The SDK `connect()` prefers this file so a plugin cannot rewrite
 //!   `hooks.json` or admit devices.
+//! - **`plugin-run/plugin-tokens.json`** — one per installed plugin, by id
+//!   ([`load_or_generate_per_plugin`]).
 //! - **`tray-token`** (`PUNKTFUNK_TRAY_TOKEN`) — `GET /local/summary` only. Fresh per
 //!   start, readable by every local account ([`mint_tray_token`]).
 
@@ -152,8 +154,8 @@ fn load_or_generate_per_plugin_in(
 
 /// Plugin-lane token, same precedence as [`load_or_generate`].
 ///
-/// On Windows, `plugins enable` grants LocalService read on this file and
-/// `cert.pem` — never `mgmt-token`.
+/// On Windows, `plugins enable` grants LocalService read on this file and the TLS-pin cert
+/// (`RUNNER_SECRET_FILES`) — never `mgmt-token`.
 pub fn load_or_generate_plugin() -> Result<String> {
     load_or_generate_impl(PLUGIN_ENV_VAR, PLUGIN_FILE)
 }

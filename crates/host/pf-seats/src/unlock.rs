@@ -32,7 +32,7 @@ pub const CHALLENGE_LIFE: Duration = Duration::from_secs(120);
 const MAX_NAME_CHARS: usize = 64;
 const MAX_RSA_KEY_BYTES: usize = 600;
 const MAX_SIGNATURE_BYTES: usize = 1024;
-/// What a key proof signs first (CONTRACT §3).
+/// What a key proof signs first; the multi-seat contract page lists the whole message.
 const CONTEXT: &[u8; 24] = b"punktfunk-seat-unlock-v1";
 
 /// A person's row's devices, as `devices.json` holds them.
@@ -458,7 +458,8 @@ mod tests {
         }
     }
 
-    /// The vector of CONTRACT §3: every implementation of the message carries it.
+    /// The vector in `clients/shared/profile-unlock-vectors.json`, which every implementation
+    /// of the message replays.
     #[test]
     fn the_signed_message_matches_the_contract_vector() {
         let challenge: [u8; 32] = std::array::from_fn(|i| i as u8 + 1);

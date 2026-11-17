@@ -5,7 +5,8 @@
 //! Pin paddles here; motion units in `crates/host/pf-inject/tests/motion_contract.rs`.
 //!
 //! uinput Xbox already exposes the grips as Elite paddles (`BTN_TRIGGER_HAPPY5-8`);
-//! only DualSense / DS4 (no native back-button slot) fold them.
+//! DualSense, DS4 and Switch Pro (no native back-button slot) fold them; the Steam Controller
+//! (two grips) folds PADDLE3/4.
 
 use punktfunk_core::input::gamepad as gs;
 

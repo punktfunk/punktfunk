@@ -76,14 +76,14 @@ fn hdr_meta_bytes(meta: Option<pf_frame::HdrMeta>) -> [u8; 28] {
     meta.map_or([0; 28], bytemuck::cast)
 }
 
-/// `frames` is the header's `frames_input`: only a driver that stamps it scaled what it was
-/// asked to. A v9 driver and a capture worker encode the surface at its own size.
 /// Confirmations as a ctl's `(arg0, arg1)`: the newest wire index, then the sixteen before it
 /// shifted over a present bit. `None` is `(0, 0)`.
 fn acked_args(acked: Option<pf_encode_core::Acked>) -> (u32, u32) {
     acked.map_or((0, 0), |a| (a.last as u32, u32::from(a.mask) << 1 | 1))
 }
 
+/// `frames` is the header's `frames_input`: only a driver that stamps it scaled what it was
+/// asked to. A v9 driver and a capture worker encode the surface at its own size.
 fn caps_from_wire(w: &encode::EncoderCapsWire, frames: bool) -> EncoderCaps {
     EncoderCaps {
         supports_rfi: w.supports_rfi != 0,
@@ -407,7 +407,7 @@ impl EncoderProxy {
     }
 
     /// `(wire_seq, source_seq)` of the last chunk taken: AU progress against the header's
-    /// `source_seq`, the "encoder wedged" signal (§2.5) the supervisor reads from Phase 4 on.
+    /// `source_seq`.
     #[allow(dead_code)]
     pub fn progress(&self) -> (u32, u32) {
         (self.au.last_wire_seq, self.au.last_source_seq)
@@ -631,7 +631,7 @@ impl Encoder for EncoderProxy {
     /// The ctl is queued for the driver's encode thread and has no reply, so the ask stands
     /// until that thread has published an access unit past it — only then does the header
     /// stamp describe the new rate. `0` is a driver that predates the stamp, whose declines
-    /// stay invisible as they always were.
+    /// stay invisible.
     fn applied_bitrate_bps(&self) -> Option<u64> {
         let h = self.snapshot();
         if h.applied_bitrate_kbps == 0 || h.published_total <= self.retarget_after {

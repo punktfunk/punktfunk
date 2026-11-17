@@ -642,7 +642,7 @@ fn every_end_of_the_session_ends_every_presence() {
     assert_eq!(rig.on_seat(), [n(&tv)]);
 }
 
-/// `left` gives a device ten minutes; a rejoin inside them clears the end again.
+/// `left` gives a device [`crate::unlock::GRACE_SECS`]; a rejoin inside it clears the end again.
 #[test]
 fn a_device_that_left_keeps_its_presence_for_a_while() {
     let rig = rig();

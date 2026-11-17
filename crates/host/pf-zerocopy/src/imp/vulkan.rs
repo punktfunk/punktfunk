@@ -9,9 +9,9 @@
 //!   exportable VkBuffer ──vkGetMemoryFdKHR(OPAQUE_FD)──▶ cuImportExternalMemory ──▶ CUdeviceptr
 //! ```
 //!
-//! One exportable buffer + CUDA mapping per resolution. Per frame: GPU copy, fence wait,
-//! pitched CUDA copy into the encoder pool. Cache imports by fd (PipeWire's pool is stable
-//! for a stream). Init/import failure disables the importer; CPU mmap takes over.
+//! One exportable buffer + CUDA mapping, rebuilt when a frame outgrows it. Per frame: GPU copy,
+//! fence wait, pitched CUDA copy into the encoder pool. Cache imports by fd (PipeWire's pool
+//! is stable for a stream). Init/import failure disables the importer; CPU mmap takes over.
 
 use super::cuda::{self, DeviceBuffer};
 use super::vkdev::{self, VkBufferAlloc};
@@ -112,8 +112,8 @@ pub struct VkBridge {
 }
 
 // SAFETY: owns unsynchronized Vulkan handles, a CUDA mapping, and an fd→buffer cache. A single
-// queue + command buffer need external sync. Created and used only on the capture thread; never
-// shared via `&`. `Send` is ownership transfer into `Send` `EglImporter`; not `Sync`.
+// queue + command buffer need external sync. Created and used only on its `EglImporter`'s thread;
+// never shared via `&`. `Send` is ownership transfer into the `Send` `EglImporter`; not `Sync`.
 unsafe impl Send for VkBridge {}
 
 impl VkBridge {
@@ -367,8 +367,8 @@ impl VkBridge {
                     return Err(e).context("vkGetMemoryFdKHR");
                 }
             };
-            // CUDA owns the fd on success. Size must match the allocation. A failed import drops
-            // `opaque_fd`, so only Vulkan objects unwind here.
+            // The driver owns the fd either way: it closes it on a failed import too, so only
+            // Vulkan objects unwind here. Size must match the allocation.
             let cuda = match cuda::ExternalDmabuf::import_owned_fd(opaque_fd, reqs.size) {
                 Ok(c) => c,
                 Err(e) => {
@@ -517,7 +517,8 @@ impl VkBridge {
     }
 
     /// Convert one LINEAR RGB dmabuf into a pooled NV12 CUDA buffer through the Vulkan CSC.
-    /// Source and destination spans are validated before any import, allocation, or dispatch.
+    /// The strides and destination layout are validated before any import; the source span
+    /// against the dmabuf's size, before the destination allocation and the dispatch.
     /// The checked layout must fit Vulkan's byte sizes, the shader's u32 word offsets, and CUDA's
     /// host `usize`; `pool` must come from an NV12 [`cuda::BufferPool`].
     pub fn import_linear_nv12(
@@ -679,8 +680,8 @@ impl VkBridge {
     pub fn forget_fd(&mut self, fd: i32) {
         if let Some(s) = self.src_cache.remove(&fd) {
             // SAFETY: `s.buf` was created by `import_src` and is owned by the removed cache
-            // entry, so it is destroyed once. A planar copy reads them on the
-            // GPU after `convert` returns, so the device idles first; this is the owning thread.
+            // entry, so it is destroyed once. The fused convert (LINEAR words, planar copy) reads
+            // it on the GPU after `convert` returns, so the device idles first; owning thread.
             unsafe {
                 let _ = self.device.device_wait_idle();
                 s.buf.destroy(&self.device);

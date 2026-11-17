@@ -129,7 +129,7 @@ fn plan_bind(
             return BindPlan::Off(BindOff::EnvLeverSuffices);
         }
     }
-    // Replace only a root-owned socket dir; ours maps, absent is created inside by us.
+    // Replace a socket dir owned by anyone else; ours maps, an absent one is created inside by us.
     BindPlan::Arm {
         x11: x11_dir_uid.is_some_and(|uid| uid != our_uid),
     }
@@ -142,7 +142,7 @@ fn plan_bind(
 /// `/tmp/.X11-unix` then reads as `nobody`; wlroots refuses every display and the short-session
 /// tracker rewrites Game Mode to plasma. Bind a 0700 `$XDG_RUNTIME_DIR` dir read-write over it.
 /// The XFixes reader is never spawned on this bind (patch paints the pointer); attach never arms
-/// it. x11rb 0.14 dropped the abstract socket, so the filesystem path is the only one.
+/// it. x11rb 0.14 connects only through the filesystem socket path, never the abstract one.
 ///
 /// The same namespace drops pkexec's setuid, so Steam's Switch to Desktop could not point the
 /// display manager at the desktop. [`PKEXEC_PATH`] is bound to a shim that runs pkexec through
@@ -150,7 +150,7 @@ fn plan_bind(
 pub(super) struct SessionBind {
     wrapper: std::path::PathBuf,
     /// The user-owned directory bound over [`X11_SOCKET_DIR`], or `None` when the real one is
-    /// already ours and needs no replacing.
+    /// ours or absent and needs no replacing.
     x11_dir: Option<std::path::PathBuf>,
     /// The shim bound over [`PKEXEC_PATH`], or `None` when the box has no pkexec there.
     pkexec_shim: Option<std::path::PathBuf>,
@@ -360,8 +360,8 @@ fn probe_argv(socket_dir_present: bool) -> &'static [&'static str] {
     }
 }
 
-/// How long [`bind_survives_namespace`] may take. One transient unit that runs `stat`; a wedged
-/// user manager costs a connect a moment, not the session.
+/// How long [`bind_survives_namespace`] may take. One transient unit that runs `stat` or `test`;
+/// a wedged user manager costs a connect a moment, not the session.
 const BIND_PROBE_BUDGET: Duration = Duration::from_secs(10);
 
 /// One-way latch: a crash-loop here rewrites Game Mode to the desktop.
@@ -599,7 +599,7 @@ mod tests {
     }
 
     /// The decision matrix, in the order the arms are meant to win. Every `Off` arm here is a box
-    /// that gets no mount namespace — the state every box was in before the redirect existed.
+    /// whose unit gets no mount namespace.
     #[test]
     fn bind_is_armed_only_where_it_is_needed_and_survivable() {
         const OURS: &str = "/usr/bin/punktfunk-gamescope";

@@ -4,7 +4,7 @@
 //! PowerShell 5.1 reads a `.ps1` *file* in the machine ANSI codepage; a non-ASCII byte on a
 //! non-English locale aborts as "unterminated string". A compiled subcommand has no such
 //! surface: `certutil`/`pnputil`/`nefconc`/`schtasks`/`netsh`/`icacls` are string literals.
-//! Same pattern as `service install` in `service.rs`.
+//! Same pattern as `service install` in `service/setup.rs`.
 //!
 //! Best-effort: a hiccup warns but returns `Ok`, since a non-zero exit aborts the installer
 //! mid-plan. `driver check`, the plan's last step, is what fails an install whose pf-vdisplay
@@ -619,7 +619,7 @@ fn inf_class(inf: &Path) -> (String, String) {
 
 // Install-time provisioning only: login password, firewall, and delete of the legacy
 // `PunktfunkWeb` scheduled task (a live one races the service's console child for :47992).
-// The service supervises bun; see `service.rs` and design/windows-web-console-lifecycle.md.
+// The service supervises bun; see `service/web.rs` and design/windows-web-console-lifecycle.md.
 
 /// Retired scheduled-task name; referenced only to delete it from older installs.
 const WEB_TASK: &str = "PunktfunkWeb";
@@ -764,8 +764,9 @@ fn web_setup(args: &[String]) -> Result<()> {
 /// an upgrade keeping the existing file keeps the hash.
 fn set_web_password(pw_path: &Path, pw_file: Option<&str>) {
     // Non-admin owner means planted under `%ProgramData%` CREATOR OWNER before this install.
-    // `FileExists` would treat it as an upgrade and keep the attacker's password. Rename aside;
-    // `!planted` still rotates if the rename failed. An Administrators-owned file is kept.
+    // An existence check alone would treat it as an upgrade and keep the attacker's password.
+    // Rename aside; `!planted` still rotates if the rename failed. An Administrators-owned file
+    // is kept.
     let planted = pf_paths_win::planted_by_non_admin(pw_path);
     if planted {
         let _ = pf_paths_win::rename_aside(pw_path);

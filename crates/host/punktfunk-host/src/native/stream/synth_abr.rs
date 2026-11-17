@@ -10,9 +10,9 @@ use super::*;
 use crate::session_status::pack_mode;
 use punktfunk_core::abr::budget::encoder_kbps_for_budget;
 
-/// A keyframe against an ordinary frame, percent, when `--idr-pct` says nothing. Ten times,
-/// which is what rounds 4–7 measured against; a hardware encoder runs `PUNKTFUNK_VBV_FRAMES`
-/// = 1.0 and fits its keyframe near one frame's share, so this is the pessimistic end.
+/// A keyframe against an ordinary frame, percent, when `--idr-pct` says nothing: ten times. A
+/// hardware encoder at its default `PUNKTFUNK_VBV_FRAMES` fits its keyframe near one frame's
+/// share, so this is the pessimistic end.
 pub const DEFAULT_IDR_PCT: u32 = 1_000;
 
 /// Repeats and the idle keepalive: one shard, the size a host sends when nothing moved.
@@ -101,9 +101,8 @@ fn cadence(src: u32, fps: u32, tick: u64) -> bool {
 
 /// How the source answers a keyframe request.
 ///
-/// The field shows both: `host173` 09-17 09:53 logged `keyframe_req=9 idr=2 rfi=8` in one
-/// minute — most asks answered with an intra-refresh wave, which does not re-anchor a client
-/// that lost its reference, and only some with a real IDR.
+/// A host answers some asks with an intra-refresh wave, which does not re-anchor a client that
+/// lost its reference, and only some with a real IDR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyframeAnswer {
     /// Every ask gets an IDR.
@@ -596,7 +595,7 @@ mod tests {
 
     /// A burst of asks costs one IDR, not one each: production gates them behind
     /// [`IDR_COOLDOWN_FULL`], and the ones that land inside it collapse into the IDR the
-    /// cooldown ends on. Round 7's 111 asks became 111 bursts without this.
+    /// cooldown ends on.
     #[test]
     fn a_burst_of_asks_costs_one_idr_per_cooldown() {
         let mut gate = KeyframeGate::default();

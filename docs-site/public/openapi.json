@@ -2974,7 +2974,7 @@
           "gpu"
         ],
         "summary": "Set the GPU preference",
-        "description": "`auto` = env pin else max VRAM; `manual` pins capture+encode. Applies to the next session.\nAn absent preferred GPU falls back to auto rather than failing the session.",
+        "description": "`auto` = env pin else max VRAM on Windows, NVIDIA else the encode render node on Linux;\n`manual` pins capture+encode. Applies to the next session.\nAn absent preferred GPU falls back to auto rather than failing the session.",
         "operationId": "setGpuPreference",
         "requestBody": {
           "content": {
@@ -6173,7 +6173,7 @@
           "native"
         ],
         "summary": "Native pairing status",
-        "description": "Poll while armed to show the PIN and countdown. `enabled: false` means\nGameStream only (no `--native`).",
+        "description": "Poll while armed to show the PIN and countdown. `enabled: false` means\nthis process runs no native plane.",
         "operationId": "getNativePairing",
         "responses": {
           "200": {
@@ -11420,7 +11420,7 @@
           "session_id": {
             "type": "integer",
             "format": "int64",
-            "description": "Streaming session; `null` while waiting out the reconnect window. Pass it to\n`DELETE /session/{id}` to stop that one session.",
+            "description": "Streaming session; `null` on the compat plane's game and on a `grace`, `detached` or\nwaiting-launch row. Pass it to `DELETE /session/{id}` to stop that one session.",
             "minimum": 0
           },
           "state": {
@@ -11469,7 +11469,7 @@
         "properties": {
           "backend": {
             "type": "string",
-            "description": "`nvenc` | `amf` | `qsv` | `mf` | `vaapi` | `software`."
+            "description": "Label of the encode branch that opened, e.g. `nvenc`, `vaapi-native`, `vulkan`,\n`software`, `driver-amf`."
           },
           "id": {
             "type": "string",
@@ -11698,7 +11698,7 @@
           },
           "selected": {
             "type": "boolean",
-            "description": "True when `PUNKTFUNK_CAPTURE_MONITOR` currently names this monitor."
+            "description": "True when the host-wide pin (`PUNKTFUNK_CAPTURE_MONITOR`, else the stored policy) names\nthis monitor."
           },
           "x": {
             "type": "integer",
@@ -12009,7 +12009,7 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "Usable now: the live session's compositor, or gamescope if its binary is installed."
+            "description": "Usable now: the live session's compositor, the `PUNKTFUNK_COMPOSITOR` pin, or a backend\nwhose own probe passes."
           },
           "default": {
             "type": "boolean",
@@ -12017,7 +12017,7 @@
           },
           "id": {
             "type": "string",
-            "description": "Stable id (`kwin` | `wlroots` | `mutter` | `gamescope`); pass to `--compositor`."
+            "description": "Stable id (`kwin` | `gamescope` | `mutter` | `wlroots` | `hyprland` | `niri` | `umbriel`);\npass to `--compositor`."
           },
           "label": {
             "type": "string"
@@ -12071,7 +12071,7 @@
             "items": {
               "$ref": "#/components/schemas/LinkMinute"
             },
-            "description": "One row per minute of link health per native session, so a freeze report carries the\nloss, recovery and ABR history instead of a log ring that holds 45 minutes. Empty on a\nGameStream capture and on recordings older than this field."
+            "description": "One row per minute of link health per native session, so a freeze report carries the\nloss, recovery and ABR history the bounded log ring may already have evicted. Empty on\na GameStream capture and on recordings older than this field."
           },
           "meta": {
             "$ref": "#/components/schemas/CaptureMeta"
@@ -12144,7 +12144,7 @@
               "string",
               "null"
             ],
-            "description": "The backend the driver opened: `nvenc` / `amf` / `qsv` / `pyrowave`. Absent as above."
+            "description": "The backend the driver opened: `nvenc` / `amf` / `qsv` / `pyrowave` / `mf`. Absent as above."
           },
           "class": {
             "type": "string",
@@ -12524,7 +12524,7 @@
       },
       "CheckSource": {
         "type": "string",
-        "description": "Origin of a verdict. `Event` is for live feeds (push on transition); v1 emits `Startup` and\n`Refresh` only.",
+        "description": "Origin of a verdict. `Event` is one an event source pushes ([`Diagnostics::set`]).",
         "enum": [
           "startup",
           "event",
@@ -13328,7 +13328,7 @@
           },
           "clients": {
             "type": "object",
-            "description": "Per-device deviations, keyed by pairing fingerprint — what identity\nslots, admission and the device list already key on (never an address:\na dual-boot box keeps its fingerprint and changes its IP).\n\nWritten only through `/display/clients/{fp}`; the host-wide PUT refuses\na `clients` key outright, so a stale console cannot round-trip the\nwhole map back over a change it never saw.",
+            "description": "Per-device deviations, keyed by pairing fingerprint — what identity\nslots, admission and the device list already key on (never an address:\na dual-boot box keeps its fingerprint and changes its IP).\n\nWritten only through `/display/clients/{fp}`; the host-wide PUT refuses\na non-empty `clients` key, so a stale console cannot round-trip the\nwhole map back over a change it never saw.",
             "additionalProperties": {
               "$ref": "#/components/schemas/ClientOverlay"
             },
@@ -13430,7 +13430,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Overlay fields this build acts on PER DEVICE. A strict subset of\n`enforced`: an axis can be host-wide and not yet per-device, and the\nconsole must not offer a device control the host would store and ignore\n(`design/web-console-overhaul.md` D1)."
+            "description": "Overlay fields this build acts on PER DEVICE. Not a subset of `enforced`:\n`max_mode` and `scale` are only here, and an axis can be host-wide and not yet\nper-device. The console must not offer a device control the host would store and\nignore (`design/web-console-overhaul.md` D1)."
           },
           "clients": {
             "type": "object",
@@ -13616,7 +13616,7 @@
           "eta_s": {
             "type": "integer",
             "format": "int64",
-            "description": "Seconds left at the last 30 s's pace, while downloading with a known total.",
+            "description": "Seconds left at the pace over the last [`ETA_WINDOW`], while downloading with a known\ntotal.",
             "minimum": 0
           },
           "phase": {
@@ -13628,7 +13628,7 @@
           "rate_bps": {
             "type": "integer",
             "format": "int64",
-            "description": "Bytes per second over the last 5 s, while downloading.",
+            "description": "Bytes per second over the last [`RATE_WINDOW`], while downloading.",
             "minimum": 0
           },
           "started_at": {
@@ -13680,7 +13680,7 @@
               "string",
               "null"
             ],
-            "description": "What the plugin is doing, in its words: `File 2 of 3`, `Verifying`. At most 80 chars."
+            "description": "What the plugin is doing, in its words: `File 2 of 3`, `Verifying`. Cut to\n[`PHASE_MAX`] bytes."
           },
           "state": {
             "$ref": "#/components/schemas/DownloadState"
@@ -14787,7 +14787,7 @@
               },
               "id": {
                 "type": "string",
-                "description": "Stable, store-qualified id: `steam:<appid>` or `custom:<id>`.",
+                "description": "Stable, store-qualified id (`steam:570`, `custom:<id>`); `library_id_for` mints a\nstored row's.",
                 "example": "steam:570"
               },
               "ids": {
@@ -14845,7 +14845,7 @@
                   "string",
                   "null"
                 ],
-                "description": "Plugin that owns this entry. `None` only for operator-typed custom entries.\n`GET /library?provider=` filters on it."
+                "description": "Plugin that owns this entry; `None` when no plugin on this host does: an operator's row,\nthe Game Mode tile, a seat's own title as the box lists it.\n`GET /library?provider=` filters on it."
               },
               "role": {
                 "$ref": "#/components/schemas/GameRole"
@@ -14863,7 +14863,7 @@
               },
               "store": {
                 "type": "string",
-                "description": "Which store surfaced it: `\"steam\"` or `\"custom\"`.",
+                "description": "Which store surfaced it: the claimed store (`\"steam\"`), `\"custom\"` for a row with no\nclaim, `\"host\"` for the host's own Game Mode tile.",
                 "example": "steam"
               },
               "title": {
@@ -15150,7 +15150,7 @@
               "string",
               "null"
             ],
-            "description": "`PUNKTFUNK_RENDER_ADAPTER` when set. Honoured in `auto`; a manual pick overrides it."
+            "description": "`PUNKTFUNK_RENDER_ADAPTER` when set. Windows honours it in `auto`; a manual pick\noverrides it."
           },
           "gpus": {
             "type": "array",
@@ -15578,7 +15578,7 @@
       },
       "HostInfo": {
         "type": "object",
-        "description": "Host identity and capabilities. Static for the process except `local_ip`.",
+        "description": "Host identity and capabilities.",
         "required": [
           "hostname",
           "uniqueid",
@@ -15610,7 +15610,7 @@
             "items": {
               "$ref": "#/components/schemas/ApiCodec"
             },
-            "description": "Codecs this host can encode (`host_wire_caps`, not the compile-time list)."
+            "description": "Codecs this host can encode (`Resolved::wire_caps`, not the compile-time list). Empty\non a door."
           },
           "door": {
             "type": "boolean",
@@ -15625,7 +15625,7 @@
               "string",
               "null"
             ],
-            "description": "Why turning the door on would be refused here, as the operator's next move: the files a\nchannel installs it with are missing, or the account isn't in `punktfunk-update`. `null`\nwhen it would start, on the door itself and on a seat host, and for every lane but the\nadmin one. The answer is up to 30 s old; a switch request drops it."
+            "description": "Why turning the door on would be refused here, as the operator's next move, such as the\nfiles a channel installs it with missing, or the account not in `punktfunk-update`. `null`\nwhen it would start, on the door itself and on a seat host, and for every lane but the\nadmin one. The answer is up to 30 s old; a switch request drops it."
           },
           "door_unavailable_code": {
             "type": [
@@ -16066,7 +16066,7 @@
               },
               {
                 "$ref": "#/components/schemas/AccessWalk",
-                "description": "The folder a running job is opening for its plugin right now."
+                "description": "The oldest folder whose access is changing while the job runs, whoever it is for."
               }
             ]
           }
@@ -16141,7 +16141,7 @@
       },
       "LaunchArg": {
         "type": "object",
-        "description": "One `{param}` value for an `exec` template.",
+        "description": "One named value: an `exec` template's `{param}`, or an `emulator` argument.",
         "required": [
           "name",
           "value"
@@ -16158,7 +16158,7 @@
       },
       "LaunchSpec": {
         "type": "object",
-        "description": "How the host launches a title. Open-ended so new stores slot in:\n`steam_appid` → `steam steam://rungameid/<value>`; `command` → run `<value>`\nnested in a gamescope session.",
+        "description": "How the host launches a title. Open-ended so new stores slot in: the host builds each\nkind's command (`steam_appid` → `steam://rungameid/<value>`); `command` runs `<value>`\nthrough `sh -c` or `cmd.exe /c`.",
         "required": [
           "kind",
           "value"
@@ -16172,11 +16172,11 @@
             "items": {
               "$ref": "#/components/schemas/LaunchArg"
             },
-            "description": "Values for an `exec` template's parameters. Each is checked against the character class\nthe manifest declares for it, and a path must sit inside the paths that manifest names.\nA list rather than a map: a map of strings generates as an untyped object in the SDK."
+            "description": "Values for an `exec` template's parameters, or an `emulator` entry's `platform`, `file`\nand `core`. Each is checked against its character class, and a path must sit inside the\npaths the publishing plugin's manifest names.\nA list rather than a map: a map of strings generates as an untyped object in the SDK."
           },
           "kind": {
             "type": "string",
-            "description": "`\"steam_appid\"` or `\"command\"`.",
+            "description": "The launch kind (`\"steam_appid\"`, `\"command\"`, `\"exec\"`, …); `launch.rs` resolves each.",
             "example": "steam_appid"
           },
           "value": {
@@ -16213,7 +16213,7 @@
       },
       "LayoutMode": {
         "type": "string",
-        "description": "Arrangement in desktop space. Computed only in `layout::arrange`:\n`/display/state` and (Linux, KWin only) position apply both consume it.",
+        "description": "Arrangement in desktop space. Computed only in `layout::arrange`: `/display/state`, the\nWindows manager and Linux position apply (KWin, Hyprland, sway, niri) consume it.",
         "enum": [
           "auto-row",
           "manual"
@@ -16364,7 +16364,7 @@
           "link_kbps": {
             "type": "integer",
             "format": "int32",
-            "description": "The link rate the client last reported, which every frame is paced at. `0` = none.",
+            "description": "The link rate the client last reported, which the pacer resolves its `L` from.\n`0` = none.",
             "minimum": 0
           },
           "loss_head": {
@@ -16468,7 +16468,7 @@
       },
       "LocalSummary": {
         "type": "object",
-        "description": "Tray snapshot for loopback: counts, booleans, and `client_name`.\n`require_auth` admits the tray token from loopback; nothing here is a secret.",
+        "description": "Tray snapshot for loopback.\n`require_auth` admits the tray token from loopback; nothing here is a secret.",
         "required": [
           "version",
           "video_streaming",
@@ -16489,7 +16489,7 @@
               "string",
               "null"
             ],
-            "description": "First native session's display name (trust-store, else connect-time). `null` when idle, nameless, or GameStream."
+            "description": "First live session's display name (trust-store, else connect-time). `null` when idle or\nnameless."
           },
           "conflicts": {
             "type": "array",
@@ -16954,7 +16954,7 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "True when this process started with `--native`."
+            "description": "True when this process runs the native plane, as `serve` always does."
           },
           "expires_in_secs": {
             "type": [
@@ -18183,7 +18183,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "description": "`first_run`, `firmware`, `firmware_install`, `players` or `config_root`."
+            "description": "hermir's name for the step, like `first_run`, `firmware`, `firmware_install`,\n`config_root`, or `config` for the session's pads."
           },
           "note": {
             "type": [
@@ -18193,7 +18193,7 @@
           },
           "outcome": {
             "type": "string",
-            "description": "`applied`, `present`, `skipped` or `failed`."
+            "description": "`applied`, `present`, `skipped`, `conflict` or `failed`."
           },
           "target": {
             "type": "string",
@@ -18799,7 +18799,7 @@
               "string",
               "null"
             ],
-            "description": "Display name. `null` or empty/whitespace clears it (listed by fingerprint alone).\n\nScrubbed with the native-plane sanitizer: control characters and Unicode bidi\noverrides stripped (one device could impersonate another in this list), whitespace\ncollapsed, capped at 64 characters.",
+            "description": "Display name. `null` or empty/whitespace clears it (listed by fingerprint alone).\n\nScrubbed with the native-plane sanitizer: control characters and Unicode bidi\noverrides stripped (one device could impersonate another in this list), whitespace\ncollapsed, capped at 64 bytes of UTF-8.",
             "example": "Living Room TV"
           }
         }
@@ -18893,7 +18893,7 @@
             "items": {
               "$ref": "#/components/schemas/ActiveGame"
             },
-            "description": "Launched titles: live sessions plus `state: \"grace\"` reconnect-window rows. Empty for a desktop-only stream."
+            "description": "Launched titles: live sessions' games, `grace` and `detached` rows, and launches still\nwaiting for their session. Empty for a desktop-only stream."
           },
           "grants": {
             "type": "integer",
@@ -18931,7 +18931,7 @@
           "session_id": {
             "type": "integer",
             "format": "int64",
-            "description": "Which `sessions` row `session`/`stream` describe. `null` when idle, or when the\nrepresentative is the GameStream stream (the compat plane has no id).",
+            "description": "Which `sessions` row `session`/`stream` describe. `null` when idle, and while a\nGameStream launch has not reached PLAY.",
             "minimum": 0
           },
           "sessions": {
@@ -19671,7 +19671,7 @@
           "id": {
             "type": "integer",
             "format": "int64",
-            "description": "Pass to `DELETE /session/{id}` and friends. `null` on the compat plane, which\nhas no per-session handle — stop it with the host-wide `DELETE /session`.",
+            "description": "Pass to `DELETE /session/{id}` and friends.",
             "minimum": 0
           },
           "join": {
@@ -19907,13 +19907,13 @@
           "frames_dropped": {
             "type": "integer",
             "format": "int64",
-            "description": "Frames the capturer's encode pool refused. Absent on a capturer that does not\ncount them (everything but the Windows IDD push path).",
+            "description": "Frames the capturer's encode pool refused. Absent on a capturer that does not\ncount them (everything but the Windows IDD-push and WGC paths), and on GameStream.",
             "minimum": 0
           },
           "frames_sent": {
             "type": "integer",
             "format": "int64",
-            "description": "Access units the send thread put on the wire. Absent when the video loop\nnever reached its tail — the `host_error` case.",
+            "description": "Access units the send thread put on the wire. Absent when the video loop\nnever reached its tail — the `host_error` case — and on GameStream.",
             "minimum": 0
           },
           "gyro": {
@@ -19984,7 +19984,7 @@
           },
           "mode": {
             "type": "string",
-            "description": "`auto` (env pin, else max dedicated VRAM) or `manual`.",
+            "description": "`auto` (Windows: env pin, else max dedicated VRAM; Linux: NVIDIA when present, else the\nencode render node) or `manual`.",
             "example": "manual"
           }
         }
@@ -21094,7 +21094,7 @@
               "string",
               "null"
             ],
-            "description": "Hex ECDSA-P256-SHA256 signature (ASN.1 DER) by the host's long-lived native identity over\n`\"punktfunk-wt-cert-v1:\" + cert_hash_sha256`. Absent when that identity is the legacy RSA\npair. A browser that has paired MUST check this; one that has not cannot, and does not."
+            "description": "Hex ECDSA-P256-SHA256 signature (ASN.1 DER) by the host's long-lived native identity over\n`\"punktfunk-wt-cert-v1:\" + cert_hash_sha256`. Absent when that identity is not a P-256\nkey. A browser that has paired MUST check this; one that has not cannot, and does not."
           },
           "expires_at": {
             "type": "integer",

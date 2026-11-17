@@ -6,8 +6,9 @@
 //! client that passes it through to a receiver.
 //!
 //! The plane is chosen once at handshake and never switches: the client's output device is
-//! open at a fixed rate. [`native_encoder`] and [`audio_thread`] compile on linux/windows
-//! (libopus + a real capturer); other targets get the stub so a dev build streams video-only.
+//! open at a fixed rate. [`native_encoder`] and [`audio_thread`] build on every target (libopus
+//! is vendored); off Linux and Windows `pf_audio` has no capturer, so a dev build streams
+//! video only.
 //! Unlike GameStream this path has no FEC, so it uses constrained VBR rather than hard CBR —
 //! see [`native_encoder`].
 
@@ -828,7 +829,7 @@ impl Egress {
 
     /// One oversized frame, not the plane: `seq` advances so the client sees a gap and conceals
     /// it. Persistent means `audio_frame_us` was sized against a datagram budget this path
-    /// lacks (see MTU note in `handshake::negotiate`).
+    /// lacks (see `handshake::pcm_datagram`).
     fn refused(&mut self, fmt: &PlaneFormat, conn: &super::link::SessionLink) {
         self.oversized_drops += 1;
         if self.oversized_drops.is_power_of_two() {
@@ -958,7 +959,7 @@ fn run_plane(args: &PlaneArgs, plane: super::handshake::AudioPlane, seq_io: &mut
             break;
         }
         // Wake on a chunk or the next owed slot, whichever first. Waiting only on capture
-        // made a hole cost more than the audio it swallowed — see [`InfillPolicy`].
+        // would make a hole cost more than the audio it swallowed — see [`InfillPolicy`].
         let wake = pacer.wake_budget(std::time::Instant::now(), acc.len());
         let Some(chunk) = lease.next_chunk(Some(wake)) else {
             continue;
@@ -1041,7 +1042,7 @@ fn run_plane(args: &PlaneArgs, plane: super::handshake::AudioPlane, seq_io: &mut
                 egress.congested();
                 continue;
             }
-            // Four `SendDatagramError` outcomes; only `ConnectionLost` ends the session. A
+            // Three `DatagramSend` outcomes; only `Unavailable` ends the audio plane. A
             // unit's parts share `seq`: one refused part drops the rest of the unit.
             for d in datagrams.drain(..) {
                 match args.conn.send_datagram(d) {

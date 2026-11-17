@@ -41,8 +41,8 @@ const PCI_VENDOR_NVIDIA: u32 = 0x10de;
 ///
 /// CUDA's device first, so GL interop and the Vulkan bridge ([`super::vkdev`]) stay on one GPU
 /// of a dual-NVIDIA box. Scan by vendor, not first node: on a hybrid host `renderD128` is the
-/// iGPU. Do not call `pf_gpu::linux_render_node` — this crate is a leaf worker, and that
-/// helper follows the operator VAAPI preference, which may name the iGPU.
+/// iGPU. Do not call `pf_gpu::linux_render_node` — this crate is a leaf worker, and that helper
+/// follows the operator's GPU preference and `PUNKTFUNK_RENDER_NODE`, which may name the iGPU.
 fn nvidia_render_node() -> std::path::PathBuf {
     use std::path::{Path, PathBuf};
     if let Some(p) = std::env::var_os("PUNKTFUNK_ZEROCOPY_RENDER_NODE").filter(|s| !s.is_empty()) {

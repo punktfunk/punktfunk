@@ -16,7 +16,7 @@ use crate::layout::Rect;
 use std::time::Duration;
 
 /// Re-enable outputs `exclusive` disabled, via `kscreen-doctor` — fallback when
-/// [`crate::kwin::mgmt::reenable_outputs`] reports the compositor did not answer.
+/// [`crate::kwin::mgmt::reenable_outputs`] declines.
 /// The registry runs this when the group's last member drops, before reclaiming that
 /// member's output, so KWin never sees zero enabled outputs.
 ///
@@ -228,7 +228,7 @@ fn output_active_size(o: &serde_json::Value) -> Option<(u32, u32)> {
 
 /// Parse `kscreen-doctor -j` into the shared monitor type. Split from the process
 /// call so the mapping can be tested against captured JSON. Mirrors the in-process
-/// contract: disabled outputs report zeroed geometry, `primary` accepts `priority: 1`
+/// contract: a disabled output reports a zero mode, `primary` accepts `priority: 1`
 /// or `primary: true`, list sorted by desktop position.
 fn monitors_from_kscreen_json(doc: &serde_json::Value) -> Vec<crate::monitors::PhysicalMonitor> {
     let Some(outputs) = doc.get("outputs").and_then(|o| o.as_array()) else {

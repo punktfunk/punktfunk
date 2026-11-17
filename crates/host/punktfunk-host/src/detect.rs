@@ -10,10 +10,11 @@
 //!
 //! Only a host that is running or will start on its own can take ports or load
 //! a second driver. Leftover files and disabled services are dormant.
-//! [`Evidence::is_active`] / [`Detection::is_active`] draw that line. Startup
-//! log, `/local/summary`, and `detect-conflicts` report active detections only;
-//! [`render_report`] still lists dormant ones for support. Pin the table at
-//! [`KNOWN`]; behaviour is locked by the tests in this file.
+//! [`Evidence::is_active`] / [`Detection::is_active`] draw that line.
+//! `/local/summary` lists active detections only. The startup log warns, and
+//! `detect-conflicts` exits 1, only for an active one; both print [`render_report`],
+//! which still lists dormant ones for support. Pin the table at [`KNOWN`];
+//! behaviour is locked by the tests in this file.
 
 use std::sync::OnceLock;
 
@@ -133,9 +134,10 @@ impl Detection {
     }
 }
 
-/// One row of the known-conflicting-host table. Names match case-insensitively;
-/// process/binary basenames have **no** extension (platform code lowercases and
-/// strips `.exe`). Add forks here; runtime, subcommand, and tray/console share it.
+/// One row of the known-conflicting-host table. Process names match
+/// case-insensitively; process/binary basenames have **no** extension (platform code
+/// lowercases and strips `.exe`). Add forks here; runtime, subcommand, and
+/// tray/console share it.
 pub struct Known {
     pub product: Product,
     /// Lowercase executable basenames, no extension.

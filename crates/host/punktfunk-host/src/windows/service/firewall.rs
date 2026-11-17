@@ -81,8 +81,8 @@ fn udp_ports(native_port: u16) -> String {
 /// Inbound streaming + mgmt rules, and the optional planes' ([`sync_plane_rules`]). Best-effort;
 /// never fails the install. Scoped by [`firewall_profile_arg`] and this executable
 /// ([`fw_add_rule_args`]). The mgmt port is deliberate: `serve` binds mgmt/library to all
-/// interfaces; off-loopback `mgmt::require_auth` is read-only to a paired client cert, so
-/// opening it adds no admin surface.
+/// interfaces; off loopback, `require_auth` (`mgmt/auth.rs`) refuses the admin API and admits a
+/// paired client only to `cert_may_access`, so opening it adds no admin surface.
 pub(super) fn add_firewall_rules(allow_public: bool) {
     let profile = firewall_profile_arg(allow_public);
     // `service install` remove-then-adds on every upgrade, so a moved install cannot leave a
@@ -97,7 +97,7 @@ pub(super) fn add_firewall_rules(allow_public: bool) {
             None
         }
     };
-    // Mgmt/library (LAN read-only, paired-cert) on the port host.env gives `serve`; `--mgmt-bind`
+    // Mgmt/library (LAN: paired-cert allowlist) on the port host.env gives `serve`; `--mgmt-bind`
     // lands there first.
     let host_env = std::fs::read_to_string(host_env_path()).unwrap_or_default();
     let listen = pf_host_config::listen::ListenPlan::from_host_env(&host_env);
@@ -141,7 +141,8 @@ pub(super) fn add_firewall_rules(allow_public: bool) {
     }
 }
 
-/// The any-UDP rule a host with a second video port needed. Video now rides the native port.
+/// The any-UDP rule a host with a second video port needed. Video rides the native port, so
+/// [`remove_firewall_rules`] only deletes it.
 const FW_DATA_PLANE_RULE: &str = "Punktfunk UDP (data plane)";
 
 pub(super) fn remove_firewall_rules() {

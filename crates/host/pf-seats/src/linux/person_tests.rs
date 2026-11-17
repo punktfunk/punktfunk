@@ -572,7 +572,7 @@ fn a_failed_start_leaves_no_login_drop_in() {
     assert!(!rig.backend.inner.handover.waits("jdoe"));
 }
 
-/// PAM refusing in the helper what the gate admitted falls back to today's start, and the
+/// PAM refusing in the helper what the gate admitted falls back to the plain start, and the
 /// supervisor runs no helper again until it restarts.
 #[test]
 #[ignore = "needs root: writes the row's drop-ins under /run/systemd/system and /run/punktfunk"]

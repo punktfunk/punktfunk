@@ -783,8 +783,8 @@ mod tests {
         assert!(!priority_refused(vk::Result::SUCCESS));
     }
 
-    /// A dual-NVIDIA box: CUDA's device wins over enumeration order; no UUID keeps the old
-    /// first-NVIDIA pick.
+    /// A dual-NVIDIA box: CUDA's device wins over enumeration order; no UUID falls back to the
+    /// first NVIDIA device.
     #[test]
     fn the_cuda_device_wins_over_enumeration_order() {
         let devices = [

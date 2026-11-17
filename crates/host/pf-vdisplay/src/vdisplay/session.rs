@@ -8,8 +8,7 @@
 //! systemd `--user` / D-Bus activation so a mid-stream switch does not leave the
 //! portal talking to the old socket.
 //!
-//! Evidence: `design/gamemode-and-dedicated-sessions.md`,
-//! `design/hyprland-support.md`.
+//! Evidence: `design/gamemode-and-dedicated-sessions.md`.
 
 use super::*;
 
@@ -19,9 +18,10 @@ use super::*;
 #[cfg(target_os = "linux")]
 const SYSTEMD_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Bumped when detection sees a different compositor instance (kind change, or same kind new PID).
-/// Pooled displays stamp this at create; the registry reuses only a matching epoch and reaps the
-/// rest, so a Desktop→Game→Desktop bounce cannot hand back a node id from the dead compositor.
+/// Bumped when detection sees a different desktop compositor instance, per
+/// [`classify_instance_change`]. Pooled displays stamp this at create; the registry reuses only a
+/// matching epoch and reaps the rest, so a Desktop→Game→Desktop bounce cannot hand back a node id
+/// from the dead compositor.
 static SESSION_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub fn session_epoch() -> u64 {
@@ -36,8 +36,8 @@ pub fn bump_session_epoch() -> u64 {
 static LAST_INSTANCE: std::sync::Mutex<Option<(ActiveKind, Option<u32>)>> =
     std::sync::Mutex::new(None);
 
-/// If the live compositor instance changed — different [`ActiveKind`], or same kind new PID —
-/// bump [`SESSION_EPOCH`] and drop the previous backend's kept displays. A new desktop also
+/// If the live desktop compositor instance changed ([`classify_instance_change`]), bump
+/// [`SESSION_EPOCH`] and drop the previous backend's kept displays. A new desktop also
 /// takes back the desk changes a dead host left. Idempotent per instance. Call from every site
 /// that detects the session.
 pub fn observe_session_instance(active: &ActiveSession) {
@@ -113,8 +113,8 @@ enum InstanceChange {
 /// Epoch rules, in one place so they can be unit-tested:
 ///
 /// * [`ActiveKind::None`] is never a change. Detection answers `None` both for
-///   "no session" and for a `/proc` race; treating that as a logout dropped live
-///   pool entries and scrubbed the live session's socket vars. A real logout is
+///   "no session" and for a `/proc` race; treating that as a logout would drop live
+///   pool entries and scrub the live session's socket vars. A real logout is
 ///   the next real observation.
 /// * Only a **desktop** compositor instance change counts. Gamescope is not
 ///   pooled, and a dedicated spawn's nodes outlive any active-session change, so
@@ -804,8 +804,8 @@ pub fn try_recover_session() -> bool {
 }
 
 /// Mid-stream switch to a desktop: push the live session env into systemd `--user` / D-Bus
-/// activation and restart the portal so it re-reads it. Best-effort. GNOME uses Mutter's direct
-/// EIS (no xdg portal), so it only needs the env push.
+/// activation, and on KWin and Hyprland restart the portal so it re-reads it. Best-effort.
+/// GNOME uses Mutter's direct EIS (no xdg portal), so it only needs the env push.
 #[cfg(target_os = "linux")]
 pub fn settle_desktop_portal(chosen: Compositor) {
     const VARS: &[&str] = &[
@@ -822,9 +822,10 @@ pub fn settle_desktop_portal(chosen: Compositor) {
     let mut activation = std::process::Command::new("dbus-update-activation-environment");
     activation.arg("--systemd").args(VARS);
     let _ = crate::proc::status_within(&mut activation, SYSTEMD_BUDGET);
-    // KWin input rides the xdg RemoteDesktop portal, which keys the backend off its *startup*
-    // `XDG_CURRENT_DESKTOP`. Restart, then wait 600 ms for it to re-read before the injector reopens.
-    // Plasma 6 names the KDE backend `plasma-xdg-desktop-portal-kde`; older builds drop the prefix.
+    // On KWin, libei input rides the xdg RemoteDesktop portal (fake_input does not), which keys
+    // the backend off its *startup* `XDG_CURRENT_DESKTOP`. Restart, then wait 600 ms for it to
+    // re-read before the injector reopens. Plasma 6 names the KDE backend
+    // `plasma-xdg-desktop-portal-kde`; older builds drop the prefix.
     if chosen == Compositor::Kwin {
         let _ = crate::proc::status_within(
             std::process::Command::new("systemctl").args([
@@ -1050,7 +1051,8 @@ mod tests {
         assert_eq!(got, None);
     }
 
-    /// Filename filter only (`sway-ipc.<uid>.` prefix). The ownership guard is the next test.
+    /// Filename filter only (`sway-ipc.<uid>.` prefix). The ownership guard is
+    /// `another_uids_owned_socket_is_ignored`.
     #[test]
     fn another_uids_socket_name_is_ignored() {
         let rt = FakeRuntime::new("otheruid", &[]);
@@ -1289,8 +1291,8 @@ mod tests {
         );
     }
 
-    /// `WAYLAND_DISPLAY` starts with the same letters as no key we read — a Wayland-only session
-    /// must not be mistaken for an X11 one.
+    /// Keys match whole, so `WAYLAND_DISPLAY` is not `DISPLAY` — a Wayland-only session must not
+    /// be mistaken for an X11 one.
     #[test]
     fn wayland_display_is_not_read_as_display() {
         let raw = environ(&["WAYLAND_DISPLAY=:0"]);

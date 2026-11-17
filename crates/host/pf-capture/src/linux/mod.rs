@@ -119,8 +119,8 @@ enum StreamStatus {
     Paused,
     /// The stream reached `Error` (e.g. "no more input formats"). It never delivers again.
     Errored,
-    /// GPU import is gone for this capture (worker death, or a tiled or planar frame the
-    /// CPU de-pad cannot read).
+    /// The capture must rebuild: GPU import is gone (worker death, or a tiled or planar frame
+    /// the CPU de-pad cannot read), or the direct capture failed once streaming.
     Broken,
 }
 

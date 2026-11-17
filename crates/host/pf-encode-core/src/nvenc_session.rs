@@ -32,7 +32,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// Bitstream pool per session. Stays above [`async_inflight_cap`] so a bitstream is never
-/// reused mid-encode, and at or above `PUNKTFUNK_ENCODE_DEPTH` (≤ 6) so GPU waits overlap.
+/// reused mid-encode.
 pub const POOL: usize = 8;
 
 const DISABLE: u32 = nv::NV_ENC_SPLIT_ENCODE_MODE::NV_ENC_SPLIT_DISABLE_MODE as u32;

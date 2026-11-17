@@ -147,8 +147,8 @@ pub const DEFAULT_VOICE_APPS: &[&str] = &[
     "mumble",
 ];
 
-/// `PUNKTFUNK_AUDIO_VOICE_APPS`: a comma list added to [`DEFAULT_VOICE_APPS`],
-/// lowercased, blanks and repeats dropped. A console store feeds the same list later.
+/// A comma list (row `audio_voice_apps`, `PUNKTFUNK_AUDIO_VOICE_APPS`) added to
+/// [`DEFAULT_VOICE_APPS`], lowercased, blanks and repeats dropped.
 pub fn parse_voice_apps(raw: Option<&str>) -> Vec<String> {
     let mut apps: Vec<String> = DEFAULT_VOICE_APPS.iter().map(|s| s.to_string()).collect();
     for extra in raw
@@ -173,7 +173,7 @@ pub fn voice_app_matches<'a>(names: impl IntoIterator<Item = &'a str>, apps: &[S
         .any(|n| apps.iter().any(|a| n.contains(a.as_str())))
 }
 
-/// Operator and dispatch knobs resolved once. Session-mutated values stay at
+/// Operator and dispatch knobs, resolved per [`Snapshot`]. Session-mutated values stay at
 /// their call sites. Unused-on-this-platform fields stay so `Debug` and the
 /// parser remain one platform-neutral function.
 #[derive(Debug, Clone, Default)]
@@ -185,12 +185,13 @@ pub struct HostConfig {
     /// Row `clipboard`.
     pub clipboard: ClipboardPolicy,
     /// `PUNKTFUNK_MGMT_BIND` — management listen (`IP:PORT`). `--mgmt-bind` wins.
-    /// Unset = `0.0.0.0:47990` (Sunshine's web UI; the only port the two share).
+    /// Unset = [`listen::ListenPlan`]'s default (Sunshine's web UI port).
     /// Lives in `host.env` because a package upgrade rewrites the unit file.
-    /// Raw string: `main.rs` turns a bad value into the same error as the flag.
+    /// Raw string: [`listen::ListenPlan::resolve`] turns a bad value into a startup error.
     pub mgmt_bind: Option<String>,
     /// `PUNKTFUNK_NATIVE_PORT` — native QUIC control port. `--native-port` wins.
-    /// Unset = 9777. Raw string so a typo is a startup error, not a silent 9777.
+    /// Unset = [`listen::NATIVE_PORT`]. Raw string so a typo is a startup error, not a silent
+    /// default.
     pub native_port: Option<String>,
     /// Row `gamestream` — GameStream/Moonlight-compat planes. **Default OFF**: they
     /// carry plain-HTTP pairing.
@@ -199,24 +200,25 @@ pub struct HostConfig {
     /// externally-reachable transport should not appear on a host because it was upgraded.
     pub webtransport: bool,
     /// `PUNKTFUNK_WEBTRANSPORT_ORIGINS` — comma-separated browser origins allowed to open a
-    /// session (`https://host:47990`). Unset = any, because a host has no way to know its own
-    /// origin until the console offers the choice. WebTransport is not subject to CORS, so this
-    /// is the only thing that separates the real client from any page the user has open.
+    /// session (`https://host:47990`). Empty = any: a host does not know its own origin.
+    /// WebTransport is not subject to CORS, so this list and pairing are what keep out the other
+    /// pages the user has open.
     pub webtransport_origins: Vec<String>,
     /// `PUNKTFUNK_WEBTRANSPORT_BIND` — browser-plane listen address. `--webtransport-bind` wins.
-    /// Unset = `[::]`, every interface, matching the native plane. Narrow it to put the browser
-    /// plane on one interface without moving the rest of the host.
+    /// Unset = every interface (`parse_serve_args`), matching the native plane. Narrow it to put
+    /// the browser plane on one interface without moving the rest of the host.
     pub webtransport_bind: Option<String>,
     /// `PUNKTFUNK_WEBTRANSPORT_PORT` — browser-plane listen port. `--webtransport-port` wins.
-    /// Unset = 9778. Raw string so a typo is a startup error, not a silent default.
+    /// Unset = [`listen::BROWSER_PORT`]. Raw string so a typo is a startup error, not a silent
+    /// default.
     pub webtransport_port: Option<String>,
     /// `PUNKTFUNK_ENCODER` — encoder-backend override (lowercased). Empty = auto-detect by GPU vendor.
     pub encoder_pref: String,
     /// `PUNKTFUNK_RENDER_ADAPTER` — discrete render-GPU pin by description substring.
     /// `Some` even when empty: empty still counts as set for presence checks.
     pub render_adapter: Option<String>,
-    /// `PUNKTFUNK_ZEROCOPY` — Windows D3D11 zero-copy encode input. `None` defers to
-    /// the per-vendor default (AMF on, QSV off).
+    /// `PUNKTFUNK_ZEROCOPY`, in the [`env_on`] grammar. Nothing reads this field: `pf-zerocopy`
+    /// reads the variable itself, in its own grammar.
     pub zerocopy: Option<bool>,
     /// Row `ten_bit` — host policy gate for HEVC Main10 / AV1. **Default ON**. The
     /// host only *allows* 10-bit; the session still needs `VIDEO_CAP_10BIT` and
@@ -237,12 +239,12 @@ pub struct HostConfig {
     pub audio_voice_chat: VoiceChatRoute,
     /// Row `audio_voice_apps` — see [`parse_voice_apps`]. Never empty.
     pub audio_voice_apps: Vec<String>,
-    /// `PUNKTFUNK_AUDIO_QUALITY` — encode tier (`low`/`standard`/`high`; default
-    /// `high`). Raw string: the table lives in `punktfunk-core`. The audio thread
-    /// warns on an unknown spelling rather than silently downgrading.
+    /// `PUNKTFUNK_AUDIO_QUALITY` — encode tier (`low`/`standard`/`high`); `None` is
+    /// `AudioTier::default()`. Raw string: the table lives in `punktfunk-core`. The
+    /// handshake's `audio_budget` warns on an unknown spelling and takes the default.
     pub audio_quality: Option<String>,
-    /// `PUNKTFUNK_AUDIO_REDUNDANCY` — force the redundant `0xD2` audio plane.
-    /// `None` = automatic: only to a client that asked, and only while losing packets.
+    /// `PUNKTFUNK_AUDIO_REDUNDANCY` — the redundant `0xD2` audio plane. `Some(false)` never
+    /// offers it; otherwise a client that asked gets it when the audio budget fits.
     pub audio_redundancy: Option<bool>,
     /// `PUNKTFUNK_AUDIO_HIRES` — host policy gate for lossless `0xD3`
     /// (`design/hi-res-audio.md`). **Default ON**, explicit-off. The host only
@@ -257,12 +259,12 @@ pub struct HostConfig {
     pub video_source: Option<String>,
     /// `PUNKTFUNK_CAPTURE_MONITOR` — pin capture at a named physical monitor
     /// (`DP-1`). Config, not a prompt: a `--user` service has nobody to answer a
-    /// chooser. A name that matches no head is a hard error. Linux-only;
-    /// `design/per-monitor-portal-capture.md`.
+    /// chooser. A name that is off or matches no head falls back to the device's own screen.
+    /// Linux-only; `design/per-monitor-portal-capture.md`.
     pub capture_monitor: Option<String>,
     /// `PUNKTFUNK_PORTAL_CURSOR_MODE` — `auto` (default) · `hidden` · `embedded` ·
-    /// `metadata`. Preference, not a command: `pf_portal::cursor_mode::pick` never
-    /// requests a mode the backend does not advertise. `embedded` is the safe pin.
+    /// `metadata`. Preference, not a command: `pf_portal::cursor_mode::pick` takes the pin only
+    /// when the backend advertises it, else falls back. `embedded` is the safe pin.
     pub portal_cursor_mode: Option<String>,
     /// `PUNKTFUNK_COMPOSITOR` — explicit compositor override (operator/CI/test).
     /// Not the runtime-detected session; `apply_session_env` never writes this.
@@ -306,8 +308,8 @@ pub struct HostConfig {
     /// decides whether HDR is *attempted*. **Default ON**, matching `PUNKTFUNK_10BIT`.
     pub gamescope_hdr: bool,
     /// `PUNKTFUNK_GAMESCOPE_SDR_NITS` — starting SDR luminance inside the PQ container
-    /// (`--hdr-sdr-content-nits`). `None` = 203 nits (BT.2408), what our clients
-    /// decode against. See `SDR_REFERENCE_WHITE_NITS`.
+    /// (`--hdr-sdr-content-nits`). `None` = pf-vdisplay's `SDR_REFERENCE_WHITE_NITS`
+    /// (BT.2408), what our clients decode against.
     pub gamescope_sdr_nits: Option<u32>,
     /// `PUNKTFUNK_GAMESCOPE_BIND` — bind patched gamescope over `/usr/bin/gamescope`
     /// in the session unit's mount namespace. `gamescope-session-plus` hardcodes
@@ -388,10 +390,9 @@ impl HostConfig {
             audio_redundancy: row_tri("PUNKTFUNK_AUDIO_REDUNDANCY"),
             audio_hires: row_bool("PUNKTFUNK_AUDIO_HIRES"),
             perf: on("PUNKTFUNK_PERF") == Some(true),
-            // Defaults to `virtual` — the flagship per-client virtual output. It used to be unset,
-            // which fell through to the synthetic test pattern: fine for a dev box that always has
-            // a host.env, wrong for a packaged install, whose unit no longer requires that file at
-            // all. `synthetic` is still reachable by naming it (any unrecognised value lands there).
+            // Defaults to `virtual`, the per-client virtual output: a packaged unit does not
+            // require host.env. `synthetic` is reached by naming it (any unrecognised value lands
+            // there).
             video_source: val("PUNKTFUNK_VIDEO_SOURCE").or_else(|| Some("virtual".to_string())),
             // Emptied-to-None: `PUNKTFUNK_CAPTURE_MONITOR=` is unset, not a blank name.
             capture_monitor: val("PUNKTFUNK_CAPTURE_MONITOR")

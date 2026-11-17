@@ -390,8 +390,8 @@ unsafe fn efc_pairs_of(
     )
 }
 
-/// The pairs `pd`'s EFC converts for `codec_op`, `None` without an EFC. Session open and the
-/// range a session is planned at both ask here.
+/// The pairs `pd`'s EFC converts for `codec_op`, `None` without an EFC: the capability probe's
+/// answer, which plans a session's range. Session open asks through [`probe_rgb_direct`].
 ///
 /// # Safety
 /// `vq_inst` wraps the live `instance` `pd` was enumerated from.

@@ -339,12 +339,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 st.capture_mgr = Some(registry.bind(name, 1.min(version), qh, ()));
             }
             "zwp_linux_dmabuf_v1" => {
-                // v3 is where `create_immed` lands; nothing above it is needed here.
+                // `create_immed` needs v2; nothing above v3 is needed here.
                 if version >= 3 {
                     st.linux_dmabuf = Some(registry.bind(name, 3, qh, ()));
                 }
             }
-            // v1 carries everything an output description needs; v2 only renames `ready`.
+            // v1 carries everything an output description needs; v2 adds nothing read here.
             "wp_color_manager_v1" => {
                 st.color_mgr = Some(registry.bind(name, 1, qh, ()));
             }

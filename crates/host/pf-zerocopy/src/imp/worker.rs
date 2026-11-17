@@ -8,9 +8,9 @@
 //! Run from the encode worker, it holds `CAP_SYS_NICE`, so the Vulkan bridge's queue gets the
 //! elevated global priority and the convert schedules ahead of a GPU-bound game.
 //!
-//! One worker per capture (spawned per `pipewire_thread`). Exits on socket EOF, which the host
-//! sends only after the capturer and every in-flight frame are gone, so pooled device memory
-//! is never freed under a live mapping.
+//! One worker per `Importer::new_for_capture`: each capture, and the encoder's own convert lane,
+//! spawns one. Exits on socket EOF, which the host sends only after the capturer and every
+//! in-flight frame are gone, so pooled device memory is never freed under a live mapping.
 //!
 //! Design: `design/zerocopy-worker-isolation.md`.
 
@@ -32,7 +32,7 @@ const FD_CACHE_CAP: usize = 64;
 
 /// Hidden `zerocopy-worker` subcommand. `--fd N` (default 3) is the socket the host `dup2`'d in.
 pub fn run_from_args(args: &[String]) -> Result<()> {
-    // Host execs via pinned exe fd (`ipc::self_exe`); kernel comm is that path's basename (an
+    // Host execs a pinned exe fd (`ipc::PinnedExe`); kernel comm is that path's basename (an
     // fd number). Rename so `top`/`pkill` see the worker.
     // SAFETY: `PR_SET_NAME` copies at most 16 bytes from the given pointer; the C-string literal
     // is valid, NUL-terminated, and short enough. No pointer is retained past the call.

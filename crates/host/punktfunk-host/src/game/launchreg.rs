@@ -947,8 +947,7 @@ mod tests {
     }
 
     /// A launch that died on the spot must not be adopted by the retry that
-    /// follows it seconds later — that is the whole in-flight window, and the
-    /// reason the player used to need a host restart.
+    /// follows it seconds later — that is the whole in-flight window.
     #[test]
     fn a_launch_that_died_on_the_spot_is_started_again_not_adopted() {
         let (fp, app) = (Some("fp-early"), Some("custom:early"));

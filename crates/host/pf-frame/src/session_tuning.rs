@@ -70,8 +70,8 @@ mod imp {
     /// visible in `powercfg /requests`).
     ///
     /// Object-lifetime, unlike the thread-bound `ES_*` flags in [`on_hot_thread`]
-    /// (OS reverts those at thread exit). Prevention only: no power request
-    /// turns an already-off display back on — that wake is the virtual-mouse kick.
+    /// (OS reverts those at thread exit). Prevention only: no power request turns an
+    /// already-off display back on — that wake is `pf_win_display::console_display::ensure_on`.
     pub struct DisplayWakeRequest(Handle);
 
     // SAFETY: the wrapped power-request HANDLE is a kernel object handle — a plain opaque value
@@ -240,7 +240,7 @@ mod imp {
 #[cfg(target_os = "windows")]
 pub use imp::{on_hot_thread, DisplayWakeRequest, SystemWakeRequest};
 
-/// No-op on non-Windows (Linux uses `setpriority` nice + CUDA stream priority —
-/// see `native::boost_thread_priority` and `zerocopy::cuda`).
+/// No-op on non-Windows (Linux uses `setpriority` nice + CUDA stream priority — see
+/// [`crate::thread_qos::boost_thread_priority`] and `pf-zerocopy`'s `cuda` module).
 #[cfg(not(target_os = "windows"))]
 pub fn on_hot_thread() {}

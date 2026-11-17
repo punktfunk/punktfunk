@@ -1,9 +1,9 @@
-# Input injection (plan §W6): the per-OS injector backends (wlroots virtual-input, KWin fake_input,
-# libei/reis, gamescope-EI on Linux; SendInput on Windows) + the virtual-gamepad HID stack (DualSense/
-# DualShock4/Switch Pro/Steam Controller/Deck over uhid/usbip and the Windows UMDF drivers), extracted
-# into a subsystem crate. Consumes punktfunk_core::input (the neutral GamepadEvent/InputEvent vocabulary,
-# moved to core in W5) and the pf-driver-proto wire contract; NEVER reaches the orchestrator (the one
-# gamescope-EI socket path is the shared pf-paths contract, not a vdisplay reach-in).
+# Input injection: the per-OS injector backends (wlroots virtual-input, KWin fake_input,
+# libei/reis, gamescope-EI on Linux; SendInput on Windows) + the virtual-gamepad HID stack
+# (uinput/uhid/usbip on Linux, the UMDF drivers on Windows). Consumes punktfunk_core::input (the
+# neutral GamepadEvent/InputEvent vocabulary) and the pf-driver-proto wire contract; NEVER reaches
+# the orchestrator (the one gamescope-EI socket path is the shared pf-paths contract, not a
+# vdisplay reach-in).
 [package]
 name = "pf-inject"
 version.workspace = true
@@ -43,16 +43,15 @@ wayland-backend = "0.3"
 # libei (EI sender) for the portable input path on KWin/GNOME (RemoteDesktop portal) + gamescope-EI.
 reis = { version = "0.7.1", features = ["tokio"] }
 futures-util = "0.3"
-# `macros` is for the `tokio::select!` in the libei and usbip worker loops. It used to be
-# absent and compile anyway, borrowed from punktfunk-core's `quic` feature via unification — i.e. an
-# unrelated crate dropping it would have broken this one.
+# `macros` is for the `tokio::select!` in the libei and usbip worker loops. Declared here, not
+# borrowed through feature unification from another crate that may drop it.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "macros"] }
 # Builds/validates the xkb keymap uploaded to the virtual keyboard + tracks modifier state.
 xkbcommon = "0.9"
-# KWin's active keyboard layout, one blocking session-bus call per typed character on a
-# multi-layout keymap. The zbus ashpd already pulls, on its tokio backend.
+# KWin's typed text, over blocking session-bus calls: the active keyboard layout, the input
+# method's state and the EIS text device. The zbus ashpd already pulls, on its tokio backend.
 zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
-# Vendored + trimmed usbip server core — presents a virtual Steam Deck over USB/IP for Steam Input.
+# Vendored + trimmed usbip server core — presents every `*_usbip` virtual pad over USB/IP.
 usbip-sim = { path = "vendor/usbip-sim" }
 # The seat pad broker's relay (`pad_broker`): fd passing over its socket, the relay's poll, and
 # whether a pad node is writable here.

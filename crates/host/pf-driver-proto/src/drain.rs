@@ -7,8 +7,6 @@
 //!
 //! Every road back to an acquire passes the loop top, so a stop, a removed device or a gone
 //! monitor is seen between any two frames, even while DWM composes without a pause.
-//!
-//! Design: `design/pf-vdisplay-driver-overhaul.md` §4 (D4) in the planning repo.
 
 /// The loop top's reads, in the order they win.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -184,7 +182,7 @@ mod tests {
 
     #[test]
     fn terminate_wins_at_the_top_during_a_frame_burst() {
-        // The reconnect leak: a frame never leads straight to another acquire.
+        // A frame never leads straight to another acquire.
         let burst = [
             (CLEAR, Next::Acquire),
             (FRAME, offer(true)),

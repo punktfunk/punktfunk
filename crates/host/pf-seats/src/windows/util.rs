@@ -3,8 +3,9 @@
 //! Paths and account names become checked NUL-terminated UTF-16 vectors. Win32
 //! and NetAPI failures become stable backend errors without including secret
 //! inputs. Process identity is compared by SID, not by a localized account
-//! name. Handle ownership transfers immediately into `OwnedHandle`, and every
-//! raw-memory read is limited by the size returned from the originating API.
+//! name. Handle ownership transfers immediately into `OwnedHandle`, except the token
+//! `with_privilege` closes itself, and every raw-memory read is limited by the size returned
+//! from the originating API.
 //! These helpers perform no account, session, service, or registry mutation; the one
 //! token change, a privilege enabled for one call, is put back after it.
 

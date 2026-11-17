@@ -1147,8 +1147,8 @@ mod tests {
             "a rebuild starts with an IDR"
         );
     }
-    /// BGRX frame of horizontal bands scrolled down by `shift` rows, with a diagonal so no
-    /// two rows are alike: the encoder must reach for rows above to predict it.
+    /// BGRX frame `i` of `smoke_pattern::scroll_pattern`: rows band by luma and move `i`
+    /// frames' worth (down by default), so the encoder must reach for rows above to predict it.
     fn scroll_frame(w: u32, h: u32, i: u32) -> CapturedFrame {
         let buf = crate::smoke_pattern::scroll_pattern(w as usize, h as usize, i as usize);
         CapturedFrame {
