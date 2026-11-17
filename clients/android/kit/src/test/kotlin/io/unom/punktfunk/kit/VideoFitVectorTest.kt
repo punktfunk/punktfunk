@@ -8,8 +8,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * `clients/shared/video-fit-vectors.json` against [VideoFit.place] — the same cases the Rust, Swift
- * and TypeScript placements run, so a letterbox on this client cannot land a pixel off another's.
+ * `clients/shared/video-fit-vectors.json` against [VideoFit.place] — the same cases the Rust and
+ * Swift placements run, so a letterbox on this client cannot land a pixel off theirs.
  */
 class VideoFitVectorTest {
     private val vectors: JSONObject by lazy {

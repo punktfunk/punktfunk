@@ -43,9 +43,9 @@ data class StreamNote(
  * How long a session holds when the app leaves the screen, or null when it does not hold at all.
  *
  * One answer rather than two, because a keep-alive without a bound is a session the host can never
- * reclaim: it cannot tell a player who walked away from one who is watching. Never on a TV, where
- * the notification carrying the End action has nowhere to appear — a held session there would be
- * one nothing outside the app could stop.
+ * reclaim: it cannot tell a player who walked away from one who is watching. Never on a TV: a TV
+ * launcher may not show the notification that carries the End action, and without it nothing
+ * outside the app could stop a held session.
  *
  * The minutes are clamped, not trusted: the picker offers [BACKGROUND_TIMEOUT_OPTIONS], but the
  * value is a plain number in a settings document a console or a preset can write, and a zero

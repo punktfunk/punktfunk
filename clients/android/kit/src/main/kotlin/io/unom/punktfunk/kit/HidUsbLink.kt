@@ -68,7 +68,8 @@ class HidUsbLink(
         val epIn: UsbEndpoint,
         val epOut: UsbEndpoint?,
     ) {
-        // Direct: UsbRequest.queue copies a heap buffer into a fresh direct one on every report.
+        // Direct: for a heap buffer, UsbRequest.queue allocates a fresh direct one on every report
+        // and dequeue copies it back (API 37).
         val inBuf: ByteBuffer = ByteBuffer.allocateDirect(64)
         var inReq: UsbRequest? = null
         var outReq: UsbRequest? = null
@@ -269,8 +270,9 @@ class HidUsbLink(
      * never blocks on EP0, so input keeps flowing while a control transfer is in flight.
      */
     private fun readLoop(conn: UsbDeviceConnection, claims: List<Claim>) {
-        // The system's own input reader runs here; a default-priority thread queues behind
-        // the decoder's and the UI's work for the wake that carries a button edge.
+        // The system's own input reader runs here (AOSP 11 through main); a default-priority
+        // thread queues behind the decoder's and the UI's work for the wake that carries a button
+        // edge.
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
         val live = claims.filter { c ->
             val req = UsbRequest()

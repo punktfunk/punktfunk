@@ -385,10 +385,10 @@ internal class StreamPeripherals(
             if (!pointerOk) m.release()
         }
         activity?.remotePointer?.setGranted(pointerOk)
-        // Mic revoked mid-session: stop the capture — the host detaches its end regardless, and
-        // an open mic (with the platform's recording indicator lit) feeding a plane the host
-        // drops would be the worst kind of lie. Not restarted on a re-grant: the host attaches
-        // the mic service at session setup only, so a fresh session is the honest offer.
+        // Mic revoked mid-session: stop the capture. The host drops mic frames against the live
+        // grant, and an open mic (with the platform's recording indicator lit) feeding a plane
+        // the host drops would be the worst kind of lie. Not restarted here on a re-grant, though
+        // the host would forward again.
         if (grants and SessionAccess.MIC == 0 && ui.micRunning) stopMic()
     }
 

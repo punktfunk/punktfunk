@@ -30,7 +30,7 @@ data class GameOverrides(
 
     /**
      * [gamepad] as a [Gamepad] wire byte; null when unset or not a name in [Gamepad.PREFS].
-     * Canonical names only: `GamepadPref::from_name` also takes aliases, which read as unset here.
+     * The host sends the canonical name (`GamepadPref::as_str`), never an alias.
      */
     val gamepadPref: Int?
         get() = gamepad?.trim()?.lowercase()?.let { g -> Gamepad.PREFS.firstOrNull { it.name == g }?.wire }

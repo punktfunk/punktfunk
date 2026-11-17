@@ -703,8 +703,8 @@ private fun BoxScope.RingFace(st: RingTouch, scale: Float) {
  * controls stay visible here, ghosted. The overrides land in the class the screen is in (wide
  * or narrow, [padControls]' own split), so a phone edited in landscape keeps its upright
  * preset untouched. The chrome takes the top edge on a wide layer and the bottom edge on a
- * narrow one, to clear the trio of small discs; [padControls] places that trio by overlap, not
- * by this split.
+ * narrow one. [padControls] places the trio of small discs by overlap, so on the full preset
+ * between about 516 and 852 dp the two share an edge.
  */
 @Composable
 internal fun PadLayoutEditor(pad: PadConfig, onChange: (PadConfig) -> Unit, onBack: () -> Unit) {

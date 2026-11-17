@@ -785,8 +785,9 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         identity, // owned (cert, key) PEM, or None (anonymous)
         preset,
         profile,
-        // An older Qualcomm display shows full-range BT.709 as studio, so ask for studio SDR. The
-        // decode path takes the range from the Welcome either way.
+        // An older Qualcomm display HAL (sm8150's `SelectCscType`) shows full-range BT.709 as
+        // studio, so ask for studio SDR. The decode path takes the range from the Welcome either
+        // way.
         studio_range,
         view: view_of(view_width.into(), view_height.into()),
         screen_wish: ScreenWish::parse(&host_screen),

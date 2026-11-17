@@ -1,15 +1,16 @@
 //! The ASurfaceControl slot scheduler: each frame its own vsync slot on a grid phased on the
 //! compositor's cycle.
 //!
-//! SurfaceFlinger defers a transaction only while `desiredPresentTime >= expectedPresentTime`, so
-//! two frames applied in one period with targets before the next vsync latch together and only
-//! the newer shows. Every frame therefore gets its own slot ([`pace_slot`]) and targets
-//! `present − period/2`: ready for that slot, not the one before, half a period of tolerance each
-//! way. Under `latency` a frame takes the slot after the last one while it can still make it, or
-//! is early for it by less than the hold band, which widens while the fences show the source
-//! outrunning the panel; earlier than that it shares the last slot and SurfaceFlinger keeps the
-//! newer. Under `smooth` the buffer bounds the hold. Until a present fence phases the
-//! [`SlotClock`], with pacing off, or on a down-rated panel, every target is as soon as possible.
+//! SurfaceFlinger holds a transaction for its target time only while `desiredPresentTime >=
+//! expectedPresentTime`, so two frames applied in one period with targets before the next vsync
+//! latch together and only the newer shows. Every frame therefore gets its own slot
+//! ([`pace_slot`]) and targets `present − period/2`: ready for that slot, not the one before, half
+//! a period of tolerance each way. Under `latency` a frame takes the slot after the last one while
+//! it can still make it, or is early for it by less than the hold band, which widens while the
+//! fences show the source outrunning the panel; earlier than that it shares the last slot and
+//! SurfaceFlinger keeps the newer. Under `smooth` the buffer bounds the hold. Until a present
+//! fence phases the [`SlotClock`], with pacing off, or on a down-rated panel, every target is as
+//! soon as possible.
 
 use punktfunk_core::phase::{pace_slot, SlotClock};
 

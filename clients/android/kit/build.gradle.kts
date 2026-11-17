@@ -39,9 +39,10 @@ dependencies {
     // `api`: the client type is in this module's signature, and Coil's POM pins 4.12.0 for :app.
     api("com.squareup.okhttp3:okhttp:5.5.0")
     testImplementation("junit:junit:4.13.2") // JVM unit tests for the pure parsers/migrations
-    // A REAL org.json on the unit-test classpath. android.jar's org.json is stubs that throw
-    // "Stub!", so the host-store migration test — which asserts over the very JSON blobs the store
-    // reads and writes — cannot run without it. Explicit test deps precede the mockable android.jar.
+    // A REAL org.json on the unit-test classpath. The mockable android.jar's org.json methods
+    // throw "not mocked", so the host-store migration test — which asserts over the very JSON
+    // blobs the store reads and writes — cannot run without it. Explicit test deps precede the
+    // mockable android.jar.
     testImplementation("org.json:json:20260814")
 }
 
@@ -130,9 +131,10 @@ fun Exec.cargoNdkEnvironment() {
 }
 
 // ------------------------------------------------------------------------------------------------
-// Verified Skia prebuilt fetch. rust-skia's GitHub releases carry no armv7-linux-androideabi
-// archive, so ALL three Android keys are served from our own release — public, R2-backed,
-// unauthenticated: git.unom.io/unom/skia-binaries/releases/download/{tag}/skia-binaries-{key}.tar.gz
+// Verified Skia prebuilt fetch. rust-skia's release at `skiaBinariesTag` carries no
+// armv7-linux-androideabi archive, so ALL three Android keys are served from our own release —
+// public, R2-backed, unauthenticated:
+// git.unom.io/unom/skia-binaries/releases/download/{tag}/skia-binaries-{key}.tar.gz
 // (the armv7 archive built by us, the two 64-bit ones byte-for-byte mirrors of rust-skia's —
 // design/android-skia-console-port.md WP6; re-derive + re-upload on every skia-safe bump).
 //
@@ -364,12 +366,10 @@ afterEvaluate {
     // those runs need no NDK or Android Rust targets (generateMessages still runs host cargo).
     // The native build stays wired for every normal APK/AAR build.
     //
-    // DEBUG APKs SHIP RELEASE RUST. Cargo's debug profile is not "a bit slower" for this library —
-    // it is unusable: the AES-GCM data-plane decrypt runs through generic-array iterator closures
-    // with per-byte UB checks instead of ARMv8 hardware AES, and on a phone the receive pump
-    // cannot drain a 20 Mbps stream. Kotlin debuggability is untouched (the APK is still a debug
-    // build); only the cargo profile changes. `-PrustDebug` restores a debug-profile native build
-    // for the rare session that actually steps through Rust.
+    // DEBUG APKs SHIP RELEASE RUST. The dev profile gives only dependencies opt-level 2: the
+    // AES-GCM decrypt's generic code builds in punktfunk-core at opt-level 0 with debug assertions,
+    // and on a phone the receive pump cannot drain a 20 Mbps stream. The APK stays a debug build;
+    // only the cargo profile changes. `-PrustDebug` restores a debug-profile native build.
     if (!project.hasProperty("skipRustBuild")) {
         val debugRust =
             if (project.hasProperty("rustDebug")) checkJniImportsDebug else checkJniImportsRelease

@@ -5,12 +5,12 @@
 //! 4-channel layout, and render them on the physical pad.
 //!
 //! # Why this needs a USB driver instead of an audio API
-//! AOSP's `UsbAlsaManager` denylists the DualSense by VID/PID (`054c:0ce6`), so the framework
-//! discards the pad's playback node (`hasOutput: false`) and no `AudioDeviceInfo` exists to
-//! target; `/dev/snd` is closed to apps by SELinux, and `UsbRequest` rejects any endpoint that
-//! is not bulk or interrupt. So this path drives the pad's isochronous endpoint directly,
-//! through `uac-host` on the file descriptor Java already owns. Claiming the interface needs no
-//! privilege and leaves the gamepad and the pad's microphone working.
+//! AOSP's `UsbAlsaManager` (Android 14+) denylists the DualSense by VID/PID (`054c:0ce6`), so
+//! the framework discards the pad's playback node (`hasOutput: false`) and no `AudioDeviceInfo`
+//! exists to target; `/dev/snd` is closed to apps by SELinux, and `UsbRequest` rejects any
+//! endpoint that is not bulk or interrupt. So this path drives the pad's isochronous endpoint
+//! directly, through `uac-host` on the file descriptor Java already owns. Claiming the interface
+//! needs no privilege and leaves the gamepad and the pad's microphone working.
 //!
 //! # Who owns the coils
 //! Every rumble write this tree emits (`DsDevice`, via [`crate::feedback`]) sets `valid_flag0`

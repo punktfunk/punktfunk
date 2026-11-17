@@ -833,7 +833,7 @@ object NativeBridge {
     const val SURFACE_FORWARDED = 2
 
     /**
-     * One stylus batch of STATE-FULL samples (the pen plane; design/pen-tablet-input.md §7):
+     * One stylus batch of STATE-FULL samples (the pen plane; design/pen-tablet-input.md §2, §3):
      * [count] × 10 floats, oldest first — `[state, tool, x, y, pressure, distance, tilt_deg,
      * azimuth_deg, roll_deg, dt_us]`. `state` = the wire in-range/touching/barrel bits; `tool`
      * 0=pen 1=eraser; x/y/pressure/distance normalized 0..1; distance/tilt/azimuth/roll < 0 =

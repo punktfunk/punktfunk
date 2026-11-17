@@ -538,11 +538,11 @@ impl AscSink {
     /// drop back to the pool as they are superseded); smooth keeps order up to capacity.
     ///
     /// One `acquireNextImageAsync` at a time, never `acquireLatestImageAsync`: that call
-    /// (`NdkImageReader.cpp`, unfixed as of AOSP main) drains through one `int*` fence out-param it
-    /// overwrites per image, releases each dropped image with its SUCCESSOR's fence, and hands the
-    /// caller the last fence it already gave away. `setBuffer` then transfers that stale fd to
-    /// SurfaceFlinger, which closes it a second time — an `fdsan` `SIGABRT` on the decode thread
-    /// the moment a burst gives it two images to collapse.
+    /// (`NdkImageReader.cpp`, unfixed in AOSP main at `e2f098935447`) drains through one `int*`
+    /// fence out-param it overwrites per image, releases each dropped image with its SUCCESSOR's
+    /// fence, and hands the caller the last fence it already gave away. `setBuffer` wraps that fd
+    /// in a second `Fence` in this process, and the double close is an `fdsan` `SIGABRT` on the
+    /// decode thread the moment a burst gives it two images to collapse.
     fn drain_reader(&mut self) {
         // Each evicted image returns with its acquire fence, so the codec cannot reuse it early.
         while let Some((acq, decoded_mono)) = self.acquire() {

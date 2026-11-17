@@ -326,7 +326,7 @@ pub(super) fn run_async(
                         stepped_down: false,
                     } => {}
                 }
-                // MediaTek HEVC decoders on GE8xxx GPUs are reported to hang right after an RFI.
+                // MediaTek HEVC decoders on GE8100/8300/8320 GPUs are reported to hang under RFI.
                 // The 5 s window is a reading aid for the report, not a verdict.
                 rebuilds += 1;
                 let gap_age_ms = match last_gap_ns.load(Ordering::Relaxed) {
@@ -1157,10 +1157,10 @@ impl DecodeTally {
     }
 }
 
-/// The receiver rule's decoder class for this session ([`Intake`]): AV1 only, strict on the
-/// Tensor G5 and Realtek decoders, lenient on the rest. Realtek's hangs on the first wave frame
-/// after a loss. `debug.punktfunk.au_admission` = `strict` /
-/// `lenient` / `off` overrides the pick.
+/// The receiver rule's decoder class for this session ([`Intake`]): AV1 only, strict on
+/// `c2.google.av1.decoder` (every Tensor) and Realtek's, lenient on the rest. Realtek's hangs on
+/// the first wave frame after a loss. `debug.punktfunk.au_admission` = `strict` / `lenient` /
+/// `off` overrides the pick.
 fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
     if codec != punktfunk_core::quic::CODEC_AV1 {
         return None;

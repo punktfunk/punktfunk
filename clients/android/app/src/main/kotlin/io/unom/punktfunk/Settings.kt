@@ -218,7 +218,7 @@ data class Settings(
     val uiPalette: String = "violet",
     /**
      * "Low-latency mode" — the master switch over the fast pipeline: decoder ranking + per-SoC
-     * vendor keys, slice-progressive delivery, pipeline thread boosts + ADPF max-performance,
+     * vendor keys, slice-progressive delivery, pipeline thread boosts + ADPF power-saving off,
      * game-tagged AAudio, DSCP marking on the media sockets, HDMI ALLM, and the forced TV mode
      * switch. (The Wi-Fi locks are NOT part of this — both are always held while streaming; see
      * StreamWindow.) Off keeps the same decode loop and presenter — so [presentPriority] applies
@@ -307,9 +307,9 @@ data class Settings(
     /**
      * Render the host's DualSense **voice-coil haptics** on a captured USB pad (tier A).
      *
-     * The pad's own 4-channel audio device carries them, driven directly over usbfs — Android's
-     * audio framework denylists that device by VID/PID, so there is no supported route to it. The
-     * two kinds are arbitrated rather than mixed, and on evidence: wire rumble is suppressed only
+     * The pad's own 4-channel audio device carries them, driven directly over usbfs: Android 14+
+     * refuses the DualSense (054C:0CE6, not the Edge) as an audio output by VID/PID. The two
+     * kinds are arbitrated rather than mixed, and on evidence: wire rumble is suppressed only
      * while haptics frames are actually arriving, so a title that drives classic rumble and sends
      * no haptics audio keeps rumbling. Off, or on an uncaptured/Bluetooth pad, the pad stays on
      * ordinary rumble (tier C), which on this client already drives the same actuators.
@@ -662,10 +662,8 @@ fun displayHdr(context: Context): DisplayHdr {
         return DisplayHdr.None
     }
     val types = buildSet {
-        // API 34+: the sanctioned per-mode query (Display.Mode.getSupportedHdrTypes). The
-        // deprecated Display-level hdrCapabilities can return EMPTY on Android 14+ devices
-        // (Pixel-class panels included), which would make a genuinely HDR display advertise
-        // no-HDR and pin the whole session to 8-bit SDR.
+        // API 34+: the per-mode query (Display.Mode.getSupportedHdrTypes). On AOSP 14+ the
+        // deprecated hdrCapabilities is this list minus the types the user disabled.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             display.mode.supportedHdrTypes.forEach { add(it) }
         }
@@ -845,7 +843,7 @@ object Resolutions {
         return ASPECTS.indexOfFirst { kotlin.math.abs(shape / it.shape - 1) < TOLERANCE }.takeIf { it >= 0 }
     }
 
-    /** Smallest stream mode the host accepts, per side. */
+    /** Smallest typed mode a client asks for, per side; the host's own floor is lower. */
     const val MIN_WIDTH = 320
     const val MIN_HEIGHT = 200
 

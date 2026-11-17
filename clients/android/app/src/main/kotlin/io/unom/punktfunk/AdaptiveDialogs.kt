@@ -265,7 +265,7 @@ fun SpeedTestPrompt(
     PunktfunkDialog(
         title = stringResource(R.string.speedtest_title),
         onDismiss = onDismiss,
-        // Measuring runs probes for ten seconds and more; a tap outside must not abandon it midway.
+        // Measuring runs probes for several seconds; a tap outside must not abandon it midway.
         dismissOnOutsideTap = phase !is SpeedTestPhase.Measuring,
         actions = buildList {
             if (done != null) {

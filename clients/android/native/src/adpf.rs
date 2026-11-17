@@ -1,11 +1,10 @@
 //! Android Adaptive Performance Framework (ADPF) — CPU performance hints for the hot threads.
 //!
 //! ADPF lets a latency-critical app tell the platform "these threads run a repeating workload with
-//! this per-cycle deadline, and here's how long they *actually* took." The kernel's CPU governor
-//! (on Qualcomm Snapdragon in particular — its ADPF backend is among the most responsive) then keeps
-//! those threads on the fast cores at high clocks instead of migrating them to a little core or
-//! down-clocking between frames. For a stream client the win is on the in-process hot path we
-//! control — the pump, the `pf-decode` feed/drain/present loop, audio and mic (the set
+//! this per-cycle deadline, and here's how long they *actually* took." The platform then adjusts
+//! those threads' core placement and clocks toward the target, instead of migrating them to a
+//! little core or down-clocking between frames. For a stream client the win is on the in-process
+//! hot path we control — the pump, the `pf-decode` feed/drain/present loop, audio and mic (the set
 //! `NativeClient::hot_thread_ids` returns) — *not* the hardware codec itself (that decodes
 //! in the mediacodec service, a separate process we can't hint); keeping our loop from being
 //! scheduled late directly trims the jitter between "AU received" and "buffer released to the

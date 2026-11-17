@@ -353,7 +353,7 @@ fun StreamScreen(
     }
 
     // Frame mode (design/touchpad-passthrough.md §4): toward a host with a touchpad of its own,
-    // Trackpad mode sends every finger to it. Each read of the host's touchpad is a new decision;
+    // Trackpad mode sends up to two fingers. Each read of the host's touchpad is a new decision;
     // the gesture layer takes it at the next gesture. Empty updates announce the surface when
     // frame mode starts and lift every contact when it ends, unless core no longer presents it.
     val touchpad = ui.touchpad
