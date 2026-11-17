@@ -18,9 +18,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use rsa::pkcs1v15::{Signature, VerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::signature::{SignatureEncoding, Signer, Verifier};
-use rsa::RsaPublicKey;
-// `rsa`'s Sha256 re-export (`digest` 0.10). Distinct from crate-wide `sha2` 0.11.
-use rsa::sha2::Sha256;
+use rsa::PublicKey as RsaPublicKey;
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -479,6 +478,21 @@ mod tests {
 
     fn cid(tag: &str) -> CeremonyId {
         cid_at(tag, "127.0.0.1".parse().unwrap())
+    }
+
+    /// Both halves of the pairing signature: what the host signs in phase 3 and what it
+    /// verifies in phase 4, against the key a certificate carries. Moonlight splits the blob
+    /// at fixed offsets, so the signature is 256 bytes or the pairing fails.
+    #[test]
+    fn a_pairing_signature_verifies_against_the_certificate_key() {
+        let id = ServerIdentity::ephemeral().expect("identity");
+        let (_, _, pubkey) = parse_client_cert(id.cert_pem.as_bytes()).expect("cert");
+        let secret = [7u8; 16];
+        let sig: Signature = id.signing_key.sign(&secret);
+        let sig = sig.to_vec();
+        assert_eq!(sig.len(), 256);
+        verify256(&pubkey, &secret, &sig).expect("the signer's own certificate verifies");
+        assert!(verify256(&pubkey, &[8u8; 16], &sig).is_err());
     }
 
     #[test]

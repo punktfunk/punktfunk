@@ -37,7 +37,8 @@
 #                   target. Here for the same reasons as miri. See the `fuzz:` job.
 # Triggers: weekly (catch newly-disclosed CVEs in pinned deps), on every lockfile/allowlist
 # change, and on demand.
-# To silence a known-unfixable Rust advisory, add it to `.cargo/audit.toml` ([advisories] ignore=[…]).
+# To silence a known-unfixable Rust advisory, add it to `.cargo/audit.toml` ([advisories] ignore=[…]),
+# or to one lockfile's `cargo audit` line as `--ignore` when only that lockfile carries it.
 name: audit
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
@@ -107,7 +108,10 @@ jobs:
           cargo audit --deny unsound --file packaging/windows/pf-vkhdr-layer/Cargo.lock
           cargo audit --deny unsound --file tools/win-input-matrix/Cargo.lock
           cargo audit --deny unsound --file tools/hid-descriptor-dump/Cargo.lock
-          cargo audit --deny unsound --file crates/host/pf-seat-keeper/Cargo.lock
+          # rsa Marvin (RUSTSEC-2023-0071) is fixed in rsa 0.10.0, which the host is on. The
+          # keeper's RDP stack (picky, sspi, winscard) pins `=0.10.0-rc.18`. It logs in with a
+          # password and holds no RSA private key. Drop the flag when those three move.
+          cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file crates/host/pf-seat-keeper/Cargo.lock
           cargo audit --deny unsound --file fuzz/Cargo.lock
 
   # cargo-audit matches registry crates by name and version, so a vendored tree has no feed but
