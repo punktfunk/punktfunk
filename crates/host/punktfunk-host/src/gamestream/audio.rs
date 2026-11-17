@@ -258,6 +258,8 @@ fn run(
     av_ping: &[u8; super::AV_PING_LEN],
     tap_from: Option<Arc<std::sync::Mutex<Option<String>>>>,
 ) -> Result<()> {
+    // The native audio plane's boost: a stall on 5 ms frames is a click.
+    pf_frame::thread_qos::boost_thread_priority(true);
     let sock = UdpSocket::bind(("0.0.0.0", AUDIO_PORT)).context("bind audio UDP")?;
     punktfunk_core::transport::grow_socket_buffers(&sock);
     tracing::debug!(port = AUDIO_PORT, "audio: awaiting client ping");
