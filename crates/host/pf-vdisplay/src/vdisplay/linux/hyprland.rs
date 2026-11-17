@@ -885,18 +885,26 @@ fn is_fullscreen(v: Option<&serde_json::Value>) -> bool {
     }
 }
 
+/// Hyprland's selector for window `address`. Only its own `0x…` form passes: under
+/// the Lua config the selector sits inside an expression Hyprland evaluates.
+fn window_selector(address: &str) -> Result<String> {
+    let hex = address.strip_prefix("0x").unwrap_or_default();
+    if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("{address:?} is not a hyprland window address");
+    }
+    Ok(format!("address:{address}"))
+}
+
 /// Run one window verb on `address`. A full-screen window is left alone for
-/// `Fullscreen`, which Hyprland toggles.
+/// `Fullscreen`, which the classic dispatcher toggles.
 ///
-/// Classic dispatchers only. The Lua config era spells these `hl.dsp.*` and
-/// this host has no instance to pin the spelling against, so that era gets a
-/// refusal and one log line rather than a guessed expression.
+/// Classic first, Lua on rejection — same two-era probe as [`focus_output`].
 pub(crate) fn window_action(verb: crate::toplevels::WindowVerb, address: &str) -> Result<()> {
     use crate::toplevels::WindowVerb;
-    let target = format!("address:{address}");
+    let target = window_selector(address)?;
     match verb {
-        WindowVerb::Focus => hyprctl_dispatch(&["dispatch", "focuswindow", &target]),
-        // No per-window fullscreen dispatcher: focus it, then act on the focused window.
+        WindowVerb::Focus => focus_window(&target),
+        // The classic dispatcher acts on the focused window, so focus it first.
         WindowVerb::Fullscreen => {
             if toplevels(None)
                 .iter()
@@ -904,10 +912,18 @@ pub(crate) fn window_action(verb: crate::toplevels::WindowVerb, address: &str) -
             {
                 return Ok(());
             }
-            hyprctl_dispatch(&["dispatch", "focuswindow", &target])?;
-            hyprctl_dispatch(&fullscreen_argv())
+            focus_window(&target)?;
+            hyprctl_dispatch_both(&fullscreen_argv(), &lua_fullscreen_expr(&target))
         }
     }
+}
+
+/// Focus window `target`, a [`window_selector`].
+fn focus_window(target: &str) -> Result<()> {
+    hyprctl_dispatch_both(
+        &["dispatch", "focuswindow", target],
+        &lua_focus_window_expr(target),
+    )
 }
 
 /// `hyprctl` argv that toggles full-screen on the focused window, split so a test
@@ -916,14 +932,37 @@ fn fullscreen_argv() -> [&'static str; 3] {
     ["dispatch", "fullscreen", "0"]
 }
 
+/// Lua spelling of "focus this window" (0.55–0.57). Pure so a test pins the shape,
+/// as for the two below. Each names its window, so none acts on the focused one.
+fn lua_focus_window_expr(target: &str) -> String {
+    format!("hl.dsp.focus({{ window = \"{target}\" }})")
+}
+
+/// Lua spelling of "make this window full-screen". `set`, not the default toggle.
+fn lua_fullscreen_expr(target: &str) -> String {
+    format!(
+        "hl.dsp.window.fullscreen({{ mode = \"fullscreen\", action = \"set\", \
+         window = \"{target}\" }})"
+    )
+}
+
+/// Lua spelling of "move this window to that monitor". Focus follows the window, as
+/// with classic `movewindow`.
+fn lua_window_move_expr(target: &str, dest: &str) -> String {
+    format!("hl.dsp.window.move({{ monitor = \"{dest}\", window = \"{target}\" }})")
+}
+
 /// Carry window `address` onto head `dest`, then follow it there.
 ///
-/// `movewindow` acts on the focused window, so focus it first. Best-effort:
+/// Classic `movewindow` acts on the focused window, so focus it first. Best-effort:
 /// the game stays where it opened on a refusal.
 pub(crate) fn move_to_output(address: &str, dest: &str) -> Result<()> {
-    let target = format!("address:{address}");
-    hyprctl_dispatch(&["dispatch", "focuswindow", &target])?;
-    hyprctl_dispatch(&["dispatch", "movewindow", &format!("mon:{dest}")])
+    let target = window_selector(address)?;
+    focus_window(&target)?;
+    hyprctl_dispatch_both(
+        &["dispatch", "movewindow", &format!("mon:{dest}")],
+        &lua_window_move_expr(&target, dest),
+    )
 }
 
 /// Workspace this launch gets on head `name`, as `(claimed, restore)`.
@@ -1923,6 +1962,38 @@ mod tests {
     #[test]
     fn the_fullscreen_verb_asks_for_full_screen_not_maximize() {
         assert_eq!(fullscreen_argv(), ["dispatch", "fullscreen", "0"]);
+    }
+
+    /// Lua spellings of the window verbs. Each is a table that names its window:
+    /// without `window` Hyprland acts on whatever is focused, and without
+    /// `action = "set"` it toggles a full-screen game back out.
+    #[test]
+    fn the_lua_window_expressions_name_their_window() {
+        let target = window_selector("0x55a1").expect("a hyprland address");
+        assert_eq!(target, "address:0x55a1");
+        assert_eq!(
+            lua_focus_window_expr(&target),
+            r#"hl.dsp.focus({ window = "address:0x55a1" })"#
+        );
+        assert_eq!(
+            lua_fullscreen_expr(&target),
+            r#"hl.dsp.window.fullscreen({ mode = "fullscreen", action = "set", window = "address:0x55a1" })"#
+        );
+        assert_eq!(
+            lua_window_move_expr(&target, "PF-1234-1"),
+            r#"hl.dsp.window.move({ monitor = "PF-1234-1", window = "address:0x55a1" })"#
+        );
+    }
+
+    /// The selector lands inside a Lua expression, so anything but Hyprland's own
+    /// address is refused before a dispatch is built.
+    #[test]
+    fn a_window_id_that_is_not_an_address_is_refused() {
+        for bad in ["", "0x", "55a1", "0x55 a1", "0x55a1\" }) os.exit() --"] {
+            assert!(window_selector(bad).is_err(), "{bad:?}");
+            assert!(window_action(crate::toplevels::WindowVerb::Focus, bad).is_err());
+            assert!(move_to_output(bad, "PF-1234-1").is_err());
+        }
     }
 
     /// Lua spellings of the resize workspace hand-off. Both dispatchers answer
