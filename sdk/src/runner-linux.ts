@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Writable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { configDir, hostFetch, publishedMgmtUrl } from "./config.js";
 import { serveHostProxy } from "./host-proxy.js";
 import type { RunnerOptions, Unit } from "./runner.js";
@@ -19,8 +19,12 @@ import {
 	grantedRoots,
 	homeLink,
 	netlinkFilter,
+	onPath,
 	type PluginManifest,
+	pastaArgv,
 	refusedRoot,
+	resolverFile,
+	sandboxCommand,
 	sandboxEnv,
 } from "./sandbox.js";
 import { forwardUi, type UiForward } from "./ui-forward.js";
@@ -98,7 +102,8 @@ export const writePluginToken = (
 /**
  * Run one plugin in its own sandbox: a child process under `bwrap`, re-executing this runner in
  * `--run-unit` mode so the plugin's code never shares an address space — or a token — with
- * another's.
+ * another's. A network plugin also needs `unshare` and pasta, which `find` looks up; without
+ * either it does not start.
  *
  * Resolves when the child exits; a non-zero exit fails the effect, which is what makes the
  * supervisor restart it with the same backoff an in-process failure gets.
@@ -108,9 +113,21 @@ export const runSandboxed = (
 	manifest: PluginManifest,
 	options: RunnerOptions,
 	log: LogSink,
+	find: (cmd: string) => string | undefined = onPath,
 ): Effect.Effect<"plugin", unknown> =>
 	Effect.callback<"plugin", unknown>((resume) => {
 		const id = manifest.id ?? unit.name;
+		let tools: { unshare: string; pasta: string } | undefined;
+		if (manifest.network) {
+			const unshare = find("unshare");
+			const pasta = find("pasta");
+			if (!unshare || !pasta) {
+				const missing = unshare ? "pasta from passt" : "unshare from util-linux";
+				resume(Effect.fail(new Error(`connect ${id} to the network: ${missing} is not on PATH`)));
+				return;
+			}
+			tools = { unshare, pasta };
+		}
 		const config = options.configDir ?? configDir();
 		const stateDir = path.join(config, "plugin-state", id);
 		adoptNestedState(stateDir, id, log);
@@ -158,26 +175,49 @@ export const runSandboxed = (
 			url,
 			fetch: ((input, init) => pinned.then((f) => f(input, init))) as typeof fetch,
 		});
-		// No network: its UI socket goes in a dir of its own, forwarded to the host's loopback.
+		// Its UI socket goes in a dir of its own, forwarded to the host's loopback.
 		let ui: { dir: string; port: number } | undefined;
 		let forward: UiForward | undefined;
-		if (!manifest.network) {
-			const dir = path.join(runtime, "punktfunk", `ui-${id}-${randomBytes(4).toString("hex")}`);
-			try {
-				fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-				forward = forwardUi(path.join(dir, "ui.sock"));
-				ui = { dir, port: forward.port };
-			} catch (e) {
-				log(`[runner] ${id}: its settings page stays unreachable — ${e}`, "warn");
-			}
+		const dir = path.join(runtime, "punktfunk", `ui-${id}-${randomBytes(4).toString("hex")}`);
+		try {
+			fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+			forward = forwardUi(path.join(dir, "ui.sock"));
+			ui = { dir, port: forward.port };
+		} catch (e) {
+			log(`[runner] ${id}: its settings page stays unreachable — ${e}`, "warn");
 		}
+		// A network plugin's resolver and its pasta's pid, in a dir no sandbox binds.
+		const net = tools
+			? path.join(runtime, "punktfunk", `net-${id}-${randomBytes(4).toString("hex")}`)
+			: undefined;
+		let stopNet: (() => void) | undefined;
 		const release = (): void => {
 			proxy.close();
 			forward?.close();
 			if (ui) fs.rmSync(ui.dir, { recursive: true, force: true });
+			if (stopNet) stopNet();
+			else if (net) fs.rmSync(net, { recursive: true, force: true });
 		};
-		const argv = [
-			...bwrapArgv(
+		if (net) {
+			try {
+				fs.mkdirSync(net, { recursive: true, mode: 0o700 });
+				const host = (() => {
+					try {
+						return fs.readFileSync("/etc/resolv.conf", "utf8");
+					} catch {
+						return "";
+					}
+				})();
+				fs.writeFileSync(path.join(net, "resolv.conf"), resolverFile(host));
+			} catch (e) {
+				release();
+				resume(Effect.fail(new Error(`prepare the network of ${id} in ${net}: ${e}`)));
+				return;
+			}
+		}
+		const [cmd, args] = sandboxCommand(
+			manifest,
+			bwrapArgv(
 				manifest,
 				{
 					stateDir,
@@ -190,22 +230,29 @@ export const runSandboxed = (
 					configDir: config,
 					homeLink: homeLink(),
 					...(ui ? { ui } : {}),
+					...(net ? { resolvConf: path.join(net, "resolv.conf") } : {}),
 				},
 				grants,
 			),
-			process.execPath,
-			...unitArgv(unit),
-		];
-		const child = spawn("bwrap", argv, {
+			tools?.unshare,
+		);
+		const child = spawn(cmd, [...args, process.execPath, ...unitArgv(unit)], {
 			env: sandboxEnv(os.homedir()),
-			// fd 3 is `--add-seccomp-fd 3`.
-			stdio: ["ignore", "inherit", "pipe", "pipe"],
+			// fd 3 is `--add-seccomp-fd 3`; a network plugin's 4 and 5 are `--info-fd` and `--block-fd`.
+			stdio: ["ignore", "inherit", "pipe", "pipe", ...(net ? (["pipe", "pipe"] as const) : [])],
 		});
 		// stderr still reaches the journal; its tail also names why the sandbox exited, since
 		// bwrap's own errors come before the plugin can ship a log line.
 		const lastLines = tailStderr(child);
 		// A bwrap that dies before reading surfaces through `exit`, not an EPIPE here.
 		(child.stdio[3] as Writable).on("error", () => {}).end(filter);
+		if (tools && net) {
+			stopNet = connectNetwork(child, tools.pasta, net, (why) => {
+				log(`[runner] ${id}: its network did not come up — ${why}`, "error");
+				stopNet?.();
+				child.kill("SIGTERM");
+			});
+		}
 		child.on("error", (e) => {
 			release();
 			resume(Effect.fail(e));
@@ -221,6 +268,100 @@ export const runSandboxed = (
 			release();
 		});
 	});
+
+/**
+ * Connect a network plugin's namespace once bwrap reports on `--info-fd` (fd 4): run pasta on
+ * `child`, which holds the namespace `unshare` made, then let the sandbox go on through
+ * `--block-fd` (fd 5). `fail` hears why the network did not come up.
+ *
+ * The returned stop ends the setup or the daemon it left and only then removes `dir`, which holds
+ * the daemon's pid file. A sandbox still blocked gets SIGKILL: until it reads fd 5 it has no
+ * parent-death signal, and a closed pipe would let it run on unsupervised.
+ */
+export const connectNetwork = (
+	child: ChildProcess,
+	pasta: string,
+	dir: string,
+	fail: (why: string) => void,
+): (() => void) => {
+	const pidFile = path.join(dir, "pasta.pid");
+	const [info, block] = (child.stdio as readonly unknown[]).slice(4) as [Readable, Writable];
+	info.on("error", () => {});
+	block.on("error", () => {});
+	let blocked: number | undefined;
+	let setup: ChildProcess | undefined;
+	let running = false;
+	let stopped = false;
+	const end = (): void => {
+		stopPasta(pidFile);
+		fs.rmSync(dir, { recursive: true, force: true });
+	};
+	const kill = (pid: number | undefined): void => {
+		try {
+			// 1 or below would signal init or a whole process group.
+			if (pid !== undefined && pid > 1) process.kill(pid, "SIGKILL");
+		} catch {
+			// Already gone.
+		}
+	};
+	let text = "";
+	const onInfo = (chunk: Buffer): void => {
+		text += chunk.toString();
+		const pid = infoPid(text);
+		if (pid === undefined || child.pid === undefined) return;
+		// bwrap is still writing: closing this end would end it on SIGPIPE, so drain to its EOF.
+		info.off("data", onInfo);
+		info.resume();
+		if (stopped) {
+			// Stopped before the report: the sandbox waits on fd 5 with no parent-death signal.
+			kill(pid);
+			return;
+		}
+		blocked = pid;
+		setup = spawn(pasta, pastaArgv(child.pid, pidFile), { stdio: ["ignore", "ignore", "pipe"] });
+		running = true;
+		const lastLines = tailStderr(setup);
+		setup.on("error", (e) => {
+			running = false;
+			if (stopped) end();
+			else fail(String(e));
+		});
+		setup.on("exit", (code, signal) => {
+			running = false;
+			if (stopped) end();
+			else if (code === 0) {
+				blocked = undefined;
+				block.end("1");
+			} else {
+				const last = lastLines();
+				fail(`pasta exited ${signal ? `on ${signal}` : `with ${code}`}${last ? `: ${last}` : ""}`);
+			}
+		});
+	};
+	info.on("data", onInfo);
+	return () => {
+		if (stopped) return;
+		stopped = true;
+		kill(blocked);
+		if (running) setup?.kill("SIGTERM");
+		else end();
+	};
+};
+
+/** The sandbox's pid in bwrap's `--info-fd` text so far. A read may end inside the number. */
+export const infoPid = (text: string): number | undefined => {
+	const pid = /"child-pid":\s*(\d+)\D/.exec(text)?.[1];
+	return pid === undefined ? undefined : Number(pid);
+};
+
+/** Stop the pasta daemon `pidFile` names. Never written, or already gone: nothing to stop. */
+const stopPasta = (pidFile: string): void => {
+	try {
+		const pid = Number(fs.readFileSync(pidFile, "utf8"));
+		// 1 or below would signal init or a whole process group.
+		if (Number.isInteger(pid) && pid > 1) process.kill(pid, "SIGTERM");
+	} catch {}
+};
 
 /** Mirror a child's stderr to ours and keep its last lines for the failure message. */
 export const tailStderr = (child: ChildProcess): (() => string) => {

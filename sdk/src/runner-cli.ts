@@ -161,7 +161,7 @@ switch (process.argv[2]) {
 const runUnit = arg("--run-unit");
 if (runUnit) {
 	const unit = { name: arg("--unit-name") ?? runUnit, file: runUnit };
-	// Set only for a plugin without network, whose UI the supervisor forwards.
+	// Set only on Linux, where the supervisor forwards every plugin's UI.
 	const uiPort = Number(process.env.PUNKTFUNK_UI_PORT);
 	if (uiPort > 0) redirectUiServe(uiPort);
 	// Set only for a Windows container, whose page goes over the host's channel on its pipe.

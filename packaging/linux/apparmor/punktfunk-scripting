@@ -33,6 +33,8 @@ profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
   pivot_root,
   # --disable-userns, inside the sandbox's own user namespace.
   @{PROC}/sys/user/max_user_namespaces w,
+  # pasta connects a network plugin's namespace through a tap device.
+  /dev/net/tun rw,
   # A bind must not carry the config dir to a path the file rules below do not cover.
   deny mount /**/.config/punktfunk{,/,/*} -> /**,
   deny mount /**/.config{,/} -> /**,
@@ -86,6 +88,7 @@ profile punktfunk-scripting-seat flags=(attach_disconnected,mediate_deleted) {
   umount,
   pivot_root,
   @{PROC}/sys/user/max_user_namespaces w,
+  /dev/net/tun rw,
   deny mount /**/.config/punktfunk{,/,/*} -> /**,
   deny mount /**/.config{,/} -> /**,
   deny mount /{,**/}home/{,*,*/} -> /**,

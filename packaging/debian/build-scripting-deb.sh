@@ -89,7 +89,7 @@ Maintainer: unom <packages@unom.io>
 Installed-Size: $INSTALLED_KB
 Section: net
 Priority: optional
-Depends: bubblewrap, punktfunk-bun (= $VERSION)
+Depends: bubblewrap, passt, util-linux, punktfunk-bun (= $VERSION)
 Homepage: https://git.unom.io/unom/punktfunk
 Description: punktfunk plugin/script runner (Effect SDK on bun)
  Runs a punktfunk host's automation: loose scripts in ~/.config/punktfunk/scripts and installed

@@ -1,6 +1,6 @@
-// A sandboxed plugin's page is no loopback listener the console can dial. On Linux without network
-// it listens on a unix socket the runner forwards a port to; in a Windows AppContainer it is served
-// over the host's channel on the plugin's pipe. Pins: `ui-forward.test.ts`, `ui-channel.test.ts`.
+// A sandboxed plugin's page is no loopback listener the console can dial. On Linux it listens on a
+// unix socket the runner forwards a port to; in a Windows AppContainer it is served over the host's
+// channel on the plugin's pipe. Pins: `ui-forward.test.ts`, `ui-channel.test.ts`.
 import * as net from "node:net";
 
 /** Where the sandbox sees the runner's UI dir. */

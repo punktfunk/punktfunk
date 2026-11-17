@@ -1,8 +1,8 @@
 // The way a sandboxed plugin reaches the host.
 //
-// A plugin runs with no network namespace of its own unless it asked for one, so it cannot dial
-// the loopback management API. The supervisor listens on a unix socket bound into each sandbox and
-// forwards what arrives to the host over the connection it already makes — the pinned TLS one.
+// A plugin's network namespace is its own, so it cannot dial the loopback management API. The
+// supervisor listens on a unix socket bound into each sandbox and forwards what arrives to the host
+// over the connection it already makes — the pinned TLS one.
 //
 // It forwards, it does not vouch: the plugin presents its OWN bearer, and a request without one is
 // refused by the host exactly as it would be on loopback. Nothing here adds a credential.

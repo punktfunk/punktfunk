@@ -637,8 +637,12 @@ in
         # covers an operator's interactive shell but NOT this unit, whose PATH is exactly this
         # list — without it the console reports a running, enabled runner as "not installed".
         ++ optional cfg.scripting.enable cfg.scripting.package
-        # Host diagnostics exec `bwrap` on THIS unit's PATH, not the runner's.
-        ++ optional cfg.scripting.enable pkgs.bubblewrap;
+        # Host diagnostics look for the sandbox's programs on THIS unit's PATH, not the runner's.
+        ++ optionals cfg.scripting.enable [
+          pkgs.bubblewrap
+          pkgs.passt
+          pkgs.util-linux
+        ];
         # Point the host at the WRAPPED encode worker (see `security.wrappers` above). The host's
         # own resolution order is PUNKTFUNK_ENCODE_WORKER -> alongside /proc/self/exe -> PATH, and
         # on NixOS the sibling of the store binary is the UNCAPPED store copy — it would run, and
@@ -756,6 +760,7 @@ in
       environment.systemPackages = [
         cfg.scripting.package
         pkgs.bubblewrap
+        pkgs.passt
       ];
 
       # The unit is the package's own (scripts/punktfunk-scripting.service); this is its drop-in.
@@ -764,11 +769,20 @@ in
         # Same scoping as the host: a root-side runner would talk to the wrong session's mgmt API.
         unitConfig.ConditionUser = userScope;
         wantedBy = optional cfg.scripting.autoStart "default.target";
-        # Each plugin runs inside its own `bwrap` sandbox, built by the runner.
-        path = [ pkgs.bubblewrap ];
+        # Each plugin runs inside its own `bwrap` sandbox, built by the runner. A network plugin's
+        # namespace comes from `unshare` and is connected by pasta.
+        path = [
+          pkgs.bubblewrap
+          pkgs.passt
+          pkgs.util-linux
+        ];
       };
       # A seat on a person's own account: its host starts this as that person.
-      systemd.user.services."punktfunk-scripting-seat@".path = [ pkgs.bubblewrap ];
+      systemd.user.services."punktfunk-scripting-seat@".path = [
+        pkgs.bubblewrap
+        pkgs.passt
+        pkgs.util-linux
+      ];
     })
 
     # --- seat supervisor -----------------------------------------------------------------------

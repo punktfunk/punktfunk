@@ -6,13 +6,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	bwrapArgv,
+	DNS_FORWARD,
 	expandHome,
 	grantedRoots,
 	homeLink,
 	netlinkFilter,
 	type PluginManifest,
+	pastaArgv,
 	readManifest,
 	refusedRoot,
+	resolverFile,
+	sandboxCommand,
 	sandboxEnv,
 	sandboxProbe,
 } from "../src/sandbox.js";
@@ -439,19 +443,42 @@ describe("bwrapArgv", () => {
 		expect(all.map(([src]) => src)).not.toContain("/home/u/.config/punktfunk");
 	});
 
-	test("no network unless the manifest asked for one", () => {
-		expect(bwrapArgv(manifest(), paths)).not.toContain("--share-net");
-		expect(bwrapArgv(manifest({ network: true }), paths)).toContain("--share-net");
+	test("no plugin shares the host's network namespace", () => {
+		for (const network of [false, true]) {
+			expect(bwrapArgv(manifest({ network }), paths)).not.toContain("--share-net");
+		}
+		const [cmd, args] = sandboxCommand(manifest(), bwrapArgv(manifest(), paths));
+		expect(cmd).toBe("bwrap");
+		expect(args).not.toContain("--share-net");
+		// A network plugin's bwrap shares the namespace `unshare --net` made: bare, it would get
+		// every loopback listener and abstract socket on the box.
+		const net = manifest({ network: true });
+		const [holder, wrapped] = sandboxCommand(net, bwrapArgv(net, paths), "/usr/bin/unshare");
+		expect(holder).toBe("/usr/bin/unshare");
+		const bwrap = wrapped.indexOf("bwrap");
+		expect(wrapped.slice(0, bwrap)).toEqual(["--map-current-user", "--net", "--"]);
+		expect(wrapped.lastIndexOf("--share-net")).toBeGreaterThan(wrapped.indexOf("--unshare-all"));
+		// It waits on fd 5 until pasta has connected the namespace bwrap reports on fd 4.
+		expect(wrapped.join(" ")).toContain("--info-fd 4 --block-fd 5");
+		expect(args.join(" ")).not.toContain("--block-fd");
 	});
 
-	test("without network the UI gets the runner's socket dir and port", () => {
+	test("every plugin's UI gets the runner's socket dir and port", () => {
 		const ui = { dir: "/run/user/1000/punktfunk/ui-demo-ab12", port: 41234 };
-		const argv = bwrapArgv(manifest(), { ...paths, ui }).join(" ");
-		expect(argv).toContain(`--bind ${ui.dir} /run/punktfunk/ui`);
-		expect(argv).toContain("--setenv PUNKTFUNK_UI_PORT 41234");
-		// A plugin on the host's network serves its UI on the host's loopback itself.
-		const shared = bwrapArgv(manifest({ network: true }), { ...paths, ui }).join(" ");
-		expect(shared).not.toContain("PUNKTFUNK_UI_PORT");
+		for (const network of [false, true]) {
+			const argv = bwrapArgv(manifest({ network }), { ...paths, ui }).join(" ");
+			expect(argv).toContain(`--bind ${ui.dir} /run/punktfunk/ui`);
+			expect(argv).toContain("--setenv PUNKTFUNK_UI_PORT 41234");
+		}
+	});
+
+	test("a network plugin resolves through pasta's DNS forward", () => {
+		const resolvConf = "/run/user/1000/punktfunk/net-demo-ab12/resolv.conf";
+		const argv = bwrapArgv(manifest({ network: true }), { ...paths, resolvConf });
+		// After the base's own bind of the host's file, so this one is what the plugin reads.
+		const at = argv.findIndex((a, i) => a === "--ro-bind" && argv[i + 1] === resolvConf);
+		expect(argv[at + 2]).toBe("/etc/resolv.conf");
+		expect(at).toBeGreaterThan(argv.indexOf("/etc/resolv.conf"));
 	});
 
 	test("grants bind read-only by default and writable only when they say so", () => {
@@ -641,6 +668,28 @@ describe("sandboxProbe", () => {
 			"linux",
 		);
 		expect(!execFail.ok && execFail.reason).toContain("execvp");
+	});
+});
+
+describe("pastaArgv", () => {
+	test("forwards no port and maps no address to the host's loopback", () => {
+		const argv = pastaArgv(4242, "/run/user/1000/punktfunk/net-demo-ab12/pasta.pid");
+		expect(argv).toContain("--no-map-gw");
+		for (const flag of ["-t", "-u", "-T", "-U"]) {
+			expect(argv[argv.indexOf(flag) + 1]).toBe("none");
+		}
+		expect(argv.join(" ")).toContain(`--dns-forward ${DNS_FORWARD}`);
+		expect(argv.at(-1)).toBe("4242");
+	});
+});
+
+describe("resolverFile", () => {
+	test("keeps the host's search domains and names only the forward", () => {
+		const host = "# resolved\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch lan tail1.ts.net\n";
+		expect(resolverFile(host)).toBe(
+			`options edns0 trust-ad\nsearch lan tail1.ts.net\nnameserver ${DNS_FORWARD}\n`,
+		);
+		expect(resolverFile("")).toBe(`nameserver ${DNS_FORWARD}\n`);
 	});
 });
 

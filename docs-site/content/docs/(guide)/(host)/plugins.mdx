@@ -116,8 +116,9 @@ A bare name installs the first-party package from Punktfunk's registry: `playnit
 
 Each plugin runs in a sandbox of its own: no network unless it declared one, and only the folders
 it declared plus the ones you allowed. It can change only its own library entries. On **Linux** the
-sandbox needs `bubblewrap`, which the packages install, and unprivileged user namespaces. On
-**Windows** it is an AppContainer under the `NT AUTHORITY\LocalService` account, which can read
+sandbox needs `bubblewrap`, which the packages install, and unprivileged user namespaces. A plugin
+that uses the network also needs `passt`, which the packages install too; it reaches the internet
+and your LAN, but nothing listening on the host's own loopback. On **Windows** it is an AppContainer under the `NT AUTHORITY\LocalService` account, which can read
 Program Files but not user profiles or other drives. Still, a plugin is code on your host: install
 only plugins you trust.
 

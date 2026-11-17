@@ -341,6 +341,24 @@ let
       );
     }
     {
+      # A network plugin's namespace comes from `unshare`, and pasta connects it. Without either
+      # on PATH that plugin does not start; a seat's runner runs network plugins too.
+      name = "the plugin runner can connect a network plugin";
+      ok =
+        lib.all
+          (
+            unit:
+            lib.all (pkg: builtins.any (p: lib.hasInfix pkg (toString p)) (unit.path or [ ])) [
+              "passt"
+              "util-linux"
+            ]
+          )
+          [
+            appliance.systemd.user.services.punktfunk-scripting
+            appliance.systemd.user.services."punktfunk-scripting-seat@"
+          ];
+    }
+    {
       # Since the library scanners became plugins, a runner that is off means an EMPTY LIBRARY and
       # no obvious reason why — which is why deb+rpm `systemctl --global enable` it.
       name = "the plugin runner is started by default, like every other channel";

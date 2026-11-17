@@ -212,6 +212,9 @@ punktfunk-bun. Enable with `systemctl --user enable --now punktfunk-web`.
 Summary:        punktfunk plugin/script runner (Effect SDK on bun)
 # Each plugin runs in its own bwrap sandbox; without it the runner starts no plugin at all.
 Requires:       bubblewrap
+# A network plugin's namespace comes from unshare, and pasta connects it.
+Requires:       passt
+Requires:       util-linux
 # Runtime is BUN — the runner import()s the operator's .ts plugin files, which only bun can do —
 # from punktfunk-bun, pinned to this exact build. The runner itself is bundled to ONE
 # self-contained JS (effect + SDK inlined), so no node_modules ship.
