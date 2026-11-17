@@ -47,9 +47,9 @@ that's the walkthrough to hand a user. Packager-side facts:
   and every box verifies it happily. `punktfunk-sysext` refuses a manifest that is unbound, is
   bound to a different feed, or whose serial is below the highest it has accepted (persisted per
   feed in `/var/lib/extensions/.punktfunk.serial-floor`, which survives `remove` on purpose).
-  `publish-sysext-feed.sh` stamps both on every publish; a feed published before binding existed
-  is bound by its next publish, or now with
-  `TOKEN=… bash packaging/bazzite/publish-sysext-feed.sh --seal f<ver>[-canary]`.
+  `publish-sysext-feed.sh` stamps both on every publish. It carries image lines and the serial
+  only from a live manifest that verifies against `FEED_KEY` and names the same feed, and stops
+  on any other, so a registry token alone can't get a line signed.
 - The image embeds `ID=fedora` + `VERSION_ID` (matched through Bazzite's `ID_LIKE`), so after a
   major rebase the old image is refused instead of merging soname-broken binaries; feeds exist
   per Fedora major, from the same CI matrix as the RPM groups. `post-install` keeps the script at

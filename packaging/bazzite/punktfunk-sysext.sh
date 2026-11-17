@@ -165,8 +165,8 @@ fetch_manifest() {
   if [ -z "$got" ] || [ -z "$serial" ]; then
     echo "!! the feed $feed is signed but UNBOUND: its manifest carries no '# FEED'/'# SERIAL'" >&2
     echo "!! header, so the signature says nothing about which feed or which publish it covers." >&2
-    echo "!! (a feed published before binding existed; it is bound on the next publish, or now with" >&2
-    echo "!!  TOKEN=… bash packaging/bazzite/publish-sysext-feed.sh --seal $want)" >&2
+    echo "!! (a feed published before binding existed; the publisher won't carry it: delete its" >&2
+    echo "!!  SHA256SUMS and SHA256SUMS.asc from the registry, then publish to $want again)" >&2
     return 1
   fi
   if [ "$got" != "$want" ]; then
