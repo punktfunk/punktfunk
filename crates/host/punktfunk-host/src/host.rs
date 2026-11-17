@@ -348,7 +348,15 @@ pub fn serve(
              PAKE with its own device key, which is what proves it — the published hash does not."
         );
     }
-    let rt = tokio::runtime::Runtime::new().context("build tokio runtime")?;
+    // Input, QUIC datagrams and control messages cross these threads on their way to the
+    // session's own: they run a step above a game, as send does.
+    #[cfg(target_os = "linux")]
+    pf_inject::set_thread_boost(|| pf_frame::thread_qos::boost_thread_priority(false));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .on_thread_start(pf_frame::thread_qos::raise_pool_thread)
+        .build()
+        .context("build tokio runtime")?;
     rt.block_on(async move {
         // rustls needs a process-wide crypto provider before any TLS config is built.
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();

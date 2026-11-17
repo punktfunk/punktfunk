@@ -278,8 +278,9 @@ pub(crate) struct UsbipAttachment {
 }
 
 impl UsbipAttachment {
-    /// Starts the thread that reads `relay`: outputs queue for [`outputs`](Self::outputs),
-    /// audio goes straight to `audio`, so neither waits for the input loop.
+    /// Starts the thread that reads `relay`, raised by the [`crate::set_thread_boost`] hook:
+    /// outputs queue for [`outputs`](Self::outputs), audio goes straight to `audio`, so neither
+    /// waits for the input loop.
     fn linked(
         vhci_port: u16,
         client_sock: Option<TcpStream>,
@@ -296,6 +297,7 @@ impl UsbipAttachment {
             std::thread::Builder::new()
                 .name("pf-usbip-pad".into())
                 .spawn(move || {
+                    crate::boost_this_thread();
                     read_outputs(&relay, &pending, audio.as_ref());
                     alive.store(false, Ordering::Relaxed);
                 })

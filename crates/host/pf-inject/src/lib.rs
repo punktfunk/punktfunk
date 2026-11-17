@@ -773,6 +773,21 @@ mod pad_driver_verdict_tests {
     }
 }
 
+static THREAD_BOOST: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Install the call this crate's input threads make first to raise their own priority: input
+/// waits on them. First caller wins; later calls are ignored.
+pub fn set_thread_boost(boost: fn()) {
+    let _ = THREAD_BOOST.set(boost);
+}
+
+/// Run the [`set_thread_boost`] hook on the calling thread, if one is installed.
+pub(crate) fn boost_this_thread() {
+    if let Some(boost) = THREAD_BOOST.get() {
+        boost();
+    }
+}
+
 #[path = "inject/service.rs"]
 mod service;
 pub use service::InjectorService;

@@ -80,7 +80,10 @@ impl InputInjector for LibeiInjector {
     }
 }
 
+/// Runs the EI session on this thread, raised by the [`crate::set_thread_boost`] hook: every
+/// event the injector sends wakes it.
 fn worker(rx: UnboundedReceiver<InputEvent>, source: EiSource) {
+    crate::boost_this_thread();
     // Shared, never dropped (`pf_portal`): the session's bus connection reads on it until
     // the session closes.
     let rt = match pf_portal::portal_runtime() {
