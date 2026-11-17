@@ -19,7 +19,7 @@ punktfunk-core = { path = "../../core/punktfunk-core", default-features = false 
 # `default-features = false`: the PyroWave decode backend is turned on through THIS crate's own
 # `pyrowave` feature (which re-exports it below), never by inheriting the dependency's default.
 # Otherwise a consumer that deliberately builds us without `pyrowave` still drags the vendored
-# C++ in — fatal on Windows ARM64, where Granite has no SIMD path.
+# C++ in — fatal on Windows ARM64 under MSVC, where Granite has no SIMD path.
 pf-client-core = { path = "../pf-client-core", default-features = false, features = ["desktop"] }
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "serde"] }
 # The in-stream notices and hints.

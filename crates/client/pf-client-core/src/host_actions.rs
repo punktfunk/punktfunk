@@ -101,7 +101,8 @@ pub fn fetch_actions(
 
 /// `POST /api/v1/actions/{id}` with an empty body.
 ///
-/// `Ok(())` is 202 Accepted (any 2xx): the host then ends every session and acts ~1 s later.
+/// `Ok(())` is 202 Accepted (any 2xx): the host then ends every session and acts at least 1 s
+/// later, up to about 11 s while seats and displays drain.
 /// Any other status becomes [`crate::library::LibraryError::Http`].
 #[cfg(desktop)]
 pub fn invoke(

@@ -297,9 +297,9 @@ impl ConsoleOptions {
 
 /// Skia GPU resource-cache ceiling (not an allocation), bytes.
 ///
-/// 160 MB, above a full-grid working set (~100 MB of covers): a budget under that set evicts
-/// covers the next frame draws again, and the render thread re-decodes them. A TV box passes
-/// its own through [`ConsoleOptions::gpu_cache_bytes`].
+/// 160 MB, above a 1440p screenful (~107 MB of covers plus ~25 MB of render targets): a
+/// budget under that set evicts covers the next frame draws again, and the render thread
+/// re-decodes them. A TV box passes its own through [`ConsoleOptions::gpu_cache_bytes`].
 pub const DEFAULT_GPU_CACHE_BYTES: usize = 160 << 20;
 
 /// The floor a host should keep [`ConsoleOptions::gpu_cache_bytes`] above, bytes. Nothing
@@ -309,8 +309,7 @@ pub const DEFAULT_GPU_CACHE_BYTES: usize = 160 << 20;
 /// scale a 1080p surface gives. Under that the cache evicts covers it is about
 /// to draw again and the next frame re-decodes them on the render thread, which
 /// on a television costs more than the frame. 96 MB leaves that ~30% of room.
-/// It is a ceiling, not an allocation, and the shell hands its covers back
-/// before a stream takes the GPU.
+/// It is a ceiling, not an allocation.
 pub const MIN_GPU_CACHE_BYTES: usize = 96 << 20;
 
 /// The full-screen card that owns input: the connect's phase, else the wake card, else the

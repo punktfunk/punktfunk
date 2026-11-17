@@ -497,7 +497,7 @@ mod os {
     //! SDL's clipboard belongs to the main thread, where the presenter pumps events. Reads and
     //! writes run there through `SDL_RunOnMainThread`; this thread waits on a channel, never on
     //! SDL, because `end_session` joins it. Changes arrive only as events: an event watch
-    //! counts them and keeps the mime list. SDL drops the Wayland/X11 echo of its own
+    //! counts them and keeps the mime list. SDL 3.4 drops the Wayland/X11 echo of its own
     //! selection and reports `SDL_SetClipboardData` synchronously, inside `set`, so the
     //! counter already includes our write when `set` returns.
 

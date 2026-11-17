@@ -1,7 +1,7 @@
 //! Focus on the element tree: which target a direction reaches, and the plate behind it.
 //!
-//! Search follows the tvOS focus engine: of the targets ahead in the direction, one that
-//! overlaps the current target across the axis wins, then the nearest, then the most
+//! Search, modelled on the tvOS focus engine: of the targets ahead in the direction, one
+//! that overlaps the current target across the axis wins, then the nearest, then the most
 //! centred. A [`Group`] is searched before the rest of the tree along the axes it holds;
 //! a group with an id hands focus back to the child it last had.
 //!

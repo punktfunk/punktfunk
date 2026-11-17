@@ -15,8 +15,8 @@
 //! local connections.
 //!
 //! A flatpak's `/tmp/.X11-unix` is a private tmpfs that no `--filesystem` grant
-//! fills, so there the abstract socket, open through `--share=network`, is the
-//! only way to the root ctx.
+//! fills (flatpak 1.18), so there the abstract socket, open through
+//! `--share=network`, is the only way to the root ctx.
 //!
 //! Best-effort: no gamescope or no X means "no signal" and fails open (forward
 //! as before). A session that has gamescope but no reachable root says so once.

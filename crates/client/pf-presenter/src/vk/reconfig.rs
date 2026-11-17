@@ -21,9 +21,9 @@ pub(super) enum Applied {
     Dropped,
 }
 
-/// NVIDIA proprietary still fails `vkCreateSwapchainKHR` after a successful
-/// enumerate — it wants `vkAcquireDrmDisplayEXT`, which SDL's KMSDRM surface
-/// does not. Empty on other backends. `drm_card` is the knob's raw value.
+/// NVIDIA proprietary fails `vkCreateSwapchainKHR` under SDL's KMSDRM surface even after a
+/// successful enumerate; SDL never calls `vkAcquireDrmDisplayEXT`. Empty on other backends.
+/// `drm_card` is the knob's raw value.
 fn kmsdrm_swapchain_hint(drm_card: Option<&str>) -> String {
     let kmsdrm = std::env::var("SDL_VIDEODRIVER").is_ok_and(|v| v.eq_ignore_ascii_case("kmsdrm"));
     if !kmsdrm {

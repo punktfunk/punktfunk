@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Covers a screen keeps decoded, and how many places past the first drawn one it decodes.
-/// At [`ART_CACHE_W`] each raster is ~0.7 MB of RAM, plus ~1.3 MB uploaded.
+/// At [`ART_CACHE_W`] each raster with its mips is ~0.7 MB of RAM, and its texture as much
+/// again; ~1.3 MB each at a 1080p TV's k = 1.35.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ArtBudget {
     pub(super) held: usize,
@@ -127,7 +128,7 @@ type ArtDone = (String, Option<crate::library::DecodedPoster>);
 pub(super) const DECODE_QUEUE: usize = 16;
 
 /// A screen's covers decoded off the thread that draws: one worker, started on first use and
-/// stopped with the screen. A TV spends 15–90 ms on one cover, a dropped frame each on the
+/// stopped with the screen. A TV can spend ~90 ms on one cover, a dropped frame each on the
 /// render thread, and a screen that only has a cover's bytes must decode it itself.
 #[derive(Default)]
 pub(crate) struct ArtDecoder {

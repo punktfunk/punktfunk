@@ -619,7 +619,8 @@ pub const PUNKTFUNK_CODEC_H264: u8 = 0x01;
 pub const PUNKTFUNK_CODEC_HEVC: u8 = 0x02;
 /// Codec bit: AV1.
 pub const PUNKTFUNK_CODEC_AV1: u8 = 0x04;
-/// PyroWave. Never auto-selected; pass it as `preferred_codec` (`design/pyrowave-codec-plan.md`).
+/// PyroWave. Off the codec ladder: chosen only as `preferred_codec`, or by the host's Encoder
+/// pin for a client that names none (`design/pyrowave-codec-plan.md`).
 pub const PUNKTFUNK_CODEC_PYROWAVE: u8 = 0x08;
 
 /// Host-capability bit: the host applies gamepad-state snapshots (a capable client

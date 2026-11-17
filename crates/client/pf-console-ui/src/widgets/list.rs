@@ -709,8 +709,7 @@ impl MenuList {
 
     /// True while an entrance, ease, or spring is still moving. The damage-gated
     /// stream overlay redraws until this is false; the console paints every frame.
-    // Unused on Android, and on any build without the Vulkan overlay — the wasm console is the
-    // second of those.
+    // `Ring::damage` reads this on every target; nothing here is dead code.
     #[cfg_attr(
         any(target_os = "android", not(feature = "vulkan-overlay")),
         allow(dead_code)

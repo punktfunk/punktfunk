@@ -30,7 +30,7 @@ const LONG_PRESS_MS: f64 = 500.0;
 /// Q24.8 wire units per DIP of two-finger pan — `delta` is DIP × 256.
 const SCROLL_UNITS_PER_DIP: f32 = 256.0;
 /// Degrees of two-finger twist before the quick-action ring arms. Natural scrolls
-/// rotate a few degrees; much below 8° two-finger scrolling gets flaky.
+/// rotate a few degrees; a smaller twist stays a scroll.
 const DIAL_ARM_DEG: f32 = 10.0;
 /// Degrees at which the ring stays open after lift.
 const DIAL_COMMIT_DEG: f32 = 30.0;
@@ -666,7 +666,7 @@ const LOGICAL_PPI: f32 = 160.0;
 
 /// The view in tenths of a millimetre, from its window pixels and display scale at
 /// [`LOGICAL_PPI`]. A Steam Deck (1280×800 at scale 1) reads 203×127 mm; its panel is
-/// 151×94 mm, so the host sees strokes 1.35× as long.
+/// 151×94 mm (LCD) or 159×100 mm (OLED), so the host sees strokes 1.27–1.35× as long.
 pub fn view_dmm(px: (u32, u32), scale: f32) -> (u16, u16) {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale

@@ -28,9 +28,8 @@ pub struct DecodeHealth {
     /// Not damaged/refused/failed: the stream was fine and a picture showed, so
     /// this must not extend [`Self::run`]. Structurally 0 without a deliverable queue.
     pub dropped: u64,
-    /// Per-op decode-status queries (`queryResultStatusSupport`). False on RADV
-    /// (a query hangs the VCN ring); [`Self::failed`] then stays 0. Distinguishes
-    /// clean from unmeasured.
+    /// Per-op decode-status queries (`queryResultStatusSupport`). False on RADV's decode
+    /// family (Mesa 26.0); [`Self::failed`] then stays 0. Distinguishes clean from unmeasured.
     pub status_queries: bool,
 }
 

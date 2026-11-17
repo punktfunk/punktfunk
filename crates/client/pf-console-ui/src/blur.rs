@@ -1,7 +1,6 @@
 //! Progressive backdrop treatment behind pinned text: what lies under a chrome band
-//! softens with depth into the band, as the Apple client's Glur tray does — σ grows
-//! linearly from nothing at the content edge toward full strength 60 % into the band
-//! plus its overhang past the glass (Glur's `interpolation: 0.6` over an 80 pt bleed).
+//! softens with depth into the band — σ grows linearly from nothing at the content edge
+//! toward full strength 60 % into the band plus its overhang past the glass.
 //!
 //! Explicit surfaces, not an image-filter graph: the band is copied out once, halved
 //! twice (a true box filter down to quarter size), blurred there by two separable
@@ -128,9 +127,8 @@ pub struct Band {
     pub clear: f32,
     /// Full-strength σ.
     pub sigma: f32,
-    /// How far past `edge` the band notionally runs on. Glur's tray bleeds 80 pt past
-    /// the screen, so its ramp reaches full strength 60 % into that longer span and a
-    /// visible band never quite gets there: a gentler rise than a ramp cut at the glass.
+    /// How far past `edge` the band notionally runs on. The ramp reaches full strength
+    /// 60 % into that longer span, a gentler rise than a ramp cut at the glass.
     pub over: f32,
 }
 

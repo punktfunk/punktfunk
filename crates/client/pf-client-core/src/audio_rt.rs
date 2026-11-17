@@ -4,13 +4,13 @@
 //! descheduled past ring depth is an underrun; a late wake on the presenter is a missed
 //! refresh, and on the present-wait waiter a wrong on-glass stamp.
 //!
-//! Linux, first success wins: `setpriority(-10)` (needs `RLIMIT_NICE`; a no-op when the limit
-//! is 0); then the Realtime portal when `/.flatpak-info` exists (rtkit looks up `/proc/<pid>`
-//! with sandbox numbers and gets ENOENT); otherwise rtkit `MakeThreadHighPriorityWithPID` on
-//! the system bus. Polkit `acquire-high-priority` allows the user's session and session-less
-//! user services, not ssh. Never `setcap`: KWin cannot read a capped process's
-//! `/proc/<pid>/exe`. Never `SCHED_RR`: realtime can preempt the compositor
-//! (`pf_frame::thread_qos`). Nice is enough.
+//! Linux, first success wins: `setpriority(-10)` (needs `RLIMIT_NICE` ≥ 30, else EACCES); then
+//! the Realtime portal when `/.flatpak-info` exists (rtkit looks up `/proc/<pid>` with sandbox
+//! numbers and gets ENOENT); otherwise rtkit `MakeThreadHighPriorityWithPID` on the system bus.
+//! Polkit `acquire-high-priority` (rtkit 0.14, polkit 127) allows a local seat session and a
+//! session-less user service whose user's display session is local; not ssh. Never `setcap`:
+//! KWin cannot read a capped process's `/proc/<pid>/exe`. Never `SCHED_RR`: realtime can preempt
+//! the compositor (`pf_frame::thread_qos`). Nice is enough.
 //!
 //! Windows: MMCSS "Pro Audio" plus `THREAD_PRIORITY_HIGHEST`. The MMCSS handle is leaked
 //! (thread-lifetime; the OS reverts at exit), matching `pf_frame::session_tuning::on_hot_thread`.

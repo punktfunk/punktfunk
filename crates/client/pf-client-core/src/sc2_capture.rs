@@ -21,7 +21,7 @@ use std::time::Duration;
 const READ_TIMEOUT_MS: i32 = 4;
 
 /// `SETTING_ENABLE_RAW_JOYSTICK` off: a pad left in raw mode reports ADC stick values that
-/// read as a few percent of travel. Steam sends the same at init; SDL does not.
+/// read as a few percent of travel. SDL does not send it.
 const NORMALIZE_JOYSTICKS: [u8; 64] = {
     let mut r = [0u8; 64];
     r[0] = 0x01; // feature report id
@@ -85,8 +85,8 @@ pub(crate) fn raw_model(pref: GamepadPref, declared: GamepadPref, pid: u16) -> O
 const CLASSIC_HOST_COMMANDS: [u8; 6] = [0x87, 0x8F, 0x9F, 0xB6, 0xC1, 0xCE];
 
 /// Feature commands the host never sends a Triton: lizard mode off and on, and the factory
-/// settings. Mirrors `pf_driver_proto::triton::forwards_to_pad`. The repo names no other
-/// command that rewrites the pad, so nothing else is held back.
+/// settings. Mirrors `pf_driver_proto::triton::forwards_to_pad`; every other command reaches
+/// the pad.
 const TRITON_HELD_BACK: [u8; 3] = [0x81, 0x85, 0x8E];
 
 /// Why a report from the host must not reach the pad, or `None` to write it. A host that

@@ -14,8 +14,8 @@ pub const AUDIO_FORMAT_LOSSLESS_48: &str = "lossless48";
 /// PCM 88.2 kHz / 24-bit (~4.2 Mbps).
 pub const AUDIO_FORMAT_LOSSLESS_882: &str = "lossless882";
 
-/// PCM 96 kHz / 24-bit (~4.6 Mbps). The host declines if capture is not 96 kHz; it does
-/// not upsample.
+/// PCM 96 kHz / 24-bit (~4.6 Mbps). The host falls back to Opus unless its capture runs at
+/// 96 kHz or above; it does not upsample.
 pub const AUDIO_FORMAT_LOSSLESS_96: &str = "lossless96";
 
 /// PCM 176.4 kHz / 24-bit (~8.5 Mbps).

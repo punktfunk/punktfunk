@@ -934,8 +934,8 @@ impl NativeLane {
         view: (u32, u32),
         fit: VideoFit,
     ) -> bool {
-        // KWin 6.7 answers no P010 frame carrying a PQ description, so PQ waits for a
-        // compositor that has already scanned SDR frames out.
+        // KWin 6.7 with AMD answers no P010 frame carrying a PQ description, so PQ waits
+        // for a compositor that has already scanned SDR frames out.
         if self.dead || (color.is_pq() && !(self.hdr_capable() && self.scans_out())) {
             return false;
         }
@@ -1192,7 +1192,7 @@ impl NativeLane {
 
     /// A refused import of a listed pair retires the lane for the session.
     pub fn refused(&mut self, fourcc: u32, modifier: u64) {
-        // NVIDIA under Mutter refuses every YUV import: expected, so not a warning.
+        // NVIDIA (615) under Mutter 50 refuses every YUV import: expected, so not a warning.
         tracing::info!(
             fourcc = format!("{fourcc:#010x}"),
             modifier = format!("{modifier:#x}"),

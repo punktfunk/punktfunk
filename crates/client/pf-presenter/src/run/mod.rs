@@ -512,11 +512,10 @@ fn capture_mut(stream: &mut Option<StreamState>) -> Option<&mut Capture> {
 
 /// One event, waiting up to `timeout` for it.
 ///
-/// SDL's wait rounds what is left of a timeout to whole milliseconds: on Windows a wait
-/// under 2 ms returns at once and a loop holding a frame for its due time spins a core,
-/// on Linux it oversleeps the hold by up to a millisecond. Those waits sleep here in
-/// half-millisecond slices: that is how long an arriving frame or a key can wait to be
-/// seen while one is held.
+/// The sdl3 crate floors a timeout to whole milliseconds and SDL's Windows wait floors what is
+/// left again, so a wait under 2 ms returns early (at once on Windows) and a loop holding a
+/// frame for its due time spins a core. Those waits sleep here in half-millisecond slices:
+/// that is how long an arriving frame or a key can wait to be seen while one is held.
 fn wait_event(pump: &mut sdl3::EventPump, timeout: Duration) -> Option<Event> {
     const SLICE: Duration = Duration::from_micros(500);
     if !timeout.is_zero() && timeout < Duration::from_millis(2) {

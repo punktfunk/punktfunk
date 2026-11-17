@@ -1,6 +1,6 @@
 //! Skia console UI: one shell — home, library, settings, add-host, pairing —
 //! drawn onto whatever `skia_safe::Canvas` a host hands it. Design:
-//! `linux-client-rearchitecture.md`, `android-skia-console-port.md`.
+//! `android-skia-console-port.md`, `console-ui-element-layer.md`.
 //!
 //! Hosts sit on the portable [`Console`] driver, among them:
 //! - the Vulkan session's [`SkiaOverlay`] (feature `vulkan-overlay`) — an

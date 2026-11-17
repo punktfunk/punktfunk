@@ -165,7 +165,7 @@ unsafe fn write_cstr(out: *mut c_char, cap: usize, s: &str) -> bool {
         return false;
     }
     // SAFETY: `out` is non-null and writable for `cap` > `s.len()` bytes; `s` is Rust memory
-    // and cannot overlap it. `.cast()`: `c_char` is i8 on x86_64 and u8 on aarch64.
+    // and cannot overlap it. `.cast()`: `c_char` is i8 or u8, by target.
     unsafe {
         ptr::copy_nonoverlapping(s.as_ptr(), out.cast::<u8>(), s.len());
         out.add(s.len()).write(0);

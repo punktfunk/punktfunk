@@ -1111,7 +1111,7 @@ mod tests {
     fn an_edit_keeps_an_unparsable_store_beside_the_new_one() {
         let _guard = crate::trust::store_health_lock();
         let path = scratch_store("hosts-unparsable");
-        // UTF-16 with a BOM: how Notepad re-saves a UTF-8 file.
+        // UTF-16 with a BOM: a store an editor re-saved in another encoding.
         let utf16: Vec<u8> = "\u{feff}{\"hosts\":[]}"
             .encode_utf16()
             .flat_map(u16::to_le_bytes)

@@ -637,8 +637,8 @@ mod tests {
     ///
     /// `(192, 128, 64)` is the only bar that can fail a limited↔full mismatch.
     /// Saturated bars clamp at [0, 1], so the 709-FULL fixture with the wrong
-    /// range has max error 0. 50% grey is 3 (inside ±4). Off-neutral mid-tone
-    /// is 11, and it exercises chroma scale too.
+    /// range has max error 0. 50% grey is 2 (inside ±4). Off-neutral mid-tone
+    /// is 10, and it exercises chroma scale too.
     const BARS: [(u8, u8, u8); 9] = [
         (255, 255, 255),
         (255, 255, 0),

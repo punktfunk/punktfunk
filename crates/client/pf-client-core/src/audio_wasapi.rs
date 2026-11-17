@@ -678,7 +678,7 @@ fn mic_thread(
     let device = pick_device(&enumerator, &Direction::Capture, "PUNKTFUNK_AUDIO_SOURCE")
         .context("capture endpoint (no microphone?)")?;
     let mut audio_client = device.get_iaudioclient().context("IAudioClient")?;
-    // Communications category is the only way a driver/APO echo canceller engages.
+    // Communications category: the mode a driver/APO echo canceller usually runs in.
     // Must precede Initialize (`SetClientProperties` is pre-init). Best-effort without
     // IAudioClient2. Opt-out is `aec_enabled`.
     if aec_enabled(echo_cancel) {

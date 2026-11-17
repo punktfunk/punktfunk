@@ -221,8 +221,8 @@ pub(crate) fn is_unpositioned(positions: &[String]) -> bool {
 /// headphone jack. First match wins (v1: one pad).
 ///
 /// Public four-channel sinks beat the hidden `Audio/Sink/Internal` parent. On UCM
-/// split cards the parent is `AUX0..AUX3` with AUX0 dead / AUX1 = speaker, so
-/// index-exact speaker-on-0/1 throws away the left speaker. The public
+/// split cards the parent is `AUX0..AUX3` and the speaker plays AUX1 only (AUX0 is
+/// headphone-left), so index-exact speaker-on-0/1 throws away the left speaker. The public
 /// `SpeakerHaptic` sink folds 0/1 onto AUX1 and passes the coils. Pro Audio's
 /// public `AUX` quad is caught first.
 #[cfg(any(target_os = "linux", test))]
@@ -271,7 +271,8 @@ pub(crate) struct CardProfile {
     pub(crate) index: u32,
     pub(crate) name: String,
     pub(crate) description: String,
-    /// `SPA_PARAM_PROFILE_available` ≠ `no`. Selecting `no` leaves the card where it was.
+    /// `SPA_PARAM_PROFILE_available` ≠ `no`. ACP marks a profile `no` when every port of one
+    /// direction is unavailable (an unplugged jack), yet still switches to it (PipeWire 1.6).
     pub(crate) available: bool,
 }
 
