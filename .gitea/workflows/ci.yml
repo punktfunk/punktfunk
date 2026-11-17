@@ -3,8 +3,8 @@
 # libcuda link stub, pinned-channel rustup) so the workspace links the
 # same libs as the dev boxes. Builder images come from the LAN registry on home-ci-core
 # (content-keyed, docker.yml) — never the WAN. Apple client CI lives in apple.yml (macOS
-# runner). The report-only benchmarks moved to bench.yml (nightly + dispatch) so they stop
-# occupying a fleet slot on every push.
+# runner). The report-only benchmarks live in bench.yml (nightly + dispatch) so they do not
+# occupy a fleet slot on every push.
 name: ci
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
@@ -31,7 +31,7 @@ on:
 #
 # RUSTC_WRAPPER covers RUST compilations and nothing else. The C/C++ half of this workspace —
 # aws-lc-sys, openh264-sys2's vendored C++, the CMake-built libopus behind opusic-sys, pyrowave —
-# was paid in full on every run until the CMAKE_*_COMPILER_LAUNCHER / CC_* wiring below existed.
+# goes through the CMAKE_*_COMPILER_LAUNCHER / CC_* wiring below.
 # Linking is the third phase and is cacheable by nothing: that one is addressed in the builder
 # images with mold (ci/cargo-config-mold.toml).
 env:
@@ -157,7 +157,7 @@ jobs:
       # is exactly what absorbs the shaderc-vs-glslang generator difference; every instruction, ID
       # and constant must match.
       #
-      # Only shaders whose rebuild command is plain `glslangValidator -V` belong here. The four
+      # Only shaders whose rebuild command is plain `glslangValidator -V` belong here. The
       # pf-client-video blobs are compiled by their build.sh with `glslc -O`, so gating them would
       # pin this diff to CI's spirv-opt version and go red on a toolchain bump, not on drift.
       #
@@ -239,7 +239,6 @@ jobs:
       # rust-safety WP2c: three textual gates for classes no lint covers — unsafe fn markers
       # carrying no contract, panic across an extern boundary (an abort since 1.81), and
       # process-global safe APIs (env::set_var & co, count-ratcheted). Pure grep/awk, no cargo.
-      # Both failure modes were demonstrated before this became blocking (planted instances).
       - name: Unsafe-hygiene grep gates
         run: sh scripts/ci/check-unsafe-hygiene.sh
 
@@ -278,8 +277,7 @@ jobs:
           python3 scripts/ci/check-host-layers.py
 
       # The plugin runner's unit replaces the home with a tmpfs, so a config file it reads and the
-      # unit does not bind is ENOENT at runtime — which is how plugin-tokens.json shipped unbound
-      # and no Linux plugin could start. Reads the names out of the SDK, not a second list.
+      # unit does not bind is ENOENT at runtime. Reads the names out of the SDK, not a second list.
       - name: Plugin-runner bind gate
         run: sh scripts/ci/check-runner-binds.sh
 
@@ -329,8 +327,8 @@ jobs:
             --features punktfunk-core/pake -- -D warnings
 
       # The installer's behavioural gates — detection per family, the derived defaults, channel
-      # switching both ways — driven against the binary. They ran in the docs-drift lane while
-      # the installer was a shell script; they live here now because that lane has no cargo.
+      # switching both ways — driven against the binary. They live here, not in the docs-drift
+      # lane, because that lane has no cargo.
       - name: Installer behaviour (detection, defaults, channel switching)
         run: sh scripts/ci/check-installer-behavior.sh
 
@@ -348,18 +346,16 @@ jobs:
           }
 
       # The GPU encode backends are OFF by default, so every step above compiles ~none of them:
-      # `nvenc` gates enc/linux/nvenc_cuda.rs (+ nvenc_core/nvenc_status) and `vulkan-encode` gates
-      # enc/linux/vulkan_video.rs (+ the vendored vk_av1_encode/vk_valve_rgb bindings) — ~8,150
-      # lines carrying ~70 `unsafe` blocks. Their ONLY prior CI coverage was deb.yml's
-      # `cargo build`, where warnings are not errors, so the `undocumented_unsafe_blocks` deny
-      # (now hoisted into [workspace.lints]) — pf-encode's stated unsafe-proof gate —
-      # was never actually enforced on them. (`pyrowave` needs no extra step: punktfunk-host has
-      # `default = ["pyrowave"]`, so the steps above already cover it.)
+      # `nvenc` gates enc/linux/nvenc_cuda.rs (+ pf-encode-core's nvenc_*) and `vulkan-encode` gates
+      # enc/linux/vulkan_video.rs (+ vk_av1_encode/vk_valve_rgb), both carrying `unsafe` blocks.
+      # deb.yml's `cargo build` also compiles them, but warnings are not errors there, so the
+      # `undocumented_unsafe_blocks` deny ([workspace.lints]) — pf-encode's stated unsafe-proof
+      # gate — is only enforced on them here. (`pyrowave` needs no extra step: punktfunk-host has
+      # `default = ["pyrowave", ...]`, so the steps above already cover it.)
       #
       # `--all-targets` is load-bearing, not decoration: without it the feature-gated
-      # `#[cfg(test)]` modules are never compiled, which is exactly how all ten
-      # `NvencCudaEncoder::open` call sites in nvenc_cuda.rs's tests drifted to the wrong arity
-      # (E0061 x10) without any job noticing.
+      # `#[cfg(test)]` modules are never compiled, and call sites in their tests can drift
+      # unnoticed.
       #
       # GPU-free: every test needing real hardware is `#[ignore]`d, and NVENC/CUDA resolve their
       # entry points at RUNTIME (dlopen), so the test binary links without a driver present.
@@ -367,8 +363,8 @@ jobs:
       # can only type-check these tests via clippy — see the note there.)
       #
       # Scoped to `-p pf-encode` with ITS OWN feature names: punktfunk-host has no code gated on
-      # `nvenc`/`vulkan-encode` (its only `cfg(feature)` sites are the two `pyrowave` ones in
-      # capture.rs, and pyrowave is default-on, so the steps above already cover them). Going
+      # `nvenc`/`vulkan-encode` (its only `pyrowave` site is the one in capture.rs, and pyrowave
+      # is default-on, so the steps above already cover it). Going
       # through `--features punktfunk-host/...` would force punktfunk-host into the selection and
       # re-run its entire test suite a second time for no extra coverage.
       #
@@ -405,16 +401,14 @@ jobs:
 
       - name: THIRD-PARTY-NOTICES drift gate
         # Every other derived artifact here is gated — the OpenAPI spec and the cbindgen header
-        # above, sdk/src/gen, web/bun.nix. This one was not, and went 36 crates stale while three
-        # separate comments claimed something regenerated it. It is also the only one whose
-        # staleness is a compliance defect rather than a build annoyance: the .deb, three RPM
-        # subpackages and the signed Windows host installer ship it verbatim as their licence
-        # file, and both MIT and Apache-2.0 require the notice.
+        # above, sdk/src/gen, web/bun.nix. This one is also the only one whose staleness is a
+        # compliance defect rather than a build annoyance: the .deb, the RPM subpackages and the
+        # signed Windows host installer ship it verbatim as their licence file, and both MIT and
+        # Apache-2.0 require the notice.
         #
         # Not in check-docs-drift.sh, whose stated budget is "no cargo": the generator reads
-        # `cargo metadata`. Its output is reproducible across machines — the same 600 crates and
-        # the same SHA-256 on macOS and on Linux with unrelated registry caches — so this compares
-        # bytes rather than the crate count.
+        # `cargo metadata`. Its output is reproducible across machines, so this compares bytes
+        # rather than the crate count.
         run: |
           bash scripts/gen-third-party-notices.sh
           git config --global --add safe.directory "$PWD"
@@ -456,9 +450,8 @@ jobs:
 
   # The client stack cross-checked for aarch64. NOT an artifact job — deb.yml ships those —
   # this exists so a portability defect fails here instead of surfacing in a release build or
-  # on a user's board. It earns its runtime: the bug that motivated it (a Vulkan extension
-  # array typed `*const i8`, where `c_char` is signed on x86_64 and UNSIGNED on aarch64)
-  # compiled cleanly on every target CI built at the time.
+  # on a user's board. It earns its runtime: a Vulkan extension array typed `*const i8`, where
+  # `c_char` is signed on x86_64 and UNSIGNED on aarch64, compiles cleanly on every x86_64 target.
   #
   # Client crates only, listed explicitly: the host's encode stack is x86 (NVENC/QSV/AMF) and
   # `--workspace` would drag it in. Runs in the cross image (amd64 toolchain + arm64 sysroot,
@@ -554,10 +547,9 @@ jobs:
           path: target
           key: cargo-target-arm64-debug-v1-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}
 
-      # Visibility only — but the ONLY way to tell a warm cache from a cold one after the fact.
-      # Every Rust job in this repo ends with this line for that reason; a hit rate that quietly
-      # collapses (a toolchain bump, a flag change, an S3 outage) is otherwise invisible and just
-      # looks like "CI got slower".
+      # Visibility only — but the ONLY way to tell a warm cache from a cold one after the fact: a
+      # hit rate that quietly collapses (a toolchain bump, a flag change, an S3 outage) is
+      # otherwise invisible and just looks like "CI got slower".
       - name: sccache stats (visibility only)
         if: always()
         run: sccache --show-stats
@@ -585,16 +577,12 @@ jobs:
       # has the why: this box runs many jobs in parallel and drops packets under that load).
       # `bun install` streams download-and-extract, so a tarball truncated mid-stream surfaces
       # as `error: Fail extracting tarball for "<pkg>"` — which reads like a corrupt package and
-      # is not one. Measured 2026-08-20: run 19630's docs-site died that way on
-      # @rolldown/binding-linux-x64-gnu (8.3 MB) while the web job installed the same registry
-      # in the same run, and run 19632 installed the identical lockfile seven minutes later. The
-      # tarball's sha512 matches the lockfile and both bun 1.3.13 and 1.3.14 extract it from
-      # disk, so there was never anything wrong with the package. 3 attempts (10s+20s backoff),
-      # not retry.sh's usual 5: a genuinely stale lockfile fails deterministically here, and
-      # 30s is enough to ride out a load burst without making that wait a minute and a half.
+      # is not one. 3 attempts (10s+20s backoff), not retry.sh's usual 5: a genuinely stale
+      # lockfile fails deterministically here, and 30s is enough to ride out a load burst
+      # without making that wait a minute and a half.
       - name: Install dependencies
         run: bash ../scripts/ci/retry.sh 3 bun install --frozen-lockfile --ignore-scripts
-      # biome.json is configured and the tree is clean, but nothing ran it — `lint` is tsc.
+      # Biome is separate from `lint`, which is tsc.
       # Before the build on purpose: biome honours .gitignore, so the generated orval client
       # and paraglide messages are out of scope either way, and this fails in a second.
       - name: Biome (format + lint)
@@ -605,10 +593,10 @@ jobs:
         run: bun run build
       - name: Typecheck
         run: bun run lint
-      # Scoped to server/ and nitro-entry/: the console's browser code has no test runner, but two
-      # gates here do — the one keeping a plugin's origin apart from the console's, whose failure
-      # mode is a well-formed header that only a browser rejects, and the one picking which of the
-      # host's two identities the console serves, whose failure mode is a cert no browser accepts.
+      # `test` covers server/, nitro-entry/ and src/ (web/package.json). Two of its gates earn a
+      # name: the one keeping a plugin's origin apart from the console's, whose failure mode is a
+      # well-formed header that only a browser rejects, and the one picking which of the host's
+      # two identities the console serves, whose failure mode is a cert no browser accepts.
       # Neither would be caught anywhere else.
       - name: Test
         run: bun run test
@@ -630,7 +618,7 @@ jobs:
         working-directory: /
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Retried — see the web job above; this is the job the flake was measured on.
+      # Retried — see the web job above.
       - name: Install dependencies
         run: bash ../scripts/ci/retry.sh 3 bun install --frozen-lockfile --ignore-scripts
       # Build first: fumadocs-mdx emits the .source typegen the typecheck imports.
@@ -650,8 +638,8 @@ jobs:
       - name: Install git + CA certs
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Both suites run here, not only on a `sdk-v*` / `plugin-kit-v*` publish tag: 25 test files
-      # gating the client, the runner CLI and the plugin runtime, for ~5 s. On the tag alone a
+      # Both suites run here, not only on a `sdk-v*` / `plugin-kit-v*` publish tag: they gate the
+      # client, the runner CLI and the plugin runtime, for a few seconds. On the tag alone a
       # break surfaces a whole release cycle after the commit that caused it.
       - name: Typecheck + test SDK
         working-directory: sdk
@@ -699,7 +687,8 @@ jobs:
         working-directory: clients/decky
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # `test` is the typecheck plus the host-row-vectors replay through mergeHosts.
+      # `test` is the typecheck plus the scripts/test-*.ts suites (merge, compat, l10n, launch-id,
+      # update, panel).
       - name: Typecheck + test
         run: |
           corepack enable
@@ -715,10 +704,8 @@ jobs:
   # web/bun.nix and sdk/bun.nix are GENERATED from their bun.lock (bun2nix) and committed; the Nix
   # build fetches node_modules from nothing else. They regenerate only on a local `bun install` that
   # runs lifecycle scripts — never under CI's `--ignore-scripts`, and never on a merge or rebase,
-  # which happily carries a lockfile change past a bun.nix generated before it. That is not
-  # theoretical: web/bun.nix sat stale on main for 553 commits (2026-07-27 → 2026-08-05) with
-  # `nix build .#punktfunk-web` broken, and was repaired only by accident when an advisory bump
-  # happened to rerun a real `bun install`.
+  # which happily carries a lockfile change past a bun.nix generated before it, leaving
+  # `nix build .#punktfunk-web` broken.
   #
   # Deliberately UNFILTERED and in ci.yml rather than nix.yml: it needs no Nix, takes well under a
   # minute, and the whole point is that the drift arrives through commits that look unrelated to
@@ -759,7 +746,7 @@ jobs:
           fetch-depth: 0
       # OpenAPI snapshot in sync, PUNKTFUNK_* vars in docs still exist, undocumented-var
       # ratchet (baseline: scripts/ci/docs-undocumented-env-baseline.txt), host-cli.md commands
-      # still exist, data/platforms.json parses.
+      # still exist, data/platforms.json parses; the script header lists the rest.
       - name: Docs drift gates
         run: sh scripts/ci/check-docs-drift.sh
       # Internal links only: /docs/* page links and their #anchors, relative file links in
@@ -772,7 +759,7 @@ jobs:
         run: |
           python3 scripts/l10n-census-test.py
           python3 scripts/l10n-census.py . --check
-      # Touched Rust comments fail at 6 (`//`) / 24 (`//!`/`///`). Self-test plants
+      # Touched Rust and Swift comments fail at 6 (`//`) / 24 (`//!`/`///`). Self-test plants
       # those failures before the live tree is checked.
       - name: Writing-style gates
         env:

@@ -1,6 +1,7 @@
 //! The Library's rows as plain values: each section the device keeps on, in its order
-//! (design §2.5). The Games grid is cut into rows of `columns` posters, so one
-//! virtualized list scrolls a library of thousands without building a widget per title.
+//! (`design/apple-touch-ui-overhaul.md` §2.5; its D6 and P6 are cited below). The Games grid
+//! is cut into rows of `columns` posters, so one virtualized list scrolls a library of
+//! thousands without building a widget per title.
 
 use crate::collate::{self, GroupBy, GroupKey, SortKey};
 use crate::library::{GameEntry, DESKTOP_ID};
@@ -162,7 +163,7 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                 );
             }
             Section::Games => games(l, !desktops_on, &mut out),
-            // The console's; the desktop shell groups the grid instead (design D5).
+            // The console's; the desktop shell groups the grid instead.
             Section::Collections | Section::Desktops => {}
         }
     }

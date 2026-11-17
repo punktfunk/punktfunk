@@ -154,8 +154,8 @@ const json = (method: string, body: unknown): RequestInit => ({
  * installed list, the runner state (it restarts), and the plugin directory the nav is built from.
  */
 export function invalidateStore(qc: QueryClient): Promise<void> {
-	// The runner restarts AFTER the job reports done, so the plugin registers its UI a few seconds
-	// from now — this invalidation would otherwise refetch the pre-install list and stop looking.
+	// The job's last step restarts the runner, and the plugin registers its UI only once the runner
+	// is back — this invalidation would otherwise refetch the pre-install list and stop looking.
 	boostPluginPolling();
 	return Promise.all([
 		qc.invalidateQueries({ queryKey: getGetPluginCatalogQueryKey() }),
@@ -170,29 +170,17 @@ export function invalidateStore(qc: QueryClient): Promise<void> {
 export const useInstalledPlugins = () =>
 	useListInstalledPlugins({ query: { refetchInterval: 30_000 } });
 
-/**
- * A single install/uninstall job, polled once a second while it runs and left alone once it
- * settles. Pass `null` to park the query (no job in flight).
- *
- * The interval keys off "not finished yet" rather than off `state === "running"`. `data` is
- * undefined in two live cases — the first poll has not landed, and the first poll FAILED — and
- * treating those as "stop polling" wedged the card: an install whose very first poll lost the race
- * with a busy host never polled again and the operator saw nothing at all, while an install that
- * restarts the runner (every successful one does) could drop a poll mid-flight.
- *
- * The failure count bounds it: jobs live in host memory, so a host restart makes the id 404 for
- * good, and something has to stop asking.
- */
+/** How often a running job is polled. */
 const JOB_POLL_MS = 1_000;
+/** The `fetchFailureCount` beyond which `useStoreJob` stops polling. */
 const JOB_MAX_FAILURES = 15;
 
 /**
  * The host's recent jobs, used to RE-ATTACH after a reload.
  *
- * The in-flight job id lived only in component state, so reloading the page (or opening the console
- * on another device) lost all trace of a running install while the Install buttons stayed armed —
- * and the host takes one job at a time, so the next click just bounced off a 409. The host keeps
- * the list; ask it rather than remembering.
+ * The in-flight job id is component state, so a reload (or the console opened on another device)
+ * has no trace of a running install, while the host takes one job at a time and bounces the next
+ * click off a 409. The host keeps the list; ask it rather than remembering.
  */
 export const useStoreJobs = () =>
 	// Only needed to find an orphaned job on mount; the job query itself does the live polling.
@@ -209,6 +197,17 @@ export function runningJob(jobs: Job[] | undefined): Job | undefined {
 	return undefined;
 }
 
+/**
+ * A single install/uninstall job, polled while it runs and left alone once it settles. Pass `null`
+ * to park the query (no job in flight).
+ *
+ * The interval keys off "not finished yet" rather than off `state === "running"`: `data` is
+ * undefined while the first poll has not landed and after the first poll failed, and neither may
+ * stop polling.
+ *
+ * The failure count is what the interval checks to give up on a job the host no longer has: jobs
+ * live in host memory, so a host restart makes the id 404 for good.
+ */
 export function useStoreJob(id: string | null) {
 	return useGetPluginJob(id ?? "", {
 		query: {

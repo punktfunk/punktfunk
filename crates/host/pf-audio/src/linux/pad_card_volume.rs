@@ -1,5 +1,5 @@
 //! Pin the usbip pad's real sound card to unity gain — host half of
-//! `pf_client_core::pad_audio::pin_sink_volume`.
+//! `pin_sink_volume` in pf-client-core's `pad_audio/pipewire.rs`.
 //!
 //! WirePlumber starts every new card at `device.routes.default-sink-volume` = 0.4, a cubed
 //! mixer 40 %: 0.4³ = −23.88 dB. The default is global and re-applies on every usbip attach.
@@ -164,7 +164,8 @@ fn pin_pad_cards() -> Result<usize> {
                             return;
                         };
                         // `audio.channels` is not in the announce subset (reads as 0).
-                        // Same trap as `pf_client_core::pad_audio::walk_graph`. Bind for it.
+                        // Same trap as `walk_graph` in pf-client-core's `pad_audio/pipewire.rs`.
+                        // Bind for it.
                         let channels = Rc::new(Cell::new(0u32));
                         let listener = node
                             .add_listener_local()

@@ -1,12 +1,13 @@
 # Android client CI (Gitea Actions). Builds the Rust JNI core (clients/android/native) via
-# cargo-ndk for all three shipping ABIs and assembles the debug APK (clients/android). Mirrors apple.yml
-# but on a Linux runner — the NDK is cross-platform, so no self-hosted host is needed.
+# cargo-ndk for all three shipping ABIs and assembles the debug APK (clients/android). On main
+# pushes, v* tags and publishing dispatches it also builds the signed release and publishes it.
+# Mirrors apple.yml but on a Linux runner — the NDK is cross-platform, so no self-hosted host is
+# needed.
 #
 # Runs in the punktfunk-android-ci builder image (ci/android-ci.Dockerfile, content-keyed on
 # the LAN registry): JDK 21, the Android SDK/NDK/CMake pins, cargo-ndk and sccache are all
-# baked, so the multi-GB per-run Google downloads this job used to make are gone. Emulator
-# instrumentation tests are deferred until a KVM-capable runner exists (they self-skip
-# otherwise, like apple.yml's RemoteFirstLightTests).
+# baked, so the job downloads none of them. Emulator instrumentation tests are deferred until a
+# KVM-capable runner exists.
 name: android
 # One pending run per workflow+ref: a newer push supersedes the queued/running one and cancels
 # it (a canary only needs the latest commit; each release tag is its own ref so tag runs never
@@ -36,14 +37,12 @@ on:
       - 'scripts/ci/**'
       - '.gitea/workflows/android.yml'
     # Single project version: a `vX.Y.Z` tag is THE release (publishes to Play `production` at
-    # 100% + attaches the .aab/.apk to the unified Gitea Release). A main push is canary
-    # (Play `beta` = open testing: public opt-in, no tester list — but unlike the previous
-    # `internal` target, every canary now passes Google review before testers see it, so a
-    # canary lands in hours/days, not minutes). The same canary versionCode is also assigned
-    # to `alpha` (closed testing) in the same Play edit, so the pre-production-access closed
-    # testers keep receiving builds without re-opting-in. Production access was granted
-    # 2026-08-01; before that a tag could only reach `alpha` and someone had to promote it
-    # by hand in the Console.
+    # 100% unless the "Version + channel" step holds it, and attaches the .aab/.apk to the
+    # unified Gitea Release). A main push is canary (Play `beta` = open testing: public opt-in,
+    # no tester list; every canary passes Google review before testers see it, so a canary
+    # lands in hours/days, not minutes). The same canary versionCode is also assigned to
+    # `alpha` (closed testing) in the same Play edit, so the closed testers keep receiving
+    # builds.
     tags: ['v*']
   pull_request:
     paths:
@@ -61,10 +60,9 @@ on:
   # Manual runs are BUILD-ONLY by default. The escape hatch below exists because a push run can
   # go missing entirely: merge two PRs seconds apart and Gitea attributes the window's runs to the
   # newer head, so the older merge sha gets no run at all — its android change then sits on main
-  # having never been built, let alone published (2026-08-14: `1e5dca4c`, PR #235, lost its run to
-  # `b5cace3a` 12 s later). Re-running the PR run does NOT recover it: a re-run replays the original
-  # `pull_request` event, so every gate below stays false. Only a dispatch with publish=true can
-  # ship that commit without inventing a filler push.
+  # having never been built, let alone published. Re-running the PR run does NOT recover it: a
+  # re-run replays the original `pull_request` event, so every gate below stays false. Only a
+  # dispatch with publish=true can ship that commit without inventing a filler push.
   workflow_dispatch:
     inputs:
       publish:
@@ -85,10 +83,9 @@ env:
   AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
   # The C/C++ half of the cache. The one that pays here is the CMake-built vendored libopus
-  # (opusic-sys), which kit/build.gradle.kts drives through cargo-ndk once per ABI — three
-  # from-scratch libopus builds per run until now. The per-ABI compilers come from the NDK via
-  # cargo-ndk's own CC_<android-triple> vars, which this does not touch; CC_x86_64_unknown_linux_gnu
-  # covers only the HOST build scripts and proc macros.
+  # (opusic-sys), which kit/build.gradle.kts drives through cargo-ndk once per ABI. The per-ABI
+  # compilers come from the NDK via cargo-ndk's own CC_<android-triple> vars, which this does not
+  # touch; CC_x86_64_unknown_linux_gnu covers only the HOST build scripts and proc macros.
   CMAKE_C_COMPILER_LAUNCHER: sccache
   CMAKE_CXX_COMPILER_LAUNCHER: sccache
   CC_x86_64_unknown_linux_gnu: sccache cc
@@ -96,10 +93,9 @@ env:
   # sccache and incremental compilation are mutually exclusive; CI wants the shared
   # cache, dev boxes keep incremental.
   CARGO_INCREMENTAL: "0"
-  # rustc overflowed its own stack compiling pf-console-ui for x86_64-linux-android at
-  # opt-level 3 (exit 254, "we would appreciate a report") — inside this container, and
-  # nowhere else: the same crate, profile and target build on a dev machine. 16 MiB is
-  # what the crash note itself asks for.
+  # Keeps rustc from overflowing its own stack compiling pf-console-ui for x86_64-linux-android
+  # at opt-level 3 (exit 254, "we would appreciate a report"). 16 MiB is what the crash note
+  # itself asks for.
   RUST_MIN_STACK: "16777216"
   # The Skia console (pf-console-ui over skia-bindings, design/android-skia-console-port.md):
   # prebuilt Skia archives for all three Android ABIs come from our own release
@@ -116,9 +112,9 @@ jobs:
   # An Android build is an hour of fleet time at worst, so on a pull request it is opt-in: add
   # the `ci:android` label (or `ci:all`). Pushes and tags are unaffected.
   #
-  # ⚠ This also gates the APK. "Attach APK(s) to the workflow run" below is `if: always()` and
-  # ran on every pull request before this gate existed; now the label is what produces it. Since
-  # only a writer can label, that is also the trust boundary on who gets a build to sideload.
+  # ⚠ This also gates the APK. "Attach APK(s) to the workflow run" below is `if: always()` inside
+  # a job this gate guards, so on a pull request the label is what produces it. Since only a
+  # writer can label, that is also the trust boundary on who gets a build to sideload.
   #
   # The decision is shell rather than a label expression on the job's `if`, because the event
   # payload is a snapshot: a label added after the last push is not in it, and a re-run replays
@@ -169,10 +165,10 @@ jobs:
       #
       # A release tag MUST carry its own Play "What's new". If the file is absent Play does not
       # show nothing — it carries the PREVIOUS release's text onto this version, so production
-      # users read notes for a build they are not getting. That is the same defect the v0.22.3
-      # notes shipped (see docs/releases/README.md), and it is invisible until someone reads the
-      # store listing. Failing here also means a missing file cannot leave a half-published
-      # release: nothing is built, nothing is attached to the Gitea release, nothing reaches Play.
+      # users read notes for a build they are not getting (see docs/releases/README.md), and it
+      # is invisible until someone reads the store listing. Failing here also means a missing
+      # file cannot leave a half-published release: nothing is built, nothing is attached to the
+      # Gitea release, nothing reaches Play.
       #
       # Canary is exempt on purpose: it has no curated notes. Open-testing users therefore see
       # the previous release's text on a canary — cosmetic, and cheaper than gating every main
@@ -188,9 +184,9 @@ jobs:
             echo "See docs/releases/README.md; copy docs/releases/whatsnew/TEMPLATE.txt."
             exit 1
           fi
-          # A verbatim copy of another release's file is the same bug wearing a hat: the store
-          # listing still describes the wrong build. Cheap to check, and only ever trips on an
-          # actual copy-paste that was never edited.
+          # A verbatim copy of another release's file leaves the store listing describing the
+          # wrong build. Cheap to check, and only ever trips on a copy-paste that was never
+          # edited.
           for other in docs/releases/whatsnew/*.txt; do
             if [ "$other" != "$NOTES" ] && [ "$other" != "docs/releases/whatsnew/TEMPLATE.txt" ]; then
               if cmp -s "$NOTES" "$other"; then
@@ -201,8 +197,8 @@ jobs:
             fi
           done
           # Length is checked here as well as in play-upload.py. Not redundant: the uploader is
-          # the last line of defence (and the only one android-promote.yml gets), but it runs at
-          # step 9 — this catches an unedited TEMPLATE copy at step 1 instead of after the build.
+          # the last line of defence (and the only one android-promote.yml gets), but it runs
+          # after the build — this catches an unedited TEMPLATE copy first.
           # Must count CHARACTERS, not bytes: Play's cap is 500 chars and `•` is 3 bytes in UTF-8,
           # so `wc -c` would reject a file that is comfortably legal.
           python3 - "$NOTES" <<'PY'
@@ -216,11 +212,10 @@ jobs:
           print(f"Play release notes OK: {path} ({len(text)}/500 chars)")
           PY
 
-      # Everything below the checkout used to be four download steps (JDK, SDK,
-      # NDK+CMake, cargo-ndk — the flakiest, heaviest part of the job); it is all baked
-      # into the image now. This guard only re-asserts the Android targets so a
-      # rust-toolchain.toml pin bump keeps working against an older image (:latest lags
-      # one image rebuild, same bootstrap note as ci.yml's dep steps).
+      # JDK, SDK, NDK+CMake and cargo-ndk are baked into the image. This guard only
+      # re-asserts the Android targets so a rust-toolchain.toml pin bump keeps working
+      # against an older image (:latest lags one image rebuild, same bootstrap note as
+      # ci.yml's dep steps).
       - name: Rust Android targets (no-op unless the toolchain pin outran the image)
         run: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
@@ -233,8 +228,8 @@ jobs:
 
       # Same key namespace as ci.yml/deb.yml ON PURPOSE: identical Cargo.lock, identical
       # CARGO_HOME layout (/usr/local/cargo), so the registry/git downloads dedupe with
-      # the rest of the fleet in the central cache. target/ is deliberately NOT cached
-      # anymore — sccache covers recompilation without shipping multi-GB tars per run.
+      # the rest of the fleet in the central cache. target/ is deliberately NOT cached —
+      # sccache covers recompilation without shipping multi-GB tars per run.
       # A pull request saves into `-ci-`, never the pool the signed tag build restores (ci.yml).
       - name: Cache (cargo registry)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -259,10 +254,9 @@ jobs:
           key: gradle-${{ github.event_name == 'pull_request' && 'ci-' || '' }}${{ hashFiles('clients/android/**/*.gradle.kts', 'clients/android/**/gradle.lockfile', 'clients/android/gradle/verification-metadata.xml', 'clients/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ github.event_name == 'pull_request' && 'ci-' || '' }}
 
-      # Clippy for the ANDROID target. Like the kit tests below, this was running NOWHERE: ci.yml
-      # lints `--workspace` on the host, where `clients/android/native` and every
-      # `#[cfg(target_os = "android")]` module elsewhere compile out, and this workflow only ever
-      # built. Discovered in 2026-08 with five lints already resident — code no gate had ever read.
+      # Clippy for the ANDROID target. ci.yml lints `--workspace` on the host, where
+      # `clients/android/native` and every `#[cfg(target_os = "android")]` module elsewhere
+      # compile out, so this step is what lints them.
       #
       # Placed BEFORE assembleDebug deliberately: a lint failure should cost the ~10 s the lint
       # takes, not the full three-ABI build first. It shares sccache and the target dir with the
@@ -274,8 +268,8 @@ jobs:
       # The `STARTING A FULL BUILD` check turns the manual rule in this workflow's `env:` block
       # ("Every ABI's log must show DOWNLOAD AND INSTALL SUCCEEDED") into something that fails the
       # job by itself. Without it a missed prebuilt reads as a Gradle stack trace with the real
-      # cause ~1,800 lines up — which is exactly how 2026-08-22 spent a week looking like a lint
-      # failure. This is the first cargo step in the job, so it catches the drop earliest.
+      # cause far above it, looking like a lint failure. This is the first cargo step in the job,
+      # so it catches the drop earliest.
       #
       # No pipefail: the runner is dash. Capture, then decide.
       - name: Clippy (Android target, deny warnings)
@@ -291,30 +285,21 @@ jobs:
           fi
           exit $rc
 
-      # The kit's JVM unit tests — the pure parsers, migrations and feedback policies. They were
-      # running nowhere: this workflow only assembled, and android-screenshots.yml runs the :app
-      # module's tests, so nothing enforced :kit's. Cheap (a couple of seconds against an already
-      # built module) and it is the only automated cover those behaviours have.
+      # The kit's JVM unit tests — the pure parsers, migrations and feedback policies. Nothing
+      # else enforces :kit's: android-screenshots.yml runs only the :app module's tests. Cheap (a
+      # couple of seconds against an already built module).
       - name: kit unit tests
         working-directory: clients/android
         run: ./gradlew :kit:testDebugUnitTest --stacktrace
 
-      # The cross-client contract in `clients/shared/console-vectors.json` — the console palette
-      # table, the settings section names and the screen-transition motion, each of which exists in
-      # three hand-written copies (here, pf-console-ui, the Apple client). The other two check it
-      # from their own suites; this is Android's side.
+      # The whole app suite, minus the Roborazzi scenes. It includes ConsolePinnedKeyTest, this
+      # client's side of the cross-client `pinned_key` contract in
+      # `clients/shared/console-vectors.json` (pf-console-ui's Rust tests pin the rest).
       #
-      # The whole app suite, minus the Roborazzi scenes. This used to be a 16-entry ALLOWLIST, so a
-      # test class that was not named here did not run: it read as coverage in the tree and gated
-      # nothing. That shape rotted in both directions and neither half was reported, because Gradle
-      # only fails when the ENTIRE filter set matches nothing. Five patterns named classes deleted
-      # with the Compose console (428fef2b2) and stayed green; six live classes —
-      # ConsoleSettingsExtra, FoldSplit, OsdScale, OverlayActions, VideoFitRect, VirtualPad, 30
-      # assertions between them — were never added and gated only at release, via
-      # android-screenshots.yml's unfiltered run on v* tags.
-      #
-      # -PexcludeScreenshots (app/build.gradle.kts) drops the scenes by package instead, so a new
-      # test class gates the moment it is written. The scenes stay a release-artifact job.
+      # There is no allowlist on purpose: a class missing from one runs nowhere, and Gradle only
+      # fails when the ENTIRE filter set matches nothing. -PexcludeScreenshots
+      # (app/build.gradle.kts) drops the scenes by package instead, so a new test class gates the
+      # moment it is written. The scenes stay a release-artifact job (android-screenshots.yml).
       - name: console parity vectors + app-module logic tests
         working-directory: clients/android
         run: ./gradlew :app:testDebugUnitTest -PexcludeScreenshots --stacktrace
@@ -351,7 +336,7 @@ jobs:
           echo "VERSION_NAME=$VN" >> "$GITHUB_ENV"
           echo "PLAY_TRACK=$TRACK" >> "$GITHUB_ENV"
           echo "PLAY_ALSO_TRACK=$ALSO" >> "$GITHUB_ENV"
-          # Play's own "What's new" (500-char cap, its own file — the vX.Y.Z.md body is ~34 KB).
+          # Play's own "What's new" (500-char cap, its own file — the vX.Y.Z.md body is far longer).
           # On a tag the gate step above already proved this exists, so the else branch is only
           # ever the canary path. See docs/releases/README.md.
           NOTES="docs/releases/whatsnew/${GITHUB_REF_NAME}.txt"
@@ -389,9 +374,10 @@ jobs:
           sh scripts/ci/check-android-strip.sh clients/android/app/build/outputs/bundle/release/app-release.aab stripped
 
       # Attach the built APK to the workflow run so it's a one-click sideload download straight from the
-      # run page (no need to know the generic-registry URL) — on EVERY trigger, incl. a PR or a
-      # workflow_dispatch. The debug APK is built on every run; the signed universal release APK exists
-      # only on a main/tag push (its build step above is push-gated), so grab whichever were produced.
+      # run page (no need to know the generic-registry URL) — on EVERY trigger of this job, incl. a
+      # PR or a workflow_dispatch. The debug APK is built on every run; the signed universal release
+      # APK exists only when the publish gate above holds (its build step is main/tag-gated), so
+      # grab whichever were produced.
       - name: Attach APK(s) to the workflow run
         if: always()
         # v3, not v4: Gitea's artifact backend identifies as GHES, which upload-artifact@v4 refuses
@@ -463,7 +449,8 @@ jobs:
       # real API error behind "Unknown error occurred."; this prints it. stdlib + openssl only (no
       # pip), reuses SERVICE_ACCOUNT_JSON (raw JSON or base64), auto-handles changesNotSentForReview.
       # Track: canary main -> `beta` (open testing) + the same versionCode on `alpha` (closed
-      # testing) in the same Play edit; a vX.Y.Z release -> `production` at 100% (`completed`).
+      # testing) in the same Play edit; a vX.Y.Z release -> `production` at 100% (`completed`),
+      # or `internal` while PLAY_HOLD_PRODUCTION is true (see "Version + channel").
       #
       # A tag therefore ships to real users with no further click. Two things keep that honest:
       # the tag is only pushed once every platform is green, and Play reviews each production

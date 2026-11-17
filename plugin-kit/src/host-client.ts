@@ -1,8 +1,8 @@
 // The pf seam as Effect services. `HostClient.request` keeps the SDK's deliberately
-// untyped `pf.request` wire (version-skew-safe against the runner-bundled SDK — design D7);
-// typing happens one level up (reconcile.ts owns the wire schemas). Only the plain `pf`
-// object crosses the plugin boundary, so no Effect values are shared with the runner's
-// bundled effect instance.
+// untyped `pf.request` wire (version-skew-safe against the runner-bundled SDK —
+// plugin-ui-surface.md D7); typing happens one level up (wire.ts owns the wire schemas).
+// Only the plain `pf` object crosses the plugin boundary, so no Effect values are shared
+// with the runner's bundled effect instance.
 import type { Punktfunk } from "@punktfunk/host";
 import { Context, Effect, Layer } from "effect";
 import { HostRequestError } from "./errors.js";

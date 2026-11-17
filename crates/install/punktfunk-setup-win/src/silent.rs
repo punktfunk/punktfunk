@@ -1,4 +1,4 @@
-//! The wizard exe's silent entry (WP2.4): no window. The engine's `silent::run` over the box
+//! The wizard exe's silent entry: no window. The engine's `silent::run` over the box
 //! `main.rs` resolved — a `--demo` preset on the fake seams, or the real box on the system
 //! seams with the extracted payload — `Plain` into `/LOG=` and, when a terminal launched us,
 //! the parent console. A GUI-subsystem exe owns no console: `sys::attach_parent_console`

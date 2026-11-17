@@ -9,7 +9,7 @@ import {
 import { AppShell } from "@/components/app-shell";
 
 // AppShell is built from TanStack Router <Link>s, so it needs a router context.
-// We stand up a throwaway in-memory router whose routes mirror the nav targets
+// We stand up a throwaway in-memory router with a route per `navPaths` entry below
 // (so links resolve + the active highlight works) and render the shell from the
 // root route. No loaders/data — purely for designing the chrome offline.
 function ShellHarness({ initialPath }: { initialPath: string }) {

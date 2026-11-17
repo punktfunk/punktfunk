@@ -103,7 +103,7 @@ pub struct Sweep {
     pub reclaimed: u16,
 }
 
-/// `Vec<Option<P>>` keyed by wire index, with the `active_mask` unplug sweep
+/// `Vec<Option<P>>` keyed by OS slot ([`crate::pad_pool`]), with the `active_mask` unplug sweep
 /// and a [`PadGate`]-guarded create.
 ///
 /// Per-index sibling state stays in the manager: reset it on the indices
@@ -118,7 +118,7 @@ pub struct PadSlots<P> {
     label: &'static str,
     /// Device name in the create-failure line (`virtual <device> creation failed`).
     device: &'static str,
-    /// Create-failure suffix: empty on Linux, the driver-install hint on Windows.
+    /// Create-failure suffix: a driver-install or `vhci_hcd` hint, or empty.
     hint: &'static str,
 }
 
@@ -406,7 +406,7 @@ mod tests {
     }
 
     /// [`create_fault`] must find the fault through further `.context()`
-    /// layers. The Windows attach (`gamepad_raii::create_named`) is
+    /// layers. The Windows attach (`gamepad_raii::Shm::create_named`) is
     /// `cfg(windows)` and is not compiled here; this chain is the same shape.
     #[test]
     fn a_named_fault_survives_the_context_layers_wrapped_around_it() {
@@ -468,8 +468,8 @@ mod tests {
         assert!(hint.contains("session id"), "{hint}");
     }
 
-    /// A named fault must not become a permanent latch — that is the
-    /// `broken: bool` [`PadGate`] removed. Retry stays armed.
+    /// A named fault must not become a permanent latch: [`PadGate`] backs off and
+    /// retry stays armed.
     #[test]
     fn a_contended_create_still_backs_off_and_retries_rather_than_latching() {
         let mut s = slots();

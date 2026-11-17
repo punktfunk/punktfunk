@@ -9,10 +9,11 @@
 // Apple Pencil has no hardware eraser end or barrel buttons, so these mappings are how
 // host-side apps get their stylus button/eraser affordances).
 //
-// HEARTBEAT (wire contract — see `PunktfunkPenSample` in punktfunk_core.h): while the pen is
-// in range or touching, the last sample repeats every ≤100 ms even when nothing changed.
-// UIKit is silent for a stationary Pencil, and the host force-releases the stroke after
-// 200 ms without samples (its dead-client failsafe) — the timer keeps a held stroke alive.
+// HEARTBEAT (wire contract — see `PUNKTFUNK_PEN_TOUCH_TIMEOUT_MS` in punktfunk_core.h): while
+// the pen is in range or touching, the last sample repeats every ≤100 ms even when nothing
+// changed. UIKit is silent for a stationary Pencil, and the host force-releases the stroke after
+// `PUNKTFUNK_PEN_TOUCH_TIMEOUT_MS` without samples (its dead-client failsafe) — the timer keeps a
+// held stroke alive.
 
 #if os(iOS) || os(visionOS)
 import PunktfunkCore
@@ -182,8 +183,9 @@ final class PencilStream: NSObject {
     /// The ≤100 ms keepalive while in range (see the file header): ONE long-lived 50 ms timer
     /// in `.common` run-loop mode, armed on range entry and torn down on exit. `.default`-mode
     /// scheduling pauses during run-loop tracking, where a stationary pen would silently cross
-    /// the host's 200 ms force-release mid-stroke. The tick resends only after ≥50 ms of send silence,
-    /// so an active stroke costs nothing and the worst-case gap stays ≈100 ms — the wire bound.
+    /// the host's `PUNKTFUNK_PEN_TOUCH_TIMEOUT_MS` force-release mid-stroke. The tick resends
+    /// only after ≥50 ms of send silence, so an active stroke costs nothing and the worst-case
+    /// gap stays ≈100 ms — the wire bound.
     private func syncHeartbeat() {
         guard inRange || touching else {
             heartbeat?.invalidate()

@@ -3,26 +3,24 @@
 #
 #   swift        — build the Rust core into PunktfunkCore.xcframework, then build + test the Swift
 #                  package. Network-dependent tests (RemoteFirstLightTests) self-skip without
-#                  PUNKTFUNK_REMOTE_HOST. Runs on pushes, tags AND pull requests.
+#                  PUNKTFUNK_REMOTE_HOST. Runs on pushes, tags AND pull requests labelled
+#                  `ci:apple` or `ci:all`.
 #   distribute   — needs: swift. The signed/notarized artifacts:
 #                    macOS (Developer ID) -> sandboxed, signed, notarized + stapled .dmg, attached
 #                              to the Gitea release on tag pushes
 #                    macOS (App Store)    -> archive + upload to TestFlight (App Store Connect)
 #                    iOS    -> archive + upload to TestFlight, plus an unsigned .ipa for sideloading
-#                    tvOS   -> archive + upload to TestFlight (Rust core built from tier-3 targets,
-#                              nightly -Zbuild-std, in build-xcframework.sh)
-#                    visionOS -> archive + upload to TestFlight (the iOS scheme; tier-3 like tvOS)
+#                    tvOS   -> archive + upload to TestFlight (Rust core built with the pinned
+#                              nightly + -Zbuild-std, in build-xcframework.sh)
+#                    visionOS -> archive + upload to TestFlight (the iOS scheme; built like tvOS)
 #   screenshots  — needs: swift. App Store Connect screenshots of the REAL UI, attached to the run
 #                  as a zip artifact. Best-effort, so a capture gap never reds the core signal.
 #
-# ⚠ WHY THIS FILE IS ONE FILE. `distribute` used to live in its own workflow called `release.yml` —
-# a name that described neither what it did (Apple only) nor how releases actually work here (every
-# platform's packaging workflow attaches to the same Gitea release on a v* tag, and announce.yml is
-# the manual "go"). The name was the smaller problem. The real one: Gitea has no cross-workflow
-# `needs`, so nothing sequenced it against apple.yml's tests — a canary main push uploaded iOS,
+# ⚠ WHY THIS FILE IS ONE FILE. Gitea has no cross-workflow `needs`, so a separate `distribute`
+# workflow would not be sequenced against apple.yml's tests: a canary main push could upload iOS,
 # macOS and tvOS builds to TestFlight even when `swift test` had just failed on the same commit,
-# and the two files' `paths:` filters had already drifted apart, so it was possible for one to fire
-# without the other. Merging is what makes `needs: swift` expressible. Do not split them again.
+# and the two files' `paths:` filters could drift apart, so one could fire without the other.
+# One file is what makes `needs: swift` expressible. Do not split them.
 #
 # The trigger list is deliberately NARROW on crates/: it names the path crates
 # scripts/build-xcframework.sh compiles into `clients/apple/native` for Apple targets.
@@ -62,17 +60,19 @@
 #     then uses ClientIdentityStore's legacy file-keychain fallback) so the build still ships
 #     a launchable app.
 #
-# Signing setup (NOT secret-based anymore): the runner is a LaunchAgent in the user's
-# logged-in Aqua session, so it uses the **login keychain** directly. Install the signing
-# identities there once via Xcode (Settings -> Accounts -> Manage Certificates): Developer
-# ID Application + Apple Distribution, with the WWDR intermediate present (so they show as
-# *valid*). xcodebuild/codesign then sign exactly like a local build — no throwaway keychain.
+# Signing setup (no keychain secrets): the runner is a system-domain LaunchDaemon run as the CI
+# user (scripts/ci/setup-macos-runner.sh), and it signs from that user's **login keychain**
+# directly. Install the signing identities there once via Xcode (Settings -> Accounts -> Manage
+# Certificates): Developer ID Application + Apple Distribution, with the WWDR intermediate
+# present (so they show as *valid*). xcodebuild/codesign then sign exactly like a local build —
+# no throwaway keychain.
 # One-time, to avoid headless "codesign wants to use the key" prompts, grant codesign access:
 #   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k <login-pw> \
 #     ~/Library/Keychains/login.keychain-db
 #
-# Secrets: only ASC_API_KEY_P8 / ASC_API_KEY_ID / ASC_API_ISSUER_ID (App Store Connect API
-# key — notarization, TestFlight upload, automatic-signing profile fetch).
+# Apple secrets: only ASC_API_KEY_P8 / ASC_API_KEY_ID / ASC_API_ISSUER_ID (App Store
+# Connect API key — notarization, TestFlight upload, automatic-signing profile fetch). The
+# registry and Gitea-release steps use REGISTRY_TOKEN.
 #
 # Needs a RELEASE Xcode on the runner (App Store rejects beta-SDK builds); the workflow
 # picks the first non-beta /Applications/Xcode*.app and only falls back to a beta with a
@@ -89,9 +89,9 @@ concurrency:
 
 on:
   push:
-    # Canary: a relevant main push builds + tests, then uploads the iOS + macOS + tvOS builds to
-    # TestFlight (Apple's own canary channel) — no notarized DMG (that's stable-only; see the
-    # per-step gates). Heavy on the shared mac-mini runner, hence the tight paths filter.
+    # Canary: a relevant main push builds + tests, then uploads the iOS + macOS + tvOS + visionOS
+    # builds to TestFlight (Apple's own canary channel) — no notarized DMG (that's stable-only;
+    # see the per-step gates). Heavy on the shared mac-mini runner, hence the tight paths filter.
     branches: [main]
     paths:
       - 'crates/client/pf-client-core/**'
@@ -113,8 +113,8 @@ on:
       - 'rust-toolchain.toml'
       - '.gitea/workflows/apple.yml'
     # Stable: a `vX.Y.Z` tag is THE release — notarized DMG attached to the unified Gitea Release
-    # + macOS/iOS/tvOS to TestFlight for manual promotion to the App Store. Tag runs are matched by
-    # `tags:` and are NOT subject to the paths filter above.
+    # + macOS/iOS/tvOS/visionOS to TestFlight for manual promotion to the App Store. Tag runs are
+    # matched by `tags:` and are NOT subject to the paths filter above.
     tags: ['v*']
   pull_request:
     paths:
@@ -223,11 +223,11 @@ jobs:
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
           "$RUSTUP" target add aarch64-apple-darwin x86_64-apple-darwin
-          # The iOS/tvOS simulator slices the two scheme builds below link against.
+          # The iOS device + simulator slices; the tvOS and visionOS slices are built below.
           "$RUSTUP" target add aarch64-apple-ios aarch64-apple-ios-sim
-          # tvOS and visionOS are tier-3 (no prebuilt std) — build-xcframework.sh compiles them with
-          # the PINNED nightly + -Zbuild-std, the same way the distribute and screenshots jobs do. The
-          # date lives in the script; rust-src must land on that toolchain, not the channel.
+          # tvOS and visionOS: build-xcframework.sh compiles them with the PINNED nightly +
+          # -Zbuild-std, the same way the distribute and screenshots jobs do. The date lives in
+          # the script; rust-src must land on that toolchain, not the channel.
           NIGHTLY="$(sed -n 's/^NIGHTLY=//p' scripts/build-xcframework.sh)"
           "$RUSTUP" toolchain install "$NIGHTLY" --profile minimal
           "$RUSTUP" component add rust-src --toolchain "$NIGHTLY"
@@ -269,11 +269,9 @@ jobs:
         run: swift test
 
       # `swift build`/`swift test` above compile for the HOST only, so nothing in an
-      # `#if os(iOS)` or `#if os(tvOS)` region is type-checked by them — about 8,600 lines across
-      # 93 files, including StreamViewIOS, TouchMouse, SiriRemotePointer and VirtualPadLayer. Both
-      # jobs that did build those platforms are gated off pull requests, so two of three shipping
-      # clients could be broken by a green PR, and were: 0a32f4eab and b5fe2a783 are post-merge
-      # repairs for exactly this, the second noting tvOS "couldn't be checked at all".
+      # `#if os(iOS)` or `#if os(tvOS)` region is type-checked by them (StreamViewIOS, TouchMouse,
+      # SiriRemotePointer and VirtualPadLayer among them). The jobs that build those platforms for
+      # real are gated off pull requests, so a green PR could break any of those clients.
       #
       # Simulator destinations and CODE_SIGNING_ALLOWED=NO: this asks the type-checker the question,
       # not the signing stack. The failure mode being caught is Swift's "unable to type-check this
@@ -371,10 +369,9 @@ jobs:
             || { echo "::error::marketing version must be X.Y.Z, got '$V'"; exit 1; }
           echo "VERSION=$V" >> "$GITHUB_ENV"
           # GITHUB_RUN_NUMBER is REPO-WIDE in Gitea (not per-workflow as on GitHub): consecutive runs
-          # of different workflows get consecutive numbers. That is why folding the old release.yml
-          # into this file could not reset the build number and strand TestFlight, which rejects a
-          # non-increasing CFBundleVersion. It also means this climbs by ~8 per push rather than by 1
-          # — monotonic either way, which is all App Store Connect asks.
+          # of different workflows get consecutive numbers, so this climbs by more than 1 per push
+          # — monotonic, which is all App Store Connect asks (TestFlight rejects a non-increasing
+          # CFBundleVersion).
           echo "BUILD_NUM=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           echo "version $V build $GITHUB_RUN_NUMBER (channel $PF_CHANNEL, latest stable ${PF_STABLE_TAG})"
 
@@ -384,8 +381,8 @@ jobs:
           dirname "$RUSTUP" >> "$GITHUB_PATH"
           "$RUSTUP" target add aarch64-apple-darwin x86_64-apple-darwin \
             aarch64-apple-ios aarch64-apple-ios-sim
-          # tvOS targets are tier-3 (no prebuilt std) — build-xcframework.sh compiles them with a
-          # PINNED nightly + -Zbuild-std. Read the date from the script so it lives in one place.
+          # tvOS: build-xcframework.sh compiles it with a PINNED nightly + -Zbuild-std. Read the
+          # date from the script so it lives in one place.
           NIGHTLY="$(sed -n 's/^NIGHTLY=//p' scripts/build-xcframework.sh)"
           "$RUSTUP" toolchain install "$NIGHTLY" --profile minimal
           "$RUSTUP" component add rust-src --toolchain "$NIGHTLY"
@@ -410,20 +407,18 @@ jobs:
       - name: Pin + prune Xcode DerivedData
         # Without -derivedDataPath, xcodebuild derives its DerivedData directory name from the
         # PROJECT'S ABSOLUTE PATH — and act_runner rotates its workspace
-        # (~/.cache/act/<hash>/hostexecutor), so each rotation minted a brand new ~760 MB tree
-        # under ~/Library that nothing ever collected. 31 of them piled up in three days
-        # (~32 GB with the shared ModuleCache), filled the runner's boot volume, and failed
-        # v0.16.0's xcframework build with "No space left on device". Pinning one path makes the
-        # tree REUSED instead of multiplied — it also keeps the module cache warm between runs.
+        # (~/.cache/act/<hash>/hostexecutor), so each rotation would mint a brand new ~760 MB tree
+        # under ~/Library that nothing ever collects, until the boot volume is full. Pinning one
+        # path makes the tree REUSED instead of multiplied — it also keeps the module cache warm
+        # between runs.
         #
-        # The directory is still named `release` after the workflow this job used to live in. Left
-        # alone deliberately: renaming it would orphan a warm ~760 MB tree and buy nothing.
+        # The directory name `release` is a label only; renaming it would orphan the warm tree.
         run: |
           DD="$HOME/ci/derived-data/release"
           mkdir -p "$DD"
           echo "DERIVED_DATA=$DD" >> "$GITHUB_ENV"
-          # Safety net for trees the pin does not own: the legacy per-path ones from before this
-          # change, and anything another job leaves in the default root. Untouched for a week ⇒ gone.
+          # Safety net for trees the pin does not own: anything another job leaves in the default
+          # root. Untouched for a week ⇒ gone.
           if [ -d "$HOME/Library/Developer/Xcode/DerivedData" ]; then
             find "$HOME/Library/Developer/Xcode/DerivedData" -mindepth 1 -maxdepth 1 \
               -mtime +7 -exec rm -rf {} + 2>/dev/null || true
@@ -560,21 +555,19 @@ jobs:
         run: |
           # Separate archive from the Developer ID one above: App Store needs a signed, entitled
           # archive that -exportArchive can re-sign for distribution, not the unsigned-then-codesign
-          # DMG path. Archive with AUTOMATIC signing (development). Why not a manually-specified
-          # profile (as this step used to do): the in-app license screens added a SwiftPM resource
-          # bundle (PunktfunkKit_PunktfunkKit), and a resource bundle is a product type that cannot
-          # carry a provisioning profile — a global PROVISIONING_PROFILE_SPECIFIER (here) or an
-          # sdk-scoped one (iOS/tvOS) lands on it and fails the archive ("does not support
+          # DMG path. Archive with AUTOMATIC signing (development), not a manually-specified
+          # profile: the SwiftPM resource bundle (PunktfunkKit_PunktfunkKit) is a product type that
+          # cannot carry a provisioning profile, and a global PROVISIONING_PROFILE_SPECIFIER (here)
+          # or an sdk-scoped one (iOS/tvOS) lands on it and fails the archive ("does not support
           # provisioning profiles"). Automatic signing assigns a profile only to the app and leaves
           # the resource bundle (and the macOS-host macro plugins) alone, and bakes the sandbox
           # entitlements in. -allowProvisioningUpdates lets Xcode sync the App ID capabilities and
-          # regenerate the managed *development* profile — needed because the App Groups capability
-          # (group.io.unom.punktfunk, in Config/Punktfunk-macOS.entitlements) invalidated the cached
-          # one. This is DEVELOPMENT signing against the Apple Development cert already in the
+          # regenerate the managed *development* profile (the App Groups capability,
+          # group.io.unom.punktfunk in Config/Punktfunk-macOS.entitlements, changes what it must
+          # carry). This is DEVELOPMENT signing against the Apple Development cert already in the
           # keychain, so the App-Manager ASC key suffices. DISTRIBUTION signing happens in the export
-          # step below
-          # (manual, via the plist). Quit Xcode so it can't prune the manually-installed App Store
-          # distribution profile that export needs.
+          # step below (manual, via the plist). Quit Xcode so it can't prune the manually-installed
+          # App Store distribution profile that export needs.
           osascript -e 'tell application "Xcode" to quit' >/dev/null 2>&1 || true
           pkill -x Xcode 2>/dev/null || true
           PROFILE="Punktfunk macOS App Store Distribution"
@@ -591,7 +584,7 @@ jobs:
             MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUM" \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="$TEAM_ID"
-          # App Review rejected an Accessibility event tap under guideline 2.4.5; never upload one.
+          # App Review rejects an Accessibility event tap (guideline 2.4.5); never upload one.
           MAS_BIN="$RUNNER_TEMP/Punktfunk-macos-appstore.xcarchive/Products/Applications/Punktfunk.app/Contents/MacOS/Punktfunk"
           if nm -u "$MAS_BIN" | grep -qE '_AXIsProcessTrusted|_CGEventTapCreate'; then
             echo "::error::App Store build links an Accessibility trust check or event tap (guideline 2.4.5)"
@@ -624,22 +617,21 @@ jobs:
       - name: iOS — archive + upload to TestFlight
         if: gitea.event_name != 'workflow_dispatch' || inputs.testflight == 'true'
         # Best-effort until the App Store Connect app record for io.unom.punktfunk exists.
-        # This covers the UPLOAD only: since the swift job builds the iOS scheme on every pull
-        # request, a compile break fails there first rather than being swallowed here.
+        # This covers the UPLOAD only: the swift job this one needs builds the iOS scheme, so a
+        # compile break fails there first rather than being swallowed here.
         continue-on-error: true
         run: |
           # Archive with AUTOMATIC signing (development) — see the macOS App Store step for the full
-          # rationale. The SwiftPM resource bundle (PunktfunkKit_PunktfunkKit, added with the in-app
-          # license screens) builds for iphoneos, so even the sdk-scoped PROVISIONING_PROFILE_SPECIFIER
-          # this step used to set matched it and failed the archive ("does not support provisioning
-          # profiles"). Automatic signing profiles only the app and leaves the resource bundle (and
-          # the macOS-host macro plugins) alone. -allowProvisioningUpdates lets Xcode sync the App ID
-          # capabilities and regenerate the managed *development* profiles for both io.unom.punktfunk
-          # AND the embedded io.unom.punktfunk.widgets — needed because adding the App Groups
-          # capability (group.io.unom.punktfunk, shared with the Widget/Live-Activity extension)
-          # invalidated the cached managed dev profile, which had no widgets profile at all. This is
-          # DEVELOPMENT signing against the Apple Development cert already in the keychain — no cert
-          # creation, so the App-Manager ASC key is sufficient (it only manages App IDs/dev profiles).
+          # rationale. The SwiftPM resource bundle (PunktfunkKit_PunktfunkKit) builds for iphoneos,
+          # so even an sdk-scoped PROVISIONING_PROFILE_SPECIFIER matches it and fails the archive
+          # ("does not support provisioning profiles"). Automatic signing profiles only the app and
+          # leaves the resource bundle (and the macOS-host macro plugins) alone.
+          # -allowProvisioningUpdates lets Xcode sync the App ID capabilities and regenerate the
+          # managed *development* profiles for both io.unom.punktfunk AND the embedded
+          # io.unom.punktfunk.widgets (the App Groups capability, group.io.unom.punktfunk, is
+          # shared with the Widget/Live-Activity extension). This is DEVELOPMENT signing against the
+          # Apple Development cert already in the keychain — no cert creation, so the App-Manager
+          # ASC key is sufficient (it only manages App IDs/dev profiles).
           # DISTRIBUTION signing is the export step below (manual, via the plist) and is unaffected.
           # A running Xcode.app prunes unrecognized profiles — quit it so the manually-installed
           # App Store distribution profile survives for export.
@@ -768,22 +760,22 @@ jobs:
           upsert_asset "$RID" "$IPA" "Punktfunk-$VERSION.ipa"
 
       - name: tvOS — archive + upload to TestFlight
-        # Canary + stable, the same track as iOS/macOS — the tvOS xcframework slice is now built
+        # Canary + stable, the same track as iOS/macOS — the tvOS xcframework slice is built
         # on every apple push (above), so this matches the iOS step's gate exactly.
         if: gitea.event_name != 'workflow_dispatch' || inputs.testflight == 'true'
         # Needs tvOS added to the App Store Connect app record + the tvOS platform installed
         # on the runner (xcodebuild -downloadPlatform tvOS). Covers the UPLOAD only: the swift job
-        # builds the tvOS scheme on every pull request, so a compile break fails there first.
+        # this one needs builds the tvOS scheme, so a compile break fails there first.
         continue-on-error: true
         run: |
           # Archive with AUTOMATIC signing (development) — see the macOS App Store step. The SwiftPM
-          # resource bundle (PunktfunkKit_PunktfunkKit) builds for appletvos and rejected the
-          # sdk-scoped profile this step used to set; Automatic signing profiles only the app and
+          # resource bundle (PunktfunkKit_PunktfunkKit) builds for appletvos and rejects an
+          # sdk-scoped profile; Automatic signing profiles only the app and
           # leaves the resource bundle + the macOS-host macro plugins (OnceMacro/SwizzlingMacro/
-          # AssociationMacro) alone. -allowProvisioningUpdates lets Xcode sync the App ID capabilities
-          # and regenerate the managed *development* profile — the tvOS app carries the App Groups key
-          # (group.io.unom.punktfunk) too, which invalidated the cached one. DEVELOPMENT signing against
-          # the Apple Development cert already in the keychain, so the App-Manager ASC key suffices.
+          # AssociationMacro) alone. -allowProvisioningUpdates lets Xcode sync the App ID
+          # capabilities and regenerate the managed *development* profile (the tvOS app carries the
+          # App Groups key, group.io.unom.punktfunk, too). DEVELOPMENT signing against the Apple
+          # Development cert already in the keychain, so the App-Manager ASC key suffices.
           # DISTRIBUTION signing is the export step below (manual, plist).
           osascript -e 'tell application "Xcode" to quit' >/dev/null 2>&1 || true
           pkill -x Xcode 2>/dev/null || true
@@ -876,17 +868,17 @@ jobs:
         run: sccache --show-stats
 
   # App Store screenshots of the real UI, zipped and attached to the run as a build artifact.
-  # Skipped on PRs (cost); runs on main pushes + manual dispatch. Needs the build/test job green
+  # Runs on release tags and manual dispatch only (see the `if:`). Needs the build/test job green
   # first, and is a separate job so a capture hiccup can never red the core signal.
   #
   # Scope = the two REQUIRED iOS sizes (iPhone 6.9" + iPad 13") + Apple TV (1920×1080), captured
   # on the Simulator (`simctl io screenshot`, no Screen Recording grant needed). The tvOS slice is
-  # Tier-3 (nightly -Zbuild-std, same as the distribute job — slow cold, cached on the self-hosted
-  # runner). The tvOS scene list is explicit: the gamepad-console scenes are iOS/macOS-only, and an
-  # unknown scene name falls back to a NORMAL app launch — the capture would silently be of the
-  # real empty app. macOS stays deliberately NOT in CI: the runner is headless (no window-server
-  # session), so the mac window capture can't run there — generate it locally on a GUI Mac with
-  # `clients/apple/tools/screenshots.sh macos`.
+  # built with the pinned nightly + -Zbuild-std, same as the distribute job — slow cold, cached on
+  # the self-hosted runner. The tvOS scene list is explicit: the gamepad-console scenes are
+  # iOS/macOS-only, and an unknown scene name falls back to a NORMAL app launch — the capture
+  # would silently be of the real empty app. macOS stays deliberately NOT in CI: the runner is
+  # headless (no window-server session), so the mac window capture can't run there — generate it
+  # locally on a GUI Mac with `clients/apple/tools/screenshots.sh macos`.
   screenshots:
     needs: swift
     # Release tags and manual runs only: the App Store takes screenshots per release, and each
@@ -907,8 +899,8 @@ jobs:
           dirname "$RUSTUP" >> "$GITHUB_PATH"
           "$RUSTUP" target add aarch64-apple-darwin x86_64-apple-darwin \
             aarch64-apple-ios aarch64-apple-ios-sim
-          # tvOS targets are tier-3 (no prebuilt std) — build-xcframework.sh compiles them with a
-          # PINNED nightly + -Zbuild-std; the date comes from the script (see the swift job).
+          # tvOS: build-xcframework.sh compiles it with a PINNED nightly + -Zbuild-std; the date
+          # comes from the script (see the swift job).
           NIGHTLY="$(sed -n 's/^NIGHTLY=//p' scripts/build-xcframework.sh)"
           "$RUSTUP" toolchain install "$NIGHTLY" --profile minimal
           "$RUSTUP" component add rust-src --toolchain "$NIGHTLY"
@@ -931,8 +923,8 @@ jobs:
           echo "$BREW_BIN" >> "$GITHUB_PATH"
 
       - name: Pin + prune DerivedData (same disease the distribute job already cures)
-        # screenshots.sh builds into a throwaway mktemp DerivedData per invocation — two
-        # fresh ~1 GB trees per run, zero reuse. Pin one stable root (PF_SHOT_DERIVED_DATA,
+        # screenshots.sh builds into a throwaway mktemp DerivedData per invocation — fresh
+        # ~1 GB trees every run, zero reuse. Pin one stable root (PF_SHOT_DERIVED_DATA,
         # honored by the script) so repeat runs are incremental, and GC anything a week old
         # in the default DerivedData root that no pin owns.
         run: |

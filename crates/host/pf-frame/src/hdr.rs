@@ -7,10 +7,9 @@
 //! - mastering luminance in 0.0001 cd/m²,
 //! - MaxCLL/MaxFALL in cd/m² (nits).
 //!
-//! SEI and AV1 metadata builders feed the NVENC and Vulkan Video encoders; display
-//! conversion the Windows capturers; the PQ cursor re-encode the Linux HDR blends.
-//! On Linux, `HdrSource` latches a failed HDR offer per source for capture and the
-//! virtual displays.
+//! SEI and AV1 metadata builders feed the NVENC, Vulkan Video and QSV encoders; the PQ
+//! cursor re-encode the Linux HDR blends. On Linux, `HdrSource` latches a failed HDR
+//! offer per source for capture and the virtual displays.
 
 /// SMPTE ST.2086 mastering volume + CEA-861.3 content light level, in HDR10
 /// SEI fixed-point units. Field-for-field the wire `punktfunk_core::quic::HdrMeta`;
@@ -47,8 +46,8 @@ fn xy_to_2086(v: f32) -> u16 {
 }
 
 /// Build [`HdrMeta`] from a source display's measured colour volume (CIE xy,
-/// cd/m²). `max_cll`/`max_fall` are nits; pass `0` when unknown — GetDesc1 does
-/// not expose them, and `0` lets the display fall back to mastering luminance.
+/// cd/m²). `max_cll`/`max_fall` are nits; pass `0` when unknown. `DXGI_OUTPUT_DESC1` has
+/// no MaxCLL or MaxFALL field.
 #[allow(clippy::too_many_arguments)]
 pub fn hdr_meta_from_display(
     red: (f32, f32),

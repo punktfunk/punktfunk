@@ -12,9 +12,9 @@ repository.workspace = true
 # Byte views of the DXVA buffers. `Pod` rejects padding at compile time; `min_const_generics`
 # covers `[u8; 810]` in the H.264 picture parameters.
 bytemuck = { version = "1.25", features = ["derive", "min_const_generics"] }
-# Direct dependency on the vendored parser crate, not just pf-bitstream: the picture-parameter
-# conversion consumes the parser's `Sps`/`Pps` types wholesale (pf-bitstream re-exports only
-# `Level`/`SliceHeader`).
+# Direct dependency on the vendored parser crate, not just pf-bitstream: `pic_h265` names the
+# parser's `ScalingLists` and the tests build `Sps`/`Pps` and IVF input from it. pf-bitstream
+# does not re-export those.
 cros-codecs = { workspace = true }
 pf-bitstream = { path = "../pf-bitstream" }
 tracing = "0.1"

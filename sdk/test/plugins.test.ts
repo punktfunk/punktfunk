@@ -222,9 +222,9 @@ describe("ensurePluginsDir", () => {
 		ensurePluginsDir(dir); // idempotent
 	});
 
-	// Field bug 2026-07-31: `bun add` installs into the nearest ancestor package.json, not into
-	// its working dir. With none here, a stray ~/package.json captured every plugin install — bun
-	// exited 0, the packages landed in the home dir, and the plugins dir stayed empty.
+	// `bun add` installs into the nearest ancestor package.json, not into its working dir. With
+	// none here, a stray ~/package.json captures every plugin install: bun exits 0, the packages
+	// land in the home dir, and the plugins dir stays empty.
 	test("seeds a package.json so bun cannot install into an ancestor", () => {
 		const dir = path.join(tmp("ensure-root"), "plugins");
 		ensurePluginsDir(dir);

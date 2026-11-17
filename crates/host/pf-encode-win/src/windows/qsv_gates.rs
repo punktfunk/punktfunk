@@ -269,7 +269,7 @@ fn picture(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Feed {
-    /// Today's path: a copy into one of the runtime's surfaces.
+    /// A copy into one of the runtime's surfaces, the path when our allocator is refused.
     Runtime,
     /// Our allocator, a copy into our ring at the coded size.
     Copy,

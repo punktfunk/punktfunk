@@ -22,7 +22,7 @@ actor ArtCache {
     private let maxAge: TimeInterval
     private let fileManager = FileManager.default
     /// Bytes written since the last prune. Pruning walks the whole directory and stats every
-    /// entry, so doing it per store made a cold 500-title library quadratic — and every poster
+    /// entry, so pruning per store is quadratic over a cold 500-title library — and every poster
     /// waits behind it on this actor.
     private var writtenSincePrune = 0
 

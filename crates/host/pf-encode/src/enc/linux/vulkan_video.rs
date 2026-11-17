@@ -3,10 +3,12 @@
 //! slot (no IDR): HEVC via an explicit short-term RPS, AV1 via `ref_frame_idx` plus
 //! `primary_ref_frame = NONE` (breaks the CDF chain).
 //!
-//! Capture is packed RGB (dmabuf/CPU). The backend imports it, runs on-GPU RGB→4:2:0 compute CSC,
-//! then encodes: 8-bit BT.709 (`rgb2yuv.comp`) or 10-bit BT.2020 (`rgb2yuv10.comp` + HEVC Main10).
-//! Opt-in via `PUNKTFUNK_VULKAN_ENCODE`; gated to HEVC/AV1 plus a device that advertises the encode
-//! op. AV1 encode structs that pinned `ash 0.38` predates live in `vk_av1_encode.rs`.
+//! Capture is packed RGB (dmabuf/CPU) or a producer's NV12/P010. RGB is imported and converted by
+//! the on-GPU compute CSC, or by the VCN's EFC (`RgbDirect`); planar is imported as the encode
+//! source. The CSC writes 8-bit BT.709 (`rgb2yuv.comp`) or 10-bit, BT.2020 PQ (`rgb2yuv10.comp`)
+//! or BT.709 (`rgb2yuv10_709.comp`). `PUNKTFUNK_VULKAN_ENCODE` switches it; it needs HEVC/AV1 and
+//! a device that advertises the encode op. AV1 encode structs that pinned `ash 0.38` predates
+//! live in `vk_av1_encode.rs`.
 //! Evidence: `design/vkenc-probe-harness`.
 // UNSAFE-LINT EXEMPTION: raw ash/Vulkan Video against an app-owned DPB. Wrapping each call would
 // add one `unsafe {}` plus a SAFETY comment that only restates the signature. Clearing this file
@@ -108,7 +110,7 @@ const PHASE_SUBMIT: usize = 1;
 const PHASE_WAIT: usize = 2;
 const PHASE_READ: usize = 3;
 const PHASE_NAMES: [&str; 4] = ["import", "submit", "wait", "read"];
-/// 100 ms is six frames at 60 Hz: a healthy phase ends under 10 ms, a field stall runs 300–900.
+/// 100 ms is six frames at 60 Hz; a healthy phase ends under 10 ms.
 const PHASE_SPIKE: std::time::Duration = std::time::Duration::from_millis(100);
 /// One warning per second at most: a run of short stalls would otherwise log every frame.
 const PHASE_SPIKE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
@@ -156,7 +158,8 @@ impl PhaseStats {
         Some(done)
     }
 }
-/// AV1 base quantizer (0..=255). CBR overrides per frame; used as the seed and for constant-Q.
+/// AV1 base quantizer (0..=255) in the frame header. Rate control overrides it per frame; no
+/// mode here is constant-Q.
 const AV1_BASE_Q_IDX: u8 = 128;
 
 /// `VK_KHR_video_encode_intra_refresh` latched at open (see [`intra_refresh_caps`]).
@@ -235,9 +238,10 @@ fn intra_refresh_caps(
 struct RgbDirect {
     x_offset: u32, // vk_valve_rgb::CHROMA_OFFSET_*
     y_offset: u32,
-    /// Mode is not 64×16-aligned, so the capture cannot be the encode source under the session's
-    /// ALIGNED `codedExtent` (EFC would read past it). Each frame copies into a per-slot ALIGNED
-    /// BGRA staging image with edge rows/columns duplicated, then encodes from there.
+    /// Mode is not 64×16-aligned and `true_extent` is off, so the capture cannot be the encode
+    /// source under the session's ALIGNED `codedExtent` (EFC would read past it). Each frame
+    /// copies into a per-slot ALIGNED staging image in the capture's RGB format with edge
+    /// rows/columns duplicated, then encodes from there.
     padded: bool,
     /// Unaligned-mode default (`PUNKTFUNK_VULKAN_RGB_TRUE_EXTENT=0` falls back to `padded`):
     /// import the visible-size buffer and pass TRUE-SIZE source `codedExtent`. RADV programs
@@ -813,7 +817,7 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> Option<VulkanEncodeCaps> {
 }
 
 /// Whether `pd` accepts an encode profile for `codec_op` at this bit depth. Profile chain is
-/// byte-identical to [`VulkanVideoEncoder::open_inner`].
+/// [`VulkanVideoEncoder::open_inner`]'s, minus the RGB-conversion struct.
 ///
 /// # Safety
 /// `vq_inst` must wrap the live instance `pd` was enumerated from.
@@ -887,9 +891,10 @@ unsafe fn modifier_importable(
 }
 
 /// DRM modifiers the encode device accepts for a `fourcc` capture dmabuf in every
-/// packed import mode the runtime can create: SAMPLED (compute CSC), TRANSFER_SRC
-/// (padded-copy fallback), and VIDEO_ENCODE_SRC under the session's RGB profile
-/// at `ten_bit`; packed RGB needs the last two only on a device with EFC. Driver
+/// import mode the runtime can create: SAMPLED (compute CSC), TRANSFER_SRC
+/// (padded-copy fallback), and VIDEO_ENCODE_SRC under the session's profile (RGB
+/// conversion for packed RGB, the plain one for NV12/P010) at `ten_bit`; packed RGB
+/// needs the last two only on a device with EFC. Driver
 /// order, LINEAR excluded, deduplicated. Unknown fourcc, or
 /// any loader/instance/device/query failure, is an empty list — the offer stays
 /// LINEAR rather than failing capture.
@@ -988,8 +993,8 @@ enum SrcAcquire {
     CpuUpload,
 }
 
-/// Persistently mapped base of a slot's `bs` memory (HOST_VISIBLE|HOST_COHERENT, mapped once).
-/// `vkFreeMemory` implicitly unmaps, so teardown needs no explicit unmap.
+/// Persistently mapped base of a slot's `bs` memory (HOST_VISIBLE, mapped once; coherent per
+/// `Frame::bs_coherent`). `vkFreeMemory` implicitly unmaps, so teardown needs no explicit unmap.
 struct BsPtr(*const u8);
 // SAFETY: a Vulkan host mapping is a property of the allocation, not of the thread that mapped
 // it (the spec places no thread affinity on mapped pointers); every dereference goes through the
@@ -1084,7 +1089,7 @@ struct Frame {
     bs_ptr: BsPtr,
     /// False when `bs` sits in cached, non-coherent memory: `read_slot` invalidates first.
     bs_coherent: bool,
-    // Unaligned RGB-direct only ([`RgbDirect::padded`]): ALIGNED BGRA encode-src.
+    // Padded RGB-direct only ([`RgbDirect::padded`]): ALIGNED encode-src in the capture's format.
     pad: VkImageAlloc,
     csc_set: vk::DescriptorSet, // Y/UV fixed; binding 0 (RGB) rewritten each use
     y: VkImageAlloc,
@@ -1225,8 +1230,8 @@ pub struct VulkanVideoEncoder {
     rc_mode: vk::VideoEncodeRateControlModeFlagsKHR,
     /// HRD window `(virtualBufferSizeInMs, initialVirtualBufferSizeInMs)`. House ~1-frame
     /// window ([`crate::vbv_window_ms`]) under VBR; loose `(1000, 500)` under CBR — tightening
-    /// CBR is a filler regression. Latched so the four `VideoEncodeRateControlInfoKHR` sites
-    /// (two declare, two install) cannot drift (`VUID-vkCmdBeginVideoCodingKHR-pBeginInfo-08254`).
+    /// CBR is a filler regression. Latched so the three `rc_info` sites (one declare, two
+    /// install) cannot drift (`VUID-vkCmdBeginVideoCodingKHR-pBeginInfo-08254`).
     vbv_ms: (u32, u32),
     /// `VkVideoEncodeCapabilitiesKHR::maxBitrate`. Bounds `bitrate` at open and every retarget.
     /// 0 means "not filled in" — treated as unbounded.
@@ -1241,8 +1246,8 @@ pub struct VulkanVideoEncoder {
     phases: PhaseStats,
     /// Lays out CPU payloads for the staging buffer; its scratch is reused across frames.
     cpu_ingest: CpuIngest,
-    /// RGB-direct (EFC) config. `Some` ⇒ picture format is BGRA, VCN does CSC; `None` ⇒ compute
-    /// CSC. Fixed per session (picture format is baked into the video session).
+    /// RGB-direct (EFC) config. `Some` ⇒ picture format is the captured RGB, VCN does CSC;
+    /// `None` ⇒ compute CSC. Fixed per session (picture format is baked into the video session).
     rgb: Option<RgbDirect>,
     /// The host's crop and scale ahead of the CSC ([`Encoder::set_input_crop`]). CSC sessions only.
     reframe: Option<Reframe>,
@@ -1268,7 +1273,7 @@ pub struct VulkanVideoEncoder {
     first_frame: bool, // RESET + DPB layout + RC install + IDR
     /// Whether the session object currently has a non-default RC mode. Not `!first_frame`:
     /// `reset()` re-arms `first_frame` without touching the session, so CBR is still current.
-    /// Keying the begin-coding declaration on `first_frame` omitted it after every reset
+    /// Keying the begin-coding declaration on `first_frame` would omit it after every reset
     /// (`VUID-vkCmdBeginVideoCodingKHR-pBeginInfo-08253`). Set on install; cleared only by a
     /// new session.
     rc_installed: bool,
@@ -1295,8 +1300,8 @@ unsafe impl Send for VulkanVideoEncoder {}
 impl VulkanVideoEncoder {
     /// Open a session. `cursor_blend` means the encoder may receive cursor bitmaps to composite.
     /// EFC cannot blend, so those sessions default to CSC; everywhere else RGB-direct is the
-    /// default wherever the probe passes. `PUNKTFUNK_VULKAN_RGB_DIRECT` overrides both ways
-    /// (see [`Knobs::vulkan_rgb_direct`]).
+    /// default wherever the probe passes. `PUNKTFUNK_VULKAN_RGB_DIRECT=0` turns it off; `=1` does
+    /// not override a cursor-blend session (see [`Knobs::vulkan_rgb_direct`]).
     pub fn open(
         codec: Codec,
         format: PixelFormat,
@@ -1703,7 +1708,7 @@ impl VulkanVideoEncoder {
             max_level: av1_max_level,
         };
         // RGB-direct: picture format is captured RGB; chained create-info selects EFC conversion.
-        // DPB stays NV12 (reconstruction is YUV). Built unconditionally; chained only when active.
+        // DPB stays YUV (reconstruction is). Built unconditionally; chained only when active.
         let mut rgb_sci = vrgb::VideoEncodeSessionRgbConversionCreateInfoVALVE {
             s_type: vrgb::stype(vrgb::ST_SESSION_CREATE_INFO),
             p_next: std::ptr::null(),
@@ -1769,7 +1774,7 @@ impl VulkanVideoEncoder {
         // Native NV12 (and AV1+RGB true-extent) author TRUE-SIZE headers: RADV programs firmware
         // padding from matching `codedExtent`. AV1 forbids sequence header (`flags-10324`) or
         // reference slots (`flags-10325`) disagreeing with source unless FRAME_SIZE_OVERRIDE /
-        // MOTION_VECTOR_SCALING (RADV has neither). HEVC stays app-aligned (conformance window).
+        // MOTION_VECTOR_SCALING (RADV has neither). HEVC RGB stays aligned (conformance window).
         let (hdr_w, hdr_h) =
             if native_nv12 || (av1 && rgb_cfg.as_ref().is_some_and(|c| c.true_extent)) {
                 (rw, rh)
@@ -2030,7 +2035,8 @@ impl VulkanVideoEncoder {
 
 impl VulkanVideoEncoder {
     /// Import a DMA-BUF with usage/profile matching this session's source mode. Native NV12 and
-    /// aligned RGB-direct are profiled `VIDEO_ENCODE_SRC`. Padded RGB-direct is transfer-source only.
+    /// unpadded RGB-direct are profiled `VIDEO_ENCODE_SRC`. Padded RGB-direct is transfer-source
+    /// only.
     unsafe fn import_dmabuf(
         &self,
         d: &pf_frame::DmabufFrame,
@@ -2170,8 +2176,8 @@ impl VulkanVideoEncoder {
     ) -> Result<vk::ImageView> {
         let dev = self.device.clone();
         let (w, h) = (self.width, self.height);
-        // CSC: size to the real frame so clamp-to-edge duplicates true content (aligned-size
-        // made the clamp land on unwritten rows). RGB-direct: aligned dims, CPU-side padding below.
+        // CSC: size to the real frame so clamp-to-edge duplicates true content (an aligned size
+        // lands the clamp on unwritten rows). RGB-direct: aligned dims, CPU-side padding below.
         let (iw, ih) = if self.rgb.is_some() {
             (w, h)
         } else {
@@ -2586,7 +2592,7 @@ impl VulkanVideoEncoder {
     }
 
     /// Ring the loop's AU wake once `slot`'s fence signals, from the fence waiter. Without
-    /// the thread the AU waits for the loop's next tick, as a probe alone left it.
+    /// the thread, a probe alone leaves the AU waiting for the loop's next tick.
     fn arm_fence(&mut self, slot: usize) {
         if self.fence_waiter.is_none() {
             let device = self.device.clone();
@@ -2721,9 +2727,9 @@ impl Encoder for VulkanVideoEncoder {
     }
 
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
-        // Blocking at depth-1 sync. `pipelined` probes: the fence waiter's ring brings the
-        // loop back for an unready oldest, so encode latency stops bounding its cadence.
-        // `None` = nothing submitted, or (pipelined) the oldest AU is still on the GPU.
+        // Unpipelined, this waits on the oldest fence. `pipelined` probes: the fence waiter's
+        // ring brings the loop back for an unready oldest, so encode latency stops bounding its
+        // cadence. `None` = nothing submitted, or (pipelined) the oldest AU is still on the GPU.
         if !self.pending.is_empty() {
             return Ok(self.pending.pop_front());
         }

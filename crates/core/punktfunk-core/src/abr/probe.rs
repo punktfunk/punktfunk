@@ -56,8 +56,8 @@ const RAMP_HOLD_SWING: u64 = 2;
 const RAMP_LOSS_SLACK_PCT: u64 = 5;
 /// What a wall licenses. A wall measured once is a snapshot of a link that
 /// moves — Wi-Fi by ±30 % — and the 30 % held back is what a 100 ms airtime
-/// stall spends instead of frames. It is also what the in-session burst has
-/// always kept, so the top of the range is no worse than what people like.
+/// stall spends instead of frames. It is also what the in-session burst keeps,
+/// so the top of the range is no worse than what people like.
 const RAMP_CEILING_PCT: u32 = 70;
 /// The session opens at this share of what the ramp proved.
 const RAMP_START_PCT: u32 = 50;
@@ -218,8 +218,8 @@ struct Step {
     /// Re-asking a rate that was refused without loss.
     repeat: bool,
     /// How long the host was asked to send for, microseconds. The offered
-    /// side of the ratio is measured against this rather than against the
-    /// host's own `duration_ms`: that is a wire field it rounds down to whole
+    /// side of the ratio is measured against this unless the host's own
+    /// `duration_ms` ran past it: that is a wire field it rounds down to whole
     /// milliseconds off its own clock, which is 4 % of a 25 ms step, and the
     /// sender-limit rule below has already established that the host put
     /// what was asked on the wire (`send_dropped == 0`, offered ≈ asked).
@@ -281,13 +281,13 @@ struct Ramp {
 ///
 /// The clamp is the whole of what a short step can honestly say. A 5 Mbps
 /// step is a dozen packets; whether the last one lands 6 ms or 15 ms after
-/// the first swings the implied rate 2.5× (rig, every profile), and an
-/// unclamped reading opened sessions on a rate no step ever offered.
+/// the first swings the implied rate 2.5×, and an unclamped reading would
+/// open a session on a rate no step offered.
 ///
 /// What a step offered is its wire when that is more than it asked: filler
 /// frames are small, so parity and headers put a 10 Mbps step on the wire
-/// at ~17 Mbps, and a wall read against the asked rate sat a fifth under
-/// the link.
+/// at ~17 Mbps, and a wall read against the asked rate would sit a fifth
+/// under the link.
 fn step_rate_kbps(step: &Step, r: &ProbeReport) -> u32 {
     let us = u64::from(r.client_interval_us.max(1));
     let rate = r.delivered_bytes.saturating_mul(8_000) / us;
@@ -1387,8 +1387,7 @@ mod tests {
     ///
     /// Two steps that differ by 600 µs — one arrival pattern inside the same
     /// millisecond — land on opposite sides of the bar, which sits the hold
-    /// past the 10 %. Four of the rig's 28 walls sat in exactly that band,
-    /// one of them latching 80 Mbps on a 237 Mbps link.
+    /// past the 10 %.
     #[test]
     fn a_step_is_judged_in_microseconds() {
         for (interval_us, wall) in [(42_000u32, false), (42_600u32, true)] {
@@ -1612,7 +1611,7 @@ mod tests {
         let (target, duration_ms) = rig.p.poll(at, 40, 40).expect("the burst fires");
         assert_eq!(duration_ms, PROBE_MS);
         assert_eq!(target, probe_target_kbps(1_026_432));
-        // And its answer binds, as an old host's always has.
+        // And its answer binds, as an old host's does.
         assert_eq!(
             rig.p.on_result(report(30_000_000, 800), at),
             Measured::Ceiling {
@@ -1747,8 +1746,8 @@ mod tests {
         );
     }
 
-    /// A host without `HOST_CAP2_RAMP` gets exactly today's session: no
-    /// steps, and the 800 ms burst two seconds after video flows.
+    /// A host without `HOST_CAP2_RAMP` gets no steps, and the 800 ms burst
+    /// two seconds after video flows.
     #[test]
     fn an_old_host_still_gets_the_legacy_burst() {
         let now = Instant::now();
@@ -1809,7 +1808,7 @@ mod tests {
 
     /// Burst must prove the stream cap and no more. Above `cap / 0.7`
     /// is discarded by `set_ceiling` (see
-    /// `abr::tests::the_stream_bound_clamps_a_learned_ceiling_only`).
+    /// `abr::controller::tests::the_stream_bound_clamps_a_learned_ceiling_only`).
     #[test]
     fn the_probe_target_proves_the_stream_cap_without_overshooting_it() {
         for (w, h, hz, codec, depth) in [

@@ -114,7 +114,7 @@ impl AddHostScreen {
         let port = self.port.parse().unwrap_or(9777);
         match &self.edits {
             Some(key) => {
-                // Same unnamed-host fallback as the store: nickname, else address.
+                // The toast names the host by nickname, else address.
                 let label = if name.is_empty() {
                     addr.clone()
                 } else {

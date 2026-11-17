@@ -102,8 +102,8 @@ pub struct SetBitrate {
     pub bitrate_kbps: u32,
 }
 
-/// Why an ack is short of what was asked. The tenth byte of
-/// [`BitrateChanged`], toward a client whose `ClientHello` set
+/// Why an ack is short of what was asked: [`BitrateChanged::reason`],
+/// toward a client whose `ClientHello` set
 /// [`EXT_ABR_ACK_REASON`](super::EXT_ABR_ACK_REASON) in its `abr_features`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AckReason {
@@ -116,8 +116,7 @@ pub enum AckReason {
     /// Encode is behind the frame cadence, so the climb is refused for now.
     /// A GPU fact, not a rate the encoder cannot hold.
     Cadence,
-    /// The host divided a shared path between sessions. Reserved: no host
-    /// sends it yet.
+    /// The host divided a shared path between sessions.
     Governor,
     /// PyroWave at an explicit rate: the pin is not negotiable.
     Pinned,
@@ -152,10 +151,9 @@ impl AckReason {
 /// In-place retarget has no IDR; a rebuild switches on the next frame (IDR).
 /// No answer ⇒ an old host that does not renegotiate bitrate.
 ///
-/// Nine bytes, or ten with [`AckReason`]. The host lengthens it only for a client whose
-/// `ClientHello` set [`EXT_ABR_ACK_REASON`](super::EXT_ABR_ACK_REASON) in its `abr_features`,
-/// because every other client rejects an ack of any other length. `reason: None` is what an
-/// older host sends and what this host sends to a client that did not ask.
+/// The host adds the [`AckReason`] only for a client whose `ClientHello` set
+/// [`EXT_ABR_ACK_REASON`](super::EXT_ABR_ACK_REASON) in its `abr_features`. `reason: None` is
+/// what an older host sends and what this host sends to a client that did not ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BitrateChanged {
     pub bitrate_kbps: u32,
@@ -392,7 +390,7 @@ pub struct ClipFetchHdr {
 // [`HOST_CAP_CURSOR`](super::caps::HOST_CAP_CURSOR) — host then stops compositing.
 
 /// Per-side pixel cap. A 0.43 client re-frames a shape behind a `u16` length,
-/// so 120² RGBA (57.6 KiB) is the largest it takes. Host downscales anything larger.
+/// so 120² RGBA (57 600 B) is the largest it takes. Host downscales anything larger.
 pub const CURSOR_SHAPE_MAX_SIDE: u16 = 120;
 
 /// `host → client`: pointer bitmap changed. Never
@@ -675,10 +673,10 @@ pub(crate) fn params_within(params: &[(String, String)], value_max: usize) -> bo
         .all(|(name, value)| name.len() <= LAUNCH_ID_MAX && value.len() <= value_max)
 }
 
-/// `client → host` ([`MSG_INPUT_EDGE`]): one input event whose loss would stick — a key or
-/// mouse-button press or release, or a character of text — on the control stream instead of
-/// the datagram plane, so QUIC resends it and keeps its order. Sent only toward
-/// [`HOST_CAP2_INPUT_EDGES`](super::HOST_CAP2_INPUT_EDGES).
+/// `client → host` ([`MSG_INPUT_EVENT`](super::v2::registry::MSG_INPUT_EVENT)): one input
+/// event whose loss would stick — a key or mouse-button press or release, or a character of
+/// text — on the control stream instead of the datagram plane, so QUIC resends it and keeps
+/// its order. Sent only toward [`HOST_CAP2_INPUT_EDGES`](super::HOST_CAP2_INPUT_EDGES).
 /// The payload is the datagram encoding unchanged, so the host feeds both paths into one
 /// queue; any kind decodes, and the grants gate it exactly as they gate the datagram.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -58,9 +58,9 @@ impl BufferDescriptor {
     }
 }
 
-/// `n` short-format records, matching [`crate::dxva::slice_bytes`].
-/// Saturating: a `u32` holds 429 million ten-byte records; the packer already
-/// refused an AU that large.
+/// `records` slice or tile records of `record_size` bytes, matching
+/// [`crate::dxva::slice_bytes`]. Saturating: a `u32` holds 429 million ten-byte
+/// records; the packer already refused an AU that large.
 fn slice_control_size(record_size: usize, records: usize) -> u32 {
     u32::try_from(record_size.saturating_mul(records)).unwrap_or(u32::MAX)
 }

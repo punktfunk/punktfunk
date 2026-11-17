@@ -8,8 +8,8 @@
 # Installs: rustup (+ both darwin targets for the universal xcframework), Node.js (the
 # runner executes JS actions like actions/checkout via `node` from PATH — host mode does
 # not auto-provision it), the act_runner binary (host mode — jobs run directly on macOS,
-# no containers), and a root LaunchDaemon that keeps the runner daemon alive (see the
-# launchd section for why it can't be a user LaunchAgent). Registration only happens once
+# no containers), and a system-domain LaunchDaemon that keeps the runner daemon alive (see
+# the launchd section for why it can't be a user LaunchAgent). Registration only happens once
 # (.runner file); the token is NOT persisted by this script.
 #
 # Env knobs: GITEA_INSTANCE (default https://git.unom.io), GITEA_RUNNER_TOKEN (required
@@ -88,8 +88,8 @@ fi
 # to unbundled CLI binaries in gui/user launchd domains — a user LaunchAgent can NOT reach
 # a Gitea instance on the LAN (curl over ssh works, the same dial from the agent fails).
 # System-domain daemons are exempt and survive reboots with nobody logged in, so the
-# runner ships as a root LaunchDaemon; installing it needs sudo once. Without sudo this
-# script still leaves a working (but reboot-volatile) nohup daemon behind.
+# runner ships as a system-domain LaunchDaemon run as $USER; installing it needs sudo once.
+# Without sudo this script still leaves a working (but reboot-volatile) nohup daemon behind.
 # PATH must carry the CLT tools, cargo, node and act_runner itself; jobs inherit it.
 # Deliberately NO DEVELOPER_DIR here: cargo (rust ld) must stay on the system default —
 # a newer-than-OS Xcode's ld emits dylibs the running dyld rejects ("mis-aligned

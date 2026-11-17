@@ -1,9 +1,9 @@
 //! Display-topology seam: the calls the isolate ladder makes into `pf-win-display`.
 //!
-//! [`CcdOps`] is how [`super::isolate_txn`], the exclusive watch's survivor read, its
-//! re-assert and a seat's HDR write reach the OS. [`WinCcd`] is the one production implementor
-//! and passes each call straight on. The trait remains so tests can script what an isolate
-//! observed.
+//! [`CcdOps`] is how [`super::isolate_txn`], the exclusive watch's survivor read and re-assert,
+//! the standby-sink pass and a seat's HDR write reach the OS. [`WinCcd`] is the one production
+//! implementor and passes each call straight on. The trait remains so tests can script what an
+//! isolate observed.
 //!
 //! The manager's other `pf_win_display` calls are direct.
 

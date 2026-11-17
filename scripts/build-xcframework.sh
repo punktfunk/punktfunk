@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build PunktfunkCore.xcframework for the Apple clients — run ON A MAC with Xcode + rustup.
 #
-#   rustup target add aarch64-apple-darwin x86_64-apple-darwin   # + aarch64-apple-ios for iOS
+#   rustup target add aarch64-apple-darwin x86_64-apple-darwin # + aarch64-apple-ios{,-sim} for iOS
 #   bash scripts/build-xcframework.sh
 #
 # Output: clients/apple/PunktfunkCore.xcframework (consumed by clients/apple/Package.swift).
@@ -70,7 +70,7 @@ if [[ "$(cat "$HOST_LINKER" 2>/dev/null)" != "$HOST_LINKER_SH" ]]; then
     printf '%s\n' "$HOST_LINKER_SH" > "$HOST_LINKER"
     chmod +x "$HOST_LINKER"
 fi
-# Both host triples. On the same-triple slice it also links the cdylib, which is not shipped.
+# Both host triples, so an Apple-silicon or an Intel runner links its host artifacts through it.
 export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$HOST_LINKER"
 export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$HOST_LINKER"
 

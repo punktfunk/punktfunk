@@ -22,12 +22,10 @@ GTK=clients/linux/data/icons/scalable/actions
 WIN=clients/windows/assets/os
 APPLE=clients/apple/Sources/PunktfunkKit/Resources/OsIcons.xcassets
 
-# The Windows shell has no vector element and no theme-aware tint, so its PNGs bake in one
-# colour. That colour is WHITE, because the shell draws these in exactly one place: the host
-# card's avatar, an accent-filled circle on both themes. (It was mid-grey while the mark sat
-# in the card's status row instead — grey is what stays legible on a card face, and it read
-# as smudged the moment the mark moved onto the accent fill.) Tall, because it is now the
-# card's leading visual rather than the smallest glyph in a row.
+# The Windows shell shows these in an `Image`, which takes no theme tint, so its PNGs bake in
+# one colour. That colour is WHITE, because the shell draws these in exactly one place: the host
+# card's avatar, an accent-filled circle on both themes. Tall, because the mark is the card's
+# leading visual rather than the smallest glyph in a row.
 WIN_WHITE='#FFFFFF'
 WIN_HEIGHT=96
 

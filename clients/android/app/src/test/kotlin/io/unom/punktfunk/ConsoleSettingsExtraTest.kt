@@ -11,11 +11,9 @@ import org.junit.Test
  * The Android-only console settings ride `trust::Settings::extra`, which is `#[serde(flatten)]`:
  * they are TOP-LEVEL keys of the settings document, beside `width` and `codec`.
  *
- * They were written and read nested under an `"extra"` object instead. Serde put that whole
- * object into the map under the literal key `"extra"`, so no console row ever found
- * `android.gamepad_ui_enabled` — and the value the console saved came back to Kotlin as the one
- * Kotlin had just sent. On glass that was a "Controller-optimized UI" switch you could turn off
- * with nothing happening: the console stayed up, because the setting never moved.
+ * Nested under an `"extra"` object, serde puts that whole object into the map under the literal
+ * key `"extra"`, so no console row finds `android.gamepad_ui_enabled` and a value the console
+ * saves comes back to Kotlin as the one Kotlin had just sent.
  */
 class ConsoleSettingsExtraTest {
     @Test

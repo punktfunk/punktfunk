@@ -4,9 +4,9 @@
 #
 #   scripts/abr-rig/matrix.sh [seconds] [repeats]
 #
-# Four cells — burst target {the webOS client's 320 Mbps, the 2 Gbps default} ×
+# Four cells — burst target {the webOS client's pinned 320 Mbps, the unpinned 2 Gbps} ×
 # keyframe answer {an IDR 700 ms later, every fourth ask 300 ms later} — plus
-# one that holds the picture far longer than the field did, to find the freeze
+# one that holds the picture far longer than the others, to find the freeze
 # length at which the aftermath reaches a judged window at all. Each runs
 # `repeats` times: real time is noisy and one run of anything here is an
 # anecdote.
@@ -41,9 +41,9 @@ cell webos-idr 320000 idr 700
 cell webos-wave 320000 wave:4 300
 cell default-idr 2000000 idr 700
 cell default-wave 2000000 wave:4 300
-# Sensitivity, not a field shape: how long must the freeze be before its asks
-# reach a judged window at all? Sixteen asks at one per 100 ms plus the answer
-# is ~1.6 s, against a ~700 ms freeze in the cells above.
+# Sensitivity, not a realistic shape: how long must the freeze be before its asks
+# reach a judged window at all? Sixteen asks at one per 100 ms span ~1.6 s,
+# against a ~700 ms freeze in the cells above.
 cell default-slow 2000000 wave:16 300
 
 "$HERE/read-matrix.sh" "$OUT"

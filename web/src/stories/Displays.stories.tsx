@@ -11,10 +11,6 @@ import { displayEffective } from "./lib/fixtures";
  * whose correctness is geometric rather than textual. `describePolicy` is covered by its own
  * table test; the sentence is rendered here beside the map because the two are read together,
  * and a story is the only place a reviewer sees them that way.
- *
- * The old story for this page existed to pin the motion nesting of a preset grid that no longer
- * exists — the presets moved into a dialog, so the grid, its stagger and the tab shell it hung
- * from all went with the draft machinery.
  */
 const mon = (over: Partial<ApiMonitorInfo>): ApiMonitorInfo => ({
 	connector: "DP-1",

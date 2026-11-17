@@ -26,14 +26,14 @@ final class WakePolicyTests: XCTestCase {
         }
     }
 
-    /// 0d8b710cd: with Auto-wake off a library open sends nothing, yet the host can still be
-    /// offered a Wake Host.
+    /// With Auto-wake off a library open sends nothing, yet the host can still be offered a
+    /// Wake Host.
     func testAutoWakeOffLeavesTheExplicitWake() {
         XCTAssertFalse(WakePolicy.autoWakes(macs, autoWake: false))
         XCTAssertTrue(WakePolicy.canWake(macs))
     }
 
-    /// f33badd4a: a host with no MAC is never woken, so a load asks it once.
+    /// A host with no MAC is never woken, so a load asks it once.
     func testNoMacNeverWakes() {
         XCTAssertFalse(WakePolicy.autoWakes([], autoWake: true))
     }

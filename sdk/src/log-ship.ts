@@ -1,14 +1,12 @@
-// The runner's log door into the web console (field report 2026-08-03, the VirtualHere plugin).
+// The runner's log door into the web console.
 //
-// WHY THIS EXISTS: plugins are not host child processes. The runner is a separate bun process that
-// `import()`s each plugin in-process, so a plugin's output is THIS process's stdout and the host's
+// WHY THIS EXISTS: plugins are not host child processes. A plugin runs in the runner (a separate
+// bun process) or in a child process of it, so its output is that process's stdout and the host's
 // `tracing` ring — the thing `GET /api/v1/logs` and the console's Logs page serve — never sees a
-// byte of it. On Linux the fallback was `journalctl --user -u punktfunk-scripting`; on Windows the
-// runner scheduled task wrote no log file at all (it does now — `scripting-run.cmd` tees to
-// `%ProgramData%\punktfunk\plugin-state\runner.log`, because THIS door needs the very connection
-// whose failure you'd be reading about; field report 2026-08-18). Both need shell access on the
-// host box, which is the exact thing the console exists to avoid. A user hitting a plugin
-// misconfiguration therefore had no way to see the error explaining it.
+// byte of it. Reading it otherwise means `journalctl --user -u punktfunk-scripting` on Linux or
+// `%ProgramData%\punktfunk\plugin-state\runner.log` on Windows (`scripting-run.cmd` tees there,
+// because THIS door needs the very connection whose failure you'd be reading about). Both need
+// shell access on the host box, which is the exact thing the console exists to avoid.
 //
 // So: tee every console line to `POST /api/v1/plugins/logs`, which lands it in the host's ring
 // alongside the host's own lines under the target `plugin:<source>`.
@@ -36,8 +34,8 @@ type Method = keyof typeof LEVEL_BY_METHOD;
 const METHODS = Object.keys(LEVEL_BY_METHOD) as Method[];
 
 /**
- * `<ISO> [<source>] [LEVEL:] <message>` — the line format `plugin-kit`'s `loggingLayer` and this
- * package's `runner.ts` both emit. Parsing it back recovers the plugin name and level that the
+ * `<ISO> [<source>] [LEVEL:] <message>` — the line format `plugin-kit`'s `loggingLayer` and
+ * `defaultLog` (`runner-log.ts`) both emit. Parsing it back recovers the plugin name and level the
  * formatting flattened, so the console can show `plugin:virtualhere` / `WARN` instead of one
  * undifferentiated `runner` stream.
  *
@@ -124,10 +122,9 @@ export const installLogShipper = (
 	// only — the interval can fire while a slow POST is still open, and two concurrent flushes
 	// would splice disjoint batches out of one queue and deliver them out of order.
 	//
-	// It deliberately does NOT gate `enqueue`. It used to, as a recursion guard, and that silently
-	// dropped every line logged during the few ms of a POST — which under load is a great many of
-	// them, and exactly the lines a busy plugin is producing. The recursion it was guarding is
-	// handled by the rule at the top of this file instead: nothing on the shipping path logs.
+	// It deliberately does NOT gate `enqueue`: that would drop every line logged during the few
+	// ms of a POST, which under load is a great many of them. Recursion is prevented by the rule
+	// at the top of this file instead: nothing on the shipping path logs.
 	let shipping = false;
 	let stopped = false;
 	// Set once the host's URL/token/CA resolve. Before that (the host writes `plugin-token` as it
@@ -240,7 +237,7 @@ export const installLogShipper = (
 			failures += 1;
 		} finally {
 			shipping = false;
-			// 2 s, 4 s, 8 s … capped at ~30 s while the host stays away.
+			// Skip 1, 2, 4, 8 … up to 15 ticks while the host stays away (~30 s by default).
 			skipTicks = failures === 0 ? 0 : Math.min(2 ** (failures - 1), 15);
 		}
 	};

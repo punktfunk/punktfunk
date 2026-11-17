@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The post-ship fixes (#1458-#1462) on a real stream: every row their PRs name, in one
-# unattended pass. Tags are `ps-<row>-<run>`; `ALL DONE` is the last line.
+# The post-ship rows (9a, 9b, 9c, 9e) on a real stream, in one unattended pass. Tags are
+# `ps-<row>-<run>`; `ALL DONE` is the last line.
 #
 #   scripts/abr-rig/post-ship-rounds.sh
 set -uo pipefail

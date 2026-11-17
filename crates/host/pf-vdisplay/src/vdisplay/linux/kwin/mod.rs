@@ -80,7 +80,7 @@ const WITHHELD: &str = "KWin does not expose zkde_screencast_unstable_v1 to this
 /// KWin exposes the created output to output-management as `Virtual-<name>`.
 const VOUT_NAME: &str = "punktfunk";
 
-/// Bind cap. KWin advertises 5; we need the `created` event (deprecated since v6) for the node id.
+/// Bind cap, one below v6, which deprecates `created`: the node id is read from that event.
 const MAX_VERSION: u32 = 5;
 
 /// KWin virtual-display driver. A paired client's cert fingerprint (set before
@@ -330,9 +330,9 @@ impl VirtualDisplay for KwinDisplay {
             let stop = StopFlag(stop);
             match setup_rx.recv_timeout(OPENER_BUDGET) {
                 Ok(Ok(v)) => Ok((v, stop)),
-                // Report as-is. The wrapper below prepends the "permanent, do not retry"
-                // phrase; this is the one refusal whose retry is the point — the repair
-                // only fixes the NEXT request.
+                // Report as-is. The wrapper below prepends the phrase
+                // `is_permanent_build_error` reads as "do not retry"; this refusal's retry
+                // is the point — the repair only fixes the NEXT request.
                 Ok(Err(e)) if e.contains(REPAIRED_HINT) => bail!("{e}"),
                 // Still permanent, but KWin never saw a request: the text below would mislead.
                 Ok(Err(e)) if e.contains(WITHHELD) => bail!("KWin virtual output failed: {e}"),
@@ -516,7 +516,7 @@ fn reenable_later(expected: Vec<(String, String)>, wave: &'static str, abort_if_
 }
 
 /// Heads an `Exclusive` create holds dark, from its journal step until its `undo`.
-/// A sibling's re-enable pass, two seconds late, would light them.
+/// A sibling's re-enable pass, [`STRAND_RECHECK_DELAY`] late, would light them.
 static HELD_DARK: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// Journal the `exclusive` restore list ([`union_restore`] of `plan` and `pre_enabled`), each
@@ -1078,7 +1078,7 @@ fn run_existing(
     stop: &AtomicBool,
 ) -> Result<()> {
     // The opener started its clock a moment ago; work before `await_created` comes
-    // out of the same 20 s (this path has two barriers — see [`CREATE_BUDGET`]).
+    // out of the same [`OPENER_BUDGET`] (this path has two barriers — see [`CREATE_BUDGET`]).
     let started = Instant::now();
     let conn = crate::session::wayland_connect().context("connect to KWin Wayland")?;
     let mut queue = conn.new_event_queue();
@@ -1254,7 +1254,7 @@ const WORKER_MARGIN: Duration = Duration::from_millis(500);
 /// Ceiling for the `created` handshake. The worker must give up before its opener,
 /// so the client sees a reason rather than a bare timeout with the worker still
 /// parked. [`run`] spends one [`ROUNDTRIP_BUDGET`]; [`run_existing`] spends two —
-/// a fixed 15 s plus two 3 s barriers exceeds [`OPENER_BUDGET`]. [`await_created`]
+/// a fixed 15 s plus two barriers exceeds [`OPENER_BUDGET`]. [`await_created`]
 /// therefore takes the worker's start instant and bounds by whichever comes first.
 const CREATE_BUDGET: Duration = Duration::from_secs(15);
 
@@ -1381,9 +1381,8 @@ mod tests {
         );
     }
 
-    /// A stored 1080p for the output name is not an alignment of a 4K request.
-    /// The second pair is the field case: a stored slot streamed for a whole
-    /// session because the create path never re-read the recreated output.
+    /// A stored 1080p for the output name is not an alignment of a 4K request, nor is a
+    /// stored 3600×2260 one of an 1800×880 request.
     #[test]
     fn a_restored_stored_mode_does_not_pass_for_the_requested_one() {
         assert!(!mode_satisfies((1920, 1080), 3840, 2160));

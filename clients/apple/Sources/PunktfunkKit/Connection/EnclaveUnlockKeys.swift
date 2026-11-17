@@ -1,6 +1,7 @@
-// Unlock keys in the Secure Enclave (CONTRACT §6.6): P-256, usable only after a match of the
-// biometrics enrolled when the key was made, never exported, never synced, and with no fallback
-// to the device passcode. tvOS has no biometry and no LocalAuthentication, so it gets none.
+// Unlock keys in the Secure Enclave (the multi-seat contract page, `key` unlock): P-256, usable
+// only after a match of the biometrics enrolled when the key was made, never exported, never
+// synced, and with no fallback to the device passcode. The AppleTVOS 27.0 SDK has no
+// LocalAuthentication, so tvOS has no biometry and gets none.
 
 #if !os(tvOS)
 import CryptoKit

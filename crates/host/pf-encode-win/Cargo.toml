@@ -53,9 +53,10 @@ windows = { version = "0.62", features = [
 [dev-dependencies]
 # The backends' tests drive the shared test helpers (`smoke_pattern::Soak`, `pyrowave_ffi::oracle`).
 pf-encode-core = { path = "../pf-encode-core", features = ["test-support"] }
-# Reads the SPS colour description back in the live Media Foundation test.
+# Reads the encoded sequence headers back (colour description, AV1 sequence info) in the
+# backends' live tests.
 pf-bitstream = { path = "../../codec/pf-bitstream" }
-# A test writer for the NVENC backend's unit tests (`with_test_writer().try_init()`).
+# A test writer for the backends' tests (`with_test_writer()`).
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]

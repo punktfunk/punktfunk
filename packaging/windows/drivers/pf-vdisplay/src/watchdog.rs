@@ -27,7 +27,8 @@ use crate::worker::Sendable;
 /// watchdog treats it as gone and reaps its monitors. Reported to the host via `IOCTL_GET_INFO`.
 pub const WATCHDOG_TIMEOUT_S: u32 = 10;
 
-/// Tick period — the host's PING cadence (`timeout/3`), so one dropped PING never trips a reap.
+/// Tick period — about the host's PING cadence (`timeout/3`, 3.3 s). The reap needs
+/// [`TICKS_TO_REAP`] silent ticks, so one dropped PING never trips it.
 const TICK_MS: u32 = 3000;
 /// Silent ticks before a reap, rounded UP so the reap never fires short of the timeout.
 const TICKS_TO_REAP: u32 = (1000 * WATCHDOG_TIMEOUT_S).div_ceil(TICK_MS);

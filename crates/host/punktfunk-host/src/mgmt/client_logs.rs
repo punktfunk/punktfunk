@@ -1,10 +1,10 @@
 //! Client log bundles: paired devices POST uploads; the console lists, fetches, and deletes.
 //! See `crate::client_logs` for why this is a file store.
 //!
-//! Upload is the one write a paired streaming cert may perform — write-only (the device
-//! cannot read anything back, not even its own bundle), size-capped, quota-bounded per
-//! device. List/fetch/delete stay on the loopback bearer: bundles can hold addresses and
-//! host names, same lane as the host's own logs.
+//! Upload is write-only for a paired streaming cert (the device cannot read anything back,
+//! not even its own bundle), size-capped, quota-bounded per device. List/fetch/delete stay
+//! on the loopback bearer: bundles can hold addresses and host names, same lane as the host's
+//! own logs.
 
 use super::auth::PairedDevice;
 use super::shared::*;
@@ -58,9 +58,8 @@ pub(crate) async fn client_logs_upload(
             "log bundle exceeds the 1 MiB cap — send the tail",
         );
     }
-    // The gate's `is_paired` is expiry-blind (right for roster GETs). This WRITE uses
-    // `effective`: a lapsed guest must not keep writing to disk. No grant bit — a view-only
-    // guest mid-session is who a debug bundle is wanted from.
+    // `effective`, as the gate's cert check: a lapsed guest must not keep writing to disk. No
+    // grant bit — a view-only guest mid-session is who a debug bundle is wanted from.
     let now_unix = crate::clock::unix_secs();
     if st
         .native

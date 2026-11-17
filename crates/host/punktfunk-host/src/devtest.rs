@@ -1,9 +1,9 @@
 //! CLI arms that exercise a host subsystem without a streaming client.
 //!
-//! Linux: UHID DualSense / Switch Pro, libei/wlr input, pad-sink and usbip audio,
-//! per-monitor mirror, libei absolute-input ladder. Windows: UMDF DualSense-family,
-//! Steam Deck spike, pad-audio endpoints. Each fn is the full `punktfunk-host`
-//! subcommand; `main.rs` only forwards. Flags live on the fn.
+//! Linux: UHID DualSense / Switch Pro, pen, libei/wlr input, pad-sink and usbip audio,
+//! per-monitor mirror, libei absolute-input ladder, HDR probe, monitor list. Linux and
+//! Windows: the virtual touchpad. The Windows-only arms live in `windows/devtest.rs`. Each fn is
+//! the full `punktfunk-host` subcommand; `main.rs` only forwards. Flags live on the fn.
 
 #[cfg(target_os = "linux")]
 use anyhow::Context;

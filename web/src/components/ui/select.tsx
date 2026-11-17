@@ -1,9 +1,9 @@
-// The console's Select IS @unom/ui's radix select, with the same two corrections the Tabs wrapper
-// needs — @unom/ui's palette names don't all mean the same thing in this app's token set:
+// The console's Select IS @unom/ui's radix select, with two corrections of the kind the Tabs
+// wrapper makes — @unom/ui's palette names don't all mean the same thing in this app's token set:
 //
 //   • `text-secondary`, which the trigger uses for BOTH the placeholder and the chevron, is a
-//     *text* colour upstream. Here `--secondary` is a SURFACE (#241c3d dark / #ece6fb light), so the
-//     chevron rendered at near-zero contrast against the card it sits on — a select that looked like
+//     *text* colour upstream. Here `--secondary` is a SURFACE (styles.css), so the chevron
+//     would render at near-zero contrast against the card it sits on — a select that looks like
 //     a plain box with no affordance at all. `text-muted-foreground` is this app's "quiet text".
 //   • `border-main` is the foreground colour — a near-white 1px border in dark, which would make a
 //     select shout next to the `border-input` used by every Input beside it.
@@ -45,8 +45,8 @@ SelectTrigger.displayName = "SelectTrigger";
 
 // The highlighted row. Upstream paints it `bg-main/25` — a neutral grey wash, since `--main` is the
 // foreground colour. Everywhere else in this console the "this is the one" wash is brand violet
-// (`bg-primary/15` on the nav's hover and active states, `ring-primary` on a chosen preset card), so
-// a grey row is the odd one out the moment a select sits next to any of them.
+// (`bg-primary/15` on the nav's hover and active states, `border-primary` on a chosen preset
+// card), so a grey row is the odd one out the moment a select sits next to any of them.
 const SelectItem = ({
 	className,
 	...props

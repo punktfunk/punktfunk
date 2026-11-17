@@ -4,8 +4,7 @@
 #   A. `unsafe fn` whose body contains no unsafe operation. Because the workspaces deny
 #      `unsafe_op_in_unsafe_fn`, every real unsafe op inside an `unsafe fn` sits in an explicit
 #      `unsafe {}` block — so an `unsafe fn` with no `unsafe` in its body is a marker carrying no
-#      contract (db659809 found two by hand, with call-site SAFETY proofs describing FFI the fns
-#      no longer performed). A contract-DEFERRING fn (`set_len` shape: safe body, the danger is in
+#      contract. A contract-DEFERRING fn (`set_len` shape: safe body, the danger is in
 #      later safe code trusting the argument) is legitimate — waive it with a comment line
 #      `// unsafe-fn-no-op-ok: <why the marker still carries a contract>` above the fn (doc lines
 #      may sit between). Two classes are skipped structurally: files carrying
@@ -16,23 +15,17 @@
 #
 #   B. `unwrap`/`expect`/`panic!` inside an `extern "C"` / `extern "system"` fn body. Panic across
 #      an `extern` boundary is an abort since Rust 1.81 — not a diagnostic, not a sanitizer
-#      finding, not fuzzable (8b98d0b3: an ETW callback's `RING.lock().unwrap()` aborted the host
-#      on a poisoned lock). A body that routes through `catch_unwind` (the C ABI's pattern) is
+#      finding, not fuzzable. A body that routes through `catch_unwind` (the C ABI's pattern) is
 #      exempt; otherwise waive a deliberate abort with `// panic-in-extern-ok: <reason>` directly
 #      above the fn.
 #
-#   C. Safe-but-process-global APIs: `env::set_var`/`remove_var`, `sigaction`, `setlocale`,
-#      `set_current_dir`. Each is (or was) callable without `unsafe` and unsound (or racy) from a
-#      live multithreaded process — the 972af299 environ data race lived in a file with ZERO
-#      occurrences of the word `unsafe`, invisible to the census. Since the edition-2024
-#      migration the env pair is `unsafe fn` (compiler-enforced, SAFETY proof per site, counted
-#      by the census); this ratchet stays for the still-safe APIs (`sigaction`, `setlocale`,
-#      `set_current_dir`) and as a growth brake on env mutation generally. The baseline below
+#   C. Process-global APIs: `env::set_var`/`remove_var`, `sigaction`, `setlocale`,
+#      `set_current_dir`. Each is unsound (or racy) from a live multithreaded process. Since the
+#      edition-2024 migration the env pair is `unsafe fn` (compiler-enforced, SAFETY proof per
+#      site, counted by the census); this ratchet stays for `sigaction`, `setlocale` and
+#      `set_current_dir`, and as a growth brake on env mutation generally. The baseline below
 #      enumerates today's debt per file; ANY increase (or a new file) fails. Shrink a file's
 #      count? Lower its baseline in the same commit.
-#
-# All three gates were shown to FAIL on deliberately planted instances before being made blocking
-# (the gate-of-the-gate rule that caught cd72f77a's `0 * SLOT`).
 #
 # Textual gates, so textual limits: string literals containing `unsafe {` and macro-generated fns
 # are invisible; nested `unsafe fn` items inside another fn's body attribute their blocks to the

@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn oversize_shape_downscales_with_hotspot() {
-        // 256 > 120 → f = ceil(256/120) = 3; hotspot scales with the same f.
+        // 256 > 120 → scaled by 120/256; the hotspot scales with it.
         let s = shape_from_overlay(&overlay(256, 256, (255, 0)), 1.0).unwrap();
         assert!(s.w <= CURSOR_SHAPE_MAX_SIDE && s.h <= CURSOR_SHAPE_MAX_SIDE);
         assert_eq!(s.rgba.len(), s.w as usize * s.h as usize * 4);

@@ -2,10 +2,10 @@
 //! as [`super::dualsense_windows`], same [`DsState`]. Differs in PnP identity
 //! (`VID_054C&PID_09CC`, `pf_dualshock4`) and codec ([`super::dualshock4_proto`]).
 //!
-//! Stamp `device_type = 1` before the section magic so hidclass binds DS4, not
-//! DualSense. Feedback is rumble (0xCA) and lightbar (`Led`, 0xCD). Pin:
-//! `dualsense_windows::tests::hwid_matches_inf`. Channel:
-//! `design/gamepad-channel-sealing.md`.
+//! The host stamps `device_type = 1` before the section magic. It must agree with the hardware
+//! id, which names the identity until the section attaches. Feedback is rumble (0xCA) and
+//! lightbar (`Led`, 0xCD). Pin: `dualsense_windows::tests::hwid_matches_inf`,
+//! `hwid_devtype_table_matches_the_driver`. Channel: `design/gamepad-channel-sealing.md`.
 
 use super::dualsense_proto::DsState;
 use super::dualshock4_proto::{

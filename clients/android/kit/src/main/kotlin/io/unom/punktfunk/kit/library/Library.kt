@@ -41,11 +41,11 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 // Android game-library client — the mirror of the Apple client's LibraryClient.swift. Fetches a
-// host's unified game library from its management REST API (`GET /api/v1/library`) over **mTLS**: the
-// paired client presents its persistent cert/key (the same identity the host paired over QUIC), and
-// the host's self-signed cert is pinned by SHA-256(DER). Reads the library and what is running;
-// writes go through [mgmtCall]. Mirrors the GameEntry/Artwork schema in
-// crates/host/punktfunk-host/src/library.rs.
+// host's unified game library from its management REST API (`GET /api/v1/library/page`, else
+// `GET /api/v1/library`) over **mTLS**: the paired client presents its persistent cert/key (the
+// same identity the host paired over QUIC), and the host's self-signed cert is pinned by
+// SHA-256(DER). Reads the library and what is running; writes go through [mgmtCall]. Mirrors the
+// GameEntry/Artwork schema in crates/host/punktfunk-host/src/library.rs.
 
 /** The management API's default port — matches `mgmt::DEFAULT_PORT` on the host and the Apple client. */
 const val DEFAULT_MGMT_PORT = 47990
@@ -115,9 +115,8 @@ data class GameEntry(
      */
     val platform: String? = null,
     /**
-     * The rest of the host's `GameMeta` that a screen has room for. The host has sent these since
-     * the library API existed and nothing decoded them until the launch hold wanted more than a
-     * title; every one is absent on an older host, which simply shows less.
+     * The rest of the host's `GameMeta` that a screen has room for. Every one is absent on an
+     * older host, which simply shows less.
      */
     val developer: String? = null,
     val releaseYear: Int? = null,
@@ -141,8 +140,9 @@ data class GameEntry(
         /**
          * The desktop tile's id — the synthetic entry every shelf leads with, so the library is
          * never a dead end for the desktop-only user and a host with no plugins is still one tap
-         * from streaming. The NUL prefix is the desktop console's (`pf-console-ui`'s
-         * `DESKTOP_ID`): a host title id is a store reference, and none can start with a NUL.
+         * from streaming. The NUL prefix is the Rust console's (`DESKTOP_ID` in
+         * `pf_client_core::library`): a host title id is a store reference, and none can start
+         * with a NUL.
          *
          * Presentation only. Never persisted, never fetched, never grouped.
          */
@@ -211,9 +211,9 @@ sealed class LibraryResult {
      * Is this the "can't reach it" failure — the only one worth waiting out?
      *
      * A rejected certificate does not become acceptable by retrying, and asking an unpaired host
-     * twelve times only delays telling the user what is actually wrong. Lives here rather than at
-     * the call site so the retry loop and the error copy can never disagree about which failures
-     * are transient.
+     * [LibraryClient.WAKE_ATTEMPTS] times only delays telling the user what is actually wrong.
+     * Lives here rather than at the call site so the retry loop and the error copy can never
+     * disagree about which failures are transient.
      */
     val isTransient: Boolean get() = this is Error
 }
@@ -287,7 +287,7 @@ enum class InstallAction {
 data class TileBadge(
     /** `download`, `pause` or `alert`; `host` marks the host's stream settings. */
     val icon: String,
-    /** `42 %`, `26 GB`, `Not installed`, `Queued`. */
+    /** `42%`, `26 GB`, `Not installed`, `Queued`. */
     val text: Say,
 ) {
     companion object {
@@ -439,8 +439,8 @@ fun humanBytes(n: Long, locale: Locale = Locale.getDefault()): Say {
  * One game the host currently has launched, from `GET /api/v1/status`.
  *
  * A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
- * The web console's view of this payload carries more (which session, which plane, the grace
- * countdown), and none of that is a player's business from the library shelf.
+ * The web console's view of this payload carries more (the plane, the grace countdown, the
+ * seat), and none of that is a player's business from the library shelf.
  */
 data class RunningGame(
     /**
@@ -628,10 +628,8 @@ object LibraryClient {
     /**
      * What the host currently has running, from `GET /api/v1/status`.
      *
-     * Same lane, same identity, no new host work: `/status` is already on the paired-certificate
-     * allowlist (the host's `mgmt::auth::cert_may_access`) alongside `/library`, and has carried a
-     * `games[]` array since the session⇄game lifetime work. This client simply never read it — so
-     * a player had no way to see, from the device they browse on, that something was already up.
+     * Same lane, same identity: `/status` is on the paired-certificate allowlist (the host's
+     * `mgmt::auth::cert_may_access`) alongside `/library`.
      *
      * **Best-effort by contract**: an older host, an unreachable one, or a shape we don't recognize
      * yields an empty list rather than an error. Nothing here is worth failing a library screen

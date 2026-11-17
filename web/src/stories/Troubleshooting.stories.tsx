@@ -99,7 +99,7 @@ export const Healthy: Story = {
 	args: { checks: [UINPUT_OK, CONFLICT_OK] },
 };
 
-/** The `.181` defect this whole feature exists for. */
+/** One critical check: a takeover that degrades to mirroring, black with the panel off. */
 export const OneCritical: Story = {
 	args: { checks: [TAKEOVER_FAIL, UINPUT_OK, CONFLICT_OK] },
 };

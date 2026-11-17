@@ -1,20 +1,20 @@
 //! The HID side the minidrivers share: the IOCTL table, descriptor and string helpers, and the
-//! **channel proof** (`pf_driver_proto::gamepad::ChannelProof`) transport, measured on .173
-//! (Win11 26200, 2026-07-28) so nobody re-derives it.
+//! **channel proof** (`pf_driver_proto::gamepad::ChannelProof`) transport, measured on Win11
+//! build 26200 so nobody re-derives it.
 //!
 //! The proof names the process the host duplicates a pad's DATA section into. The bootstrap
-//! mailbox cannot carry it: any LocalService principal could name its own process there
-//! (security-review 2026-07-28). Only the driver bound to the devnode answers its I/O, so the
-//! device stack is asked. Three attempts, one survivor:
+//! mailbox cannot carry it: any LocalService principal could name its own process there. Only
+//! the driver bound to the devnode answers its I/O, so the device stack is asked:
 //!
 //! * ❌ `IOCTL_HID_GET_INDEXED_STRING`: hidclass never forwards it to a UMDF HID minidriver.
 //! * ❌ A private device interface (the `pf_xusb` shape): enumerates, but `CreateFile` is
 //!   refused — hidclass owns `IRP_MJ_CREATE` on a devnode it is the FDO for.
 //! * ✅ The serial-number string: `HidD_GetSerialNumberString` works on a zero-access handle
 //!   (`pf_mouse` answered `PFCP:3:0:7296`, a real WUDFHost).
+//! * ✅ A feature report: `HidD_GetFeature` on the pad's HID handle (`pf_gamepad`).
 //!
-//! `pf_mouse` serves its proof as its serial. The pads do not: SDL and Steam dedup controllers
-//! on the serial, so `pf_gamepad` has no device-stack transport here.
+//! `pf_mouse` and `pf_touchpad` serve their proof as their serial. The pads do not: SDL and
+//! Steam dedup controllers on the serial, so `pf_gamepad` answers GET_FEATURE (`on_get_feature`).
 
 /// `CTL_CODE(FILE_DEVICE_KEYBOARD, id, METHOD_NEITHER, FILE_ANY_ACCESS)`: the HID minidriver
 /// IOCTL numbering hidclass and mshidumdf speak.

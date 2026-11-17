@@ -20,7 +20,7 @@ default = ["ui", "pyrowave"]
 # --no-default-features and so skips it — note that also drops `ui` (the Skia console/OSD),
 # not just pyrowave; hardware video decode itself (D3D11VA / Vulkan Video) is unaffected.
 pyrowave = ["pf-client-core/pyrowave", "pf-presenter/pyrowave"]
-# The Skia console UI (stats OSD, capture HUD, later the gamepad library). Dropping it
+# The Skia console UI (stats OSD, capture HUD, the gamepad console). Dropping it
 # (`--no-default-features`) is the ~15 MB-smaller power-user build: same streaming,
 # stats on stdout only.
 ui = ["dep:pf-console-ui", "dep:serde_json"]
@@ -28,24 +28,23 @@ ui = ["dep:pf-console-ui", "dep:serde_json"]
 # binary.
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 # `default-features = false` on both: THIS crate's `pyrowave` feature (above) is the single
-# switch that turns the wavelet codec on, and it enables it explicitly on each. Inheriting their
-# defaults instead would make `--no-default-features` a lie — the Windows ARM64 leg builds that
-# way precisely to skip the vendored PyroWave C++, which has no ARM64 SIMD path.
+# switch that turns the wavelet codec on, and it enables it explicitly on each. Both default
+# `pyrowave` on, so inheriting their defaults would make `--no-default-features` a lie.
 pf-presenter = { path = "../../crates/client/pf-presenter", default-features = false }
 pf-console-ui = { path = "../../crates/client/pf-console-ui", optional = true }
 pf-client-core = { path = "../../crates/client/pf-client-core", default-features = false, features = ["desktop"] }
 punktfunk-core = { path = "../../crates/core/punktfunk-core", features = ["quic"] }
 # `os_languages()`: the language the console's text follows; `client` for its own lines.
 pf-l10n = { path = "../../l10n", features = ["client", "os"] }
-# The fake-library dev hook (`PUNKTFUNK_FAKE_LIBRARY`, browse mode) parses GameEntry JSON.
+# The fake-library dev hook (`PUNKTFUNK_FAKE_LIBRARY`, browse mode) parses GameEntry JSON, and
+# a preset the console saves arrives with its overrides as JSON.
 serde_json = { version = "1", optional = true }
 tracing = "0.1"
 
 # This crate carries NO toolkit, deliberately: it is the renderer the shells spawn, and the
 # `--no-default-features` build is what a minimal/embedded image installs. GTK4/libadwaita/relm4
-# belong to `clients/linux` (the shell) and must never appear here — a stray copy of the shell's
-# modules landed in src/ once (b0ea1e6b) and dragging its dependencies in behind it is what let
-# the wrong `main.rs` build and ship as `punktfunk-session`.
+# belong to `clients/linux` (the shell) and must never appear here; `tests/contract_smoke.rs`
+# runs the built binary to prove it is this program.
 
 # Embeds the app icon as an exe resource (build.rs) — Windows hosts only (rc.exe from
 # the SDK); same pattern as clients/windows.

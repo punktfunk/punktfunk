@@ -340,7 +340,7 @@ impl std::fmt::Display for OpRecord {
     }
 }
 
-/// End of [`run`]. `ADL_ERR_NOT_SUPPORTED` still [`Done`]s; each op's rc is in the records.
+/// End of [`run`]. `ADL_ERR_NOT_SUPPORTED` still ends `Done`; each op's rc is in the records.
 pub enum RunOutcome {
     /// `atiadlxx.dll` missing (or an export). No emulation lever on this box.
     NoAdl,
@@ -700,8 +700,8 @@ fn encode_journal(leases: &[Lease]) -> Vec<u8> {
 }
 
 /// The leases in a marker. A bare `{"locked":true}` (or an unreadable marker) is `None`, which
-/// unlocks every connector as it always did. An empty lease pinned nothing, so it unlocks
-/// nothing: the operator's own pins stay.
+/// unlocks every connector. An empty lease pinned nothing, so it unlocks nothing: the
+/// operator's own pins stay.
 fn decode_journal(bytes: &[u8]) -> Option<Vec<Lease>> {
     let v = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
     let int = |n: &serde_json::Value| n.as_i64().and_then(|n| i32::try_from(n).ok());
@@ -799,7 +799,7 @@ pub fn lock_for_stream() -> bool {
         .filter_map(|r| lease_of(&r.target))
         .collect();
     // The lease: only these connectors are ours to unlock. Written after the fact — the bare
-    // marker above already covers a crash in between (it unlocks everything, as before).
+    // marker above already covers a crash in between (it unlocks everything).
     if let Err(e) = std::fs::write(journal_path(), encode_journal(&leased)) {
         tracing::warn!(error = %format!("{e:#}"), "edid_lock: lease write failed");
     }

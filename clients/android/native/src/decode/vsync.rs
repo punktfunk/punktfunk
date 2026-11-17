@@ -5,18 +5,17 @@
 //! On API 33+ the thread rides `AChoreographer_postVsyncCallback`, whose callback payload carries
 //! the platform's FRAME TIMELINES — for each upcoming refresh, when SurfaceFlinger expects to
 //! present and the deadline by which a frame must be submitted to make it. That pair is exactly
-//! what `AMediaCodec_releaseOutputBufferAtTime` wants as its target. On 31/32 the older
-//! `postFrameCallback64` supplies only the vsync instant; the presenter then releases ASAP
-//! (identical to the legacy path) and uses the measured period purely to predict the latch for
-//! its glass budget.
+//! what `AMediaCodec_releaseOutputBufferAtTime` wants as its target. Below API 33 the older
+//! `postFrameCallback64` (API 29) supplies only the vsync instant; the presenter then releases
+//! ASAP (identical to the legacy path) and uses the measured period purely to predict the latch
+//! for its glass budget.
 //!
 //! Every `AChoreographer_*` symbol is dlsym-resolved from `libandroid.so` (mirrors
 //! [`super::setup::try_set_frame_rate`]): several sit above the crate's API floor, and one hard
 //! import of a too-new symbol fails `System.loadLibrary` on every older device.
 //!
-//! Started LAZILY on the first decoded frame (the Apple deadline presenter's bootstrap lesson:
-//! an eagerly started clock ticks uselessly for the whole connect window), stopped + joined via
-//! [`VsyncClock`]'s `Drop`.
+//! Started lazily, on the first decoded output (an eagerly started clock ticks uselessly
+//! through the connect window); stopped + joined via [`VsyncClock`]'s `Drop`.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -37,9 +36,8 @@ pub(super) struct VsyncShared {
     ///
     /// ⚠ This is the APP's render rate, not necessarily the panel's: Android down-rates a
     /// process's vsync stream (frame-rate categories / per-uid overrides), so a quiet UI can be
-    /// served 60 Hz callbacks while the panel scans at 120 (observed on-glass, A024). Pacing
-    /// video to THIS rate would cap the stream — hence `panel_period_ns` + the subdivision in
-    /// [`Self::next_target`].
+    /// served 60 Hz callbacks while the panel scans at 120. Pacing video to THIS rate would cap
+    /// the stream — hence `panel_period_ns` + the subdivision in [`Self::next_target`].
     period_ns: AtomicI64,
     /// The panel's own refresh period — the grid SurfaceFlinger actually latches on (0 = unknown).
     /// Seeded from the display mode Kotlin resolved at stream start and then corrected by
@@ -48,7 +46,8 @@ pub(super) struct VsyncShared {
     panel_period_ns: AtomicI64,
     /// Callback count, for the one-shot cadence diagnostic log.
     ticks: std::sync::atomic::AtomicU32,
-    /// The latest callback's upcoming timelines, soonest first. Empty on the 31/32 fallback.
+    /// The latest callback's upcoming timelines, soonest first. Empty on the
+    /// `postFrameCallback64` fallback.
     timelines: Mutex<Vec<FrameTimeline>>,
 }
 
@@ -58,7 +57,7 @@ impl VsyncShared {
         self.period_ns.load(Ordering::Relaxed)
     }
 
-    /// The panel's own refresh period (0 = unknown) — for the pf-present line's decomposition.
+    /// The panel's own refresh period (0 = unknown) — for the pf.present line's decomposition.
     pub(super) fn panel_period_ns(&self) -> i64 {
         self.panel_period_ns.load(Ordering::Relaxed)
     }
@@ -75,7 +74,7 @@ impl VsyncShared {
 
     /// SurfaceFlinger's own lead: the latest timeline's expected present minus its deadline,
     /// which is when the compositor wakes to latch for that present. 0 before a timeline and on
-    /// the 31/32 fallback.
+    /// the `postFrameCallback64` fallback.
     pub(super) fn sf_lead_ns(&self) -> i64 {
         self.timelines
             .lock()
@@ -85,8 +84,8 @@ impl VsyncShared {
     }
 
     /// The release target for a frame that must not be presented before `not_before_ns`:
-    /// [`pick_timeline`] over the stored set, then [`onto_panel_grid`]. `None` on the 31/32
-    /// fallback; the caller releases ASAP.
+    /// [`pick_timeline`] over the stored set, then [`onto_panel_grid`]. `None` on the
+    /// `postFrameCallback64` fallback; the caller releases ASAP.
     pub(super) fn next_target(&self, not_before_ns: i64) -> Option<FrameTimeline> {
         let picked = {
             let g = self
@@ -188,12 +187,10 @@ impl CallbackCtx {
             .shared
             .last_vsync_ns
             .swap(frame_time_ns, Ordering::Relaxed);
-        // Panel-grid learner: timeline spacing is SurfaceFlinger's own grid, and therefore the
-        // only honest witness to what the panel is doing — the configured mode is not (under a
-        // per-uid frame-rate override `Display.getRefreshRate` REPORTS THE OVERRIDE, observed
-        // on-glass: a 120 Hz panel read back as 60 while its timelines ran at 8.28 ms), and
-        // neither is the mode Kotlin *requested* (`preferredDisplayModeId` is a hint the system
-        // may refuse). Both directions matter and the asymmetry lives in `PanelGrid`.
+        // Panel-grid learner: timeline spacing is SurfaceFlinger's own grid, the only honest
+        // witness to what the panel is doing. `Display.getRefreshRate` reports any per-uid
+        // override, and the mode Kotlin *requested* (`preferredDisplayModeId`) may be refused.
+        // Both directions matter and the asymmetry lives in `PanelGrid`.
         if timelines.len() >= 2 {
             let spacing = timelines[1].expected_present_ns - timelines[0].expected_present_ns;
             let mut grid = self.panel.get();
@@ -312,9 +309,9 @@ impl VsyncClock {
     /// only do something cheap and `Send` (the decode loop passes an event-channel send).
     /// `panel_hz` SEEDS the panel-grid learner (0 = unknown) — the latch grid that
     /// [`VsyncShared::next_target`] subdivides onto. A seed, not a fact: it names the display
-    /// mode Kotlin *requested*, and the observed timeline spacing is what settles it. `None` when the platform surface is missing
-    /// (very old device) — the presenter then runs clock-less (ASAP targets, predicted-latch
-    /// budget).
+    /// mode Kotlin *requested*, and the observed timeline spacing is what settles it. `None`
+    /// when neither `AChoreographer` post entry point resolves (API < 29) or the thread does not
+    /// spawn — the presenter then runs clock-less (ASAP targets, predicted-latch budget).
     pub(super) fn start(panel_hz: i32, on_tick: Box<dyn Fn() + Send>) -> Option<VsyncClock> {
         let api = ChoreoApi::resolve()?;
         let timelines_live = api.post_vsync.is_some();

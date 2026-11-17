@@ -14,7 +14,7 @@ pub const PUNKTFUNK_PAD_MOUSE_FULL: u8 = 2;
 /// Switch exactly the pads in `mask` (bit = wire pad index) to full controller mouse: their
 /// buttons, sticks and touchpads drive the host pointer and a few keys while the host pad sits
 /// neutral. Every other full-mouse pad returns to passthrough. Session-scoped. `Unsupported`
-/// without `PUNKTFUNK_GRANT_POINTER`.
+/// for a non-empty `mask` without `PUNKTFUNK_GRANT_POINTER`.
 ///
 /// # Safety
 /// `c` is a valid connection handle. Callable from any thread.
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn punktfunk_connection_set_invert_scroll(
     })
 }
 
-/// Pads in controller mouse now. A removed pad or a lost pointer grant clears its bit.
+/// Pads in full controller mouse now. A removed pad or a lost pointer grant clears its bit.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `mask` is writable (NULL is skipped).
@@ -286,10 +286,9 @@ pub unsafe extern "C" fn punktfunk_connection_set_rumble_quirks(
     })
 }
 
-/// Pull the next HID-output feedback (DualSense lightbar / player LEDs / adaptive
-/// trigger, or SC2 `PUNKTFUNK_HIDOUT_HID_RAW`) into `*out`.
+/// Pull the next HID-output feedback (`PUNKTFUNK_HIDOUT_*`) into `*out`.
 /// [`PunktfunkStatus::NoFrame`] on timeout, [`PunktfunkStatus::Closed`] once ended.
-/// DualSense and SC2 backends only. One puller, may run alongside other planes.
+/// One puller, may run alongside other planes.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `out` is writable for one `PunktfunkHidOutput`.

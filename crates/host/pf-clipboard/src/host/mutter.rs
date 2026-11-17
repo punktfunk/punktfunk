@@ -339,7 +339,7 @@ fn set_blocking(fd: &OwnedFd) -> Result<()> {
 /// Mutter session stands in for the host app (Mutter has no `wl-clipboard`).
 ///
 /// ```text
-/// cargo test -p punktfunk-host --bin punktfunk-host -- --ignored --nocapture clipboard::mutter::live
+/// cargo test -p pf-clipboard -- --ignored --nocapture host::mutter::live
 /// ```
 ///
 /// Skips when Mutter is not running, so `--ignored` off-GNOME is a no-op.

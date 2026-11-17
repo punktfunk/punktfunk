@@ -113,8 +113,8 @@ pub enum Style {
     Off,
 }
 
-/// A/B while the TV's look is chosen: a style for every backdrop this thread draws,
-/// `None` for the default. EXPERIMENT, not for commit.
+/// A style for every backdrop this thread draws; `None` restores the blur. The pixel styles
+/// are reachable only through it.
 pub fn set_style_override(style: Option<Style>) {
     OVERRIDE.with(|o| o.set(style));
 }
@@ -149,8 +149,7 @@ impl Band {
     }
 }
 
-/// The style this frame draws: the blur everywhere, the reduced interface included — the
-/// pixel treatment stays behind the A/B override until it is wanted.
+/// The style this frame draws: the override, else the blur.
 fn style() -> Style {
     OVERRIDE.with(std::cell::Cell::get).unwrap_or(Style::Blur)
 }

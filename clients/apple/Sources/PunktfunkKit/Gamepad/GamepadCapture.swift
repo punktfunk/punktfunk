@@ -7,8 +7,8 @@
 //
 // The wire is incremental (one button/axis transition per event), so every valueChanged snapshots
 // the pad and sends the diff. Sticks are ±32767 with +y up, triggers 0...255. Touchpad contacts
-// (0...65535, +y down) and motion (DualSense units, converted in `Wire`) ride the rich-input
-// plane, which the host reads only for a DualSense or DualShock 4 pad.
+// (0...65535, +y down) and motion (DualSense units, converted in `GamepadWire`) ride the
+// rich-input plane, which a host Xbox pad does not have.
 //
 // A controller cannot click local UI, so forwarding ignores the mouse-capture toggle. Deactivation,
 // a controller switch or stop releases every held control on the wire.
@@ -66,7 +66,7 @@ public final class GamepadCapture {
         var fingerActive: [Bool] = [false, false]
         /// A motion sample went out on this pad — `flush` then owes the wire a zero-gyro
         /// sample: the host holds motion as STATE and re-emits it, so a nonzero angular
-        /// velocity left behind reads as endless rotation (the gyro-sweep latch).
+        /// velocity left behind reads as endless rotation.
         var motionSent = false
         /// The last accel sent, re-used by the flush zero so "rotation stopped" doesn't
         /// also replace a plausible gravity vector with free-fall.
@@ -171,26 +171,24 @@ public final class GamepadCapture {
     /// The ring sector the left stick last resolved to — see `ringSector`.
     private var stickSector: Int?
 
-    /// Forward this device's controllers to the host at all (`Settings.gamepadForwarding`,
-    /// default true). Off is for a couch whose controller reaches the host another way — USB
-    /// passthrough such as VirtualHere, or a pad plugged into the host itself — where
-    /// forwarding as well would give the host two pads for one pair of hands.
+    /// Forward this device's controllers to the host at all
+    /// (`EffectiveSettings.gamepadForwarding`). Off is for a couch whose controller reaches the
+    /// host another way — USB passthrough such as VirtualHere, or a pad plugged into the host
+    /// itself — where forwarding as well would give the host two pads for one pair of hands.
     ///
-    /// Off still opens slots and tracks button state; it just sends nothing (see `wire`). That
-    /// is deliberate, not laziness: the escape chord is read off the same slots, and on tvOS it
-    /// is the ONLY controller way out of a stream — a session that silently lost its exit
-    /// because a forwarding preference was off would be a worse bug than the one this fixes.
+    /// Off still opens slots and tracks button state; it just sends nothing (see `wire`).
+    /// The escape chord is read off the same slots, and on tvOS it is the ONLY controller way
+    /// out of a stream, so a session with forwarding off would otherwise lose its exit.
     /// Unlike pf-client-core's slots, GameController claims nothing exclusive, so holding one
     /// open costs the host nothing and blocks no passthrough tool.
     public let forwarding: Bool
 
     /// The connection, or nil while forwarding is off — every wire send goes through this, so
-    /// "don't forward" is one fact in one place rather than a condition at twelve call sites.
+    /// "don't forward" is one fact in one place rather than a condition at every call site.
     private var wire: PunktfunkConnection? { forwarding ? connection : nil }
 
-    /// Forward the raw guide + share/QAM presses (`EffectiveSettings.systemButtonsForward`,
-    /// default true on Apple — where the OS shows its own overlay for them, that's the OS's
-    /// business; local mode exists for preset parity with the Gaming-Mode clients).
+    /// Forward the raw guide + share/QAM presses (`EffectiveSettings.systemButtonsForward`
+    /// decides; the `local` policy keeps them off the wire).
     public let systemForward: Bool
     /// The session's pad shortcuts (`EffectiveSettings.resolvedShortcuts`).
     private let shortcuts: Shortcuts
@@ -319,7 +317,7 @@ public final class GamepadCapture {
     }
 
     /// A one-shot synthetic tap of a system button on the host's pad (pf-client-core's
-    /// `GamepadService.tapButton`), on wire pad `pad` — by default the first forwarded slot's,
+    /// `GamepadService::tap_button`), on wire pad `pad` — by default the first forwarded slot's,
     /// pad 0 when none is open, which is best-effort (the host pad may not exist). The dial's
     /// and the shortcuts' route to the host's guide on a device whose OS keeps the physical Home
     /// press. `misc1` is the Quick Access action, pressed as that pad's host device reads it
@@ -739,8 +737,8 @@ public final class GamepadCapture {
         if g.rightThumbstickButton?.isPressed == true { b |= GamepadWire.rightStickClick }
         if g.leftShoulder.isPressed { b |= GamepadWire.leftShoulder }
         if g.rightShoulder.isPressed { b |= GamepadWire.rightShoulder }
-        // guide (Home/PS) is NOT read here — it's forwarded directly by the Home button's
-        // pressedChangedHandler (the legacy `buttonHome` element is unreliable). See `attach`.
+        // guide (Home/PS) is NOT read here — the Home button's pressedChangedHandler feeds it
+        // (`homeChanged`); the legacy `buttonHome` element is unreliable. See `attach`.
         if g.buttonA.isPressed { b |= GamepadWire.a }
         if g.buttonB.isPressed { b |= GamepadWire.b }
         if g.buttonX.isPressed { b |= GamepadWire.x }
@@ -884,9 +882,8 @@ public final class GamepadCapture {
             slot.fingerActive[f] = false
         }
         // Motion is host-side STATE, re-emitted until replaced — a nonzero angular velocity
-        // left behind reads as endless rotation (the gyro-sweep latch: Control Center
-        // pull-down froze the last sample for as long as the overlay stayed up). Rest means
-        // zero rotation; the last accel is kept so gravity doesn't become free-fall.
+        // left behind reads as endless rotation. Rest means zero rotation; the last accel is
+        // kept so gravity doesn't become free-fall.
         if slot.motionSent {
             slot.motionSent = false
             wire?.sendMotion(pad: UInt8(slot.pad), gyro: (0, 0, 0), accel: slot.lastAccel)

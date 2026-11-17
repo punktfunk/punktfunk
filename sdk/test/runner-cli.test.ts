@@ -2,9 +2,9 @@
 // not spin. `Effect.runFork` registers nothing with the event loop (the keep-alive lives in
 // `Runtime.makeRunMain`, which runner-cli deliberately doesn't use), and a bun process whose only
 // pending work is an unresolved promise busy-loops instead of blocking — so in the runner's own
-// documented no-op state (no scripts, no plugins) it pinned a full core indefinitely until
-// runner-cli started holding one idle handle. Measured against the real CLI rather than mocked:
-// the regression is a property of the process, not of any function in it.
+// documented no-op state (no scripts, no plugins) it would pin a full core without the idle handle
+// runner-cli holds (`keepAlive`). Measured against the real CLI rather than mocked: parking is a
+// property of the process, not of any function in it.
 import { afterAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";

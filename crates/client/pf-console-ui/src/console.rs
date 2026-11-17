@@ -592,7 +592,7 @@ mod tests {
     }
 
     /// Returning to the shelf on top keeps it (its posters survive the stream); another
-    /// host's shelf, a Stream entry, or a Home top re-roots as before.
+    /// host's shelf, a Stream entry, or a Home top re-roots.
     #[test]
     fn a_library_entry_for_the_shelf_on_top_is_a_no_op() {
         let stack = entry_stack(ConsoleEntry::Library(Box::new(row())), "d");

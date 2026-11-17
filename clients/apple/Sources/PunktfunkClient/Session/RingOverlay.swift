@@ -4,7 +4,7 @@
 // disc opens it at the corner. Closed, it leaves the view hierarchy entirely (tenet 1: any layer
 // above the stream costs a refresh of display latency on iOS). tvOS carries the same ring,
 // opened by a short Back on the remote or `Select+A` and driven by the pad (§2.5, §2.6); it
-// has no twist, no tap and no drag, so those paths are iOS-only below.
+// has no twist, no tap and no drag, so the tap and drag paths below are compiled out for it.
 //
 // macOS carries it too, opened by ⌃⌥⇧O, the Stream menu or `Select+A` — no twist there
 // either, so it opens CENTRED (`openCentred`) rather than under a hand. A Mac has no touch screen
@@ -791,8 +791,8 @@ struct RingOverlay: View {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                     order.swapAt(k, target)
                 }
-                // Past the spring's settle: a reset while the discs still move jumped them
-                // the last few points as the contents swapped, which read as a flash.
+                // Past the spring's settle: a reset while the discs still move would jump them
+                // the last few points as the contents swap, which reads as a flash.
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(650))
                     var t = Transaction()
@@ -808,7 +808,7 @@ struct RingOverlay: View {
 
     /// One round glass button — the exit disc's primitive, at ring size. On tvOS it is a plain
     /// disc, not a Button: in-stream every press stays on the GameController path (the pad's
-    /// and the remote's `RingNav`), and a focusable Button only parked the engine's idle focus
+    /// and the remote's `RingNav`), and a focusable Button would park the engine's idle focus
     /// on one slot, drawing the system platter behind it next to the pad's own highlight.
     private func slotButton(_ s: SlotSpec?, size: CGFloat, scale: CGFloat, alpha: CGFloat, armed: Bool,
                             highlighted: Bool = false, action: @escaping () -> Void) -> some View {
@@ -849,8 +849,8 @@ struct RingOverlay: View {
 }
 
 /// A chord on a disc: the modifiers as the compact glyphs Apple keyboards print (⌃ ⌥ ⇧ ⌘),
-/// the key large under them, shrinking to fit. One legend line ("Ctrl+Shift+Esc") ran past
-/// the disc's edge. The editor previews a chord with this same view.
+/// the key large under them, shrinking to fit. One legend line ("Ctrl+Shift+Esc") would run
+/// past the disc's edge. The editor previews a chord with this same view.
 struct ChordKeycap: View {
     let keys: [String]
 
@@ -1034,7 +1034,7 @@ private struct RingSheet: View {
                         let r = rows[i]
                         if let h = r.header { header(h) }
                         // tvOS: rows, not Buttons — the pad's cursor is the only navigation in-stream
-                        // (see `slotButton`), and a Button's idle focus drew the platter on row 0.
+                        // (see `slotButton`), and a Button's idle focus draws the platter on row 0.
                         Group {
                             #if os(tvOS)
                             row(r, at: i)

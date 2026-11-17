@@ -51,7 +51,7 @@ sealed class DialEvent {
 private const val KB_SWIPE_FRACTION = 0.10f
 
 // Trackpad-mode pointer ballistics (relative one-finger motion). POINTER_SENS: base finger-px →
-// host-px gain (~1:1, never twitchy). The rest is mild acceleration so a flick crosses the screen
+// host-px gain. The rest is mild acceleration so a flick crosses the screen
 // while a slow drag stays precise: above ACCEL_SPEED_FLOOR px/ms the gain ramps by ACCEL_GAIN per
 // px/ms, capped at ACCEL_MAX (so a fast swipe can't fling the cursor uncontrollably).
 private const val POINTER_SENS = 1.3f
@@ -81,31 +81,6 @@ internal object TouchTuning {
     val dialSlopInTapSlops = DIAL_SLOP / TAP_SLOP
 }
 
-/**
- * Touch → mouse, run inside the stream overlay's `pointerInput`. Two models, chosen by the
- * Trackpad-mode setting:
- *  * trackpad (default): the cursor STAYS where it is on touch-down and moves by the finger's
- *    relative delta (MouseMove) with mild pointer acceleration — swipe to nudge, lift and
- *    re-swipe to walk it across, tap to click where it is. This is what makes the cursor
- *    reachable on a small screen. Toward a host with a touchpad of its own the fingers go there
- *    instead ([TouchpadFrames]) and the host OS moves the cursor.
- *  * direct (opt-out): the cursor jumps to the finger and follows it (MouseMoveAbs,
- *    host-normalized against the overlay size), the old "direct pointing" behaviour.
- *
- * Both share the same gesture vocabulary: tap = left click; two-finger tap = right click;
- * two-finger drag = scroll; tap-then-press-and-drag OR press-and-hold-then-drag = left-drag
- * (text selection / moving windows); three-finger tap = [onCycleStats] (cycle the stats-HUD tier);
- * three-finger swipe up/down = [onKeyboard] (summon/dismiss the local soft keyboard, for
- * typing on the host).
- */
-/**
- * Real multi-touch passthrough ([TouchMode.TOUCH]): every finger forwards as a host touchscreen
- * contact (down/move/up with a stable per-finger id), with NO gesture interpretation — taps,
- * drags and multi-finger input mean whatever the remote app decides. Coordinates are overlay
- * pixels with the overlay size as the surface, exactly like the absolute-mouse path (the host
- * normalizes and maps into the output). On teardown (stream leaves composition) every still-held
- * contact is lifted so nothing stays stuck on the host.
- */
 /**
  * The stream frame the gesture layer maps into: how it fills the container ([fit]) and its size
  * — or, when the picture spans two screens, the [span] rows from [originY] down that this
@@ -190,6 +165,14 @@ private suspend fun AwaitPointerEventScope.awaitFirstFingerDown(
     }
 }
 
+/**
+ * Real multi-touch passthrough ([TouchMode.TOUCH]): every finger forwards as a host touchscreen
+ * contact (down/move/up with a stable per-finger id), with NO gesture interpretation — taps,
+ * drags and multi-finger input mean whatever the remote app decides. Coordinates are frame
+ * pixels ([FrameMap]) with the frame size as the surface, exactly like the absolute-mouse path
+ * (the host normalizes and maps into the output). On teardown (stream leaves composition) every
+ * still-held contact is lifted so nothing stays stuck on the host.
+ */
 internal suspend fun PointerInputScope.streamTouchPassthrough(
     sink: TouchSink,
     stylus: StylusStream?,
@@ -247,6 +230,23 @@ internal suspend fun PointerInputScope.streamTouchPassthrough(
     }
 }
 
+/**
+ * Touch → mouse, run inside the stream overlay's `pointerInput`. Two models, chosen by [trackpad]
+ * ([TouchMode.TRACKPAD] or [TouchMode.POINTER]):
+ *  * trackpad (default): the cursor STAYS where it is on touch-down and moves by the finger's
+ *    relative delta (MouseMove) with mild pointer acceleration — swipe to nudge, lift and
+ *    re-swipe to walk it across, tap to click where it is. This is what makes the cursor
+ *    reachable on a small screen. Toward a host with a touchpad of its own the fingers go there
+ *    instead ([TouchpadFrames]) and the host OS moves the cursor.
+ *  * direct: the cursor jumps to the finger and follows it (MouseMoveAbs in frame pixels; the
+ *    host normalizes against the frame size).
+ *
+ * Both share the same gesture vocabulary: tap = left click; two-finger tap = right click;
+ * two-finger drag = scroll; tap-then-press-and-drag OR press-and-hold-then-drag = left-drag
+ * (text selection / moving windows); three-finger tap = [onCycleStats] (cycle the stats-HUD tier);
+ * three-finger swipe up/down = [onKeyboard] (summon/dismiss the local soft keyboard, for
+ * typing on the host).
+ */
 internal suspend fun PointerInputScope.streamTouchInput(
     sink: TouchSink,
     stylus: StylusStream?,
@@ -587,9 +587,9 @@ private class Gesture(
             if (dialOnly && !scrollLocked) return true
         }
         // Two fingers → scroll by the centroid delta as a precise distance; never move the
-        // cursor. (Re-)anchor whenever the finger COUNT changes, not just on scroll start: the
-        // centroid of three fingers sits far from the centroid of two, and real fingers never land
-        // (or lift) in the same input frame — so the 2→3 transition would otherwise read as travel.
+        // cursor. (Re-)anchor on scroll start: threeFingers clears `scrolling`, because the
+        // centroid of three fingers sits far from the centroid of two and the 3→2 transition
+        // would otherwise read as travel.
         if (!scrolling || pressed.size != scrollCount) {
             scrolling = true
             scrollCount = pressed.size

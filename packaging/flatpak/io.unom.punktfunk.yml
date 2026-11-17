@@ -3,12 +3,12 @@
 # punktfunk-client-session, binary `punktfunk-session`) that the shell execs for
 # `--connect`/`--browse` — both must ship or streaming from the Deck breaks (the Decky
 # wrapper launches the shell with those flags and the shell resolves its sibling
-# `punktfunk-session`, see clients/linux/src/spawn.rs). Built into a single-file `.flatpak`
-# bundle and published to Gitea's generic package registry (see .gitea/workflows/flatpak.yml
-# + packaging/flatpak/README.md).
+# `punktfunk-session`, see `session_binary` in pf-client-core's orchestrate.rs). Built into a
+# single-file `.flatpak` bundle and published to Gitea's generic package registry (see
+# .gitea/workflows/flatpak.yml + packaging/flatpak/README.md).
 #
-# Why flatpak for the CLIENT (the host stays an RPM/deb — see packaging/README.md "Why not
-# Flatpak"): on SteamOS the Steam Deck's /usr is read-only and image-based, so a bare
+# Why flatpak for the CLIENT (the host stays an RPM/deb — see packaging/README.md "Why the host
+# is not a Flatpak"): on SteamOS the Steam Deck's /usr is read-only and image-based, so a bare
 # `punktfunk-client` binary in ~/.local/bin can't bring its own libadwaita / SDL3 (both
 # MISSING from the SteamOS system) — but flatpak is the Deck's native, update-survivable app
 # path (the user already runs Moonlight + chiaki-ng as flatpaks). Unlike the host, the client
@@ -23,13 +23,11 @@
 # The PipeWire client lib is in the freedesktop base; SDL3 is NOT, so it is built
 # from source as a bundled module.
 #
-# HEVC decode needs NOTHING from the runtime since M10 (design/client-native-decode.md §6):
-# the client links no FFmpeg at all. It decodes on the user's own GPU drivers — Vulkan Video
-# through the loader in the GL runtime, or VAAPI through libva, which is dlopen'd and never
-# linked — with openh264 + rav1d (both vendored, both BSD-2) as the CPU floor. Nothing here
-# depends on the base runtime's stripped libavcodec, and nothing depends on
-# `org.freedesktop.Platform.codecs-extra` shadowing it either; that whole arrangement (and the
-# encumbered-codec question it existed to answer) is simply not this app's problem any more.
+# HEVC decode needs NOTHING from the runtime (design/client-native-decode.md §6): the client
+# links no FFmpeg at all. It decodes on the user's own GPU drivers — Vulkan Video through the
+# loader in the GL runtime, or VAAPI through libva, which is dlopen'd and never linked — with
+# openh264 + rav1d (both vendored, both BSD-2) as the CPU floor. Nothing here depends on the
+# base runtime's stripped libavcodec or on `org.freedesktop.Platform.codecs-extra`.
 #
 # ⚠ The one thing that follows: the CPU floor has no HEVC — no permissively-licensed HEVC
 # decoder exists — so an HEVC session on a box whose GPU cannot decode HEVC reconnects on a
@@ -95,15 +93,13 @@ finish-args:
   # --- HDR under gamescope (Steam Deck Game Mode) ---
   # A flatpak's Vulkan loader can't see the host's gamescope WSI layer, so without help the SDL3
   # surface never offers the HDR10 (ST.2084) colorspace and the presenter silently tone-maps
-  # PQ->SDR — the field-reported "HDR->SDR" badge. The layer is now VENDORED (see the
-  # gamescope-wsi-layer module below), so it is always present and there is no longer any
-  # manual `flatpak install ... VulkanLayer.gamescope` step for the user.
-  # FOUR things are needed. An earlier revision of this block claimed three and was WRONG: the
-  # fourth is the gate that makes the other three moot, so the Deck sat at hdr10_format=None with
-  # all of (1)-(3) in place, which is exactly the field report ("HDR->SDR" in the stats overlay).
-  # (1) the layer's implicit-layer JSON must be on the Vulkan loader's search path — now
-  # automatic, the vendored module installs it to /app/share/vulkan/implicit_layer.d which
-  # XDG_DATA_DIRS already covers. (2) ENABLE_GAMESCOPE_WSI
+  # PQ->SDR (the "HDR->SDR" badge). The layer is VENDORED (the gamescope-wsi-layer module below),
+  # so it is always present and needs no `flatpak install ... VulkanLayer.gamescope` step.
+  # FOUR things are needed; the fourth is the gate that makes the other three moot, so with only
+  # (1)-(3) the Deck sits at hdr10_format=None.
+  # (1) the layer's implicit-layer JSON must be on the Vulkan loader's search path — automatic:
+  # the vendored module installs it to /app/share/vulkan/implicit_layer.d, which XDG_DATA_DIRS
+  # already covers. (2) ENABLE_GAMESCOPE_WSI
   # flips the layer's own `enable_environment` gate. (3) --filesystem=xdg-run/gamescope-0 binds
   # gamescope's private Wayland socket: the layer must reach the compositor over it to negotiate
   # HDR10, and the Deck runs games as X11 clients (DISPLAY=:1, no WAYLAND_DISPLAY exported) so
@@ -111,16 +107,16 @@ finish-args:
   # set INSIDE the sandbox. The layer's `isRunningUnderGamescope()` reads that env var and nothing
   # else; flatpak does not forward host env, so it arrives unset and the layer's CreateInstance
   # early-returns before it ever creates a GamescopeInstance. The layer still LOADS and still logs
-  # its generic bits ("Forcing on VK_EXT_swapchain_maintenance1", swapchain destroys), which is why
-  # this reads as working — but no gamescope surface is made, so no HDR10 format is ever appended
-  # and (1)-(3) buy nothing. Measured on a Deck OLED (Galileo, SteamOS 3.8.16) 2026-08-05, client
-  # `--browse`, reading `pf_presenter::vk::setup` "swapchain config":
+  # its generic bits ("Forcing on VK_EXT_swapchain_maintenance1", swapchain destroys), so it looks
+  # as if it works — but no gamescope surface is made, so no HDR10 format is ever appended and
+  # (1)-(3) buy nothing. On SteamOS 3.8.16, client `--browse`, reading `pf_presenter::vk::setup`
+  # "swapchain config":
   #     unset                    -> no "[Gamescope WSI] Surface state" block at all, hdr10_format=None
   #     set, hdr_enabled=0       -> "server hdr output enabled: false", hdr10_format=None
   #     set, hdr_enabled=1       -> "hdr formats exposed to client: true",
   #                                 hdr10_format=Some(A2B10G10R10_UNORM_PACK32, HDR10_ST2084_EXT)
-  # DXVK_HDR is NOT the gate for us and was ruled out by measurement: the layer forces it OFF for
-  # clients it has already decided to deny, it does not turn HDR on.
+  # DXVK_HDR is NOT the gate for us: the layer forces it OFF for clients it has already decided
+  # to deny, it does not turn HDR on.
   # Hardcoding `gamescope-0` matches the socket bound just below, and is safe off-Deck both ways:
   # on a normal Wayland desktop --socket=wayland sets WAYLAND_DISPLAY=wayland-0 inside the sandbox
   # and the layer bails on the mismatch; on X11-only there is no gamescope socket to connect to, so
@@ -131,7 +127,7 @@ finish-args:
   - --env=ENABLE_GAMESCOPE_WSI=1
   # The layer engages only while WAYLAND_DISPLAY is unset or names this socket too. When
   # gamescope leaves it unset, flatpak binds the desktop's wayland-0 and drops DISPLAY; the
-  # session then restarts with WAYLAND_DISPLAY=gamescope-0 (`gamescope::foreign`).
+  # shell then launches the session with WAYLAND_DISPLAY=gamescope-0 (`gamescope::foreign`).
   - --env=GAMESCOPE_WAYLAND_DISPLAY=gamescope-0
   - --filesystem=xdg-run/gamescope-0   # gamescope's Wayland socket: HDR negotiation, the window
 
@@ -143,7 +139,7 @@ build-options:
     PKG_CONFIG_PATH: /app/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig
     # bindgen (sdl3-sys, pyrowave-sys) loads libclang from the llvm20 extension.
     LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
-    # mold (shipped in rust-stable) speeds the ~450-crate link on the Deck APU.
+    # mold (shipped in rust-stable) speeds the link on the Deck APU.
     RUSTFLAGS: -C link-arg=-fuse-ld=mold
   # The multiarch directory in PKG_CONFIG_PATH is per-architecture, and flatpak-builder does NOT
   # shell-expand `env` values — so ${FLATPAK_ARCH} would be taken literally. An `arch` override is
@@ -174,7 +170,7 @@ modules:
     sources:
       - type: archive
         url: https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
-        # `sha256sum SDL3-3.4.18.tar.gz` (verified 2026-10-07). Bump url + sha together.
+        # `sha256sum SDL3-3.4.18.tar.gz`. Bump url + sha together.
         sha256: 9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3
         x-checker-data:
           type: anitya
@@ -193,13 +189,10 @@ modules:
   # compile, and `cleanup: '*'` so nothing reaches the runtime (the Vulkan LOADER comes from
   # the GL runtime).
   #
-  # It was added for the session binary's pf-ffvk crate, which ran bindgen over FFmpeg's
-  # libavutil/hwcontext_vulkan.h. M10 deleted pf-ffvk along with the rest of the client's
-  # FFmpeg (design/client-native-decode.md §6), so that consumer is gone — but the module
-  # stays, because the gamescope WSI layer built two modules below is itself a VULKAN LAYER
-  # and compiles against these headers. Module order is the dependency: this one must build
-  # first. Do not drop it as dead weight; flatpak.yml has no `pull_request:` trigger, so a
-  # manifest break of that kind reaches main invisibly and a tag then ships no Linux flatpak.
+  # The gamescope WSI layer built in the next module is itself a VULKAN LAYER and compiles
+  # against these headers. Module order is the dependency: this one must build first. Do not
+  # drop it as dead weight; flatpak.yml has no `pull_request:` trigger, so a manifest break of
+  # that kind reaches main invisibly and a tag then ships no Linux flatpak.
   # The native decoder needs nothing from here — pf-vkdecode reaches Vulkan through `ash`,
   # which is pure Rust bindings with no bindgen and no C headers.
   # ---------------------------------------------------------------------------------------
@@ -222,14 +215,12 @@ modules:
   # has no colour-management protocol to negotiate HDR10 through and only this layer can add
   # the ST.2084 surface formats. Without it: zero `[Gamescope WSI]` lines, hdr10_format=None.
   #
-  # It used to come from the flathub runtime extension
-  # `org.freedesktop.Platform.VulkanLayer.gamescope`, which every user had to install BY HAND
-  # (documented only in a comment here — so in practice nobody did, and the field report was
-  # "HDR->SDR" in the stats overlay). Vendoring instead of `add-extensions` autodownload,
-  # deliberately: that extension is 94 MB of whole-gamescope to deliver one 4 MB .so, its
-  # layer JSON hardcodes a /usr `library_path` that an app-scoped extension (mounted under
-  # /app) would not satisfy, and it would make flathub a hard install-time dependency of an
-  # app we self-host on flatpak.unom.io.
+  # Vendored rather than taken from the flathub runtime extension
+  # `org.freedesktop.Platform.VulkanLayer.gamescope` via `add-extensions` autodownload: that
+  # extension is 94 MB of whole-gamescope to deliver one 4 MB .so, its layer JSON hardcodes a
+  # /usr `library_path` that an app-scoped extension (mounted under /app) would not satisfy,
+  # and it would make flathub a hard install-time dependency of an app we self-host on
+  # flatpak.unom.io.
   #
   # Pinned to the SAME gamescope rev as packaging/gamescope/PKGBUILD (`_gsrev`) so the
   # client's layer and the host's punktfunk-gamescope always come from one tree — bump both
@@ -245,13 +236,7 @@ modules:
   # The layer JSON is generated by meson from prefix+libdir, so it self-writes
   # `library_path: /app/lib/libVkLayer_FROG_gamescope_wsi_x86_64.so` and lands in
   # /app/share/vulkan/implicit_layer.d — already on the loader's search path via
-  # XDG_DATA_DIRS, which is why no VK_ADD_IMPLICIT_LAYER_PATH is needed (and why it was
-  # dropped from finish-args: pointing at the old /usr extension path too would risk
-  # double-loading two layers of the same name).
-  #
-  # Verified on a Deck OLED 2026-08-05: builds offline in org.gnome.Sdk//50, and the
-  # resulting .so drives the Deck's system gamescope to
-  # "hdr formats exposed to client: true" + hdr10_format=Some(...).
+  # XDG_DATA_DIRS, which is why no VK_ADD_IMPLICIT_LAYER_PATH is needed.
   # ---------------------------------------------------------------------------------------
   - name: gamescope-wsi-layer
     buildsystem: simple
@@ -298,11 +283,12 @@ modules:
 
   # ---------------------------------------------------------------------------------------
   # The client. cargo-sources.json is the GENERATED offline crate cache:
-  #   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
-  # (run from the repo root; the CI step does exactly this). With it present the build is fully
-  # offline (CARGO_NET_OFFLINE). For quick LOCAL iteration WITHOUT regenerating it, drop the
-  # cargo-sources.json source and pass  --build-args=--share=network  to flatpak-builder
-  # (non-reproducible; cargo fetches from crates.io during the build).
+  #   python3 flatpak-cargo-generator.py <Cargo.lock after prune-windows-lock.py>
+  #     -o packaging/flatpak/cargo-sources.json
+  # (from the repo root; build-flatpak.sh and the CI step both do this). With it present the
+  # build is fully offline (CARGO_NET_OFFLINE). For quick LOCAL iteration WITHOUT regenerating
+  # it, drop the cargo-sources.json source and pass  --build-args=--share=network  to
+  # flatpak-builder (non-reproducible; cargo fetches from crates.io during the build).
   # ---------------------------------------------------------------------------------------
   - name: punktfunk-client
     buildsystem: simple
@@ -355,17 +341,12 @@ modules:
       - install -Dm0644 packaging/flatpak/io.unom.punktfunk.metainfo.xml
           ${FLATPAK_DEST}/share/metainfo/io.unom.punktfunk.metainfo.xml
       # Scalable icon named for the app id (GNOME runtime renders SVG via librsvg).
-      # One icon source for every Linux packaging (it used to live under packaging/flatpak,
-      # which is why the deb/rpm/arch entries shipped a stock `video-display` instead).
+      # One icon source for every Linux packaging (packaging/linux/icons).
       - install -Dm0644 packaging/linux/icons/hicolor/scalable/apps/io.unom.punktfunk.svg
           ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.unom.punktfunk.svg
     sources:
-      # The repo checkout. For a Flathub/published build, replace with a pinned git source:
-      #   - type: git
-      #     url: https://git.unom.io/unom/punktfunk
-      #     tag: vX.Y.Z
-      #     commit: <sha>
-      # For ON-DECK / CI builds we build the checked-out working tree in place:
+      # The repo checkout, built in place (on-Deck and CI builds). The Flathub build pins a
+      # source tag instead: packaging/flathub/io.unom.punktfunk.yml.
       - type: dir
         path: ../..
       # Generated offline crate cache (see the comment block above). Remove for --share=network.
@@ -388,8 +369,7 @@ modules:
       # `no variant, associated function, or constant named 'Default' found for enum
       # SkPathFillType` (that const is generated INTO bindings.rs, so it moves with the
       # archive, not with the crate). Cargo.lock and cargo-sources.json are regenerated
-      # automatically; this file is the one place the skia archive is pinned by hand, which
-      # is exactly how the 0.87 → 0.99 bump (#193) left it behind.
+      # automatically; this file is the one place the skia archive is pinned by hand.
       - type: file
         only-arches: [x86_64]
         url: https://github.com/rust-skia/skia-binaries/releases/download/0.153.3/skia-binaries-b7f043e0b1e2a850e702-x86_64-unknown-linux-gnu-ganesh-jpegd-jpege-pdf-textlayout-vulkan.tar.gz

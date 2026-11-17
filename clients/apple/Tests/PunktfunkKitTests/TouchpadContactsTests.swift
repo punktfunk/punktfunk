@@ -168,7 +168,7 @@ final class TrackpadContactGateTests: XCTestCase {
         XCTAssertTrue(gate.forwarding)
         gate.noteSurface(true, fingers: 0) // the last finger lifted
         XCTAssertFalse(gate.forwarding)
-        gate.noteSurface(false, fingers: 3) // handed back: today's paths
+        gate.noteSurface(false, fingers: 3) // handed back: the ordinary paths
         XCTAssertFalse(gate.forwarding)
     }
 

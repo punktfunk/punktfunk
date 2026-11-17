@@ -1,5 +1,6 @@
 //! The commands of a seat on a person's own Linux account: the supervisor, never the door,
-//! decides which device opens the person's desktop (CONTRACT §4, rules in [`crate::unlock`]).
+//! decides which device opens the person's desktop. The multi-seat contract page lists the
+//! commands ("Who opens a person's seat"); the rules are in [`crate::unlock`].
 //!
 //! A password goes through the attempt limits and the PAM child outside `ops`, then everything it
 //! rested on is read again under `ops`, where a stopped session is started through the same path

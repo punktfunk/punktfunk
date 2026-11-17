@@ -157,8 +157,8 @@ mod win {
     /// One `SetDisplayConfig(SDC_TOPOLOGY_EXTEND)` poke — re-activates every attachable display
     /// from the CCD database, i.e. exactly the "a non-managed display re-activated after the
     /// verified isolate" event the exclusive-topology watchdog exists to evict. Fired ONCE (not a
-    /// loop): the point is to trigger one reassert round and observe the recovery — one
-    /// `reassert-recover` trace, ONE ring recreate, stream alive.
+    /// loop): the point is to trigger one reassert round and observe the recovery — the
+    /// `reassert-recover` trace, stream alive.
     fn extend_once() -> ! {
         let t = Instant::now();
         // SAFETY: the no-buffers topology form of SetDisplayConfig; flags request the stored
@@ -200,8 +200,7 @@ mod win {
     /// The physical (DDC-capable) monitors behind one HMONITOR, with their descriptions. The
     /// handle-ACQUISITION timing is itself reported (`ddc-open`): it is the poller's first contact
     /// with every monitor — including a virtual one that then yields no handles — and on a
-    /// streaming host in exclusive topology the virtual monitor is the only one there is, so the
-    /// cost of this failing path is exactly what the DDC-fail-fast driver work changes.
+    /// streaming host in exclusive topology the virtual monitor is the only one there is.
     fn physical_monitors(mon: HMONITOR, label: &str) -> Vec<(HANDLE, String)> {
         let t = Instant::now();
         let mut count = 0u32;

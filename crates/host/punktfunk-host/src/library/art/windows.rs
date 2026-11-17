@@ -5,9 +5,9 @@ use super::*;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// How long one scan of the registry and the users base is reused. A page of covers asks for
-/// sixty at once and every check would repeat it; a launcher installed meanwhile is picked up
-/// within this.
+/// How long one scan of the registry and the users base is reused. A page of covers
+/// (`PAGE_DEFAULT` in `mgmt/library.rs`) asks at once and every check would repeat it; a
+/// launcher installed meanwhile is picked up within this.
 const ROOTS_TTL: Duration = Duration::from_secs(30);
 
 static SCANNED: Mutex<Option<(Instant, Vec<PathBuf>)>> = Mutex::new(None);

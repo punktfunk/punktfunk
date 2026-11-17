@@ -1,10 +1,11 @@
 # Lints the packaging sources on every pull request that touches them. deb, rpm, arch and flatpak
 # build only on push to main and tags, so a broken spec, PKGBUILD or shell script otherwise
 # surfaces on the canary. Nothing is built here: syntax, shellcheck, rpmspec, makepkg
-# --printsrcinfo, the desktop entries and metainfo, the payload checker's self-test, each channel's policy against its matrix and
-# the Steam Deck rebuild check on a stub box. scripts/ci/check-workflow-paths.py fails CI when
-# the paths below stop covering what the lane lints, and holds every workflow's path lists to
-# the files its package recipes name.
+# --printsrcinfo, the desktop entries and metainfo, the payload checker's self-test, each
+# channel's policy against its matrix, the Steam Deck rebuild check on a stub box, the
+# seat-session env reader and the Steam Frame adapter hook. scripts/ci/check-workflow-paths.py
+# fails CI when the paths below stop covering what the lane lints, and holds every workflow's
+# path lists to the files its package recipes name.
 name: packaging-lint
 
 on:

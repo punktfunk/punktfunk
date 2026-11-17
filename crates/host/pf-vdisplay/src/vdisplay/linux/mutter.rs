@@ -9,8 +9,8 @@
 //! die with the connection, so a keepalive thread owns it.
 //!
 //! Needs a live Mutter (`gnome-shell`, or `gnome-shell --headless`) on
-//! the session bus. Detected via `XDG_CURRENT_DESKTOP=GNOME` or
-//! `PUNKTFUNK_COMPOSITOR=mutter`.
+//! the session bus. [`crate::detect`] picks it from the `PUNKTFUNK_COMPOSITOR=mutter`
+//! pin, a live `gnome-shell`, or else the stored `XDG_CURRENT_DESKTOP=GNOME`.
 //!
 //! GNOME cannot rematch a virtual monitor (Mutter mints a fresh EDID
 //! serial per RecordVirtual). Scale is host-persisted
@@ -58,8 +58,8 @@ const CURSOR_EMBEDDED: u32 = 1;
 /// D-Bus calls return while Mutter is still rebuilding (and, for
 /// `APPLY_TEMPORARY`, still auto-reverting). Every locked section ends
 /// with [`settle_topology`] before the guard drops. [`StopGuard`]'s Drop
-/// waits for Stop + settle: a fire-and-forget flag let the next
-/// `RecordVirtual` take the lock while the doomed session still stood.
+/// waits for Stop + settle: a fire-and-forget flag would let the next
+/// `RecordVirtual` take the lock while the doomed session still stands.
 static TOPOLOGY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Mutter virtual-display driver. Each `create` spins a keepalive thread
@@ -280,8 +280,8 @@ impl VirtualDisplay for MutterDisplay {
 ///
 /// Drop is synchronous and bounded: it waits for Stop +
 /// [`settle_topology`] under [`TOPOLOGY_LOCK`]. Callers that re-create
-/// immediately need that wait — a fire-and-forget flag let the next
-/// `RecordVirtual` take the lock while this monitor still stood.
+/// immediately need that wait — a fire-and-forget flag would let the next
+/// `RecordVirtual` take the lock while this monitor still stands.
 struct StopGuard {
     stop: Arc<AtomicBool>,
     /// `Disconnected` when the session thread (owner of the sender) returns.

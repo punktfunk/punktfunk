@@ -75,8 +75,8 @@ export const SectionLogs: FC = () => {
 		[profiles.data, info.data],
 	);
 
-	// Host and plugins on by default — the page's previous "All", and still the right opening
-	// state: a device bundle is a deliberate act of correlation, not something to be opted out of.
+	// Host and plugins on by default: a device bundle is a deliberate act of correlation, not
+	// something to be opted out of.
 	const [selected, setSelected] = useState<Set<string>>(
 		() => new Set([HOST_SOURCE, PLUGINS_SOURCE]),
 	);

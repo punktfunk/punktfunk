@@ -4,7 +4,7 @@
 // re-addressed or the store is wiped.
 //
 // The pasteboard is the one part of that with no cross-platform API, hence this two-line shim.
-// tvOS has no clipboard at all, so the affordance simply isn't offered there.
+// tvOS has no clipboard (UIPasteboard is unavailable there), so the affordance isn't offered.
 
 #if os(macOS)
 import AppKit

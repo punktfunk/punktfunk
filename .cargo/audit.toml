@@ -6,19 +6,16 @@
 #
 # The workflow's `--deny unsound` fails vulnerabilities and unsound advisories. Unmaintained
 # advisories stay visible without failing CI, so we keep the maintenance signal. paste is the
-# root one: transitive with no successor, through BOTH utoipa-axum (host) and rav1d (every
-# client), so dropping utoipa-axum alone would not clear it.
-# (rustls-pemfile was dropped 2026-06-29 by removing axum-server's unused tls-rustls feature +
-# moving our own PEM parsing to rustls-pki-types; memmap2's unsoundness was fixed by the 0.9.11
-# bump.)
+# root one: transitive with no successor, through utoipa-axum (host), rav1d (every client) and
+# metal, so dropping utoipa-axum alone would not clear it.
 
 [advisories]
 ignore = [
     # rsa "Marvin Attack" (RUSTSEC-2023-0071): a timing side-channel in the rsa crate's variable-time
     # modular exponentiation of the SECRET exponent. IMPORTANT — this affects the RSA private-key op in
     # general, INCLUDING signing (m^d mod n), which the host DOES perform (gamestream/pairing.rs
-    # `signing_key.sign(&serversecret)`). It is NOT, as an earlier version of this note wrongly claimed,
-    # limited to decryption — so "the vulnerable path isn't exercised" is false; signing exercises it.
+    # `signing_key.sign(&serversecret)`). It is not limited to decryption, so signing exercises the
+    # vulnerable path.
     # We accept it because the attack is not practically reachable here, NOT because the path is unused:
     #   * No RSA decryption / PKCS#1v1.5 padding oracle exists anywhere (every `decrypt` in the tree is
     #     AES/AES-GCM), so the classic Bleichenbacher/Marvin chosen-ciphertext oracle is absent.
@@ -35,8 +32,4 @@ ignore = [
     # a constant-time rsa ships (then drop this), the host ever signs an attacker-chosen message with
     # this key, or any RSA decryption / key-transport using the private key is added.
     "RUSTSEC-2023-0071",
-    # The quick-xml DoS pair (RUSTSEC-2026-0194/0195) used to be ignored here, with the note
-    # "revisit when wayland-scanner releases against quick-xml >=0.41". It has: wayland-scanner
-    # 0.31.11 moved to `quick-xml ^0.41` and the lock is on 0.41.0 as of 2026-08-13, so both
-    # entries were dropped rather than left as permanent exceptions.
 ]

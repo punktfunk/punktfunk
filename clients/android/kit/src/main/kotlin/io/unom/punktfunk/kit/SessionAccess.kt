@@ -32,7 +32,7 @@ object SessionAccess {
     /** Host power — the `power.*` host actions (`design/host-actions.md`); route-gated, never input. */
     const val POWER = 1 shl 6
 
-    /** Pause and remove a title's download (`design/plugin-downloads.md`); route-gated, never input. */
+    /** Pause and remove a title's download; route-gated, never input. */
     const val MANAGE_GAMES = 1 shl 7
 
     /** Choosing the screen this device streams and what the host's monitors do; route-gated, never input. */

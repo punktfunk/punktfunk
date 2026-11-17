@@ -155,7 +155,7 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // Per-device display settings. Same lane as the host-wide policy above and
         // deliberately no stricter: this route changes ONE device's behaviour, while
         // `PUT /display/settings` changes every device's. A paired device may PUT its own
-        // row's `screen` alone; the handler refuses the rest (`a_device_sets_only_its_own_screen`).
+        // row's pick alone; the handler refuses the rest (`a_device_writes_only_its_own_pick`).
         ("GET", "/api/v1/display/clients/{fingerprint}", true, false),
         ("PUT", "/api/v1/display/clients/{fingerprint}", true, true),
         (
@@ -327,11 +327,11 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("DELETE", "/api/v1/store/sources/{name}", false, false),
         ("GET", "/api/v1/store/runtime", false, false),
         ("POST", "/api/v1/store/runtime", false, false),
-        // Updates: `apply` runs an installer / the root helper.
         // Host settings: operator only. A plugin or a device must not reopen GameStream.
         ("GET", "/api/v1/host/settings", false, false),
         ("PATCH", "/api/v1/host/settings", false, false),
         ("GET", "/api/v1/host/audio/apps", false, false),
+        // Updates: `apply` runs an installer / the root helper.
         ("GET", "/api/v1/update/status", false, false),
         ("POST", "/api/v1/update/check", false, false),
         ("POST", "/api/v1/update/apply", false, false),
@@ -532,7 +532,7 @@ async fn only_the_operator_writes_a_profile_s_layer() {
         (status, &body["code"]),
         (StatusCode::NOT_FOUND, &"profile_unknown".into())
     );
-    // An empty `as` names nobody: the plugin's own switch on the box, as before.
+    // An empty `as` names nobody: the plugin's own switch on the box.
     let req = json_req(
         Method::PUT,
         "/api/v1/library/scanners/demo?as=",

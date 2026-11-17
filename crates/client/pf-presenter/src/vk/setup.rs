@@ -40,7 +40,7 @@ pub(crate) const VIDEO_CODECS: [&std::ffi::CStr; 3] = [
 ];
 
 /// All five conjuncts of "this device can host Vulkan Video decode".
-/// [`DecodeProbe::usable`] is its one caller.
+/// [`DecodeProbe::usable`] is its only caller outside tests.
 pub(crate) fn video_decode_gate(
     api_1_3: bool,
     features_ok: bool,
@@ -414,7 +414,7 @@ impl DeviceCaps {
     /// table, there when the instance enabled `VK_KHR_get_surface_capabilities2`;
     /// present-wait2, present timing and exclusive fullscreen ask through it. Logs each
     /// optional lane's verdict. `qfi` is the decode queue's fallback. The `present_wait2`
-    /// and `present_timing` knobs opt into those two.
+    /// knob opts into wait2; `present_timing` overrides the platform default for timing.
     fn probe(
         instance: &ash::Instance,
         pdev: vk::PhysicalDevice,
@@ -1083,7 +1083,7 @@ fn create_instance(
     if has_colorspace_ext {
         instance_extensions.push("VK_EXT_swapchain_colorspace".into());
     }
-    // Per-surface queries (present-wait2, exclusive fullscreen) go through
+    // Per-surface queries (present-wait2, present timing, exclusive fullscreen) go through
     // `VK_KHR_get_surface_capabilities2`.
     let has_caps2_ext = inst_available
         .iter()
@@ -1283,8 +1283,8 @@ fn hw_ctx(
     }
 }
 
-/// The selected device's facts and handles for the decode lanes. Extension lists match
-/// creation: the pyrowave decoder replays them into its pinned create-info.
+/// The selected device's facts and handles for the decode lanes. Every extension listed is
+/// enabled at creation: the pyrowave decoder replays the lists into its pinned create-info.
 #[allow(clippy::too_many_arguments)]
 fn decode_export(
     entry: &ash::Entry,
@@ -1891,7 +1891,7 @@ pub struct PresentPref {
 /// LATEST_READY is newest-wins in the driver; plain FIFO waits a full refresh,
 /// so without LATEST_READY that rung is opt-in.
 /// Otherwise MAILBOX first so an arrival-paced presenter does not block.
-/// V-sync off: IMMEDIATE, FIFO_RELAXED, MAILBOX.
+/// V-sync off: IMMEDIATE, FIFO_RELAXED, MAILBOX, then LATEST_READY where enabled.
 fn present_mode_chain(pref: PresentPref) -> Vec<vk::PresentModeKHR> {
     use vk::PresentModeKHR as M;
     let flr = pref.fifo_latest_ready.then_some(fifo_latest_ready::MODE);
@@ -2181,9 +2181,8 @@ mod tests {
         }
     }
 
-    /// V-sync on may hold no tearing rung. The field surface offers only
-    /// `[IMMEDIATE, FIFO]`, and a ladder that lists IMMEDIATE ahead of its FIFO
-    /// landing tears on every such client.
+    /// V-sync on may hold no tearing rung. A surface that offers only `[IMMEDIATE, FIFO]`
+    /// lands on FIFO: a ladder that lists IMMEDIATE ahead of it would tear.
     #[test]
     fn vsync_never_lands_on_a_tearing_mode() {
         let offered = [M::IMMEDIATE, M::FIFO];

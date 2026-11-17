@@ -59,7 +59,7 @@ describe("padEvents", () => {
 		expect(anchor.buttons).toBe(BIT.A);
 	});
 
-	// The reporter's question, and the acceptance line: Guide must read as BTN_MODE both ways.
+	// Guide must read as BTN_MODE both ways.
 	test("guide reads as BTN_MODE down, then up", () => {
 		const a = padEvents(undefined, frame()).anchor;
 		const down = padEvents(a, frame({ buttons: BIT.GUIDE }));

@@ -1,5 +1,5 @@
 //! Virtual Steam Deck on Windows via the UMDF minidriver — analogue of the Linux
-//! UHID Deck ([`super::steam_controller`]'s `SteamProto`). Shares
+//! UHID Deck (`SteamProto` in the Linux `steam_controller`). Shares
 //! [`super::steam_proto`]: the `ID_CONTROLLER_DECK_STATE` serializer, the
 //! XInput/rich mappers, the `0xEB` rumble parser.
 //!

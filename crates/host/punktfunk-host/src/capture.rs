@@ -8,7 +8,7 @@
 use anyhow::Result;
 
 pub use pf_frame::{CapturedFrame, OutputFormat};
-// Named only by the GameStream media path and the Linux pyrowave plumbing below.
+// Named only by the GameStream media path and the Linux modifier plumbing below.
 // Off both, a native-only Windows build would trip -D warnings.
 #[cfg(any(target_os = "linux", feature = "gamestream"))]
 pub use pf_frame::PixelFormat;
@@ -214,8 +214,9 @@ impl OutputLease {
 
 /// Capturer from an already-created [`crate::vdisplay::VirtualOutput`], which it owns. A
 /// named output is offered to direct capture first; `pf_capture::open_virtual_output` picks.
-/// Direct capture probes its consumer; PipeWire probes only level-21 gamescope and
-/// non-gamescope PyroWave. Ordinary KWin, Mutter, and older gamescope keep their LINEAR offer.
+/// Direct capture probes its consumer. On raw-dmabuf passthrough, PipeWire offers the
+/// encoder-proved tiled modifiers to level-21 gamescope, to any other producer's VAAPI encode,
+/// and to non-gamescope PyroWave; older gamescope keeps its LINEAR offer.
 /// The YUV it asks for or converts takes the session's range.
 #[cfg(target_os = "linux")]
 pub fn capture_virtual_output(

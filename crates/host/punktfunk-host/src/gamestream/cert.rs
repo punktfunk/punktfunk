@@ -79,8 +79,8 @@ impl ServerIdentity {
 fn generate() -> Result<(String, String)> {
     // rcgen cannot generate RSA (`KeyGenerationUnavailable`); Moonlight needs RSA-2048.
     // Mint with `rsa`, self-sign via rcgen, return the same PKCS#8 PEM `from_pems` re-parses.
-    // `RsaPrivateKey::new` wants rand_core 0.6's `CryptoRngCore`. Our `rand` 0.9 `ThreadRng`
-    // is a different trait of the same name — use `rsa::rand_core::OsRng`.
+    // `RsaPrivateKey::new` wants rand_core 0.6's `CryptoRngCore`. Our `rand` sits on a later
+    // rand_core, so none of its rngs qualify — use `rsa::rand_core::OsRng`.
     let priv_key = RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
         .context("generate RSA-2048 host key")?;
     let key_pem = priv_key

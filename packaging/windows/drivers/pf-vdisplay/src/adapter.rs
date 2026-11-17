@@ -2,7 +2,7 @@
 //! object is only valid after D0), and is ASYNC: `init_adapter` builds the caps and calls
 //! `IddCxAdapterInitAsync`; the adapter object arrives later via `EvtIddCxAdapterInitFinished`
 //! (`adapter_init_finished` → [`set_adapter`]). FP16 caps + the obligated `*2`/gamma/hdr callbacks (in
-//! `callbacks.rs`) together enable HDR. STEP 3.
+//! `callbacks.rs`) together enable HDR.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -13,13 +13,13 @@ use windows::core::w;
 use crate::STATUS_SUCCESS;
 use crate::worker::Sendable;
 
-/// The IddCx adapter handle, stashed for later DDIs (e.g. `SET_RENDER_ADAPTER`, STEP 4).
+/// The IddCx adapter handle, stashed for later DDIs (e.g. `SET_RENDER_ADAPTER`).
 type SendAdapter = Sendable<iddcx::IDDCX_ADAPTER>;
 
 // A slot, NOT a OnceLock: `set_adapter` must be last-write-wins so a D0-resume re-init's fresh
-// handle REPLACES the pre-power-cycle one (a OnceLock's second `set` was a silent no-op, leaving
-// every later `IddCxMonitorCreate` pointed at a stale adapter). Poison-recovering lock idiom as
-// in `monitor.rs` (panic = abort here, so poisoning is unreachable anyway).
+// handle REPLACES the pre-power-cycle one (a OnceLock would keep the stale one for every later
+// `IddCxMonitorCreate`). Poison-recovering lock idiom as in `monitor.rs` (panic = abort here,
+// so poisoning is unreachable anyway).
 static ADAPTER: Mutex<Option<SendAdapter>> = Mutex::new(None);
 
 /// The WDFDEVICE the last `init_adapter` ran on (as an integer: the handle is opaque), so an ADD
@@ -82,9 +82,9 @@ pub unsafe fn init_adapter(device: WDFDEVICE) -> NTSTATUS {
     dbglog!("[pf-vd] init_adapter");
     DEVICE.store(device as usize, Ordering::Release);
 
-    // Firmware/hardware version (telemetry). The oracle points BOTH at one IDDCX_ENDPOINT_VERSION.
-    // `version` is a stack local read synchronously by IddCxAdapterInitAsync (same as the oracle). `.Size`
-    // is `size_of` throughout — these are the IddCx 1.10 structs and the framework here is 1.10 (= upstream).
+    // Firmware/hardware version (telemetry): both point at one IDDCX_ENDPOINT_VERSION, a stack
+    // local read synchronously by IddCxAdapterInitAsync. `.Size` is `size_of` throughout (the
+    // IddCx 1.10 structs).
     let mut version = iddcx::IDDCX_ENDPOINT_VERSION {
         Size: core::mem::size_of::<iddcx::IDDCX_ENDPOINT_VERSION>() as u32,
         MajorVer: env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap_or(0),
@@ -110,13 +110,10 @@ pub unsafe fn init_adapter(device: WDFDEVICE) -> NTSTATUS {
         pHardwareVersion: (&raw mut version).cast(),
     };
 
-    // STEP 7 (HDR): declare we can process FP16 (scRGB) desktop surfaces — this is what marks the virtual
-    // monitor advanced-color-capable (→ the host sees display_hdr=true → the "Use HDR" toggle appears). The
-    // ONLY reason STEP 3 rejected this flag was setting it WITHOUT the obligated *2/HDR DDIs; those are now
-    // registered in entry.rs (parse_monitor_description2/monitor_query_modes2/adapter_commit_modes2 +
-    // query_target_info/set_default_hdr_metadata/set_gamma_ramp). The proven oracle sets exactly this flag
-    // with the INF still at UmdfExtensions=IddCx0102. GammaSupport stays NONE (set above). Enum is bindgen
-    // ModuleConsts — the variant is a plain-int const assignable straight to the `Flags` field.
+    // HDR: declare FP16 (scRGB) desktop surfaces, which marks the virtual monitor
+    // advanced-color-capable (the host then sees display_hdr=true). It needs the obligated *2/HDR
+    // DDIs registered in entry.rs; GammaSupport stays NONE (set above). The enum is bindgen
+    // ModuleConsts: the variant is a plain-int const assignable straight to `Flags`.
     let mut caps = iddcx::IDDCX_ADAPTER_CAPS {
         Size: core::mem::size_of::<iddcx::IDDCX_ADAPTER_CAPS>() as u32,
         Flags: iddcx::IDDCX_ADAPTER_FLAGS::IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16,
@@ -201,7 +198,7 @@ pub unsafe fn init_adapter(device: WDFDEVICE) -> NTSTATUS {
     st
 }
 
-/// Stash the adapter object delivered by `EvtIddCxAdapterInitFinished` (STEP 4 reads it).
+/// Stash the adapter object delivered by `EvtIddCxAdapterInitFinished` (`adapter()` reads it).
 /// Last write wins — see [`ADAPTER`].
 pub fn set_adapter(adapter: iddcx::IDDCX_ADAPTER) {
     *ADAPTER

@@ -19,48 +19,46 @@ omur = { git = "https://github.com/unom-io/omur", rev = "18981af0cd66380b06cbf52
 # path the tray and the desktop client already take. `quic` brings `tls` (and `PinVerify`) with it.
 # `serde` reads and writes `GameOverrides` in `library-overrides.json` and on `GET /library`.
 punktfunk-core = { path = "../../core/punktfunk-core", features = ["quic", "ureq-tls", "serde"] }
-# Vendor libraries are dlopen'd at runtime, never linked: `libcuda.so.1` (`zerocopy::cuda`) and
-# NVML on every OS (`encoder_sessions`), so one binary runs with or without an NVIDIA driver.
+# Vendor libraries are dlopen'd at runtime, never linked: NVML on every OS (`encoder_sessions`)
+# and the Linux clock pin (`linux/gpuclocks`), so one binary runs with or without an NVIDIA driver.
 libloading = "0.9"
 # Signed update-manifest fetch/verify + install-kind detection, shared with the Linux client.
 pf-update-check = { path = "../../core/pf-update-check" }
-# Config-dir + owner-private file helpers (moved out of the gamestream junk drawer, plan §W6).
+# Config-dir + owner-private file helpers.
 pf-paths = { path = "../pf-paths" }
 # The seat supervisor's ledger and pipe frames: the service runs it, placement reads it.
 pf-seats = { path = "../pf-seats" }
 # Windows owner/DACL checks (planted secrets, admin-only staging dirs).
 pf-paths-win = { path = "../pf-paths-win" }
-# Process-wide host config global, extracted to a leaf crate (plan §W6).
+# Process-wide host config global.
 pf-host-config = { path = "../pf-host-config" }
-# GPU vendor/adapter detection + selection, extracted to a leaf crate (plan §W6).
+# GPU vendor/adapter detection + selection.
 pf-gpu = { path = "../pf-gpu" }
-# Linux GPU zero-copy plumbing (CUDA/EGL/Vulkan dmabuf import + the isolated worker), extracted
-# to a leaf crate (plan §W6). Compiles empty on non-Linux, so it lives in the main deps.
+# Linux GPU zero-copy plumbing (CUDA/EGL/Vulkan dmabuf import + the isolated worker). Compiles
+# empty on non-Linux, so it lives in the main deps.
 pf-zerocopy = { path = "../pf-zerocopy" }
 # Shared frame/format vocabulary (CapturedFrame/PixelFormat/…), HDR metadata, thread QoS, and the
-# Windows DXGI capture identity — the leaf both capture and encode speak (plan §W6).
+# Windows DXGI capture identity — the leaf both capture and encode speak.
 pf-frame = { path = "../pf-frame" }
-# Windows display-topology helpers (CCD/GDI mode-set, PnP monitor devnodes, display-change watch),
-# extracted to a leaf crate (plan §W6). Empty on non-Windows, so it lives in the main deps.
+# Windows display-topology helpers (CCD/GDI mode-set, PnP monitor devnodes, display-change watch).
+# Empty on non-Windows, so it lives in the main deps.
 pf-win-display = { path = "../pf-win-display" }
 # Video encode backends (NVENC/VAAPI/AMF/QSV/Vulkan-Video/PyroWave/openh264) behind one Encoder
-# trait, extracted to a subsystem crate (plan §W6). The host's nvenc/qsv/vulkan-encode/pyrowave
-# features forward here (see [features]); the heavy encoder deps (ffmpeg-next, the NVENC SDK,
-# openh264, pyrowave-sys) moved with it.
+# trait. The host's nvenc/qsv/vulkan-encode/pyrowave features forward here (see [features]); the
+# encoder deps (the NVENC SDK, openh264, pyrowave-sys) are declared in pf-encode and its sub-crates.
 pf-encode = { path = "../pf-encode" }
-# Frame capture backends (Linux PipeWire portal + Windows IDD direct-push) behind one Capturer
-# trait, extracted to a subsystem crate (plan §W6). The facade (src/capture.rs) hands it the
-# pre-resolved encode facts + the sealed-channel delivery closure so the edge stays one-way.
+# Frame capture backends behind one Capturer trait. The facade (src/capture.rs, and
+# src/windows/idd.rs for the Windows opens) hands it the pre-resolved encode facts and, on
+# Windows, the driver-control closures, so the edge stays one-way.
 pf-capture = { path = "../pf-capture" }
-# Input injection backends (per-OS injectors + the virtual-gamepad HID stack), extracted to a
-# subsystem crate (plan §W6). Consumes core::input; the heavy input deps (wayland/reis/xkbcommon/
-# usbip) moved with it.
+# Input injection backends (per-OS injectors + the virtual-gamepad HID stack). Consumes
+# core::input; the input deps (wayland/reis/xkbcommon/usbip) are declared there.
 pf-inject = { path = "../pf-inject" }
-# Host audio (PipeWire/WASAPI capture, the virtual mic, pad audio, the Windows wiring plan),
-# extracted to a subsystem crate (plan §W6). The PipeWire binding moved with it.
+# Host audio (PipeWire/WASAPI capture, the virtual mic, pad audio, the Windows wiring plan). The
+# PipeWire binding is declared there.
 pf-audio = { path = "../pf-audio" }
 # Virtual-display orchestration (per-compositor Linux backends + the Windows IddCx driver backend),
-# extracted to a subsystem crate (plan §W6). The DDC panel control + KWin zkde protocol moved with it.
+# including the DDC panel control and the KWin zkde protocol.
 pf-vdisplay = { path = "../pf-vdisplay" }
 # Shared clipboard (design/clipboard-and-file-transfer.md §4): the per-OS session-clipboard
 # backends + coordinator. Portable dep — the crate's facade (policy / ClipCoordCmd / start)
@@ -96,8 +94,7 @@ tokio = { version = "1", features = ["full"] }
 # The native planes use the P-256 identity (src/hostsys/identity.rs) and never touch this crate — so a
 # native-only build also sheds the accepted Marvin advisory (RUSTSEC-2023-0071, .cargo/audit.toml).
 #
-# TWO independent `rsa` features, arriving from two different bumps in this wave — both are load-
-# bearing, and taking either side alone breaks the build:
+# Both `rsa` features are load-bearing; dropping either breaks the build:
 #
 # `sha2` re-exports the `sha2` that `rsa`'s OWN trait generation speaks. `rsa` 0.9 is built on
 # `digest 0.10`, and the rest of this crate is on the `digest 0.11` wave (sha2 0.11 / hmac 0.13) —
@@ -108,26 +105,23 @@ tokio = { version = "1", features = ["full"] }
 # should ride.
 #
 # `getrandom` is NOT one of rsa's defaults; we ask for it because `RsaPrivateKey::new` wants an
-# rng implementing rand_core **0.6**'s traits, and since our own `rand` moved to 0.9 no rng we
-# hold satisfies that bound any more. The feature exposes `rsa::rand_core::OsRng`, which does —
+# rng implementing rand_core **0.6**'s traits, and our own `rand` is 0.10, so no rng we hold
+# satisfies that bound. The feature exposes `rsa::rand_core::OsRng`, which does —
 # see the keygen in gamestream/cert.rs. Getting it from rsa's own re-export is what keeps the two
 # rand_core majors from being something this crate has to name.
 rsa = { version = "0.9", optional = true, features = ["sha2", "getrandom"] }
-# `oid` is default-on in sha2 0.11 and was only ever needed for the RSA signer, which now takes
-# its digest from `rsa::sha2` (above).
+# `oid` is default-on in sha2 0.11. The RSA signer takes its digest from `rsa::sha2` (above).
 sha2 = "0.11"
 aes = "0.9"
 aes-gcm = "0.11"
 cbc = { version = "0.2", features = ["alloc"] }
-# 0.9, matching punktfunk-core and pf-client-core — the host was the last 0.8 holdout, and that
-# was drift, not a pin. NOTE this does NOT take rand 0.8 out of the gamestream build: `rsa` pulls
-# it transitively through `num-bigint-dig`, so 0.8 only disappears from the native-only host
-# (`--no-default-features`, where `rsa` is absent). What it does buy everywhere is that OUR calls
-# all speak one rand major.
+# The same major as pf-client-core. The gamestream build still links rand 0.8: `rsa` pulls it
+# through `num-bigint-dig`, so 0.8 only disappears from the native-only host
+# (`--no-default-features`, where `rsa` is absent).
 rand = "0.10"
 hex = "0.4"
-# Cover-art delivery in the game library: encode Lutris's local JPEGs into `data:` URLs and decode
-# the Epic launcher's base64 `catcache.bin`. Cross-platform (Linux Lutris art + Windows Epic art).
+# `data:` cover art (library/art.rs), certificate DER (webtransport.rs), device keys and
+# signatures (mgmt/device_auth.rs), and paging cursors (mgmt/library.rs).
 # `default-features = false` + `std` deliberately: 0.23 added a default-ON `simd-unsafe` feature
 # (hand-written AVX2/NEON engines). ureq already declares base64 exactly this way, so taking the
 # defaults here would unify the feature ON and pull that unsafe code into every build as a side
@@ -135,19 +129,14 @@ hex = "0.4"
 # measurement — not one to inherit silently. `std` covers everything we call (`Engine::encode`,
 # `decode` to a `Vec`).
 base64 = { version = "0.23", default-features = false, features = ["std"] }
-# Blocking HTTP for the library art store: the proxy fetches a cover the first time a client asks
-# for one, on a `spawn_blocking` thread off the async runtime. `ureq` is small + sync (no tokio
-# here) and bundles webpki roots (no system cert dependency).
+# Blocking HTTP: cover art, downloads, webhooks, the plugin store, updates and `ctl`. `ureq` is
+# small + sync (no tokio here) and bundles webpki roots (no system cert dependency).
 ureq = { workspace = true, features = ["gzip"] }
 rcgen = { workspace = true }
-# ⚠ Do not float this back below 0.18. 0.16 was the LAST crate pulling `thiserror` 1.0 into the
-# host graph (via asn1-rs 0.6 / der-parser 9 / oid-registry 0.7); 0.18 moves that chain to asn1-rs
-# 0.7 + thiserror 2, so the host now links exactly one thiserror major. `cargo tree -p
-# punktfunk-host -i thiserror@1` must keep reporting no match.
+# ⚠ Do not float this back below 0.18: 0.16 pulls `thiserror` 1.0 into the host graph (via
+# asn1-rs 0.6 / der-parser 9 / oid-registry 0.7). `cargo tree -p punktfunk-host -i thiserror@1`
+# must keep reporting no match.
 x509-parser = "0.18"
-# (axum-server left with the plain-HTTP nvhttp listener: both nvhttp listeners now run the
-# governed tokio-rustls/hyper accept loop in https.rs — connection ceilings + header
-# deadlines, security-review 2026-08-31 M-6 — which axum-server could not express.)
 # The workspace entry's `prefer-post-quantum` offers X25519MLKEM768 first on the mgmt/native TLS
 # 1.3 listeners; classical curves stay in the list, so a client without ML-KEM still connects.
 # Keep `tls12` for GameStream/Moonlight clients that negotiate TLS 1.2.
@@ -161,7 +150,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc
 #
 # ⚠ `default-features = false` is LOAD-BEARING. wtransport's default set is
 # `["self-signed", "ring"]`, and `ring` would put a SECOND crypto stack back into a tree that
-# moved to aws-lc-rs on purpose — the same trap the `ureq` line above spells out. Name
+# moved to aws-lc-rs on purpose — the trap the workspace manifest's TLS note spells out. Name
 # `aws-lc-rs` explicitly and the whole graph (quinn, rustls, rcgen) follows this crate's backend.
 # `self-signed` is what supplies `Identity::self_signed_builder`, which mints the ECDSA P-256
 # certificate the WebTransport spec demands and caps its validity at the two weeks
@@ -175,8 +164,8 @@ hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio", "service"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
-# Stream combinators for the mgmt API's SSE event feed (`GET /api/v1/events`) — already in the
-# tree transitively (axum/hyper) and as a Linux target dep; control plane only.
+# Stream combinators for the mgmt API's streamed bodies (the `GET /api/v1/events` SSE feed
+# among them) — already in the tree transitively (axum/hyper); control plane only.
 futures-util = "0.3"
 # Webhook signing (X-Punktfunk-Signature: sha256=<hex HMAC>) for operator hooks; pairs with
 # the existing sha2. Already in the lockfile transitively.
@@ -190,31 +179,29 @@ hmac = "0.13"
 rusty_enet = { version = "=0.4.0", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Management/control-plane REST API + OpenAPI (control pane, M2). `axum_extras` wires
-# utoipa into axum 0.8 extractors; utoipa-axum collects `#[utoipa::path]` routes into the
-# spec; utoipa-scalar serves the interactive docs. Codegen-friendly: the spec is emitted
-# verbatim by the `openapi` subcommand. Control plane only — never the per-frame path.
-# SHA-256 over the downloaded installer and its signing-leaf DER (update/windows.rs) — Windows-only
-# in practice, the plugin-store's ed25519 path re-exports pf-update-check's verifier. Already in the
-# tree via rustls; its API is ring-compatible by design, which is what made the swap mechanical.
+# SHA-256 over the downloaded installer and its signing-leaf DER (update/windows.rs), P-256
+# signature checks (mgmt/device_auth.rs, webtransport/session.rs) and random bytes
+# (profiles/locks.rs). The plugin store's ed25519 check is pf-update-check's. Already in the tree
+# via rustls.
 aws-lc-rs = { workspace = true }
 # Semver comparisons for the plugin store: `minHost` gating and the revocation list's version
 # ranges (`<0.3.2`). Already in the lockfile transitively.
 semver = "1"
 # RFC3339 timestamps on plugin access grants (`plugins::access`). Std only — no tzdb.
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
+# Management/control-plane REST API + OpenAPI (control pane, M2). `axum_extras` wires
+# utoipa into axum 0.8 extractors; utoipa-axum collects `#[utoipa::path]` routes into the
+# spec; utoipa-scalar serves the interactive docs. Codegen-friendly: the spec is emitted
+# verbatim by the `openapi` subcommand. Control plane only — never the per-frame path.
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2"
 utoipa-scalar = { version = "0.3", features = ["axum"] }
 
 [dev-dependencies]
-# (`tower` drives the management API router in-process in the handler tests, but it is already a
-# normal dependency above and those are visible to tests — the dev-dependency re-declaration was
-# redundant.)
 http-body-util = "0.1"
 # An HTTP/2 client for the management API's multiplexing test (`https.rs`).
 h2 = "0.4"
-# Disposable directory fixtures for the Steam local-librarycache scan tests (library.rs).
+# Disposable directory fixtures for tests.
 tempfile = "3"
 # The C ABI, driven from Rust by the native plane's connection round-trip tests (native.rs).
 punktfunk-ffi = { path = "../../client/punktfunk-ffi", features = ["quic"] }
@@ -233,8 +220,8 @@ zbus = { version = "5", default-features = false, features = ["tokio", "p2p"] }
 opus = "0.4"
 
 [target.'cfg(unix)'.dependencies]
-# The POSIX calls behind the `#[cfg(unix)]` helpers in `hooks.rs` (kill) and the SIGTERM
-# ladder in `gamelease.rs`. Declared for every unix, not just Linux, or a macOS build fails on
+# The POSIX calls behind the `#[cfg(unix)]` code, e.g. `kill` in `hooks.rs` and the SIGTERM
+# ladder in `game/gamelease`. Declared for every unix, not just Linux, or a macOS build fails on
 # code whose own cfg already says it is portable.
 libc = "0.2"
 
@@ -250,19 +237,8 @@ ashpd = { version = "0.13", features = ["screencast", "remote_desktop", "inhibit
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 # `session_bus`: every session-bus connection goes to the address the host detected.
 pf-portal = { path = "../pf-portal" }
-# (ashpd 0.13 drives the one-time portal handshake on tokio; the unconditional `tokio = "full"`
-# in [dependencies] already covers that — this block used to re-declare a strict subset of it.)
-# NOTE: the Wayland stack (wayland-client / -protocols{,-wlr,-misc} / -scanner / -backend),
-# `xkbcommon`, `reis`, `khronos-egl`, `ash` and `usbip-sim` used to be declared here. The code that
-# used them moved to `pf-inject` (virtual input, libei, USB/IP) and `pf-zerocopy` (EGL/Vulkan dmabuf)
-# in the subsystem extraction, and each of those crates declares them itself — only the manifest
-# entries were left behind, along with comments describing code this crate no longer contains.
-# Verified unused before removal: zero `use`/path references across src/ + build.rs.
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Windows host backends. `windows` covers the Win32/CCD APIs the SudoVDA virtual-display backend
-# drives (SetupAPI device enumeration, DeviceIoControl IOCTLs, QueryDisplayConfig name resolution);
-# capture/encode/input/audio backends extend the feature set as they land.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -274,13 +250,11 @@ windows = { version = "0.62", features = [
     "Win32_Security_Cryptography_Sip",
     # CERT_CONTEXT for the signing-leaf fingerprint pin (same file).
     "Win32_Security_Cryptography",
-    # ConvertStringSecurityDescriptorToSecurityDescriptorW — the SDDL on the virtual-DualSense
-    # shared-memory section (inject/dualsense_windows.rs) so the UMDF host can open it.
+    # ACLs and SID strings (windows/folder_ace.rs, registry_ace.rs, app_container.rs,
+    # person_pipe.rs, theme.rs).
     "Win32_Security_Authorization",
     "Win32_Security_Isolation",
     "Win32_Devices_DeviceAndDriverInstallation",
-    # SwDeviceCreate/SwDeviceClose — the per-session virtual-DualSense devnode
-    # (inject/dualsense_windows.rs).
     "Win32_Devices_Enumeration_Pnp",
     "Win32_Devices_Display",
     "Win32_Storage_FileSystem",
@@ -296,8 +270,6 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     # Session-local user launches (interactive.rs) and the service's active-console host selection.
     "Win32_System_RemoteDesktop",
-    # Who listens on a plugin's registered loopback port (plugins/windows.rs): the launch dial
-    # carries the UI secret, so the listener must still be the LocalService runner.
     "Win32_NetworkManagement_IpHelper",
     # WSASendMsg + UDP_SEND_MSG_SIZE: UDP Send Offload for GameStream video (gamestream/uso.rs).
     "Win32_Networking_WinSock",
@@ -305,15 +277,8 @@ windows = { version = "0.62", features = [
     # The capture worker's three pipes (windows/capture_worker.rs).
     "Win32_System_Pipes",
     "Win32_System_Environment",
-    # Module-path crash records and the System32-scoped AVRT loader.
     "Win32_System_LibraryLoader",
-    # VirtualProtect — for the inline patch of the win32u GPU-preference shim (Apollo's MinHook port:
-    # the hybrid-GPU output-reparenting hook that keeps Desktop Duplication stable on a 4090+iGPU box).
-    # See capture/windows/dxgi.rs `install_gpu_pref_hook`. No trampoline (we fully replace the fn) → no detour
-    # crate / no C length-disassembler dep; a 12-byte absolute-jmp prologue patch suffices.
     "Win32_System_Memory",
-    # Per-monitor-v2 DPI awareness — IDXGIOutput5::DuplicateOutput1 (the modern capture path Apollo
-    # uses; FP16/format-list, robust to overlay/format churn) requires the process to be DPI-aware.
     "Win32_UI_HiDpi",
     # Windows service supervisor (src/windows/service/runtime.rs): a kill-on-close job object so a
     # service crash never orphans the SYSTEM host it launched into the active console session.
@@ -327,12 +292,12 @@ windows = { version = "0.62", features = [
     "Win32_System_Variant",
     # The console user's theme values (src/windows/theme.rs).
     "Win32_System_Registry",
-    # SetUnhandledExceptionFilter + EXCEPTION_POINTERS — the last-resort native-crash logger
-    # (src/windows/crash.rs); Kernel gates the CONTEXT type EXCEPTION_POINTERS embeds.
+    # DebugActiveProcess, for the windows/idd.rs tests that freeze a process. The native-crash
+    # logger is punktfunk-core's (`crash_windows.rs`).
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Kernel",
-    # CreateToolhelp32Snapshot/Process32*W — the conflicting-streaming-host process scan
-    # (src/detect/windows.rs): is Sunshine/Apollo/... running alongside us?
+    # CreateToolhelp32Snapshot/Process32*W — the process scan in src/game/procscan/windows.rs;
+    # the conflicting-host check (src/detect/windows.rs) reads it.
     "Win32_System_Diagnostics_ToolHelp",
     # GetApplicationUserModelId — a packaged (UWP) game's identity, which its frame window carries
     # (src/windows/game_term.rs).
@@ -346,28 +311,25 @@ windows = { version = "0.62", features = [
 # The SCM plumbing for the `service` subcommand (define_windows_service! / dispatcher / control
 # handler / ServiceManager install). Wraps the Win32 service API; the supervision loop itself uses
 # the `windows` crate above.
-# ⭐ Keep this at 0.8+: 0.7 was the LAST crate in the tree pulling `windows-sys 0.52`, so it alone
-# kept a fourth windows-sys major compiling. 0.8.1 moves to `windows-sys 0.61`, which the tree
-# already builds, and that duplicate is gone. (0.8.0 is NOT enough — it lands on 0.59.)
+# ⭐ Keep this at 0.8.1+: 0.7 pulls `windows-sys 0.52` and 0.8.0 `windows-sys 0.59`; 0.8.1 uses
+# the `windows-sys 0.61` the tree already builds.
 windows-service = "0.8"
 # Registry reads the host does on Windows — ergonomic + correct-by-construction vs. hand-rolled
-# Reg* FFI for subkey enumeration. Survived the removal of the built-in store scanners (which is
-# what first pulled it in): `library/launch.rs` resolves launcher install paths for the typed launch
-# kinds a plugin publishes and `procscan/windows.rs` maps processes.
+# Reg* FFI for subkey enumeration: `library/launch` resolves launcher install paths for the typed
+# launch kinds a plugin publishes, `procscan/windows.rs` maps processes, and more.
 winreg = "0.56"
 # The pad-audio capture thread's COM init and the `pad-endpoint reshape` devtest's sample types;
 # capture itself lives in pf-audio.
 wasapi = "0.25"
 # Shared host<->driver wire contract for the pf-vdisplay IddCx virtual-display backend: the
 # control-plane IOCTL codes + `#[repr(C)] Pod` request/reply structs, defined ONCE so host<->driver
-# ABI drift is a compile error (used from `capture.rs`). The `bytemuck` that serializes those
-# structs into the DeviceIoControl buffers is pf-vdisplay's dependency, not this crate's — it was
-# declared here too, unused.
+# ABI drift is a compile error (used from `windows/idd.rs`, the native stream pipeline and
+# `mgmt/host.rs`). The `bytemuck` that serializes those structs into the DeviceIoControl buffers
+# is pf-vdisplay's dependency, not this crate's.
 pf-driver-proto = { path = "../pf-driver-proto" }
 
-# The encode feature flags now FORWARD to the pf-encode subsystem crate (the heavy encoder deps —
-# ffmpeg-next, the NVENC SDK, openh264, pyrowave-sys — moved there, plan §W6). Selecting a feature
-# on the host turns on the matching backend inside pf-encode.
+# The encode feature flags forward to pf-encode: selecting one on the host turns on the matching
+# backend there.
 [features]
 # PyroWave ships in every default build (the codec stays strictly opt-in per session — a client
 # must explicitly prefer CODEC_PYROWAVE; nothing changes for normal HEVC/AV1 sessions).

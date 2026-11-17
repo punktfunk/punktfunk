@@ -17,11 +17,11 @@ import org.robolectric.annotation.Config
 
 /**
  * A dual-boot box answers at one lease with one MAC and a certificate per OS. Trusting the second
- * OS used to overwrite the first one's record, and the advert of whichever OS was up read as the
- * host already saved — so it never reached "Discovered" and could not be added at all.
+ * OS must not overwrite the first one's record, and the advert of whichever OS is up must not read
+ * as the host already saved — it would never reach "Discovered" and could not be added at all.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36]) // Robolectric 4.16 has no SDK 37 image yet; the app targets 37
+@Config(sdk = [36]) // Robolectric has no SDK 37 image yet; the app targets 37
 class DualBootHostsTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val windows = "ab".repeat(32)

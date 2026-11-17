@@ -149,8 +149,9 @@ impl VkDecoder<H264> {
     ///
     /// Full [`DeviceHandles`] contract (liveness, enabled extensions and
     /// features, truthful queue families) for this decoder's lifetime. The
-    /// device must have `VK_KHR_video_decode_h264` enabled; that part is
-    /// checked below because a miss is UB at session creation, not an error.
+    /// device must have `VK_KHR_video_decode_h264` enabled: a miss is UB at
+    /// session creation, and the codec check below, a physical-device query,
+    /// cannot see it.
     pub unsafe fn new(
         handles: &DeviceHandles,
         lock: Box<dyn QueueLock>,
@@ -161,8 +162,8 @@ impl VkDecoder<H264> {
         // the hardware even if the extension was never enabled (`device.rs`).
         dev.require_codec_op(vk::VideoCodecOperationFlagsKHR::DECODE_H264, "H.264 decode")?;
         // The picture-pool arrangement is a device fact, not the stream's: ask with
-        // the profile every host encodes, so an unusable device refuses the rung
-        // before its first AU. A stream in another profile re-queries at its SPS.
+        // `H264_PROFILE_HIGH`, so an unusable device refuses the rung before its
+        // first AU. A stream in another profile re-queries at its SPS.
         // SAFETY: live device (the `wrap` contract above).
         let caps = unsafe { H264::query_caps(&dev, H264_PROFILE_HIGH)? };
         let codec = H264 {
@@ -319,7 +320,7 @@ impl VkDecoder<H264> {
     }
 }
 
-/// `STD_VIDEO_H264_PROFILE_IDC_HIGH`: the profile every punktfunk host encodes.
+/// `STD_VIDEO_H264_PROFILE_IDC_HIGH`: what the VAAPI, QSV and Media Foundation encoders emit.
 const H264_PROFILE_HIGH: hh::StdVideoH264ProfileIdc = 100;
 
 /// Map `profile_idc` to the Std code point. Identity for the four

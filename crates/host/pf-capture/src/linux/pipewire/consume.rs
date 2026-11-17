@@ -97,7 +97,7 @@ impl FenceWaitStats {
         if self.samples == 0 {
             return None;
         }
-        // 0-based index of the sample at `q`; q=1.0 is the last sample.
+        // 1-based rank of the sample at `q`; q=1.0 is the last sample.
         let target = ((self.samples as f64) * q).ceil().max(1.0) as u64;
         let mut seen = 0u64;
         for (i, &count) in self.buckets.iter().enumerate() {
@@ -187,7 +187,7 @@ pub(super) const PTS_REPORT_EVERY: std::time::Duration = std::time::Duration::fr
 /// `CLOCK_REALTIME − CLOCK_MONOTONIC`, ns.
 ///
 /// PipeWire stamps `spa_meta_header.pts` in `CLOCK_MONOTONIC`; the wire speaks realtime-since-epoch.
-/// A failed read reports 0, which puts every rebased stamp outside the 50 ms plausibility window
+/// A failed read reports 0, which puts every rebased stamp outside the `PLAUSIBLE_NS` window
 /// and falls the stream back to delivery stamps — the safe direction.
 pub(in crate::linux) fn realtime_minus_monotonic_ns() -> i64 {
     let rt = SystemTime::now()
@@ -368,8 +368,8 @@ impl Path for Portal<'_, '_> {
         self.ud.publish(frame, fence);
     }
 
-    /// RGB→NV12 backends blend cursor-as-metadata. Gamescope burns the pointer in;
-    /// native NV12/P010 has none.
+    /// RGB→NV12 backends blend cursor-as-metadata. Gamescope sends no `SPA_META_Cursor`
+    /// (its pointer comes through XFixes); native NV12/P010 has none.
     fn cursor(&self) -> Option<pf_frame::CursorOverlay> {
         self.ud.cursor.overlay()
     }
@@ -456,9 +456,9 @@ impl Path for Portal<'_, '_> {
     }
 }
 
-/// The wire stamp for this arrival, taken once before de-pad or import. Sampling at publish
-/// put CPU work inside the timestamp and let the three lanes drift apart. Emits the
-/// provenance line every [`PTS_REPORT_EVERY`].
+/// The wire stamp for this arrival, taken once before de-pad or import, so no lane's CPU work
+/// lands inside it and the three lanes stamp alike. Emits the provenance line every
+/// [`PTS_REPORT_EVERY`].
 fn stamp_frame(ud: &mut UserData, hdr_pts_ns: Option<i64>) -> u64 {
     let delivery_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)

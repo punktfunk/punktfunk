@@ -1,14 +1,14 @@
 //! A remote source's supervisor (immunity plan WP13 wiring): feeds the pure [`Classifier`]
 //! from the clocks the source keeps plus the session encoder's own ([`EncoderTelemetry`]),
 //! hands its verdicts to the pure [`Coordinator`], and tells the source which actuator to run.
-//! Same 15 s floor and "no evidence = idle" as the WP3b watchdog it retired; the ladder
-//! replaces the one-rebuild-then-terminal rule. [`Supervision::Classify`] runs the classifier
-//! alone, for the capture worker's mirror.
+//! The ladder runs on `Thresholds::default()`'s stall floor, and a gap with no activity
+//! evidence is idle. [`Supervision::Classify`] runs the classifier alone, for the capture
+//! worker's mirror.
 //!
 //! It runs ON the capture thread. The presentation restart is capture-thread-owned; the encoder
 //! reset belongs to the stream loop, which polls for it and reports back. An `Encoder`
 //! episode is proven by access units, every other class by new source frames. The host's
-//! pipeline rebuild (its own 5-attempt budget) is the rung above `Failed`.
+//! pipeline rebuild (punktfunk-host's `MAX_CAPTURE_REBUILDS`) is the rung above `Failed`.
 
 use std::time::{Duration, Instant};
 
@@ -50,7 +50,7 @@ fn stage_name(s: Stage) -> &'static str {
 }
 
 /// Cursor travel over a frozen image that counts as INPUT evidence — a couple of real mouse
-/// movements, comfortably above sub-pixel jitter (the WP3b value).
+/// movements, comfortably above sub-pixel jitter.
 const INPUT_EVIDENCE_PX: u32 = 64;
 /// No canary before this much missed source, and at most one per interval.
 const CANARY_AFTER: Duration = Duration::from_secs(5);
@@ -497,9 +497,9 @@ mod tests {
         assert!(!sv.owns_episode());
     }
 
-    /// The WP3b contract survives the hand-over: under the floor nothing runs; over it, cursor
-    /// travel alone asks for a canary and never an actuator; an unanswered canary opens the
-    /// presentation ladder, and three new source frames close it.
+    /// With no evidence nothing runs; cursor travel alone asks for a canary and never an
+    /// actuator; an unanswered canary opens the presentation ladder, and three new source
+    /// frames close it.
     #[test]
     fn supervisor_walks_idle_canary_presentation_reset_recovered() {
         let t0 = Instant::now();

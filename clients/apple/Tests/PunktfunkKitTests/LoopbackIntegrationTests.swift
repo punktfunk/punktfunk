@@ -1,7 +1,8 @@
 // Integration: the Swift wrapper against a real punktfunk/1 host over QUIC + UDP on loopback —
-// the Swift twin of punktfunk-host's m3.rs::c_abi_connection_roundtrip, this time through the
-// statically linked xcframework. Driven by clients/apple/test-loopback.sh, which builds and
-// starts `punktfunk-host punktfunk1-host --source synthetic` and sets PUNKTFUNK_LOOPBACK_PORT.
+// the Swift twin of punktfunk-host's native/tests.rs::c_abi_connection_roundtrip, this time
+// through the statically linked xcframework. Driven by clients/apple/test-loopback.sh, which
+// builds and starts `punktfunk-host punktfunk1-host --source synthetic` and sets
+// PUNKTFUNK_LOOPBACK_PORT.
 
 import XCTest
 @testable import PunktfunkKit
@@ -98,7 +99,7 @@ final class LoopbackIntegrationTests: XCTestCase {
             XCTAssertEqual(rumble?.pad, 0)
             XCTAssertEqual(rumble?.low, 0x4000)
             XCTAssertEqual(rumble?.high, 0x8000)
-            // The synthetic host emits a v2 envelope (400 ms TTL) — assert the self-terminating tail
+            // The synthetic host emits a self-terminating rumble (400 ms TTL) — assert the TTL
             // survived the full wire → C ABI → Swift path, not just the level.
             XCTAssertEqual(rumble?.ttlMs, 400)
             XCTAssertTrue(
@@ -171,9 +172,9 @@ final class LoopbackIntegrationTests: XCTestCase {
         let identity = try generateIdentity()
 
         // 1. Unpaired clients don't get sessions from a require-pairing host. The host PARKS the
-        //    identified knock for delegated console approval (§8b-1) rather than rejecting it
-        //    outright — nobody approves here, so the connect times out client-side. Either way:
-        //    no session while unpaired.
+        //    identified knock for delegated console approval rather than rejecting it outright —
+        //    nobody approves here, so the connect times out client-side. Either way: no session
+        //    while unpaired.
         XCTAssertThrowsError(
             try PunktfunkConnection(
                 host: "127.0.0.1", port: port, width: 1280, height: 720, refreshHz: 60,

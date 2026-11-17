@@ -3,10 +3,10 @@
 //! onto each library entry; the client applies them on top of its own settings at the connect
 //! that launches the game, then [`fit`] clamps the result to the device.
 //!
-//! A set field wins over the device's pick. `lines` and `hz` never go above the panel unless
-//! `beyond_screen`, and never above the codec's wall. `hdr` and `gamepad` replace the device's
-//! value before its own gates (an HDR panel, a pad the host can create). The Swift and Kotlin
-//! twins run `clients/shared/game-override-vectors.json`; change the rule there first.
+//! A set field wins over the device's pick. `hz` never goes above the panel, nor `lines` unless
+//! `beyond_screen`; the size never goes above the codec's wall. `hdr` and `gamepad` replace the
+//! device's value before its own gates (an HDR panel, a pad the host can create). The Swift and
+//! Kotlin twins run `clients/shared/game-override-vectors.json`; change the rule there first.
 
 use crate::config::{GamepadPref, Mode};
 

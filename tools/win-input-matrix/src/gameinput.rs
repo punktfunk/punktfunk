@@ -1,25 +1,20 @@
-//! The GameInput row of the matrix, and the only API that can drive TRIGGER rumble.
+//! The GameInput row of the matrix, and the probe's only path that drives TRIGGER rumble.
 //!
 //! WHY THIS IS HAND-WRITTEN COM. GameInput has no binding in the `windows` crate, so the vtables
-//! below are declared by hand. Every slot index is taken from the SDK header
-//! `Windows Kits\10\Include\10.0.26100.0\um\GameInput.h`, not from guesswork — a COM vtable is
-//! positional, so a wrong slot calls a different method with the wrong signature and corrupts the
-//! stack. Only the slots up to the ones actually called are declared; anything past them is simply
-//! absent from the struct, which is sound because a vtable is only ever read through the offsets we
-//! name and we never call beyond the last declared entry.
+//! below are declared by hand, each slot index taken from the SDK header
+//! `Windows Kits\10\Include\10.0.26100.0\um\GameInput.h`. A COM vtable is positional: a wrong slot
+//! calls a different method with the wrong signature and corrupts the stack. Only the slots up to
+//! the last one called are declared; nothing past them is ever read.
 //!
-//! ⭐ WHY IT MATTERS BEYOND ENUMERATION. `XINPUT_VIBRATION` has exactly two members, so classic
+//! WHY IT MATTERS BEYOND ENUMERATION. `XINPUT_VIBRATION` has exactly two members, so classic
 //! XInput can never exercise an Xbox pad's two IMPULSE-TRIGGER motors. `GameInputRumbleParams` has
-//! four — `lowFrequency`, `highFrequency`, `leftTrigger`, `rightTrigger` — which makes this the one
-//! path that can settle the open question in `design/trigger-rumble-plane.md` §2.1: the `enable`-
-//! mask bit assignment for the two trigger actuators in the pad's HID output report `0x03` is
-//! CONJECTURE (bits 2/3 = the handles are measured; bits 0/1 = the triggers are inferred from field
-//! order and nothing else).
+//! four — `lowFrequency`, `highFrequency`, `leftTrigger`, `rightTrigger`. `parse_xbox_output`
+//! (pf-inject `xbox_proto.rs`) reads the `enable` mask of HID output report `0x03` as bit 0 = weak,
+//! bit 1 = strong, bit 2 = right trigger, bit 3 = left trigger, as hid-microsoft and xpadneo do.
 //!
-//! The experiment `--gi-rumble` exists for: drive four DISTINCT magnitudes, then read what the pad
-//! actually decoded. Four distinct values make the mapping self-identifying — a channel that comes
-//! back zero had its enable bit guessed wrong, and a channel that comes back holding another's
-//! value is a swap.
+//! `--gi-rumble` drives four DISTINCT magnitudes, then the pad's decoded output identifies the
+//! mapping by itself: a channel that comes back zero had the wrong enable bit, and a channel
+//! holding another's value is a swap.
 //!
 //! The runtime is loaded by name rather than linked, so this builds with no import library and
 //! degrades to a clean "GameInput not present" on a box without it.
@@ -150,10 +145,9 @@ impl GameInput {
     /// Poll for a reading, because GameInput's device enumeration is ASYNCHRONOUS.
     ///
     /// A freshly created `IGameInput` has not finished enumerating yet, so the first
-    /// `GetCurrentReading` reliably returns nothing even with a pad actively reporting — measured
-    /// on `.173` 2026-08-09, where a sweeping devtest pad and a live DualSense both read "no
-    /// reading" on the first call. This is the GameInput analogue of `wake_wgi`: the API looks like
-    /// a query and is really a cache someone else fills.
+    /// `GetCurrentReading` can return nothing even with a pad actively reporting. This is the
+    /// GameInput analogue of `wake_wgi`: the API looks like a query and is really a cache someone
+    /// else fills.
     ///
     /// ⚠️ Focus is NOT the cause and was ruled out from the header: `GameInputDefaultFocusPolicy`
     /// is 0 and every `GameInputFocusPolicy` flag is a RESTRICTION

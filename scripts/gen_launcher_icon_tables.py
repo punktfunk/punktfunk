@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Emit the three INLINE launcher-icon registries from the assets/launcher-icons masters.
 
-Three clients each need seven paths of up to 3 kB, and a single mangled character is a silently
-wrong logo, so these files are generated outright, with their commentary baked in below:
+Three clients each need every master's path (up to 3 kB each), and a single mangled character
+is a silently wrong logo, so these files are generated outright, with their commentary baked in
+below:
 
     web/src/components/launcher-icon.tsx           web console, inline SVG
     clients/android/.../components/LauncherIcons.kt Android, Compose ImageVector via PathParser
     crates/client/pf-console-ui/src/launcher_icons.rs      in-session console UI, Skia Path::from_svg
 
-The baked derivatives (GTK / Windows / Apple) come from gen-launcher-icons.sh, which calls this.
+The baked derivatives (GTK / Windows / Apple / host tile) come from gen-launcher-icons.sh,
+which calls this.
 
 Usage: python3 scripts/gen_launcher_icon_tables.py     (from anywhere; paths are repo-relative)
 """
@@ -19,9 +21,8 @@ from svg_marks import ROOT, comment, mark, write
 
 MASTERS = ROOT / "assets" / "launcher-icons"
 
-# Registry order — the order a reader of any of the three files sees. Live tiles first, then the
-# marks that ship dormant (see the masters' README), so "what actually renders today" reads off
-# the top of the list.
+# Registry order — the order a reader of any of the three files sees. Steam, Lutris, Heroic and
+# Playnite first, then the tiles that need a host knowing their `launcher_ui` (masters' README).
 TOKENS = ["steam", "lutris", "heroic", "playnite", "epic", "gog", "xbox", "hydra"]
 
 BANNER = (

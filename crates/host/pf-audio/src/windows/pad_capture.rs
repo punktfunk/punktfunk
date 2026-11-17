@@ -1,7 +1,7 @@
 //! WASAPI loopback of one pad's own render endpoint, plus the tone and probe that exercise it.
 //!
 //! The pad endpoints are minted by [`super::pad_endpoint`]; capturing from one is a different
-//! job, and the same one [`super::wasapi_cap`] does for the desktop's default render device.
+//! job, and the same one [`super::wasapi_cap`] does for the desktop mix.
 //! Same COM discipline as that file: the WASAPI objects live on a dedicated thread and the
 //! struct holds channel + stop + join, so a device error ends the thread and the caller reopens.
 

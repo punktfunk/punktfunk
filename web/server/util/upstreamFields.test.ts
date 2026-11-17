@@ -1,11 +1,9 @@
 // The password-gated BFF routes rebuild their upstream body from a field whitelist, so anything
 // they forget to list is silently dropped on the way to the host. That is invisible from the
-// console — the request succeeds, the setting just never lands — and it is exactly how
-// `until_disconnect` shipped as a no-op once already.
+// console — the request succeeds, the setting just never lands.
 //
 // So: every property the OpenAPI request schema defines must be named in the route that forwards
-// it. Textual on purpose — importing an h3 route pulls in nitro's globals, and the thing worth
-// pinning is the whitelist, not the handler.
+// it. Textual on purpose — the thing worth pinning is the whitelist, not the handler.
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

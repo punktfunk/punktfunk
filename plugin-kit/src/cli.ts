@@ -1,6 +1,6 @@
 // Minimal plugin CLI scaffold. Deliberately NOT `effect/cli`: its runner needs
 // Stdio/Terminal/FileSystem service implementations that only ship in platform packages,
-// which would add a runtime dependency to every plugin for what is a five-verb ops tool.
+// which would add a runtime dependency to every plugin for a handful of ops verbs.
 // A plugin CLI is `<bin> <command> [args...]` — this dispatcher gives that shape the same
 // ManagedRuntime + layer graph as the plugin entry, so commands reuse the exact services.
 import { connect, type Punktfunk } from "@punktfunk/host";
@@ -47,7 +47,7 @@ const usage = <R>(
 
 /**
  * Run one CLI invocation: dispatch `process.argv[2]`, build the plugin's layer graph,
- * run the command, tear down. Exits the process (0 ok / 1 failure / 2 usage).
+ * run the command, tear down. Exit status: 0 ok, 1 failure, 2 usage.
  */
 export const runPluginCli = async <E, R>(opts: {
 	readonly def: PluginKitDef<E, R>;
@@ -71,12 +71,8 @@ export const runPluginCli = async <E, R>(opts: {
 	const rt = ManagedRuntime.make(Layer.provideMerge(opts.def.layer, base));
 	try {
 		await rt.runPromise(Effect.scoped(command.run(rest)));
-		// Do NOT clobber a non-zero code the command set deliberately. `parity --compare` reports a
-		// mismatch by setting `process.exitCode = 1` and then RETURNING normally — a red parity is a
-		// finished comparison, not a crashed command. Assigning 0 here unconditionally overwrote it,
-		// so the one verb documented as a release gate ("exits non-zero on any difference", "do not
-		// publish a version whose parity run is red") always exited 0, and any scripted use of it
-		// passed. MEASURED against a live host on 2026-08-06: `parity FAILED — 1 missing`, exit 0.
+		// Do NOT clobber a non-zero code the command set itself: `parity --compare` reports a
+		// mismatch by setting `process.exitCode = 1` and then RETURNING normally.
 		process.exitCode ??= 0;
 	} catch (e) {
 		const hint =

@@ -17,7 +17,7 @@ use windows_reactor::*;
 
 /// Names the host the Start in row resolves to, and says when it resolves to nothing — which
 /// is what every value does until one host is paired. The pointer is written from a host's own
-/// tile menu, not from this page, so the help line is where the two meet.
+/// page, not from this page, so the help line is where the two meet.
 fn start_in_help() -> String {
     let known = KnownHosts::load();
     match start::default_host(&Settings::load(), &known) {
@@ -61,7 +61,7 @@ pub(super) fn general_section(cx: &Cx) -> Vec<View> {
         |s, on| s.fullscreen_on_stream = on,
     );
 
-    // The cross-client verbosity ladder (Compact ⊂ Normal ⊂ Detailed).
+    // The cross-client verbosity ladder (Off, then Compact ⊂ Normal ⊂ Detailed).
     let tiers: Vec<(StatsVerbosity, &str)> = StatsVerbosity::ALL
         .iter()
         .map(|v| (*v, v.label()))

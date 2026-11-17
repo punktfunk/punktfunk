@@ -1,8 +1,9 @@
 //! Host model: frames at the session fps, the wire-budget arithmetic the host
 //! runs, adaptive FEC, and the send pacer.
 //!
-//! The budget arithmetic is the shipped [`crate::abr::budget`]; only
-//! [`auto_burst_bytes`] is still a copy of the host's, naming its source.
+//! The budget arithmetic is the shipped [`crate::abr::budget`]. The FEC geometry,
+//! pacer constants and probe filler below copy the host's, each naming its source.
+//! [`auto_burst_bytes`] is the model's own rule; `send_pacing.rs` has no counterpart.
 
 use super::Rng;
 pub(super) use crate::abr::budget::{
@@ -18,15 +19,15 @@ use std::time::Instant;
 /// block, so its whole parity pool covers loss anywhere in it.
 const MIN_RECOVERY_SHARDS: u32 = 2;
 const MAX_DATA_PER_BLOCK: u32 = 4_096;
-/// `stream.rs` `paced_submit`: the pacer runs at ~3× the live encoder rate.
+/// `send_pacing.rs` `pace_factor`'s default: a frame may leave at 3× the stream rate.
 const PACE_FACTOR: u64 = 3;
 /// `send_pacing.rs` `MAX_PACE_SPREAD`.
 const MAX_PACE_SPREAD_MS: u64 = 100;
 
-/// The `Smooth` delivery profile's allowance (`send_pacing.rs` `BURST_MIN`).
+/// The `Smooth` delivery profile's group (`send_pacing.rs` `GROUP_MIN`).
 const SMOOTH_BURST_BYTES: u64 = 16 * 1024;
 
-/// Bytes that leave unpaced (`send_pacing.rs` `auto_burst_bytes`).
+/// Bytes that leave unpaced: the model's own rule, with no `send_pacing.rs` counterpart.
 pub(super) fn auto_burst_bytes(pace_rate_bps: u64, wire_bytes: usize) -> usize {
     const BURST_MS: u64 = 10;
     const BURST_MIN: usize = 16 * 1024;
@@ -180,7 +181,7 @@ pub(super) struct HostCfg {
     /// `(from_ms, until_ms, µs)`: frames made inside the range carry this encode time,
     /// as the first AUs after a source stall carry the stall. The encoder keeps its pace.
     pub encode_stamp: (u64, u64, u32),
-    /// A keyframe is this many times an ordinary frame.
+    /// A keyframe's size, in percent of an ordinary frame.
     pub idr_pct: u32,
     /// How long after a keyframe ask a decodable recovery point reaches the
     /// wire. `0` = the next frame is an IDR. Larger where the host answers
@@ -203,7 +204,7 @@ pub(super) struct HostCfg {
     pub acks: bool,
     /// PyroWave: the session's rate is a pin. Asks are refused with it —
     /// except the bring-up ramp's verdict, once, inside the window, and only
-    /// ever lower (`native/control.rs` `PyroWavePin`).
+    /// ever lower (`native/control/rate.rs` `PyroWavePin`).
     pub pinned: bool,
     /// The session streams under the `Smooth` delivery profile: a 16 KiB
     /// allowance, the rest spread at the pace rate.
@@ -250,7 +251,7 @@ struct ProbeBurst {
     bytes_sent: u64,
 }
 
-/// `native/control.rs` `MIN_PROBE_INTERVAL`: one burst per 10 s, lifted for
+/// `native/control/mod.rs` `ProbeSpacing::INTERVAL`: one burst per 10 s, lifted for
 /// the bring-up ramp.
 const MIN_PROBE_INTERVAL_MS: u64 = 10_000;
 
@@ -369,9 +370,9 @@ impl Host {
     }
 
     /// A `SetBitrate` landed. The ack the client gets back is what the encoder
-    /// can apply, not what was asked, and it names what held it short
-    /// (`native/control.rs`: the share, the ceiling clamp, then the cadence
-    /// hold).
+    /// can apply, not what was asked, and it names what held it short: the
+    /// encoder ceiling, the share, then the cadence hold. The host's own order
+    /// is `native/control/rate.rs` `resolve`.
     ///
     /// A pinned session answers every ask `Pinned` with the pin as it stands.
     /// The one exception is the ramp's verdict inside the bring-up window —
@@ -506,7 +507,7 @@ impl Host {
 
     /// A client's report window arrived. Its boundary closes the
     /// share window, so what this session offered and what reached the client
-    /// cover one stretch of link (`native/control.rs`).
+    /// cover one stretch of link (`native/control/mod.rs` `delivery_share`).
     pub(super) fn on_delivery_report(&mut self, now: Instant, packets_received: u64) {
         let wire = self.cfg.shard_payload as u64 + SHARD_WIRE_OVERHEAD;
         let (offered, delivered, streaming) =
@@ -823,8 +824,8 @@ mod tests {
         assert_eq!(big.parity_of(1), 2);
     }
 
-    /// The burst rule: a 5 Mbps stream bursts about 19 KiB, a fat link clamps
-    /// at 256 KiB (`send_pacing.rs`).
+    /// The model's burst rule: a 5 Mbps stream bursts about 18 KiB, a fat link
+    /// clamps at 256 KiB.
     #[test]
     fn the_pacing_burst_follows_the_hosts_rule() {
         assert_eq!(auto_burst_bytes(15_000_000, 200_000), 18_750);

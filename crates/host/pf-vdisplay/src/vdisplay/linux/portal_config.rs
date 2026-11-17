@@ -198,7 +198,7 @@ pub(crate) fn upsert(existing: &str, block: Block<'_>, key: &str, value: &str) -
 /// Backup the original once, the first time we touch a file we did not write.
 /// `true` means the file changed — the caller restarts the portal only then.
 ///
-/// Only [`ErrorKind::NotFound`] means empty. Any other read failure (non-UTF-8
+/// Only [`std::io::ErrorKind::NotFound`] means empty. Any other read failure (non-UTF-8
 /// included) is a refuse-to-rewrite: `upsert("")` would replace the user's file
 /// with only our block, and the backup is skipped because there is nothing to
 /// back up.
@@ -279,7 +279,8 @@ fn read_config(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Both `None` if we have never touched the file (or it does not exist).
+/// `(live value, recorded prior)`. The prior is `None` until we take the key over; both are
+/// `None` when the file is missing, unreadable, or lacks the block.
 pub(crate) fn peek(
     path: &Path,
     block: Block<'_>,

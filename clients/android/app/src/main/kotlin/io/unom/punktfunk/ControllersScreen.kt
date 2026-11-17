@@ -68,16 +68,15 @@ import kotlinx.coroutines.delay
  * the app can see about attached input devices, plus a live input test. This exists for exactly
  * the support case where a pad "doesn't work" - adapters and BT-to-USB dongles often enumerate
  * with a different identity than the physical pad, or not as a gamepad at all, and punktfunk only
- * forwards devices Android classifies as gamepad/joystick. This screen makes that visible on the
+ * forwards devices Android classifies as a gamepad. This screen makes that visible on the
  * device itself.
  *
- * The TOUCH presentation, and since 2026-08 the only one: the console reaches the same answer
- * through its own Skia screen (`crates/client/pf-console-ui/src/screens/controllers.rs`), which keeps the
- * console's input on the page instead of suspending it behind a Compose takeover. What this screen
- * still owns alone is the live input test - the console receives only the aggregated navigation
- * sample, which is nowhere near a per-device axis/trigger readout. Everything the console DOES
- * need from here it asks for as a `ConsoleCmd::PadAction` (see [SkiaConsoleShell]), which is why
- * [padInfoOf] and [testRumble] are internal rather than private.
+ * The TOUCH presentation: the console reaches the same answer through its own Skia screen
+ * (`crates/client/pf-console-ui/src/screens/players.rs`), which keeps the console's input on the
+ * page instead of suspending it behind a Compose takeover, and has its own live input test
+ * (`ConsoleCmd::PadTest`). Everything the console needs from here it asks for as a
+ * `ConsoleCmd::PadAction` (see [SkiaConsoleShell]), which is why [padInfoOf] and [testRumble] are
+ * internal rather than private.
  */
 @Composable
 internal fun ControllersScreen(
@@ -106,7 +105,7 @@ internal fun ControllersScreen(
             .toList()
             .mapNotNull { InputDevice.getDevice(it) }
             // Everything real that is NOT counted as a controller — including a device that claims
-            // a pad source with no pad hardware behind it, which the Gamepads list above now
+            // a pad source with no pad hardware behind it, which the Gamepads list above
             // rejects. One list or the other, never neither: this screen is where someone looks
             // when the client's idea of "a pad is attached" disagrees with the room.
             .filter { !it.isVirtual && !Gamepad.looksLikeController(it) }
@@ -180,9 +179,9 @@ internal fun ControllersScreen(
             ) {
                 Sc2BluetoothRow(attached = sc2OnBluetooth, activity = activity) { usbGeneration++ }
             }
-            // Every real controller is forwarded now (Automatic forwards them all, each on its own
-            // wire pad index) — not just the first. A joystick-only device Android doesn't classify as
-            // a gamepad still can't be forwarded (the host wants a gamepad), so gate the badge on it.
+            // Every controller Android classifies as a gamepad is forwarded, each on its own wire
+            // pad index. A joystick-only device can't be (the host wants a gamepad), so the badge
+            // is gated on it.
             pads.forEach { info ->
                 PadRow(info, gamepadSetting = gamepadSetting)
             }
@@ -294,11 +293,10 @@ private fun rememberInputTest(
                         test.bHeld = false
                         if (consume) {
                             if (event.eventTime - event.downTime >= HOLD_TO_FINISH_MS) {
-                                // The hold ends the test HERE, on the release, and NOT the moment
-                                // the 1.2 s elapsed: end it a moment earlier and this release falls
-                                // through unconsumed to the activity's B→BACK remap, which takes the
-                                // whole screen with it. Finishing the test and leaving the screen on
-                                // one press is not what "hold B to finish" says.
+                                // The hold ends the test on the RELEASE, not when HOLD_TO_FINISH_MS
+                                // elapses: ending it earlier lets this release fall through
+                                // unconsumed to the activity's B→BACK remap, which would take the
+                                // whole screen with it.
                                 onTestingChange(false)
                                 test.held.clear()
                             } else {
@@ -334,10 +332,10 @@ private fun rememberInputTest(
         activity?.pushPadProbes(probes)
         onDispose { activity?.removePadProbes(probes) }
     }
-    // Hold-B-to-exit: with events consumed, the pad can't reach the Switch — a 1.2 s hold ends the
-    // test instead (touch still works). This half only ANSWERS the hold once it is long enough; the
-    // release is what ends the test (see the probe). Letting go early cancels the effect before the
-    // delay fires, so nothing is announced.
+    // Hold-B-to-exit: with events consumed, the pad can't reach the Switch — holding B for
+    // HOLD_TO_FINISH_MS ends the test instead (touch still works). This half only ANSWERS the hold
+    // once it is long enough; the release is what ends the test (see the probe). Letting go early
+    // cancels the effect before the delay fires, so nothing is announced.
     LaunchedEffect(test.bHeld, testing) {
         if (test.bHeld && testing) {
             delay(HOLD_TO_FINISH_MS)
@@ -424,10 +422,9 @@ fun sc2BluetoothGrantOffered(
  *
  * A wired or Puck SC2 is enumerated over USB with no permission at all, so it shows up in this
  * screen either way; the bonded list a BLE one lives in is behind `BLUETOOTH_CONNECT` from API 31
- * and answers "nothing is paired" rather than "ask me first" when the permission is missing. Until
- * this existed, nothing in the client ever requested it, so a Bluetooth SC2 was silently absent
- * everywhere — no capture, no controller layout, no forwarding — while the same pad over USB
- * worked (field report, 2026-08-15).
+ * and answers "nothing is paired" rather than "ask me first" when the permission is missing. A
+ * Bluetooth SC2 without the grant is absent everywhere — no capture, no controller layout, no
+ * forwarding — while the same pad over USB works.
  *
  * [attached] distinguishes "we can see one sitting in lizard mode" from "you may have one paired",
  * which is the difference between a statement and a guess. [onGranted] re-probes the caller's
@@ -852,7 +849,8 @@ private fun isForwarded(dev: InputDevice): Boolean =
  * Everything [PadRow] renders, decoupled from [InputDevice] so the screenshot harness can compose
  * the connected-pad card at all — Robolectric enumerates no input devices, and a marketing shot of
  * "no controller detected" sells nothing. Production always maps a real device via [padInfoOf];
- * [dev] powers the rumble test and is absent only in the harness (the button then no-ops).
+ * [dev] powers the rumble test and is absent only in the harness (the button then says the pad
+ * has no motor).
  */
 internal data class PadInfo(
     val name: String,
@@ -909,7 +907,6 @@ internal fun testRumble(dev: InputDevice, body: Vibrator?): Boolean = runCatchin
     false
 }
 
-/** Identity line: VID:PID + the source classes Android assigned. */
 /**
  * The message about a pad whose buttons had to be resolved from their scancodes because Android
  * has no key layout for it — null for a pad it does know, which needs no explanation.
@@ -921,6 +918,7 @@ private fun padButtonsNote(buttons: Gamepad.PadButtons): Int? = when (buttons) {
     Gamepad.PadButtons.SONY_MODERN -> R.string.android_pad_layout_corrected
 }
 
+/** Identity line: VID:PID + the source classes Android assigned. */
 internal fun deviceDetail(dev: InputDevice): String =
     "%04X:%04X · %s".format(dev.vendorId, dev.productId, sourcesLabel(dev.sources))
 
@@ -973,8 +971,8 @@ private val AXIS_LABELS = listOf("LX", "LY", "RX", "RY", "LT", "RT", "HX", "HY")
 
 /**
  * How long B must be held to end the input test — and, below that, how long a press still counts as
- * a tap that gets answered rather than ignored. One constant, because a hold that ends at 1.2 s
- * while the "you tapped" answer stops at some other number leaves a window where a press does
+ * a tap that gets answered rather than ignored. One constant, because a hold that ends at one
+ * number while the "you tapped" answer stops at another leaves a window where a press does
  * nothing at all.
  */
 private const val HOLD_TO_FINISH_MS = 1_200L

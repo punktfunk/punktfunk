@@ -5,8 +5,8 @@
 # transaction, needs no reboot, and is trivially removable).
 #
 # The image overlays /usr from /var/lib/extensions/punktfunk.raw with the host, tray and web
-# console + their udev/sysctl/systemd-user payload; the RPMs' /etc file (the gamescope
-# session drop-in) rides inside at /usr/share/punktfunk/etc/ and is copied into the real /etc
+# console + their udev/sysctl/systemd-user payload; the RPMs' /etc payload rides inside at
+# /usr/share/punktfunk/etc/, and the gamescope session drop-in is copied into the real /etc
 # here (a sysext can only carry /usr).
 #
 # Bootstrap (the script also ships inside the image as /usr/bin/punktfunk-sysext):
@@ -34,7 +34,7 @@
 # feed it fetched, or whose SERIAL is below the highest this box has accepted. Without both, anyone
 # who can write the registry WITHOUT the key (a leaked write:package token) copies the canary
 # manifest + images into the stable path, or puts last month's back, and every box verifies it
-# happily. Same two rules the Rust updater enforces (crates/core/pf-update-check/src/manifest.rs).
+# happily. The Rust updater enforces the same two rules (pf-update-check: manifest.rs, floor.rs).
 set -euo pipefail
 
 REGISTRY="${PUNKTFUNK_SYSEXT_REGISTRY:-https://git.unom.io/api/packages/unom/generic/punktfunk-sysext}"
@@ -53,7 +53,7 @@ PF_TMP="$(mktemp -d)"; trap 'rm -rf "$PF_TMP"' EXIT
 # The feed's signing key: punktfunk packages <packages@unom.io>, AF245C506F4E4763. Identical to
 # packaging/rpm/RPM-GPG-KEY-punktfunk — ONE key signs both the RPMs and this feed, so rotating it
 # means updating both copies (the rotation runbook in packaging/rpm/README.md says so, and
-# publish-sysext-feed.sh refuses to sign if the two ever disagree).
+# publish-sysext-feed.sh refuses to sign with any other key).
 FEED_KEY='-----BEGIN PGP PUBLIC KEY BLOCK-----
 
 mDMEai/2eRYJKwYBBAHaRw8BAQdAFxLGvh8wvzES9ylmxT4gy1i58EituotPyZwt
@@ -86,8 +86,8 @@ feed_name() {
 }
 feed_url() { echo "$REGISTRY/$(feed_name)"; }
 
-# The highest manifest serial ever accepted for a feed — the anti-rollback floor, persisted the way
-# the Rust updater persists its own per-channel `serial_floor` (crates/host/punktfunk-host/src/update.rs).
+# The highest manifest serial ever accepted for a feed — the anti-rollback floor, kept like the
+# Rust updater's per-channel `serial_floor` (crates/core/pf-update-check/src/floor.rs).
 # Per FEED, never global: serials are publish timestamps, so a canary publish would otherwise raise
 # the floor above the next stable manifest and lock the stable channel out.
 serial_floor() {
@@ -259,11 +259,10 @@ post_merge() {
   # The seats' pad fence, for the same reason: a pad made after boot must meet the rule.
   install -Dm0644 /usr/lib/udev/rules.d/65-punktfunk-seats.rules /etc/udev/rules.d/65-punktfunk-seats.rules 2>/dev/null || :
   udevadm control --reload 2>/dev/null || :
-  # Creating the group is necessary but NOT sufficient, and the difference is invisible until a
-  # stream fails: `pf-dm-helper` gates on MEMBERSHIP, so a host whose user never joined gets
-  # "stopping the display manager needs privilege" on every managed takeover — sddm's autologin
-  # Relogin loop then churns logind sessions for the whole stream. Joining stays opt-in (writing
-  # vhci `attach` materialises an arbitrary emulated USB device), so say so instead of doing it.
+  # Creating the group is necessary but NOT sufficient: `pf-dm-helper` serves only MEMBERS of it,
+  # so a host whose user never joined degrades every managed takeover to a mirror of the box's own
+  # session, silently. Joining stays opt-in (writing vhci `attach` materialises an arbitrary
+  # emulated USB device), so say so instead of doing it.
   local _pf_user="${SUDO_USER:-}"
   if [ -n "$_pf_user" ] && ! id -nG "$_pf_user" 2>/dev/null | tr ' ' '\n' | grep -qx punktfunk; then
     echo "!! $_pf_user is not in the 'punktfunk' group — the managed gamescope takeover cannot stop"
@@ -286,7 +285,7 @@ post_merge() {
   udevadm trigger --subsystem-match=platform --sysname-match='vhci_hcd.*' 2>/dev/null || :
   # The /etc payload a sysext can't carry. The gamescope-session drop-in is %config(noreplace):
   # only seed it, never clobber a local edit. Older images also copied a global tray autostart
-  # entry; the host now writes a per-user one.
+  # entry; the host writes a per-user one, so the global one goes.
   if [ -f "$ETC_SRC/gamescope-session-plus/sessions.d/steam" ] \
      && [ ! -e /etc/gamescope-session-plus/sessions.d/steam ]; then
     install -Dm0644 "$ETC_SRC/gamescope-session-plus/sessions.d/steam" \
@@ -395,20 +394,10 @@ cmd_update() {
   [ -n "$l" ] || { echo "no image in the feed $(feed_url)" >&2; exit 1; }
   ver="${l%% *}"
   if [ "$ver" = "$cur" ] && merged; then
-    # NOT "nothing to do": re-run post_merge. Every step in it is idempotent, and skipping it here
-    # is how host state silently rots one release behind the image.
-    #
-    # The trap, field-proven on a Bazzite host that took 0.25.0 -> 0.26.0 (2026-08-09): an upgrade
-    # is driven by the script from the OLD image — this file is replaced by the very
-    # `systemd-sysext refresh` that runs mid-upgrade — so a post_merge step ADDED in the new
-    # release is executed by nobody. The old script doesn't have it, and the new script never gets
-    # a turn, because from then on `update` matches this branch and returns. The step is then
-    # permanently unreachable on exactly the installs that need it.
-    #
-    # That cost the `punktfunk` group (added to post_merge in 0.26.0): it was never created, so
-    # `pf-dm-helper` refused every caller — it gates on membership — and every managed gamescope
-    # takeover fell back to "stopping the display manager needs privilege", leaving sddm's autologin
-    # Relogin loop churning for the whole stream.
+    # NOT "nothing to do": re-run post_merge. Every step in it is idempotent. An upgrade is driven
+    # by the script from the OLD image (`systemd-sysext refresh` replaces this file mid-upgrade),
+    # so a post_merge step the new release adds runs in no upgrade. The next `update` lands here
+    # and runs it.
     echo "already on $cur (channel $(channel)) — re-applying host state."
     post_merge
     return

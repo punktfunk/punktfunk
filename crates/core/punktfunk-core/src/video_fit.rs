@@ -41,7 +41,7 @@ impl VideoFit {
         }
     }
 
-    /// The `Hello::video_fit` byte. `0` is Fit, so absence and older clients read as today.
+    /// The `Hello::video_fit` byte. `0` is Fit, so a Hello without the field reads as Fit.
     pub fn wire(self) -> u8 {
         match self {
             VideoFit::Fit => 0,

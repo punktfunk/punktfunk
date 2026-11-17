@@ -2,8 +2,8 @@
 //!
 //! A ledger has one schema version and at most four seats. IDs remain stable
 //! while names, accounts, ports, and display slots are unique. Display slots
-//! are fixed at 12 through 15; port pools are explicit so a later platform
-//! backend can choose a different reserved range without changing the ledger.
+//! are fixed at 12 through 15; the native, management and browser ports each
+//! come from a fixed pool of four.
 //! Every value is validated again after deserialization. Runtime state is an
 //! observation, not a substitute for the backend's own process identity.
 //!

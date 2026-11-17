@@ -278,7 +278,7 @@ fn run(action: PresetAction, ctx: &Ctx, id: &str, name: &str) {
         }
         PresetAction::Delete => {
             // The warning counts what breaks: hosts that fall back to the defaults, and pinned
-            // cards that disappear (design §6).
+            // cards that disappear (`design/client-settings-profiles.md` §6).
             let (bound, pinned) = {
                 let known = ctx.store.hosts();
                 let bound = known
@@ -340,10 +340,9 @@ pub fn saved<T>(dialog: &adw::PreferencesDialog, r: anyhow::Result<T>) -> Option
     }
 }
 
-/// The chip palette a preset can carry (`StreamPreset.accent`). Eight entries rather than a
-/// full colour picker: the point is telling presets apart at a glance on a host card, which a
-/// small set of legible, contrast-checked colours does better than free choice — and the
-/// schema's `#RRGGBB` still accepts anything a future picker or a hand-edit writes.
+/// The chip palette a preset can carry (`StreamPreset.accent`): no colour, then eight. The
+/// point is telling presets apart at a glance on a host card, which a small set does better
+/// than free choice; the schema's `#RRGGBB` still accepts any value a hand-edit writes.
 const SWATCHES: &[(&str, &str, Text)] = &[
     ("", "pf-swatch-none", client::preset_color_none),
     ("#e01b24", "pf-swatch-red", client::preset_color_red),
@@ -371,9 +370,8 @@ const SWATCHES: &[(&str, &str, Text)] = &[
 /// A colour picker as its own full-width row: the title and caption above, the swatches on
 /// their own line beneath, wrapping if the dialog is narrow.
 ///
-/// They started as an [`adw::ActionRow`] suffix, which is where a control that size normally
-/// goes — but nine swatches squeeze the row's title until it is unreadable, and squeezing the
-/// label to fit the control is backwards. A `FlowBox` beneath keeps both legible at any width.
+/// As an [`adw::ActionRow`] suffix, nine swatches would squeeze the row's title until it is
+/// unreadable. A `FlowBox` beneath keeps both legible at any width.
 fn colour_row(
     title: &str,
     caption: Option<&str>,
@@ -456,8 +454,8 @@ fn swatch_row(current: Option<&str>, on_pick: impl Fn(String) + 'static) -> gtk:
 }
 
 /// A one-line name prompt (create/rename). Refuses empty and duplicate names in place —
-/// menus keyed by name are ambiguous otherwise (design §6) — rather than failing after the
-/// dialog is gone.
+/// menus keyed by name are ambiguous otherwise (`design/client-settings-profiles.md` §6) —
+/// rather than failing after the dialog is gone.
 fn prompt_name(
     parent: &impl IsA<gtk::Widget>,
     heading: &str,

@@ -324,7 +324,7 @@ internal fun LibraryScreen(
     // Lambdas, NOT `::launch` / `::linkAction`: two callable references to the same local function
     // compare EQUAL however different the frame they captured, so a skipped recomposition would
     // leave the child calling a closure over stale settings. SettingsScreen documents the same
-    // trap at `scopePreset()`, having been bitten by it.
+    // trap at `scopePreset()`.
     // Where this shelf should open. Read ONCE per screen (not per recomposition) so a launch
     // rewriting it mid-browse cannot make the grid jump under the player's thumb; the effects that
     // consume it are one-shot on top of that.
@@ -503,7 +503,7 @@ internal fun LibraryScreen(
 }
 
 /**
- * Fill the shelf. Four things happen and the ORDER is the point:
+ * Fill the shelf. Five things happen and the ORDER is the point:
  *   1. the CACHED catalog goes up immediately, marked stale — a library is the screen a player
  *      uses to decide what to play, and an empty one while a sleeping box boots is the opposite
  *      of useful;

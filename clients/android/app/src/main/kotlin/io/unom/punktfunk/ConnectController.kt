@@ -31,8 +31,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * A no-PIN "request access" connect in flight: the host asked (it labels the cancelable "Waiting
- * for approval…" dialog) and the flag its Cancel trips. The connect blocks with no abort, so a
- * late result checks [cancelled] and closes the session, approved or not, instead of navigating.
+ * for approval…" dialog) and the flag its Cancel trips. The request blocks with no abort, so a
+ * late answer checks [cancelled] and is dropped instead of touching the UI.
  */
 private class RequestAccessState(val target: PendingTrust) {
     val cancelled = AtomicBoolean(false)
@@ -40,7 +40,7 @@ private class RequestAccessState(val target: PendingTrust) {
 
 /**
  * A plain dial in flight: [hostName] labels the [ConnectOverlay]'s "Connecting…" phase, and its
- * Cancel trips [ticket]. A late handle is closed silently, as [RequestAccessState]'s is.
+ * Cancel trips [ticket]. A late handle is closed silently.
  */
 internal class ConnectAttempt(val hostName: String) {
     val ticket = HostServices.Ticket()
@@ -216,6 +216,7 @@ internal class ConnectController(
         notice = null
         pauseBrowse()
         scope.launch {
+            // By this dial's pin (the address may also name the other OS of a dual-boot box).
             val record = pinHex?.let { knownHostStore.resolve(it, targetHost, targetPort) }
             val choice = chooseProfile(
                 knownHostStore, id, record, linkAs.also { linkAs = null },
@@ -261,8 +262,6 @@ internal class ConnectController(
                     attempt = if (up) null else thisAttempt
                 }
             }
-            // By this dial's pin (the address may also name the other OS of a dual-boot box); with
-            // no saved record, a TOFU dial pins what the host presented, unpaired.
             // A parked dial is the approval wait, or with an unlock the desktop starting.
             val watch = launch {
                 while (!thisAttempt.awaitingApproval) {
@@ -484,7 +483,7 @@ internal class ConnectController(
         saved: KnownHost? = null,
     ) {
         // Every dial/pair path funnels through here — with local network access denied the connect
-        // can only EPERM its way to a 10 s timeout, so ask instead of pretending to try.
+        // can only EPERM its way to a timeout, so ask instead of pretending to try.
         if (!lnpGranted) {
             lnpPrompt = true
             return

@@ -109,8 +109,8 @@ jobs:
 
       # The client's display tests are `#[ignore]`d for wanting an X/Wayland server, and this is
       # the only job in the repo that HAS one — ci.yml's container has no Xvfb, so they otherwise
-      # execute nowhere. A weak gate (tags only, best-effort); the strong one is Xvfb in
-      # ci/rust-ci.Dockerfile so ci.yml can run them per PR.
+      # execute nowhere. A weak gate (tags only, best-effort); a stronger one needs Xvfb in
+      # ci/rust-ci.Dockerfile, which has none, so ci.yml could run them per PR.
       #
       # ONE PROCESS PER TEST, not one run: GTK binds to whichever thread first calls
       # `gtk::init()`, and libtest gives every test its own thread — so a second display test in

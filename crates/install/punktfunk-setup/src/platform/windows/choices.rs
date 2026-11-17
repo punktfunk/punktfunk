@@ -94,7 +94,7 @@ impl WinChoices {
     /// Defaults for installing `artifact`.
     ///
     /// The artifact is not decoration: host and client are two products under two registry
-    /// keys (D1), so reading `facts.installed` unconditionally made a client install inherit
+    /// keys (D1), so reading `facts.installed` unconditionally would give a client install
     /// the HOST's upgrade verdict and its install directory.
     pub fn derive(facts: &WinFacts, artifact: Artifact) -> WinChoices {
         let installed = facts.installed_for(artifact);

@@ -4,9 +4,9 @@
 //! (`%APPDATA%\punktfunk`, or a non-empty `PUNKTFUNK_CONFIG_DIR`:
 //! `client-windows-settings.json` / `client-known-hosts.json`).
 //!
-//! The shell is the settings file's only writer; the session only reads it. The shell's
-//! former private `Settings` copy (≤ 0.8.4: `show_hud`, `engine`) is gone — old files
-//! still load via a serde alias in core.
+//! The shell is not the settings file's only writer (a session's window resize, the console
+//! UI and the CLI save it too), so its edits go through `Settings::update`, under the file's
+//! lock. Files from older WinUI shells still load via a serde alias in core.
 
 pub use pf_client_core::trust::{
     access_error_message, device_code, device_name, grouped, hex, learn_from_advert,

@@ -21,8 +21,8 @@ use wayland_client::{ConnectError, Connection, EventQueue, QueueHandle};
 const POOL: usize = 4;
 
 /// Dispatch until `done` holds or `timeout` passes. Bounded: a `blocking_dispatch` never
-/// returns for a compositor that answers nothing, and `spawn`'s startup timeout joins the
-/// capture thread, so a hang here would hang the caller too.
+/// returns for a compositor that answers nothing, and a probe runs this on its caller's
+/// thread.
 fn pump_until(
     conn: &Connection,
     queue: &mut EventQueue<State>,

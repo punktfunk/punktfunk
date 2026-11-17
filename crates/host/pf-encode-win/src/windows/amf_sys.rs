@@ -8,7 +8,8 @@
 //! `extern "C"` (`AMF_CDECL_CALL`).
 //!
 //! Layout is stable on every runtime at or above [`AMF_MIN_VERSION`] (1.4.30).
-//! `const` size/offset asserts below pin the PODs and the slots `amf.rs` calls.
+//! `const` size/offset asserts below pin the PODs and the slots `amf.rs` calls, all but
+//! `AmfComponentVtbl::get_property`.
 //! Evidence: `design/native-amf-encoder.md`.
 
 use std::ffi::c_void;
@@ -393,8 +394,8 @@ pub struct AmfBufferVtbl {
 
 // Hand-written C mirror: a POD size miss or a shifted vtable slot is silent UB
 // (`amf.rs` dispatches by position). `AMF_MIN_VERSION` is a version number, not
-// a layout check. These `const` asserts (not `#[cfg(test)]`) are the defence;
-// they cover every slot `amf.rs` calls plus each table's total size.
+// a layout check. These `const` asserts (not `#[cfg(test)]`) are the defence; they
+// cover each table's total size and every slot `amf.rs` calls but the component's `get_property`.
 
 const SLOT: usize = core::mem::size_of::<Slot>();
 

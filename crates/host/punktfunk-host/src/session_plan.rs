@@ -1,5 +1,5 @@
 //! Per-session capture, topology, and encoder decision, resolved once from
-//! [`HostConfig`](crate::config), the session's encode resolution, and handshake-negotiated
+//! [`HostConfig`](pf_host_config::HostConfig), the session's encode resolution, and handshake-negotiated
 //! depth, HDR, chroma, and codec.
 //!
 //! Capture and topology callers read this artifact instead of re-deriving from config.
@@ -9,13 +9,16 @@
 //! probes the encode backend again.
 //!
 //! Platform-neutral so it threads through `virtual_stream` / `build_pipeline`. Linux
-//! resolves to portal + single-process; Windows is IDD-push + single-process.
+//! resolves to portal + single-process; Windows to IDD-push + single-process, or WGC in a
+//! capture worker for a mirrored or joined session ([`CaptureBackend::resolve`],
+//! [`SessionPlan::sharing_live_display`]).
 //!
 //! See `design/windows-host-rewrite.md`.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureBackend {
-    /// Linux: xdg ScreenCast portal → PipeWire. The only Linux capture path.
+    /// Linux: every capture, PipeWire or direct `ext-image-copy-capture-v1`. The only value
+    /// off Windows.
     Portal,
     /// Windows: IDD direct-push from the pf-vdisplay driver's shared ring. The
     /// host runs as SYSTEM in the interactive console session, so it captures
@@ -49,8 +52,8 @@ impl CaptureBackend {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionTopology {
-    /// One process captures and encodes: Linux portal, or Windows IDD-push in the
-    /// host's SYSTEM process in the interactive console session.
+    /// No capture worker: the Linux portal, or Windows IDD-push, whose driver captures and
+    /// encodes for the host's SYSTEM process in the interactive console session.
     SingleProcess,
     /// Windows: a capture worker in the user's session captures and encodes; the host reads
     /// its access units.
@@ -91,8 +94,8 @@ pub struct SessionPlan {
     pub bit_depth: u8,
     /// Handshake HDR verdict, handed to the capturer (not derived from depth).
     /// Windows IDD-push enables advanced colour; Linux offers 10-bit PQ/BT.2020.
-    /// Set only where `capture::capturer_supports_hdr_for` said yes — Linux means
-    /// a gamescope output off our `pipewire-hdr` build; other compositors are 8-bit.
+    /// Set only where the source can deliver it: `capture::capturer_supports_hdr_for` on the
+    /// native plane, `gamestream::launch_hdr_capable` on GameStream.
     pub hdr: bool,
     /// 4:2:0, or 4:4:4 when client, host, and GPU all support it. `Yuv420` on every backend that declined.
     pub chroma: crate::encode::ChromaFormat,

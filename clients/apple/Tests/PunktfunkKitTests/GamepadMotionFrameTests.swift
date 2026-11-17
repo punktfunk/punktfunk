@@ -1,15 +1,14 @@
 // The motion frame conversion, pinned against the readings it was derived from.
 //
-// On 2026-08-07 one physical DualSense was read twice on one desk — over raw HID (the pad's own
-// report) and through GameController — so both frames come from the same controller in the same
-// orientations rather than from two documents:
+// One physical DualSense was read twice — over raw HID (the pad's own report) and through
+// GameController — so both frames come from the same controller in the same orientations
+// rather than from two documents:
 //
 //   DualSense report frame: (Right, Up, Backward)   axis 0 pitch, 1 yaw, 2 roll
 //   GameController frame:   (Right, Forward, Up)
 //
 // The numbers below are those measurements. They are the reason the conversion is `(x, z, -y)` and
-// not one of the five other permutations that also move gravity to slot 1, so they belong in a test
-// rather than only in a commit message.
+// not one of the five other permutations that also move gravity to slot 1.
 
 import XCTest
 
@@ -36,8 +35,8 @@ final class GamepadMotionFrameTests: XCTestCase {
         XCTAssertEqual(w.2, 0.160, accuracy: 0.05)
     }
 
-    /// The tilt term's SIGN is the whole point: before this conversion the client sent Apple's y
-    /// straight through, so a pad tilted nose-up reported itself tilted nose-down.
+    /// The tilt term's SIGN is the whole point: sending Apple's y straight through would make a
+    /// pad tilted nose-up report itself tilted nose-down.
     func testTheForeAftAxisIsNegatedNotJustMoved() {
         XCTAssertEqual(wire((0, 1, 0)).2, -1, "GC +y (Forward) is the wire's -Backward")
         XCTAssertEqual(wire((0, -1, 0)).2, 1)

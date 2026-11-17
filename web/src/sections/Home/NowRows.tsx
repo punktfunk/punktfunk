@@ -158,9 +158,10 @@ export interface SessionActions {
 
 /**
  * A live session. `stream` is set only on the row the host reports numbers for. A seat's row
- * says so (`seat`), and its primary action ends the seat's session (`endLabel`). A session on
- * another's screen says so beside its mode (`join`). Its folded facts name the link rate every frame is paced at, the wake shape while it is on, and where
- * the last minute's lost shards fell in their frames (`link`, absent in the first minute).
+ * says so (`seat`), and its primary action ends the seat's session (`end`). A session on
+ * another's screen says so beside its mode (`join`). Its folded facts name the link rate every
+ * frame is paced at, the wake shape while it is on, and where the last minute's lost shards
+ * fell in their frames (`link`, absent in the first minute).
  *
  * Mute and the player slot ride native-only lanes; access is ungoverned on the compat plane, so
  * none of the three is offered there.

@@ -73,8 +73,8 @@ final class ColorBarDecodeTests: XCTestCase {
             expected: .init(matrix: 1, fullRange: false))
     }
 
-    /// BT.709 full range — the PUNKTFUNK_444_FULLRANGE experiment's signaling (requesting the
-    /// full-range sibling keeps VT from range-converting, so the full-range rows are exercised).
+    /// BT.709 full range — requesting the full-range sibling keeps VT from range-converting,
+    /// so the full-range rows are exercised.
     func testGolden709FullBars() throws {
         try assertBars(
             "709-full", au: ColorBarFixtures.bars709Full,

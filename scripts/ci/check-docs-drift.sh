@@ -1,21 +1,19 @@
 #!/bin/sh
-# Docs drift gates (docs-and-onboarding-overhaul WP1). The docs rotted through four unchecked
-# duplication channels; these are the cheap textual halves of closing them. No cargo, no bun
-# install — pure git grep, so the gate runs on every push in seconds (the deep half, regenerating
-# the OpenAPI spec from the host binary, lives in ci.yml's `rust` job where the build already
-# exists).
+# Docs drift gates: the cheap textual checks that keep the docs in step with the tree. No cargo,
+# no bun install — pure git grep, so the gate runs on every push in seconds (the deep half,
+# regenerating the OpenAPI spec from the host binary, lives in ci.yml's `rust` job where the
+# build already exists).
 #
 #   1. docs-site/public/openapi.json must be a byte-for-byte copy of api/openapi.json. The
-#      snapshot is a manual `cp` (docs-site/README.md); it sat stale on main for weeks once,
-#      publishing an /api reference missing the whole self-update surface.
+#      snapshot is a manual `cp` (docs-site/README.md).
 #   2. Every PUNKTFUNK_* or PFVD_* (the virtual display driver's) variable the docs mention
 #      must still exist somewhere in the tree
 #      (docs describing a removed knob is drift a reader pays for). Historical records —
 #      docs/releases/, CHANGELOG.md — don't count as existence: a knob that lives only in old
 #      release notes is gone.
 #   3. Ratchet: no NEW PUNKTFUNK_* or PFVD_* env var may appear in code without a docs mention.
-#      150 or so internal/debug knobs (the PFVD_* probe knobs among them) are deliberately
-#      undocumented today, so this can't be a hard list —
+#      Internal/debug knobs (the PFVD_* probe knobs among them) are deliberately undocumented
+#      (the baseline file lists them), so this can't be a hard list —
 #      but a NEW knob must either be documented in docs-site (configuration.md or the page
 #      owning its feature) or join the baseline below in the same commit, making "undocumented"
 #      a decision instead of an accident. A baseline line whose knob left the code or got
@@ -27,15 +25,11 @@
 #      platforms.json — the snapshot the <Install/> and <Ports/> MDX components render from
 #      (the docs Docker build context is docs-site/ alone) — must be a byte copy of it, same
 #      rule as gate 1.
-#   6. scripts/install.sh (the download stub) parses, verifies its download, owns no options
-#      states — every `install` line of an apt/pacman/dnf/sysext host platform must appear in
-#      the script verbatim (it edits channel/group into the string at run time, never the
-#      literal), and the script must parse under sh.
-#   7. The installer under --dry-run against faked os-release files detects every family it claims
-#      to (and --uninstall prints each family's removal) — the committed half of the manual
-#      16-file matrix PR #345 was verified with. Needs curl on PATH (the script's own prerequisite).
-#      Per-family *defaults* (group / linger / GameStream) live in check-install-defaults.sh.
-#   8. scripts/web-init.sh — the web console's host-readiness gate — actually waits for the host's
+#   6. scripts/install.sh (the download stub) parses under sh, refuses a download whose sha256
+#      does not match, keeps the PUNKTFUNK_SETUP_BIN override, parses no installer option and
+#      carries no platforms.json install line. The installer's detection and channel matrices are
+#      check-installer-behavior.sh; its per-family defaults are check-install-defaults.sh.
+#   7. scripts/web-init.sh — the web console's host-readiness gate — actually waits for the host's
 #      first-run files and actually stops waiting when they land, against a faked config dir. Not
 #      docs drift, but the same shape: a packaging script no build exercises, whose failure mode
 #      (the console failing its first enable on a fresh install) only shows up on real glass.
@@ -109,8 +103,8 @@ while IFS= read -r cmd; do
 done < "$tmp/cli-cmds"
 
 # ---------------------------------------------------------------- gate 5: platforms.json parses
-# Explicit try/exit: `bun -e` (1.3.x) exits 0 on an uncaught JSON.parse throw, so relying on
-# the default uncaught-exception exit code silently disarms the gate.
+# Explicit try/exit: the gate must not depend on how a given `bun -e` release exits on an
+# uncaught JSON.parse throw.
 json_check='try{JSON.parse(require("fs").readFileSync("data/platforms.json","utf8"))}catch(e){console.error(e.message);process.exit(1)}'
 if [ ! -f data/platforms.json ]; then
     echo "::error::data/platforms.json is missing"
@@ -130,11 +124,11 @@ fi
 # scripts/install.sh is a stub: it downloads punktfunk-setup, verifies its sha256 and execs it
 # (design/installer-v2.md D1). Its whole value is being boring, so this checks that it still is.
 #
-# The install lines moved with the behaviour. The binary embeds data/platforms.json and generates
-# its commands from it, so they are verbatim by construction rather than by a substring check —
-# crates/install/punktfunk-setup/tests/plan_goldens.rs asserts it, and the detection and channel matrices
-# that used to live below are now scripts/ci/check-installer-behavior.sh, run in the rust lane
-# where a binary can be built.
+# The install lines live in the binary. It embeds data/platforms.json and generates its commands
+# from it, so they are verbatim by construction rather than by a substring check —
+# crates/install/punktfunk-setup/tests/plan_goldens.rs asserts it. The detection and channel
+# matrices are scripts/ci/check-installer-behavior.sh, run in the rust lane where a binary can
+# be built.
 if ! sh -n scripts/install.sh; then
     echo "::error::scripts/install.sh does not parse under sh"
     fail=1
@@ -165,9 +159,9 @@ fi
 
 # ------------------------------------------------- gate 7: the web console's host-readiness gate
 # scripts/web-init.sh is what stops punktfunk-web.service from starting before the host has written
-# the files it cannot start without. `After=punktfunk-host.service` never did that (the host is
-# Type=simple), and the console's first enable on a fresh install failed at the systemd level as a
-# result — field report 2026-08-28, Omarchy. Run the real script against a faked config dir.
+# the files it cannot start without. `After=punktfunk-host.service` does not do that (the host is
+# Type=simple), so the console's first enable on a fresh install can fail at the systemd level.
+# Run the real script against a faked config dir.
 wi="$tmp/web-init"
 # $1 = wait seconds, $2 = config dir. Echoes the script's output; sets wi_rc / wi_secs.
 run_web_init() {
@@ -208,10 +202,9 @@ case "$wi_out" in *'waiting for punktfunk-host'*) ;; *)
     fail=1 ;;
 esac
 
-# THE REGRESSION THIS GATE EXISTS FOR. The host writes mgmt-token EARLY in `serve` and its identity
-# cert LAST (inside mgmt::run), so a gate that waits for the token alone still hands the console a
-# directory with no cert to listen with — it just moves the failure. Token present, cert absent
-# must still WAIT.
+# The host writes mgmt-token in `prepare_serve` and its identity cert later, in `host::serve`, so
+# a gate that waits for the token alone still hands the console a directory with no cert to
+# listen with. Token present, cert absent must still WAIT.
 mkdir -p "$wi/token-only/punktfunk"
 seed_token "$wi/token-only"
 run_web_init 1 "$wi/token-only"

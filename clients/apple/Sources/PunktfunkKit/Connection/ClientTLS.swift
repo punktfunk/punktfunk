@@ -9,11 +9,11 @@
 // `SecIdentityCreateWithCertificate` — the straight-line "pair these two" API — is macOS-only:
 //   - macOS: SecIdentityCreateWithCertificate does the pairing directly once the key is in the
 //     Keychain (a plain `SecItemAdd`).
-//   - iOS/tvOS: that API is unavailable. Instead, add BOTH the key and the certificate to the
-//     Keychain (under the same application tag) and query `kSecClassIdentity` — the system
-//     correlates a stored cert against a stored key with a matching public key and vends the pair
-//     as one `SecIdentity`, no PKCS#12 needed. This is the standard non-macOS technique for
-//     "I already have a raw cert + key, not a .p12".
+//   - iOS/tvOS: that API is unavailable (SecIdentity.h, SDK 27). Instead, add the key (under an
+//     application tag) and the certificate (under a label) to the Keychain and query
+//     `kSecClassIdentity` — the system correlates a stored cert against a stored key with a
+//     matching public key and vends the pair as one `SecIdentity`, no PKCS#12 needed. This is the
+//     standard non-macOS technique for "I already have a raw cert + key, not a .p12".
 
 import CryptoKit
 import Foundation

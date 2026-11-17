@@ -69,7 +69,7 @@ export async function pressHost(action: "guide" | "qam"): Promise<void> {
   }
 }
 
-/** Wake a host and wait for it (up to 90 s), then rescan so its row reads online. */
+/** Wake a host and wait for it, then rescan so its row reads online. */
 export async function wakeHost(host: HostView): Promise<void> {
   toast(t("dial_waking", { host: host.name }));
   const r = await wake(host.ref).catch(() => null);
@@ -107,7 +107,7 @@ export async function runHostAction(host: HostView, a: HostAction): Promise<void
     return;
   }
   const r = await runAction(host.ref, a.id).catch(() => null);
-  // The CLI's sentence says why it failed; its words follow the Deck's locale, not Steam's.
+  // The CLI's sentence says why it failed; its words are English.
   toast(
     r?.ok
       ? t("hostcard_action_sent_body", { host: host.name, action })

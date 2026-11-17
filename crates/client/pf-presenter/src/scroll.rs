@@ -21,7 +21,8 @@ pub enum NativeAxisSource {
     Wheel,
     /// Touchpad two-finger scroll, in the compositor's axis units.
     Finger,
-    /// Dial / tilt / other uninterruptible continuous surface, in axis units.
+    /// Dial or other uninterruptible continuous surface, in axis units. A wheel tilt is a
+    /// `Wheel`.
     Continuous,
 }
 

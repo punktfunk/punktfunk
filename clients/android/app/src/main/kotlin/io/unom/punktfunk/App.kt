@@ -173,12 +173,10 @@ fun App(forceGamepadUi: Boolean = false) {
         })
     }
 
-    // System bars have ONE owner: this effect. The stream and the console shell both want the
-    // whole panel (bars hidden, a swipe shows them transiently); the touch shell wants them back.
-    // It cannot live inside the screens themselves: `AnimatedContent` below keeps the outgoing
-    // screen composed until its fade ends, so a per-screen `onDispose { show(...) }` fired AFTER
-    // the incoming screen's hide — console → stream left the status and gesture bars parked over
-    // the video. Keyed on the resolved intent, not the screens.
+    // System bars have ONE owner: this effect, keyed on the resolved intent. The stream and the
+    // console shell hide them (a swipe shows them transiently); the touch shell shows them. A
+    // per-screen `onDispose { show(...) }` would run AFTER the incoming screen's hide, because
+    // `AnimatedContent` below keeps the outgoing screen composed until its fade ends.
     val immersive = session != null || gamepadUi
     DisposableEffect(immersive) {
         val window = activity?.window ?: return@DisposableEffect onDispose {}
@@ -223,10 +221,9 @@ fun App(forceGamepadUi: Boolean = false) {
         }
     }
 
-    // Where a bare launch opens (design/default-host.md). Once per PROCESS, not per composition:
-    // `LaunchedEffect(Unit)` in this composable runs on a cold start and never again, so
-    // foregrounding, a finished stream and a return from Settings all land where the shell would
-    // land anyway. Never with a link waiting — explicit intent wins — and never while the console
+    // Where a bare launch opens (design/default-host.md). `LaunchedEffect(Unit)` runs once per
+    // composition of App: a cold start, not a foregrounding, a finished stream or a return from
+    // Settings. Never with a link waiting — explicit intent wins — and never while the console
     // shell is up, which resolves the same policy for itself in `SkiaConsole.ensure`.
     LaunchedEffect(Unit) {
         if (gamepadUi || pendingLink != null || session != null) return@LaunchedEffect
@@ -481,9 +478,9 @@ private fun TouchTabs(tab: Tab, onTab: (Tab) -> Unit, content: @Composable (Tab)
                     }
                     Spacer(Modifier.weight(1f))
                 }
-                // The rail handles its own insets; the content pane insets itself (the screens
-                // don't, since they used to rely on the Scaffold's padding). Cutout included:
-                // a tablet in landscape puts its punch on exactly this pane's leading edge.
+                // The rail handles its own insets; the content pane insets itself, since the
+                // screens don't. Cutout included: a tablet in landscape puts its punch on
+                // exactly this pane's leading edge.
                 Box(Modifier.weight(1f).fillMaxHeight().safeArea()) { tabContent(true) }
             }
         } else {

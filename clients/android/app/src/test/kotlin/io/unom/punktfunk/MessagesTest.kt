@@ -14,7 +14,7 @@ import org.xmlpull.v1.XmlPullParser
 
 /**
  * The resources :kit generates from `l10n/messages`, as the app resolves them: the seed messages
- * read as the literals they replaced, and the per-app language list holds the shipped languages.
+ * read in English, and the per-app language list holds the shipped languages.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])

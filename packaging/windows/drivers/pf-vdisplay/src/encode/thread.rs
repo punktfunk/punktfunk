@@ -48,7 +48,7 @@ pub struct EncodeThread {
 
 impl EncodeThread {
     /// How long a stop waits before the thread is detached. A healthy thread is between two
-    /// backend calls within one frame; ~250 ms is ten of them at 60 Hz.
+    /// backend calls within one frame; ~250 ms is fifteen of them at 60 Hz.
     pub const STOP_BOUND: Duration = Duration::from_millis(250);
 
     /// Start the thread. `None` when the OS refused a thread or event; the caller replies
@@ -98,11 +98,11 @@ fn block_after() -> Option<u64> {
 
 /// The thread body: open, build or reuse the monitor's pool, report, then drive until stopped.
 /// The backend opens at the request's encode size; the pool takes the monitor's surfaces and is
-/// reused — retained slot included — when it already fits this session's device, framing and
-/// input kind; anything else is a fresh pool installed on the monitor. The session opens on the
-/// pool's newest frame or the monitor's seed, and its sequence and `frames_input` are in the
-/// header before the reply. The open line names the frame path (`pool` or `bypass`), the
-/// framing when it scales, and that frame.
+/// reused — retained slot included — when it already fits this session ([`Pool::matches`]:
+/// device epoch, input kind, framing, range, frame path); anything else is a fresh pool
+/// installed on the monitor. The session opens on the pool's newest frame or the monitor's
+/// seed, and its sequence and `frames_input` are in the header before the reply. The open line
+/// names the frame path (`pool` or `bypass`), the framing when it scales, and that frame.
 fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
     let _mmcss = Mmcss::distribution("encode");
     let section = &ctx.session.section;

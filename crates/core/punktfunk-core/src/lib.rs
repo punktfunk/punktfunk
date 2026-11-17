@@ -11,10 +11,10 @@
 //! Per-frame processing never enters an async runtime; `tokio` and `quinn` are confined to
 //! the optional control plane.
 
-// `unsafe` is crate-denied. Parsers of network bytes stay safe Rust. Carve-outs are
-// only `client` (thread ids, QoS pins, hostname), `crash_windows`, the transport syscall
-// shims (`udp`, `qos_windows`, `ifinfo`, `sockstat`) and the parity lane's frame borrow
-// (`session::seal`). A wire parser may not add one; SAFETY proofs sit next to each `unsafe`.
+// `unsafe` is crate-denied. Parsers of network bytes stay safe Rust. Carve-outs are only
+// `client` (thread ids, QoS pins, hostname), `crash_windows`, the transport syscall shims
+// (`udp`, `qos_windows`, `ifinfo`, `sockstat`), the parity lane's frame borrow (`session::seal`)
+// and two tests. A wire parser may not add one; SAFETY proofs sit next to each `unsafe`.
 #![deny(unsafe_code)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -31,7 +31,8 @@ pub mod client;
 #[cfg(feature = "quic")]
 pub mod clipboard;
 pub mod config;
-/// The unhandled-SEH filter every Windows process installs after logging init.
+/// The unhandled-SEH filter the Windows host, session binary and client install after logging
+/// init.
 #[cfg(windows)]
 #[path = "crash_windows.rs"]
 pub mod crash;
@@ -110,7 +111,7 @@ fn env_value_on(value: &str) -> bool {
 /// do not mint another `connect_ex*` or grow `PunktfunkAudioPcm` / `PunktfunkStats`
 /// (no size guard, allocated by value). Growing a struct the library writes whole into
 /// the caller's buffer is a bump: the version check is the overrun guard
-/// (`PunktfunkHidOutput` at 27, `PunktfunkProbeResult` at 43).
+/// (`PunktfunkHidOutput`, `PunktfunkProbeResult`).
 ///
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.

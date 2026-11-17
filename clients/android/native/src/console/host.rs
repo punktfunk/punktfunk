@@ -168,7 +168,7 @@ impl Drop for ConsoleHost {
 /// `decode::setup::boost_thread_priority` lifts the decode thread. This thread IS the console's
 /// frame loop — every menu press waits on it — and at default priority a TV box's scheduler is
 /// free to park it on a little core behind whatever else the system is doing, which reads as a
-/// UI that lags the remote. `-8` rather than the decode path's `-10`: a stream's frames are the
+/// UI that lags the remote. `-8`, a weaker boost than the decode path's: a stream's frames are the
 /// harder deadline, and the two should not compete when the console is up during a session.
 ///
 /// Non-fatal if the platform refuses (the exact floor a foreground app may set is policy).
@@ -372,9 +372,8 @@ impl Glass {
                 // last in it. The shell covers the frame, so this only matters for the pixels
                 // a partial first frame leaves — and a wrap happens on rotation, not per frame.
                 surf.canvas().clear(skia_safe::Color::BLACK);
-                // The console's real render resolution — the one number a bug report
-                // from a TV never carried. A 4K panel is 4× the fragment work of 1080p
-                // for every pass the shell draws.
+                // The console's real render resolution. A 4K panel is 4× the fragment work
+                // of 1080p for every pass the shell draws.
                 log::info!("console: drawing at {w}×{h}");
                 self.skia = Some((surf, w, h));
                 // Start the frame window here, not at loop entry: the console parks

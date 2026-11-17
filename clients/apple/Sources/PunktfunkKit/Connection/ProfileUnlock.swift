@@ -1,7 +1,8 @@
-// Opening a profile on a person's own account (CONTRACT §6) or a locked one: the secret a connect
-// carries, the message an unlock key signs, the host's challenge, and the flow that chooses
-// between the key and the password or PIN prompt. `clients/shared/profile-unlock-vectors.json`
-// pins the rules. The Secure Enclave keys live in EnclaveUnlockKeys.swift.
+// Opening a profile on a person's own account or a locked one (the multi-seat contract page): the
+// secret a connect carries, the message an unlock key signs, the host's challenge, and the flow
+// that chooses between the key and the password or PIN prompt.
+// `clients/shared/profile-unlock-vectors.json` pins the rules. The Secure Enclave keys live in
+// EnclaveUnlockKeys.swift.
 
 import Darwin
 import Foundation
@@ -137,7 +138,7 @@ public struct ProfileUnlock: Sendable, CustomStringConvertible {
         }
     }
 
-    /// The 152 bytes a key proof signs (CONTRACT §3), built by the core:
+    /// The 152 bytes a key proof signs (the multi-seat contract page), built by the core:
     /// `"punktfunk-seat-unlock-v1" ‖ challenge ‖ seat ‖ device ‖ box`. nil for a wrong shape.
     public static func message(challenge: Data, seat: String, device: Data, box: Data) -> Data? {
         guard challenge.count == 32, device.count == 32, box.count == 32 else { return nil }

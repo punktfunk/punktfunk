@@ -174,13 +174,13 @@ class PresetsTest {
     }
 
     /**
-     * Every field this build models must be in the store's KNOWN key set, or the load files it
+     * Every field this build models must be in `SettingsFields.PRESET_KEYS`, or the load files it
      * under "keys a newer build wrote" as WELL as into its own field — and `clear` (which only
      * nulls the field) then writes it straight back out of that carry-through map, so resetting
-     * the row to inherited silently never sticks. `ten_bit_sdr` shipped exactly that way.
+     * the row to inherited silently never sticks.
      *
-     * Stated as behaviour rather than by reading KNOWN: set every field, round-trip, and nothing
-     * may have been mistaken for a stranger.
+     * Stated as behaviour rather than by reading the key set: set every field, round-trip, and
+     * nothing may have been mistaken for a stranger.
      */
     @Test
     fun everyModelledOverrideSurvivesAResetToInherited() {
@@ -320,9 +320,7 @@ class PresetsTest {
             AUDIO_FORMAT_WIRE_UNSPECIFIED,
             base.copy(audioFormat = AUDIO_FORMAT_OPUS).audioFormatWire(),
         )
-        // Both rate families. The 44.1 one was deferred only for as long as the shared jitter
-        // policy divided by 1 000 before it multiplied (44 100 → 44 samples/ms, every buffer
-        // figure 2.3 % out); core multiplies first now, so these are simply rates.
+        // Both rate families: 44.1 kHz multiples and 48 kHz multiples.
         assertEquals(
             44_100 to 24,
             base.copy(audioFormat = AUDIO_FORMAT_LOSSLESS_441).audioFormatWire(),
@@ -343,7 +341,7 @@ class PresetsTest {
             176_400 to 24,
             base.copy(audioFormat = AUDIO_FORMAT_LOSSLESS_1764).audioFormatWire(),
         )
-        // The default is the legacy request — a fresh install asks for exactly what it always did.
+        // The default is the legacy request: the unspecified pair.
         assertEquals(AUDIO_FORMAT_WIRE_UNSPECIFIED, Settings().audioFormatWire())
         // A newer build's value (or a corrupted pref) falls back to Opus rather than reaching the
         // host as an unrepresentable rate: a settings string must never be able to block a connect.
@@ -354,22 +352,19 @@ class PresetsTest {
     }
 
     /**
-     * ⚠⚠ **A user who chose Standard (Opus) must not advertise `CLIENT_CAP_AUDIO_HIRES`**, and the
+     * **A user who chose Standard (Opus) must not advertise `CLIENT_CAP_AUDIO_HIRES`**, and the
      * only thing standing between them and 1.5 Mbps of PCM they did not ask for is that this pair
      * is `0`/`0`.
      *
      * Core's `advertised_client_caps` sets the bit when EITHER field is non-zero — it keys on "a
      * format was specified", not on "the format differs from the default", because 48 kHz/16-bit is
      * both the legacy pair AND the cheapest lossless rung and the other rule would make that rung
-     * unrequestable. The host's gate then accepts 48 kHz/16-bit as a perfectly supported format. So
-     * a client that sends the legacy-looking numbers as its stand-in for "default" opts every one of
-     * its users in, on every host that has not deliberately opted out — which since 2026-08-17 is
-     * every host, `PUNKTFUNK_AUDIO_HIRES` having gone default-ON — with no surface anywhere saying
-     * so: a declined session and a silently granted one look identical from the settings screen.
-     *
-     * This client did exactly that until the four clients were compared. The rule is restated here
-     * rather than reached through core because Kotlin cannot call it; core's own tests pin the other
-     * half.
+     * unrequestable. The host's gate then accepts 48 kHz/16-bit as a perfectly supported format,
+     * and `PUNKTFUNK_AUDIO_HIRES` defaults on. So a client that sends the legacy-looking numbers
+     * as its stand-in for "default" opts every one of its users in on every host that leaves it
+     * on, with no surface saying so: a declined session and a silently granted one look
+     * identical from the settings screen. The rule is restated here rather than reached through
+     * core because Kotlin cannot call it; core's own tests pin the other half.
      */
     @Test
     fun theOpusSettingDoesNotAdvertiseTheLosslessCapability() {

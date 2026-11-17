@@ -3,11 +3,11 @@
 //! The D3D/DXGI types are the `windows` crate (refcounted COM, no manual Drop); the swap-chain/LUID
 //! hand-off to the wdk-sys IddCx world happens via raw pointers in `swap_chain_processor.rs`.
 //!
-//! Binding this device to the swap-chain keeps the monitor a live display, and the frame publisher
-//! reuses its immediate context in `CopyResource` on each swap-chain processor thread. The device is
-//! POOLED across processors (one per render LUID, [`pooled_device`]), so two live monitors' worker
-//! threads share it concurrently — creation must NOT pass `D3D11_CREATE_DEVICE_SINGLETHREADED` (sound
-//! only pre-pooling, device-per-processor), and the immediate context is `SetMultithreadProtected`
+//! Binding this device to the swap-chain keeps the monitor a live display, and the encode pool
+//! runs its GPU passes on its immediate context from each swap-chain processor thread. The device
+//! is POOLED across processors (one per render LUID, [`pooled_device`]), so two live monitors'
+//! worker threads share it concurrently — creation must NOT pass
+//! `D3D11_CREATE_DEVICE_SINGLETHREADED`, and the immediate context is `SetMultithreadProtected`
 //! (it has no internal locking of its own).
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
@@ -36,14 +36,15 @@ pub struct Direct3DDevice {
     _dxgi_factory: IDXGIFactory5,
     _adapter: IDXGIAdapter1,
     pub device: ID3D11Device,
-    /// The shared immediate context — used by STEP 6's frame-push publisher's `CopyResource` on each
+    /// The shared immediate context — the encode pool's passes and copies run on it from each
     /// swap-chain processor thread. Pooled across processors, so it is `SetMultithreadProtected` at
     /// init: an immediate context has no internal locking, and two concurrent monitors' workers would
     /// otherwise race it (undefined behavior inside the UMD).
     pub device_context: ID3D11DeviceContext,
     /// This device object's epoch (immunity plan D2): minted from [`DEVICE_EPOCH`] at `init`, so a
     /// TDR recreate on the SAME LUID is a different epoch and LUID equality is never mistaken for
-    /// D3D-object compatibility. Reported to the host in the v3 header.
+    /// D3D-object compatibility. The pool refuses a surface from another epoch, and the seed
+    /// hands a kept frame out only to its own.
     epoch: u32,
     /// Set once ANY worker observed this device removed (`GetDeviceRemovedReason` failed). Every
     /// worker on the entry stops using it and [`pooled_device`] recreates instead of handing it out.
@@ -155,13 +156,12 @@ impl Direct3DDevice {
 }
 
 /// ONE shared D3D render device PER RENDER LUID, reused across every swap-chain assignment.
-/// Creating a fresh `Direct3DDevice` per assign — and the swap-chain flap fires several assigns per
-/// session — spawned a new NVIDIA UMD worker-thread set each time that was NEVER reclaimed on release
-/// (proven on the RTX box: ~70 `nvwgf2umx` threads + ~50 MB VRAM leaked per reconnect, permanently,
-/// even though our `Direct3DDevice` refcount dropped to 0). Pooling keeps a single, stable thread
-/// set per adapter: the processors borrow an `Arc`, so the device outlives them and is never
-/// re-created. A bounded MAP, not one slot (immunity plan WP5): on a hybrid iGPU+dGPU box two
-/// live monitors on different adapters must not evict each other's entry every assignment.
+/// A fresh `Direct3DDevice` per assign (the swap-chain flap fires several per session) leaks the
+/// NVIDIA UMD's worker threads and VRAM: they are never reclaimed on release, even after our
+/// refcount drops to 0. Pooling keeps one stable thread set per adapter: the processors borrow
+/// an `Arc`, so the device outlives them and is never re-created. A bounded MAP, not one slot
+/// (immunity plan WP5): on a hybrid iGPU+dGPU box two live monitors on different adapters must
+/// not evict each other's entry every assignment.
 static DEVICE_POOL: Mutex<Vec<(i64, Arc<Direct3DDevice>)>> = Mutex::new(Vec::new());
 
 /// How many adapters the pool keeps devices for — beyond this the oldest entry goes.

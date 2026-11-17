@@ -1,6 +1,6 @@
 //! The fake kit: a far side the tests play behind a [`Transport`] — the encoder of the driver
 //! or of a capture worker, publishing access units through the driver's own `HeapRing`
-//! (01's `Producer`) into a leaked `Vec` section — on a virtual clock.
+//! (`au_reader::producer::Producer`) into a leaked `Vec` section — on a virtual clock.
 //!
 //! [`FarSide`] records what the source asked (`SET_ENCODE`, every `ENCODE_CTL`, every reaped
 //! value) and scripts what it answers (a refusal, the news `poll` hands out, the secure

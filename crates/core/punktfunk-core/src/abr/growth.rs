@@ -96,7 +96,7 @@ pub(super) fn proration(
 /// constrained, and an unconstrained window proves no capacity.
 ///
 /// Prorated together with the proven bound or they deadlock: a 35 fps
-/// source's wall-clock wire rate never exceeds ~39 % of its target.
+/// source's wall-clock wire rate on 90 Hz never exceeds ~39 % of its target.
 pub(super) fn utilized(
     activity: WindowActivity,
     proration: Option<(u64, u64)>,
@@ -413,7 +413,7 @@ mod tests {
 
     /// Five empty windows are not an idle stretch. [`CLEAN_WINDOWS_TO_INCREASE`]
     /// is 6, so five quiet windows plus one active would additive-climb if
-    /// Empty were credited as clean (the older-host `None` path).
+    /// Empty were credited as clean (the older-host `Unmarked` path).
     #[test]
     fn empty_windows_do_not_rearm_abr_slow_start() {
         let mut c = BitrateController::new(20_000, None);

@@ -10,8 +10,7 @@ const e = (seq: number): ActivityEntry => ({
 
 describe("mergeActivity", () => {
 	test("a whole replay lands in one call, newest first", () => {
-		// Oldest to newest, which is the order the host replays its ring in. 161 is what a real
-		// host sent on connect.
+		// Oldest to newest, which is the order the host replays its ring in.
 		const replay = Array.from({ length: 161 }, (_, i) => e(i + 1));
 		const ring = mergeActivity([], replay);
 		expect(ring.length).toBe(161);

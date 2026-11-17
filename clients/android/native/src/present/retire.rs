@@ -9,7 +9,7 @@
 //! its own reference from `setBuffer`, so an early free tears at worst and never faults.
 //!
 //! `CASES` replays completion traces and pins each outcome. Design:
-//! `design/android-native-overhaul.md` F3 (planning repo).
+//! `design/android-presenter-overhaul-v3.md` §3.3 (planning repo).
 
 use std::collections::VecDeque;
 

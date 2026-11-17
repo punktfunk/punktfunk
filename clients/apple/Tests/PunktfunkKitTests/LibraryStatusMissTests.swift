@@ -5,7 +5,7 @@ import XCTest
 @testable import PunktfunkKit
 
 final class LibraryStatusMissTests: XCTestCase {
-    /// R5-1: a reload whose status read misses keeps the Resume badge and the live download,
+    /// A reload whose status read misses keeps the Resume badge and the live download,
     /// so the download's poll goes on.
     func testAReloadWhoseStatusReadMissesKeepsTheBadges() async throws {
         let up = try JSONDecoder().decode(

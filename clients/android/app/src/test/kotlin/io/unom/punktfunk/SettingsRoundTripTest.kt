@@ -10,17 +10,14 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * One client setting is spelled out in fifteen places — the data class, its prefs key, `load`,
- * `save`, the preset overlay's eight members, both halves of the console bridge, and its settings
- * row. Two of those fifteen fail to compile when a field is missed. The other thirteen are named
- * arguments with defaults, `put` statements and `when` arms, all of which are perfectly legal one
- * field short — so the miss ships, and surfaces as a setting that saves but never loads, or an
- * override that cannot be reset (`ten_bit_sdr` was exactly that).
+ * [SettingsFields] is the one list of [Settings] fields: the prefs store, the preset overlay and
+ * both halves of the console bridge loop over it. A property missing from one of those paths
+ * still compiles (named arguments carry defaults), so the miss ships — as a setting that saves
+ * but never loads, or an override that cannot be reset.
  *
  * These tests are FIELD-BLIND on purpose. They set every field away from its default and compare
  * whole objects, so a new setting is covered the day it is added and nobody has to remember to
- * extend a list here — which is the failure this file exists to stop, and which the console test
- * next door still has as a hand-written seven-line assertion.
+ * extend a list here.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -87,9 +84,9 @@ class SettingsRoundTripTest {
 
     /**
      * The console shell and the touch UI edit ONE store, so what one writes the other must read
-     * back unchanged. Anything the console genuinely does not own belongs in the copy below with
-     * its reason — the point is that adding a setting forces that decision rather than silently
-     * dropping it on the floor the first time a user opens the console.
+     * back unchanged. Anything the console genuinely does not own needs a test of its own with its
+     * reason (see [theHostScreenIsNeverAGlobal]) — adding a setting forces that decision rather
+     * than silently dropping it the first time a user opens the console.
      */
     @Test
     fun everySettingSurvivesTheConsoleBridge() {

@@ -13,10 +13,10 @@ import SwiftUI
 
 @MainActor
 final class PresetStore: ObservableObject {
-    /// One catalog for the whole app. Unlike `HostStore` (which ContentView owns and hands down),
-    /// the settings surface reaches this from a SEPARATE macOS `Settings` scene, where no parent
-    /// can pass it — and two instances would mean editing a preset in Preferences while the host
-    /// grid still shows the old one. Same shape as `GamepadManager.shared`.
+    /// One catalog for the whole app. The settings surface reaches this from a SEPARATE macOS
+    /// `Settings` scene, where no parent can pass it — and two instances would mean editing a
+    /// preset in Preferences while the host grid still shows the old one. Same shape as
+    /// `HostStore.shared` and `GamepadManager.shared`.
     static let shared = PresetStore()
 
     @Published private(set) var catalog: PresetCatalog {
@@ -31,9 +31,8 @@ final class PresetStore: ObservableObject {
     }
 
     /// Coalesces the write. A save encodes EVERY preset, and a continuous control in preset
-    /// scope writes per drag tick — dragging one slider re-encoded the whole catalog hundreds of
-    /// times. One run-loop turn is enough to collapse a drag into a single write while still
-    /// landing long before the app can be killed.
+    /// scope writes per drag tick. One run-loop turn is enough to collapse a drag into a single
+    /// write while still landing long before the app can be killed.
     private var saveTask: Task<Void, Never>?
 
     private func scheduleSave() {

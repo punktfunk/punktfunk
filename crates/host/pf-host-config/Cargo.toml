@@ -1,6 +1,6 @@
-# The process-wide host configuration global (HostConfig + the config() OnceLock), extracted into a
-# leaf crate so every subsystem crate (pf-encode, pf-capture, pf-vdisplay, pf-gpu) can read config
-# WITHOUT depending on the orchestrator (plan §W6 — config parked above its consumers).
+# The process-wide host configuration (HostConfig + the config() snapshot) in a leaf crate, so
+# every subsystem crate (pf-encode, pf-capture, pf-vdisplay, pf-gpu) can read config WITHOUT
+# depending on the orchestrator.
 [package]
 name = "pf-host-config"
 version.workspace = true

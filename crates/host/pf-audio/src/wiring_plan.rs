@@ -447,12 +447,13 @@ pub fn describe_no_loopback(renders: &[Endpoint], wiring: &Wiring) -> String {
             } else if ln.contains("voicemeeter") {
                 "VoiceMeeter strip (shares the mixer the mic writes into — a feedback loop)"
             } else if ln.contains("steam streaming speakers") {
-                // Only when Speakers ARE the mic target (override) — last resort takes them otherwise.
+                // Last resort takes any Speakers the mic leaves; only a pad render, which
+                // `plan` filters out, reaches here.
                 "known-silent loopback (validated live)"
             } else if ln.contains("virtual") {
                 "unrecognized virtual endpoint (assumed feedback/silence risk)"
             } else {
-                // `plan` accepts any non-virtual render; this arm means a tier drifted.
+                // Pad renders (`plan` filters them out) and any render no tier took.
                 "rejected by the wiring plan"
             };
             format!("{name:?}: {why}")
@@ -1135,8 +1136,8 @@ mod tests {
 
     #[test]
     fn describe_no_loopback_skips_satisfied_remedies() {
-        // Override pins the mic to Streaming Microphone — the only way it may
-        // strand the loopback now that game audio outranks the candidate order.
+        // Override pins the mic to Streaming Microphone — the only way the mic may
+        // strand the loopback: without one, game audio outranks the candidate order.
         let renders = [ep("Altavoces (Steam Streaming Microphone)")];
         let captures = [ep("Microphone (Steam Streaming Microphone)")];
         let w = plan(

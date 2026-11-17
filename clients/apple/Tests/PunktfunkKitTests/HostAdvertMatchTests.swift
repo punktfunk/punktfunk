@@ -15,8 +15,7 @@ final class HostAdvertMatchTests: XCTestCase {
     }
 
     /// A dual-boot box: one lease, one MAC, a certificate per OS. The OS that is up must not read
-    /// as the one already saved — that is what kept it out of the discovered section, so it could
-    /// never be added.
+    /// as the one already saved, or it stays out of the discovered section and can never be added.
     func testASecondOsAtOneAddressIsADifferentHost() {
         let other = advert(fp: linux)
         XCTAssertFalse(other.matches(pin: windows, address: "192.168.1.9", port: 9777))

@@ -5,7 +5,8 @@
 //! owner-only sibling temporary, sync it, and replace the live file. A backup
 //! plus the temporary file lets `LedgerStore` recover an interrupted replace.
 //! Ledger candidates are validated before use, and the highest generation
-//! wins. No helper in this module consults process-global config paths.
+//! wins. Only `default_root` picks a path of its own; every other helper works below the
+//! root it is given.
 
 use crate::model::{Ledger, ValidationError};
 use std::io;
@@ -161,9 +162,9 @@ impl SecretRoot {
     /// Re-checks the root is still a real directory reached through no link.
     ///
     /// The DACL is applied once in [`SecretRoot::open`]. Re-applying it per
-    /// access costs two `icacls` processes each time and would only defend
-    /// against someone who can already write inside a SYSTEM-only directory,
-    /// while the link check is cheap and is the guard that matters.
+    /// access would only defend against someone who can already write inside
+    /// a SYSTEM-only directory, while the link check is cheap and is the
+    /// guard that matters.
     fn harden(&self) -> io::Result<()> {
         reject_links_in_path(&self.root)
     }

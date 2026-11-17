@@ -74,7 +74,7 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             out(json, &slice, render_sessions);
             Ok(())
         }
-        // `/status` has no device names. `/local/summary` is the one endpoint that names the client.
+        // `/local/summary`: the tray's snapshot, with the streaming client's name.
         "summary" => {
             let v = Client::one_shot()?.get("/api/v1/local/summary")?;
             out(json, &v, render_summary);
@@ -317,9 +317,9 @@ fn access(args: &[&str], json: bool) -> Result<()> {
 /// Two GETs because the API keeps them apart: `/display/settings` is stored policy,
 /// `/display/state` is this second. One verb so they are not shown at two instants.
 ///
-/// `displays` is empty on wlroots: the registry passes portal-fd heads through rather
-/// than owning them, so it never lists them. Read `[]` as "this host does not track
-/// them", never as "there are none".
+/// `displays` lists only the heads the display registry pools. One it passes through (a
+/// portal fd, a gamescope-owned output) is never listed: read `[]` as "this host tracks
+/// none", never as "there are none".
 fn display(args: &[&str], json: bool) -> Result<()> {
     let c = Client::one_shot()?;
     match args.first().copied() {
@@ -1133,8 +1133,8 @@ mod tests {
         );
     }
 
-    /// The ticket must never be readable by another local user — that is the whole reason the URL
-    /// stopped being passed as an argument.
+    /// The ticket must never be readable by another local user: a 0600 page in a 0700 directory,
+    /// rewritten whole on every launch.
     #[cfg(unix)]
     #[test]
     fn the_stub_is_private_and_overwrites_cleanly() {

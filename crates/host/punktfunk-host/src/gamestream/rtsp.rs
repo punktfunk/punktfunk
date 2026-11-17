@@ -444,7 +444,7 @@ const NVFF_AUDIO_ENCRYPTION: u32 = 0x20;
 /// catastrophic failure. Also lets the client seal RTSP; [`read_sealed_message`].
 const SS_ENC_CONTROL_V2: u32 = 0x01;
 
-/// Stream-encryption offer from `PUNKTFUNK_GS_ENCRYPT`.
+/// Stream-encryption offer from `PUNKTFUNK_GAMESTREAM_ENCRYPT`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EncOffer {
     /// `0` — advertise nothing. Escape hatch for a client that mis-negotiates.
@@ -717,8 +717,6 @@ fn stream_config(
     // Moonlight sets `dynamicRangeMode != 0` when it saw Main10 and the user
     // enabled HDR. Honor only if this launch's route can carry it; otherwise 8-bit SDR.
     let hdr_requested = parse_u("x-nv-video[0].dynamicRangeMode").unwrap_or(0) != 0;
-    // `mut` is load-bearing on Linux (probe below clears it). Allow only
-    // off-Linux so `unused_mut` still fires if that probe goes away.
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let encoder = crate::encode::resolve();
     let mut hdr = hdr_requested
@@ -1483,7 +1481,7 @@ mod tests {
         let sdp = describe_sdp(
             super::super::SCM_H264 | super::super::SCM_HEVC | super::super::SCM_AV1_MAIN8,
         );
-        // Assert against `enc_flags`, not a literal: `PUNKTFUNK_GS_ENCRYPT`
+        // Assert against `enc_flags`, not a literal: `PUNKTFUNK_GAMESTREAM_ENCRYPT`
         // can still steer the offer.
         let (supported, requested) = enc_flags(gs_encryption_offer());
         assert!(sdp.contains(&format!("a=x-ss-general.encryptionSupported:{supported}")));

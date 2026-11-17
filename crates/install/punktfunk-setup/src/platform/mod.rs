@@ -97,8 +97,8 @@ fn compose_install(base_line: &str, choices: &Choices) -> String {
     }
 }
 
-/// Reuse the family's flags; a hand-written `pacman -S` dropped `-Syu` and failed
-/// "target not found" against a never-fetched repo.
+/// Reuse the family's flags: a bare `pacman -S` without the line's `-Syu` fails "target not
+/// found" against a never-fetched repo.
 fn client_only(base_line: &str) -> String {
     let head: Vec<&str> = base_line
         .split_whitespace()
@@ -447,10 +447,9 @@ impl PkgBackend for Sysext {
 }
 
 /// SteamOS ships no package: `/usr` is read-only, so the host is compiled on the device inside
-/// a Debian distrobox ABI-matched to the running OS, which is what keeps it working across OS
-/// updates. `scripts/steamdeck/install.sh` is that build, and it also does the groups, linger,
-/// tuning and unit start every other family gets from the phases below — so this is a hand-off
-/// like Omarchy's, and it ends the run.
+/// a Debian trixie distrobox and the binary runs natively. `scripts/steamdeck/install.sh` is
+/// that build, and it also does the groups, linger, tuning and unit start every other family
+/// gets from the phases below — so this is a hand-off like Omarchy's, and it ends the run.
 struct Steamos;
 
 impl PkgBackend for Steamos {

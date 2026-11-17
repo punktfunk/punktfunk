@@ -1,7 +1,7 @@
 // The Effect face of `servePluginUi`: build the plugin's local API from an HttpApi (or
 // any HttpRouter route layers), mount it as the SDK server's `fetch` handler, and manage
-// register/renew/deregister through Scope. Validated end-to-end by the phase-0 spike:
-// core-only env layers, no platform package, SPA fallthrough preserved.
+// register/renew/deregister through Scope. It needs only effect core layers (no platform
+// package), and a path outside the API prefix falls through to the SDK's static SPA.
 import { type PluginUiHandle, servePluginUi } from "@punktfunk/host";
 import {
 	decodeHostEvent,
@@ -194,7 +194,8 @@ const pageRoute = (page: string | undefined): string | undefined =>
 
 /**
  * A library id the host accepts: `<store>:<external id>`, both halves non-empty, at most 1024
- * UTF-8 bytes. Control characters are refused too. clients/shared/library-id-vectors.json pins it.
+ * UTF-8 bytes. The kit also refuses control characters. clients/shared/library-id-vectors.json
+ * pins the host's rule.
  */
 export const validEntryId = (id: string): boolean => {
 	const colon = id.indexOf(":");
@@ -385,7 +386,8 @@ export interface ServeUiOptions {
 	readonly metadata?: (req: Request) => Promise<Response>;
 	/**
 	 * Stages this plugin holds. The host POSTs the event to `/__hold` and waits for the handler,
-	 * up to `holdTimeoutMs` (default 30 000, at most 120 000), then goes on regardless.
+	 * up to `holdTimeoutMs` (bounds and default: `HOLD_MAX_MS`, `HOLD_DEFAULT_MS` in the host's
+	 * `plugin_host/registry.rs`), then goes on regardless.
 	 */
 	readonly holds?: ServeUiHolds;
 	readonly holdTimeoutMs?: number;
@@ -443,8 +445,8 @@ export const serveUi = (
 		const fetch = async (req: Request): Promise<Response | undefined> => {
 			const url = new URL(req.url);
 			// `__`-prefixed paths are the kit/SDK's own contract surface (`__health` lives in the
-			// SDK), deliberately checked BEFORE the API prefix and before any static asset so a
-			// plugin's own routes can never shadow them.
+			// SDK), deliberately checked BEFORE the API prefix so a plugin's own routes can never
+			// shadow them.
 			if (url.pathname === "/__config") {
 				return serveConfig?.(req) ?? new Response("not found", { status: 404 });
 			}
@@ -513,18 +515,15 @@ export const serveUi = (
  * Read our own directory entry back and warn if the requested `category` is not on it.
  *
  * `category` travels through the UNTYPED `pf.request` seam precisely so an older host ignores it
- * instead of rejecting the registration — which means dropping it is SILENT by design, at three
- * different layers (an old host, an old runner-resolved SDK, a typo). On 2026-08-08 the middle one
- * happened: `@punktfunk/host@0.1.2` was published before it forwarded the field, so every installed
- * library scanner registered without a category. The visible result was Lutris and Heroic sitting in
- * the console nav — which they explicitly opt out of — and their settings unreachable, because the
- * Library section's Game sources surface lists exactly the plugins whose category IS `library`.
- * Nothing logged anything.
+ * instead of rejecting the registration — which means dropping it is SILENT, at three different
+ * layers (an old host, an SDK that predates the field, a typo). A library scanner that loses its
+ * category sits in the console nav, which it opts out of, and its settings become unreachable,
+ * because the Library section's Game sources surface lists exactly the plugins whose category IS
+ * `library`. Nothing else logs it.
  *
- * So this asks the host what it actually recorded. Same spirit as the store-claim degradation
- * warning in `defineLibraryPlugin`: turn a silent no-op into one line that names the fix. Purely
- * advisory — a failed read, or a host too old to report the field, must never keep a working plugin
- * from starting.
+ * So this asks the host what it actually recorded: a silent no-op becomes one line that names the
+ * fix. Purely advisory — a failed read, or a host too old to report the field, must never keep a
+ * working plugin from starting.
  */
 const verifyCategoryLanded = (
 	category: string | undefined,

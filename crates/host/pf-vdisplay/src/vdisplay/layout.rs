@@ -53,8 +53,8 @@ fn pin_of(m: &Member, layout: &Layout) -> Option<Placement> {
         .map(|p| Placement { x: p.x, y: p.y })
 }
 
-/// One [`Placement`] per member, same order. Shared by the state readout and
-/// (KWin) the per-backend position apply.
+/// One [`Placement`] per member, same order. Shared by the state readout and the
+/// position apply (the Linux pool, the Windows group layout).
 pub fn arrange(members: &[Member], layout: &Layout) -> Vec<Placement> {
     match layout.mode {
         LayoutMode::AutoRow => (0..members.len())
@@ -73,7 +73,7 @@ pub fn arrange(members: &[Member], layout: &Layout) -> Vec<Placement> {
 /// shifts when a pinned sibling arrives later in acquire order. Nothing here
 /// re-applies: `registry::position_for_new` takes only `.last()` and moves the
 /// new display. The registry must re-apply the whole group on a Manual
-/// membership change (`windows/manager.rs` `arrange_slots` already does).
+/// membership change (`windows/manager.rs` `apply_group_layout` already does).
 /// Seeding from preceding pins only restores incremental stability by
 /// bringing the overlap back — the wrong trade.
 fn arrange_manual(members: &[Member], layout: &Layout) -> Vec<Placement> {
@@ -292,7 +292,7 @@ mod tests {
     /// No height, so "share space" is x-only.
     #[test]
     fn no_unpinned_member_overlaps_a_sibling_under_any_layout() {
-        // Numerical Recipes LCG — reproducible, no crate.
+        // Knuth MMIX LCG — reproducible, no crate.
         let mut rng: u64 = 0x0bad_f00d_dead_beef;
         let mut next = || {
             rng = rng

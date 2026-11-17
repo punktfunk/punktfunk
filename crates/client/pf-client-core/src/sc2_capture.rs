@@ -215,7 +215,8 @@ const DECK_IMU_ON: [u8; 65] = {
 };
 
 /// Turn a Deck's motion sensors on, through a second handle on the SDL slot's node. SDL's Deck
-/// driver never writes this setting. False when the node will not open or refuses the write.
+/// driver never writes this setting (checked on SDL 3.4.18). False when the node will not open
+/// or refuses the write.
 pub(crate) fn deck_imu_on(path: &str) -> bool {
     Dev::open(path).is_some_and(|dev| dev.send_feature(&DECK_IMU_ON) >= 0)
 }

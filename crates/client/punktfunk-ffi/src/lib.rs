@@ -2,20 +2,22 @@
 //! (`cargo run -p gen-headers`). Pin with [`punktfunk_abi_version`] and `struct_size`.
 //!
 //! Opaque handles only. Cross-boundary structs are `#[repr(C)]`; buffers are
-//! pointer + length. Every handle from `*_new` / `*_pair` must reach
-//! [`punktfunk_session_free`]. A [`PunktfunkFrame`]'s `data` is borrowed until
+//! pointer + length. Every handle must reach its own release call: its `*_free`
+//! ([`punktfunk_session_free`] for a loopback pair), `punktfunk_connection_close` or
+//! `punktfunk_demo_host_stop`. A [`PunktfunkFrame`]'s `data` is borrowed until
 //! the next `poll`/`free` on that session — copy it out.
 //!
-//! Callers own every pointer. Handles stay valid until `*_free` (`as_mut` /
+//! Callers own every pointer. Handles stay valid until released (`as_mut` /
 //! `as_ref` turn null into `None`). Out-params are writable slots; C strings
-//! are NUL-terminated or null (`opt_cstr`). Nothing is retained past the call.
+//! are NUL-terminated or null (`opt_cstr`). Nothing is retained past the call, except the
+//! callbacks of `punktfunk_set_log_callback` and `punktfunk_connection_set_au_memory`.
 //!
 //! Panics never cross: [`guard`] maps them to `PunktfunkStatus::Panic`;
 //! [`guard_void`] swallows teardown panics. Bare entry points cannot panic.
 //! Evidence: `include/punktfunk_core.h`.
 //!
-//! Everything behind the surface is `punktfunk-core`. This crate holds only the
-//! boundary, so core's Rust consumers never build the cdylib or staticlib.
+//! Behind the surface are `punktfunk-core`, `pf-bitstream`, `pf-l10n` and the demo host. The
+//! cdylib and staticlib are built here, so core's Rust consumers never build them.
 
 // An `unsafe fn` body still scopes each unsafe op in a block with its own proof.
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -244,7 +246,7 @@ impl log::Log for CallbackLogger {
 }
 
 /// Route core `log`/`tracing` lines to `cb`. `max_level` 1..=5 (error…trace), 0 = off.
-/// 3 (info) is the usual default; debug/trace is per-packet. `cb == NULL` detaches.
+/// Trace adds per-packet transport lines. `cb == NULL` detaches.
 /// `Unsupported` if another `log` backend is already installed. Idempotent.
 ///
 /// Detaching or replacing stops new callbacks but does not wait for ones already running.

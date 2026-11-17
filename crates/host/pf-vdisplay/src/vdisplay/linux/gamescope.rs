@@ -7,7 +7,7 @@
 //! the process. Managed sessions live at host lifetime ([`Takeover`]); restore is this
 //! module's job.
 //!
-//! Needs PipeWire + libei in gamescope, and a usable Vulkan device. Input: `inject/libei.rs`.
+//! Needs PipeWire + libei in gamescope, and a usable Vulkan device. Input: `inject/linux/libei.rs`.
 //! Takeover: `design/gamemode-and-dedicated-sessions.md`.
 
 use super::{DisplayOwnership, Mode, VirtualDisplay, VirtualOutput};
@@ -380,7 +380,7 @@ impl GamescopeDisplay {
         out.refresh_mhz = Some(session_mhz(mode));
         out.ownership = DisplayOwnership::Spawned;
         // From the same log `wait_for_node` just read. `None` only if gamescope changed the line;
-        // every discovery then falls back to unscoped, which is what it did before seats.
+        // every discovery then falls back to unscoped.
         out.seat = wayland_name_from_log(&log);
         out.pid = Some(pid);
         self.join_name = out.seat.clone();
@@ -443,7 +443,7 @@ fn attach_output(node_id: u32, mode: Mode, own: bool) -> VirtualOutput {
 }
 
 /// Host-managed session at the client's mode, state in [`Takeover::managed`]. Reuse if mode and
-/// node are live; otherwise relaunch — gamescope cannot change output mode live.
+/// node are live; otherwise relaunch — a managed session is never resized in place.
 fn create_managed_session(client: &str, mode: Mode, hdr: bool) -> Result<VirtualOutput> {
     // Not a bare clear: cancel also waits out a restore that already popped (`keep_alive=off` is
     // 0 s debounce).
@@ -509,8 +509,9 @@ fn create_managed_session(client: &str, mode: Mode, hdr: bool) -> Result<Virtual
     // Desktop Steam also holds the instance; SESSION_UNIT's own Steam is exempt via cgroup.
     free_desktop_steam()?;
     // Decide under the lock, act outside it. Holding the takeover lock across `launch_session`
-    // (~90 s) pins shutdown restore behind `native.rs`'s 20 s grace. [`Launching`] is the
-    // exclusion: taken before the decision so a second connect re-tests after the first records.
+    // (~90 s) pins shutdown restore behind `native.rs`'s `SHUTDOWN_RESTORE_GRACE`. [`Launching`]
+    // is the exclusion: taken before the decision so a second connect re-tests after the first
+    // records.
     let _launching = Launching::begin();
     let same_mode = {
         let mut t = takeover();
@@ -723,8 +724,8 @@ fn create_managed_session_steamos(mode: Mode, hdr: bool) -> Result<VirtualOutput
     Ok(managed_output(node_id, mode))
 }
 
-/// The target restart's budget: Steam's clean stop, then the headless shim's 40 s wait for
-/// gamescope's ready line. A restart past it is a failed launch.
+/// The target restart's budget: Steam's clean stop, then the headless shim's wait for
+/// gamescope's ready line (`HEADLESS_READY_SECS`). A restart past it is a failed launch.
 const STEAMOS_RESTART_BUDGET: Duration = Duration::from_secs(60);
 
 /// How long a restarted target has to publish its node.
@@ -1021,8 +1022,8 @@ fn kill_unit(unit: &str) {
         }
     }
     // All three budgeted: this runs on disconnect restore and on shutdown, where the whole
-    // sequence has ~20 s before `native.rs` gives up. Three unbounded `systemctl` calls against
-    // a busy user manager spend that budget on their own.
+    // sequence has `SHUTDOWN_RESTORE_GRACE` (`native.rs`) before it gives up. Three unbounded
+    // `systemctl` calls against a busy user manager spend that budget on their own.
     let _ = crate::proc::status_within(
         Command::new("systemctl").args(["--user", "kill", "--signal=SIGKILL", unit]),
         UNIT_VERB_BUDGET,
@@ -1364,8 +1365,8 @@ fn stop_session(unit_name: &str) {
     }
 }
 
-/// `$XDG_RUNTIME_DIR`, never world-writable `/tmp`: a second local user must not plant a rogue
-/// EIS path. Reader also rejects a symlink.
+/// The stored session's `$XDG_RUNTIME_DIR`, not world-writable `/tmp` (the fallback only when it
+/// has none): a second local user must not plant a rogue EIS path. Reader also rejects a symlink.
 pub fn ei_socket_file() -> std::path::PathBuf {
     // The shared `pf_paths::gamescope_ei_socket_file` contract: the libei injector reads it
     // from the same stored session.

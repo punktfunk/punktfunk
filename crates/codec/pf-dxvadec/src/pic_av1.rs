@@ -322,7 +322,7 @@ fn refs(
 
     // Seven reference NAMES: slot, coded size, global motion (module docs).
     // `plan.refs` is indexed by NAME; a hole keeps `UNUSED_INDEX`. Compacting
-    // first renamed every name after the first loss.
+    // would rename every name after the first hole.
     let mut frame_refs = [PicEntryAv1::zeroed(); REFS_PER_FRAME];
     let inter = !matches!(
         h.frame_type,
@@ -1538,7 +1538,7 @@ mod tests {
                     );
                 }
 
-                // `reference_frame_update` is bit 22 of the coding flags — read back
+                // `reference_frame_update` is bit 26 of the coding flags — read back
                 // through `pack` rather than spelled as a magic mask.
                 let coding = pp.coding;
                 let on = CodingFlagsAv1 {

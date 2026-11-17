@@ -121,7 +121,8 @@ pub fn native_evidence(rung: NativeRung, wire: u8) -> RungEvidence {
              Intel Arc (2026-08-07), after fixing a decode target that aliased a reference \
              surface on 268 of 274 frames - two vendors, no soak (M7)",
         ),
-        // Keep `verified` false: flipping it would move `auto` off Vulkan Video on every Linux AMD/Intel client.
+        // Keep `verified` false: flipping it would put VAAPI ahead of Vulkan Video on every GPU
+        // that is not NVIDIA or AMD (`prefer_vulkan_first`).
         (NativeRung::Vaapi, _) => (
             false,
             "7 legs bit-identical to libavcodec on RDNA3 (Mesa 26.0.3, 2026-08-08) and Intel \
@@ -270,10 +271,10 @@ pub(crate) fn resolve_decoder_pref(env: Option<&str>, pref: &str) -> String {
 /// one we cannot. Constants, not probes: asked before a device exists.
 /// Device facts are [`decodable_codecs_for`].
 ///
-/// AV1 here is a decoder existing, not one that can keep up — gated in
-/// [`decodable_codecs_for`]. HEVC is hardware-only and still advertised:
-/// refusing it up front would cost every working box to protect the few
-/// that later fail. Exhaustion is [`last_rung_verdict`].
+/// Both AV1 and HEVC are listed here with no device in view: AV1 is a decoder
+/// existing, not one that can keep up, and HEVC has no CPU rung.
+/// [`decodable_codecs_for`] drops each where no hardware decodes it. Exhaustion
+/// is [`last_rung_verdict`].
 pub fn decodable_codecs() -> u8 {
     // Native Vulkan's three codecs union the CPU rung's. Written as a union so
     // removing a rung's codec leg drops the advertisement rather than keeping it.
@@ -348,7 +349,7 @@ pub fn av1_advertised(vk: Option<&VulkanDecodeDevice>) -> bool {
 /// Vulkan only: VAAPI/DXVA/CPU are 4:2:0. Advertising 4:4:4 without a Vulkan
 /// 4:4:4 profile costs the whole codec (host grants 4:4:4 only on HEVC; no CPU HEVC).
 /// Both 8- and 10-bit profiles are required: HDR may resolve 4:4:4 10-bit.
-/// Not used for `VIDEO_CAP_10BIT`: all three hardware rungs decode 10-bit 4:2:0.
+/// Not used for `VIDEO_CAP_10BIT`: that is [`ten_bit_decodable`]'s question.
 pub fn hevc_444_hardware_decodable(vk: Option<&VulkanDecodeDevice>) -> bool {
     #[cfg(any(target_os = "linux", windows))]
     {
@@ -369,7 +370,7 @@ pub fn hevc_444_hardware_decodable(vk: Option<&VulkanDecodeDevice>) -> bool {
 const CHROMA_444: u8 = 3;
 
 /// Can this client present a PQ stream — the promise `VIDEO_CAP_HDR` makes.
-/// Decode is not the question (every hardware rung does 10-bit 4:2:0).
+/// Decode depth is [`ten_bit_decodable`]'s question, not this one's.
 ///
 /// On the Vulkan backend D3D11VA is in every ladder and shows PQ as HDR10 pass-through
 /// or the video processor's PQ→sRGB tonemap. That tonemap is unvalidated: the

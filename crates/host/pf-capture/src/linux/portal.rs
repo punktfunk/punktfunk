@@ -2,10 +2,9 @@
 //! shared portal runtime, and GNOME's BT.2100 colour-mode probe.
 //!
 //! Nothing here is per-frame. The handshake runs once; the thread then parks until
-//! `PortalSession`'s `Drop` (parent module) fires `quit_rx`, closes the portal
-//! session and signals done. ashpd's `Session` has no `Drop`, and the zbus
-//! connection is process-global (`pf_portal`), so only `Session.Close`
-//! ends the compositor's cast.
+//! `PortalSession`'s `Drop` (`pipewire/capturer.rs`) fires `quit_rx`, closes the portal
+//! session and signals done. ashpd's `Session` has no `Drop`, so the thread ends the
+//! compositor's cast with `Session.Close`.
 //!
 //! HDR offer is scoped to `PUNKTFUNK_CAPTURE_MONITOR` when set; unpinned it is
 //! "any head in BT.2100". See `design/per-monitor-portal-capture.md`. The probe
@@ -125,8 +124,7 @@ fn hdr_offer_for(heads: &[(&str, bool)], pinned: Option<&str>) -> bool {
 type SetupTx = std::sync::mpsc::Sender<Result<(OwnedFd, u32), String>>;
 
 /// Handshake under [`HANDSHAKE_BUDGET`], hand the fd and node over, park
-/// on `quit_rx`, then `Session.Close`. ashpd `Session` has no `Drop` and the connection is
-/// process-global, so nothing else ends the cast.
+/// on `quit_rx`, then `Session.Close` (ashpd's `Session` has no `Drop`).
 ///
 /// `anchored` selects sources on a RemoteDesktop session (KWin/GNOME), so the single
 /// `start` grant — the `kde-authorized` headless bypass, same as libei — covers capture.
@@ -301,8 +299,7 @@ async fn cast<S: ashpd::desktop::screencast::IsScreencastSession>(
 }
 
 /// Run `steps` under the deadline, hand the result over, then hold `session` until
-/// `quit_rx` and close it. The zbus connection is process-global, so only that Close ends
-/// the compositor's cast.
+/// `quit_rx` and close it.
 async fn serve<S: ashpd::desktop::SessionPortal>(
     deadline: tokio::time::Instant,
     session: &ashpd::desktop::Session<S>,

@@ -1,11 +1,11 @@
 // The Steam Controller 2 read OUTSIDE a session, so the gamepad UI can be navigated with it.
 //
-// iOS only, and BLE only. macOS surfaces an SC2 to GameController on its own (`GamepadManager`'s
-// shadow suppression exists for exactly that), so the console launcher is already navigable
-// there; iOS surfaces nothing for it, which leaves an iPad user unable to reach the launcher
-// with the only controller in the room. `Sc2Capture` cannot cover it — that one is built from a
-// live `PunktfunkConnection` at stream start, so it does not exist until the session it is
-// meant to launch is already running.
+// iOS and visionOS only, and BLE only. macOS surfaces an SC2 to GameController on its own
+// (`GamepadManager`'s shadow suppression exists for exactly that), so the console launcher is
+// already navigable there; iOS surfaces nothing for it, which leaves an iPad user unable to reach
+// the launcher with the only controller in the room. `Sc2Capture` cannot cover it — that one is
+// built from a live `PunktfunkConnection` at stream start, so it does not exist until the session
+// it is meant to launch is already running.
 //
 // One link, one pad, no wire: state reports are parsed to `Sc2Device.State` and kept in
 // `snapshot` for `GamepadMenuInput`'s 60 Hz poll. Nothing here claims a wire slot, forwards a

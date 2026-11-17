@@ -7,19 +7,19 @@
  * is type-checked against Windows. A field at the wrong offset is not a compile
  * error, it is a driver reading a reference index where a quantiser should be.
  *
- * AV1 is the first codec here whose declaration we can measure against the
- * AUTHORITATIVE header rather than against libavcodec's mirror: `DXVA_PicParams_AV1`
- * ships in the Windows SDK's own `dxva.h` (present in 10.0.26100.0 and 10.0.28000.0
- * on the .173 box). That is the declaration the driver was compiled against, so it
- * outranks any second-hand copy.
+ * The AV1 declarations are measured against the AUTHORITATIVE header rather than
+ * against libavcodec's mirror: `DXVA_PicParams_AV1` ships in the Windows SDK's own
+ * `dxva.h` (present in 10.0.26100.0 and 10.0.28000.0). That is the declaration the
+ * driver was compiled against, so it outranks any second-hand copy.
  *
  * Run it on a Windows box with the SDK (no FFmpeg, no GPU work, no stream):
  *
  *   cmd /c ""C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" ^
  *     && cl /nologo /W3 layout-probe-av1.c /Fe:probe-av1.exe && probe-av1.exe"
  *
- * Every number it prints is pinned as a `const` assertion in `src/dxva_av1.rs`, so a
- * transcription mistake is a compile error. The bit-field section exists because C
+ * Most sizes and offsets it prints are pinned as `const` assertions in `src/dxva_av1.rs`, so a
+ * transcription mistake is a compile error; the bit-field results are pinned by the
+ * `packed_words_match_what_msvc_measured` test. The bit-field section exists because C
  * bit-field allocation order is ABI-defined rather than standardised: it PROVES
  * MSVC's least-significant-bit-first order rather than assuming it.
  */

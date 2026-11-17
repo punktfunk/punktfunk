@@ -691,7 +691,7 @@ fn quantization(
     let q = &h.quantization_params;
     let lf = &h.loop_filter_params;
     pic_params.base_qindex = narrow("base_qindex", q.base_q_idx)?;
-    // `su(1+6)`: parser cannot emit outside -63..=63, so this cannot truncate.
+    // `su(1+6)`: parser cannot emit outside -64..=63, so this cannot truncate.
     pic_params.y_dc_delta_q = q.delta_q_y_dc as i8;
     pic_params.u_dc_delta_q = q.delta_q_u_dc as i8;
     pic_params.u_ac_delta_q = q.delta_q_u_ac as i8;
@@ -725,7 +725,7 @@ fn loop_restoration(h: &ParsedFrameHeaderAv1) -> u16 {
     let lr = &h.loop_restoration_params;
     LoopRestorationFieldsAV1 {
         // Parser `FrameRestorationType` is the spec's; no remap.
-        // [`LoopRestorationFieldsAV1`] documents libavcodec's coded-`lr_type` swap.
+        // [`LoopRestorationFieldsAV1`] says why the coded `lr_type` is wrong here.
         yframe_restoration_type: lr.frame_restoration_type[0] as u8,
         cbframe_restoration_type: lr.frame_restoration_type[1] as u8,
         crframe_restoration_type: lr.frame_restoration_type[2] as u8,

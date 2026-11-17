@@ -4,8 +4,8 @@
 // nothing here competes with that. The problem this file solves is the other half of the time: the
 // instant `GamepadManager.active` goes nil (the pad slept, its battery died, it was unplugged, or
 // `gamepadUIMode == "always"` put the console UI up with no pad at all) there is no element left to
-// ask, and every legend fell back to the generic letter glyphs — which read as an Xbox pad. A
-// DualSense user watched their ✕/◯ legends turn into A/B the moment the controller dozed off.
+// ask, and every legend would fall back to the generic letter glyphs — which read as an Xbox
+// pad, so a DualSense's ✕/◯ legends would turn into A/B.
 //
 // So: `GamepadManager` remembers the KIND of the last controller that was actually attached
 // (`DefaultsKey.lastGamepadKind`, never cleared on disconnect) and the legends resolve through this

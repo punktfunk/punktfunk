@@ -1,19 +1,19 @@
 #!/bin/sh
-# Regenerate the software rung's colour fixtures (`video_software.rs`'s M8 exit test).
+# Regenerate the software rung's colour fixtures, which the `video_software.rs` test
+# `software_h264_reproduces_the_golden_bars_in_both_ranges` decodes.
 #
 # Three single-IDR H.264 streams of the same NINE colour bars, whose VUIs differ ONLY in
 # matrix coefficients and range. That is the point: the pictures are DIFFERENT code points
 # that must converge on the SAME RGB once the signalled matrix and range are honoured —
-# which is what makes the test able to fail against a hardcoded matrix (the swscale BT.601
-# default the old libav rung needed correction code for).
+# which is what makes the test able to fail against a hardcoded matrix.
 #
 # ⚠ The NINTH bar (192,128,64) is load-bearing and must not be dropped for tidiness. The
 # eight before it are fully saturated primaries/secondaries plus black and white, and on
 # THOSE a limited↔full range mistake only pushes values outside [0,1] — where the shader
 # clamps — so the whole fixture set decodes with max error 0 under the WRONG range and the
-# range axis could not fail. Measured on this fixture: (192,128,64) gives max error 13
-# under the wrong range, while a 50% grey gives only 3, which is inside the test's ±4
-# tolerance. So it has to be a non-neutral mid-tone, not just a mid-tone.
+# range axis could not fail. On this fixture (192,128,64) is off by about 10 under the wrong
+# range, outside the test's ±4 tolerance, while a 50% grey is off by under 4, inside it.
+# So it has to be a non-neutral mid-tone, not just a mid-tone.
 #
 # Not lossless: x264 refuses qp 0 outside High 4:4:4 Predictive, which openh264 cannot
 # decode. qp 1 over flat bars is exact to within a code point or two at the bar centres

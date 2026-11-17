@@ -2,9 +2,9 @@
 //
 // WebCrypto produces and consumes raw `r || s`, 32 bytes each. Everything on the host side —
 // aws-lc-rs, rcgen, X.509 — speaks ASN.1 DER. Neither will take the other's, so a device
-// credential converts on the way out. This is the same routine the host's own tests pin against
-// its Rust twin; one of the two being subtly wrong would surface only as a signature nobody
-// accepts, with no other symptom.
+// credential converts on the way out. `credential.test.ts` pins the round trip and the sign-padding
+// cases; a subtly wrong routine would surface only as a signature nobody accepts, with no other
+// symptom.
 //
 // Platform-neutral: `Uint8Array` in, `Uint8Array` out, nothing named that a browser lacks.
 

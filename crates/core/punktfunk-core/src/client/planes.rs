@@ -127,8 +127,9 @@ const RUMBLE_QUEUE: usize = 16;
 /// The v2 seq is consumed by the datagram reorder gate and is not forwarded.
 pub(crate) type RawRumble = (u16, u16, u16, Option<u16>);
 
-/// HID-output (DualSense lightbar / LEDs / triggers). Overflow drops newest;
-/// the host re-sends on the next feedback change.
+/// HID output (DualSense lightbar / LEDs / triggers, raw passthrough
+/// reports). Overflow drops newest; the host re-sends on the next feedback
+/// change.
 const HIDOUT_QUEUE: usize = 32;
 
 /// Pad-audio (`0xD1` voice-coil + speaker), all pads on one queue. Same 64
@@ -226,14 +227,15 @@ const CURSOR_STATE_QUEUE: usize = 8;
 const ACCESS_QUEUE: usize = 8;
 
 /// One packet from the host audio datagram: Opus off `0xC9`/`0xD2`
-/// (48 kHz, 5 ms), lossless PCM off `0xD3` at the negotiated rate/depth
-/// and one rung of [`crate::audio::pcm::FRAME_US_LADDER`], or one whole
-/// AC-3 / E-AC-3 access unit off `0xD4` ([`crate::audio::bitstream`]).
+/// (48 kHz, 5 ms), lossless PCM off `0xD3` (or rejoined from `0xD5` parts)
+/// at the negotiated rate/depth and one rung of
+/// [`crate::audio::pcm::FRAME_US_LADDER`], or one whole AC-3 / E-AC-3
+/// access unit off `0xD4` ([`crate::audio::bitstream`]).
 ///
 /// The planes share this type because they share `seq` / `pts_ns`. They do
 /// not share how `data` is read — the session
 /// [`NativeClient::audio_codec`](crate::client::NativeClient::audio_codec)
-/// says which, once, for the whole session.
+/// says which, until a packet's `new_format` moves it.
 #[derive(Clone, Debug)]
 pub struct AudioPacket {
     /// One per packet: a bitstream unit has one seq however many parts carried it.

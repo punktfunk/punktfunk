@@ -155,7 +155,7 @@ describe("isCrossSiteMutation", () => {
 		});
 
 	test("a plugin-origin POST with Origin and no Fetch-Site is refused", () => {
-		// The hole: Fetch-Site-only allowed this, and Lax attaches the cookie.
+		// Fetch-Site alone would allow this, and Lax attaches the cookie.
 		expect(post({ origin: PLUGIN })).toBe(true);
 	});
 

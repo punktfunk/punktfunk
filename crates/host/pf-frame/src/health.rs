@@ -91,7 +91,7 @@ pub struct EncoderTelemetry {
     /// The newest access unit re-encodes the frame the one before it carried: a keyframe over
     /// a still desktop. The loop's own tick cannot tell, it races the driver's next frame.
     pub au_repeat: bool,
-    /// The driver's encoder state word (`pf_driver_proto::encode::ENCODER_*`).
+    /// The driver's encoder state word (`pf_driver_proto::encode::au::ENCODER_*`).
     pub state: u32,
     /// The backend the driver opened, for the status surface.
     pub backend: &'static str,
@@ -118,9 +118,9 @@ pub struct Snapshot {
     pub now: Instant,
     /// [`EncoderTelemetry::drain_heartbeat`]. Stale = the worker is starved or wedged.
     pub drain_heartbeat: Option<Instant>,
-    /// When the driver's pool last took a composed frame, and its counter
-    /// ([`EncoderTelemetry::source_seq`]).
+    /// The last source frame: the IDD-push ladder feeds the instant the drain clock last moved.
     pub last_source: Option<Instant>,
+    /// The source counter: [`EncoderTelemetry::drain_progress`], never its raw `source_seq`.
     pub source_seq: u64,
     /// [`EncoderTelemetry::last_au`]; `None` before the driver's encoder is open.
     pub last_au: Option<Instant>,
@@ -148,8 +148,8 @@ pub enum StallClass {
     Encoder,
     /// Heartbeat fresh, source stopped, a canary answered by nothing → one presentation reset.
     Presentation,
-    /// An encoder stall that two resets did not hold (detached ≥ 2), or the WUDFHost is gone →
-    /// cycle the adapter and its host process.
+    /// An encoder stall that two resets did not hold (detached ≥ 2) → cycle the adapter and its
+    /// host process. A gone WUDFHost skips the classifier and starts at the same rung.
     Driver,
 }
 
@@ -160,9 +160,10 @@ pub enum HealthClass {
     /// No source frames and no activity evidence — DWM composed nothing. No recovery, ever.
     Idle,
     /// Source missed several intervals with activity evidence, below the stall floor — or past it
-    /// on WEAK evidence only. The verdict asks for a canary here.
+    /// on WEAK evidence only. The verdict asks for a canary unless the evidence is already strong.
     Suspect,
-    /// Past the stall floor on strong evidence: the coordinator's first actuator.
+    /// Past the stall floor on a stale heartbeat, a silent encoder behind a moving source, or
+    /// strong evidence. The coordinator's first actuator.
     Stalled(StallClass),
     /// After a stall: source frames are back but fewer than the recovery count have landed.
     Recovering,
@@ -171,9 +172,9 @@ pub enum HealthClass {
     SecureDesktop,
 }
 
-/// Tunables. Frame-relative where the plan says so, with absolute floors anchored to the recorded
-/// field envelope (benign vendor holes run 1.6–10 s; multi-second holes recur every 20–45 s), so the
-/// defaults are the values the plan fixes, not fresh guesses. Tests pin them.
+/// Tunables. Suspicion scales with the frame interval ([`Thresholds::suspect_after`]); the
+/// absolute stall floor sits above the 1.6–10 s benign vendor holes of the field record
+/// (`design/vdisplay-disturbance-immunity.md` §1). Tests pin the defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Thresholds {
     /// The display's frame interval (1 / refresh).
@@ -181,7 +182,7 @@ pub struct Thresholds {
     /// Missed source intervals before suspicion (subject to `suspect_floor`).
     pub suspect_missed_intervals: u32,
     pub suspect_floor: Duration,
-    /// No actuator before this much continuously missed source (WP3b's floor carries over).
+    /// No actuator before this much continuously missed source.
     pub stall_floor: Duration,
     /// A drain heartbeat older than this at stall time names the WORKER class.
     pub heartbeat_stale: Duration,

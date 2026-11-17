@@ -8,7 +8,7 @@
 //!
 //! Three unions are narrower than a word: `loop_filter_info_fields` is `u8`,
 //! `qmatrix_fields` and `loop_restoration_fields` are `u16`. A `u32` packer
-//! overwrites the neighbour (`mode_control_fields` / `wm[0]`).
+//! writes past the field: over `ref_deltas` after the first, `wm[0]` after the last.
 //!
 //! `ref_frame_map` is slot-indexed `VASurfaceID`s; `ref_frame_idx` and `wm` are
 //! name-indexed (`wm[0]` = LAST_FRAME). Drivers take each reference's size from
@@ -200,7 +200,7 @@ impl ModeControlFieldsAV1 {
 
 /// `loop_restoration_fields` — 16 bits. Values are spec `FrameRestorationType`
 /// (NONE 0, WIENER 1, SGRPROJ 2, SWITCHABLE 3), not coded `lr_type`. The parser
-/// already remaps; sending the coded value swaps WIENER and SWITCHABLE.
+/// already remaps; sending the coded value reads every type but NONE as another.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LoopRestorationFieldsAV1 {
     pub yframe_restoration_type: u8,

@@ -7,8 +7,7 @@
 //!
 //! The asserts are not decoration. A wrong offset here is a driver reading a field
 //! from the wrong bytes, which encodes a picture nobody can decode and reports
-//! success. They were generated from `offsetof` on the target's own header
-//! (libva 2.22, `.50`), not written from memory.
+//! success. They come from `offsetof` on libva 2.22's own header, not from memory.
 //!
 //! Bitfield unions are declared as their `u32` `value` half only. libva defines both
 //! arms and the driver reads `value`; naming the bits in Rust would add a second
@@ -42,7 +41,7 @@ pub const VA_ENC_MISC_PARAMETER_TYPE_HRD: u32 = 5;
 /// which is `SEQUENCE | PICTURE` — the driver then ignores every packed header the
 /// app supplies and encodes anyway, reporting success.
 ///
-/// Named apart so the two can never be confused again.
+/// Named apart so the two cannot be confused.
 pub const VA_ENC_PACKED_HEADER_FLAG_SEQUENCE: u32 = 0x0000_0001;
 pub const VA_ENC_PACKED_HEADER_FLAG_PICTURE: u32 = 0x0000_0002;
 pub const VA_ENC_PACKED_HEADER_FLAG_SLICE: u32 = 0x0000_0004;
@@ -68,7 +67,7 @@ pub const VA_ENTRYPOINT_ENC_SLICE: i32 = 6;
 pub const VA_ENTRYPOINT_ENC_SLICE_LP: i32 = 8;
 
 /// Rate-control modes, as `VAConfigAttribRateControl` values. CBR is the only one
-/// both radeonsi and iHD advertise for every profile we open, so it is the default.
+/// both radeonsi and iHD advertise for every profile we open, so the session requires it.
 pub const VA_RC_CBR: u32 = 0x00000002;
 pub const VA_RC_VBR: u32 = 0x00000004;
 
@@ -105,9 +104,9 @@ pub struct VaEncSequenceParameterBufferH264 {
     /// log2_max_mv_len_horizontal:5 | log2_max_mv_len_vertical:5 |
     /// fixed_frame_rate:1 | low_delay_hrd:1 | mvs_over_pic_boundaries:1`.
     ///
-    /// Bit 2 is the one WP1.1 wanted and neither AMF nor Media Foundation can set:
-    /// with it, the host states its reorder bound and the client stops holding
-    /// pictures for a depth the stream never uses.
+    /// Bit 2 (`bitstream_restriction`) lets the host state its reorder bound, so the
+    /// client stops holding pictures for a depth the stream never uses. Neither AMF
+    /// nor Media Foundation can set it.
     pub vui_fields: u32,
     pub aspect_ratio_idc: u8,
     pub sar_width: u32,
@@ -281,8 +280,8 @@ pub struct VaCodedBufferSegment {
     pub va_reserved: [u32; 4],
 }
 
-/// Generated from `offsetof` on libva 2.22's own header, on the box that runs it.
-/// A mismatch is a driver reading the wrong bytes and reporting success.
+/// From `offsetof` on libva 2.22's own header. A mismatch is a driver reading the
+/// wrong bytes and reporting success.
 const _: () = {
     assert!(size_of::<VaEncSequenceParameterBufferH264>() == 1132);
     assert!(offset_of!(VaEncSequenceParameterBufferH264, intra_period) == 4);
@@ -330,7 +329,8 @@ const _: () = {
     assert!(offset_of!(VaEncMiscParameterRateControl, va_reserved) == 44);
     assert!(size_of::<VaEncMiscParameterHrd>() == 24);
     assert!(size_of::<VaEncMiscParameterFrameRate>() == 24);
-    // layout-probe on the 780M: size 28, location 4, size 6, qp delta 8, reserved 12.
+    // `layout-probe.c`, VAEncMiscParameterRIR: size 28, location 4, size 6, qp delta 8,
+    // reserved 12.
     assert!(size_of::<VaEncMiscParameterRir>() == 28);
     assert!(offset_of!(VaEncMiscParameterRir, intra_insert_size) == 6);
     assert!(offset_of!(VaEncMiscParameterRir, qp_delta_for_inserted_intra) == 8);

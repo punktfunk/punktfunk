@@ -31,24 +31,22 @@ Card.displayName = "Card";
 /**
  * The card inset, as ONE utility.
  *
- * It used to be `p-4 sm:p-6`, and that responsive pair is what made every padding override in this
- * codebase unreliable: tailwind-merge resolves conflicts only *within* a variant, so a call-site
- * `pt-6` beat the base `pt-0` and lost to `sm:pt-0` — correct on mobile, zero on desktop. Seven call
- * sites had grown their own compensation for that in five different dialects.
+ * Not a responsive pair like `p-4 sm:p-6`: tailwind-merge resolves conflicts only *within* a
+ * variant, so a call-site `pt-6` would beat a base `pt-0` yet lose to `sm:pt-0` — correct on
+ * mobile, zero on desktop.
  *
  * A single-variant token cannot half-lose. `--spacing-padding-card` is also what @unom/ui's own
- * `Card` uses, so nested cards finally agree on their inset.
+ * `Card` uses, so nested cards agree on their inset.
  */
 const INSET = "p-padding-card";
 
 /**
  * Body/footer padding, minus the top when something already sits above.
  *
- * The old code hard-coded `pt-0` because "a CardHeader supplies the top inset" — an assumption about
- * a SIBLING that nothing enforced. Delete the header (exactly what tabbing a page does, since the
- * tab label replaces the card title) and the top inset silently vanished at ≥640px. Asking the DOM
- * instead of the author makes it self-correcting: first child keeps its inset, later children drop
- * it.
+ * Hard-coding `pt-0` would assume a CardHeader supplies the top inset — an assumption about a
+ * SIBLING that nothing enforces. Delete the header (exactly what tabbing a page does, since the
+ * tab label replaces the card title) and the top inset would vanish. Asking the DOM instead of
+ * the author makes it self-correcting: first child keeps its inset, later children drop it.
  */
 const INSET_AFTER_SIBLING = `${INSET} [&:not(:first-child)]:pt-0`;
 
@@ -95,7 +93,7 @@ CardDescription.displayName = "CardDescription";
  * Do NOT reach for `className="p-0"`: `flush` exists precisely so that intent is expressed as a prop
  * the component honours, rather than as a utility that has to out-argue the one already there.
  *
- * Conversely, you no longer need to ADD top padding when there is no header — that is automatic now.
+ * Conversely, there is no need to ADD top padding when there is no header — that is automatic.
  * If you find yourself writing `pt-*` on a CardContent, the layout is telling you something else is
  * wrong.
  */

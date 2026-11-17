@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // `punktfunk-scripting` — the plugin/script runner AND the `punktfunk-host plugins …` package ops.
 //
-// With NO subcommand it RUNS the runner: discover the operator's scripts + punktfunk-plugin-*
+// With NO subcommand it RUNS the runner: discover the operator's scripts + installed plugin
 // packages and supervise them (see ./runner.ts). SIGINT/SIGTERM interrupt the whole tree
 // structurally, so every plugin's finalizers run before exit (the systemd-stop story). This bare
 // form is what the systemd unit / Windows scheduled task launch — do not change its behavior.
@@ -194,8 +194,7 @@ if (process.argv.includes("--list")) {
 // (our shutdown is the bespoke two-signal one below) — and a bun process whose only pending work
 // is an unresolved promise BUSY-SPINS rather than blocking. With units running there is usually a
 // socket or timer to park on, but in the documented no-op state (no scripts, no plugins) there is
-// nothing at all: field report 2026-07-25 had it pinning a full core indefinitely, `strace`
-// showing a bare `clock_gettime` loop and nothing else. One idle handle is the whole fix.
+// nothing at all, and the process would pin a full core. One idle handle prevents that.
 const keepAlive = setInterval(() => {}, 2 ** 31 - 1);
 
 // Follow the host's REAL mgmt port before anything dials it. Plugins run in this process and

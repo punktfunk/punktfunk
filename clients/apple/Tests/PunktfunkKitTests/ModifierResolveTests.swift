@@ -6,8 +6,8 @@ import XCTest
 /// Pins the macOS flagsChanged → modifier-VK resolution (InputCapture.resolveModifier).
 /// Modifier keys arrive only as flagsChanged, which carries no down-vs-up: the changed key
 /// is the event's keyCode, and the direction is recovered from the flag bits — with a
-/// held-state fallback for keyboards that omit the device-dependent L/R bits (the gap that
-/// used to silently drop Control when the transition was diffed from those bits alone).
+/// held-state fallback for keyboards that omit the device-dependent L/R bits (diffing those
+/// bits alone would silently drop Control).
 final class ModifierResolveTests: XCTestCase {
     /// Resolve with a fixed already-held answer for the fallback path.
     private func resolve(

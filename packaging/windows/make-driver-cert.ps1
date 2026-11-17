@@ -9,9 +9,9 @@
   Built on the .NET CertificateRequest API rather than New-SelfSignedCertificate, for two reasons:
     * No key container is involved, so this works over SSH. New-SelfSignedCertificate fails with
       NTE_PERM 0x80090010 on a network logon because it wants the user's key container.
-    * The extension set is explicit, so it matches byte-for-byte what the drivers have always been
-      signed with (verified against the certs on this box): KeyUsage=DigitalSignature (critical),
-      EKU=codeSigning (non-critical), SubjectKeyIdentifier, and NO basicConstraints.
+    * The extension set is explicit, so it matches the driver cert already shipped:
+      KeyUsage=DigitalSignature (critical), EKU=codeSigning (non-critical),
+      SubjectKeyIdentifier, and NO basicConstraints.
 
   The key exists only in memory and in the .pfx this writes. It is never added to a certificate
   store, so there is nothing to clean up afterwards except the output folder.
@@ -49,9 +49,9 @@ if (-not $OutDir) {
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # -- 1. key + self-signed cert, in memory ------------------------------------------------------
-# RSA 3072 / SHA-256. The drivers were previously signed with 2048; nothing interoperates with this
-# cert except our own installer (we are our own trust anchor), so there is no compatibility reason
-# to stay at 2048 - and the signtool self-test below proves 3072 is consumable.
+# RSA 3072 / SHA-256. Nothing interoperates with this cert except our own installer (we are our
+# own trust anchor), so there is no compatibility reason for a smaller key - and the signtool
+# self-test below proves 3072 is consumable.
 $rsa = [System.Security.Cryptography.RSA]::Create(3072)
 $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
     $subject, $rsa,

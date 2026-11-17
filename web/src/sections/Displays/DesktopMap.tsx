@@ -5,8 +5,9 @@
 // screen arranges it.
 //
 // Positions come from the host in DESKTOP pixels and are rendered as percentages of the
-// bounding box, so the map is responsive with no measurement. Only dragging needs the
-// container's real rect, and it reads it at drag time.
+// bounding box, so the boxes scale with no per-box measurement. The container's width is
+// measured only to tell whether the smallest box stays readable; a drag reads its rect at
+// drag time.
 import { Monitor, Settings2 } from "lucide-react";
 import {
 	type FC,
@@ -62,7 +63,7 @@ export function toBoxes(
 		dimMonitors?: boolean;
 		/** Monitors kept lit through a stream that turns the others off. */
 		keepLit?: readonly string[];
-		/** Fingerprints with a stored overlay (§6.2) — their boxes carry a marker. */
+		/** Device names with a stored overlay (§6.2) — their boxes carry a marker. */
 		overlaid?: readonly string[];
 	} = {},
 ): MapBox[] {
@@ -92,7 +93,8 @@ export function toBoxes(
 	}
 	// Each group reports positions in its own space, from (0, 0). A group that would land on
 	// something drawn moves right of it all: a separate desktop past a gap, an extension flush.
-	// Only the live group that takes the screen stays over the monitors: that overlap is the point.
+	// Only one group stays over the monitors, the first that takes the screen (live groups first):
+	// that overlap is the point.
 	const groups = new Map<number, ApiDisplayInfo[]>();
 	for (const d of displays)
 		groups.set(d.group, [...(groups.get(d.group) ?? []), d]);
@@ -148,9 +150,10 @@ export function toBoxes(
 }
 
 /**
- * Where the next device's screen lands under `topology` (concrete, never `auto`): beside the
- * monitors, or over the main one. Sized like the main monitor — the device's own mode is not known
- * until it connects. None while a monitor is mirrored: that monitor is the screen.
+ * Where the next device's screen lands under `topology`: beside the monitors, or over the main
+ * one. Sized like the main monitor — the device's own mode is not known until it connects. None
+ * while a monitor is mirrored (that monitor is the screen) and for an unresolved `auto` while a
+ * monitor exists.
  */
 export function ghostBox(
 	monitors: readonly ApiMonitorInfo[],
@@ -383,7 +386,7 @@ export const DesktopMap: FC<{
 										: "border-border bg-card",
 								// A streamed screen sits ON the desktop, so it draws over the heads it
 								// covers — under `primary` and `exclusive` it shares their origin, and
-								// relying on source order left its name hidden under a monitor's box.
+								// source order alone would hide its name under a monitor's box.
 								b.kind !== "monitor" && "z-[1]",
 								b.dimmed && "opacity-40",
 								b.draggable &&
@@ -447,9 +450,8 @@ export function stateLabel(
 		case "pinned":
 			return m.display_state_kept_until();
 		case "lingering":
-			// The countdown is the reason this box is still on the map, so it rides the chip
-			// rather than being dropped with the list that used to carry it. Rounded up: "0 s"
-			// on a display that has not gone yet reads as a bug.
+			// The countdown is the reason this box is still on the map, so it rides the chip.
+			// Rounded up: "0 s" on a display that has not gone yet reads as a bug.
 			return expiresInMs == null
 				? m.display_state_kept()
 				: m.display_state_kept_for({ seconds: Math.ceil(expiresInMs / 1000) });

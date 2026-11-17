@@ -3,8 +3,9 @@
 //! Owns the entry table ([`EncodeApi`]), the bitstream lock guard, codec GUIDs,
 //! slice / sub-frame / split arbitration, the process-lifetime bitrate-ceiling
 //! cache, range-RFI policy, and the low-latency `NV_ENC_CONFIG` author. Library
-//! load, device bind, surface register, and Windows async retrieve stay in those
-//! backends. Sibling of [`super::nvenc_status`].
+//! load, device bind, surface register, and the retrieve thread's wait stay in those
+//! backends; the session they share is [`super::nvenc_session`]. Sibling of
+//! [`super::nvenc_status`].
 //!
 //! Union reads, borrows, and bitfield setters sit in their own `unsafe` blocks
 //! and name the codec arm they rely on. Plain union-arm writes are safe by
@@ -383,8 +384,8 @@ pub fn preset_guid(preset: u8) -> nv::GUID {
 
 /// H.264/HEVC slice count: `PUNKTFUNK_NVENC_SLICES` (1..=32; 1 = single-slice
 /// escape) else `default_slices`. AV1 is always 1 (tiles, not slices). Shared by
-/// [`apply_low_latency_config`] and the Linux chunked-poll arm so they cannot
-/// disagree. A client that never advertised `VIDEO_CAP_MULTI_SLICE` stays at 1.
+/// [`apply_low_latency_config`] and the chunked-poll arm so they cannot disagree.
+/// Without the knob, a client that never advertised `VIDEO_CAP_MULTI_SLICE` stays at 1.
 pub fn resolve_slices(codec: Codec, default_slices: u32) -> u32 {
     if !matches!(codec, Codec::H264 | Codec::H265) {
         return 1;
@@ -621,8 +622,7 @@ mod split_subframe_tests {
     }
 }
 
-// Gated to both backends: `nvenc_core` also builds with neither, and an
-// ungated item is the item-level `dead_code` trap (see `subframe_env_forced`).
+// `lib.rs` already builds this module only on Linux and Windows; the item gates repeat it.
 #[cfg(any(target_os = "linux", windows))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArbAction {
@@ -649,8 +649,7 @@ enum ArbState {
 /// changed `splitEncodeMode` with `resetEncoder=0` and no IDR, so both arms
 /// can be tried on the wire.
 ///
-/// Measure, do not model: a hard-coded per-architecture constant is how the
-/// previous rule went wrong (one 10-bit datapoint became a fleet veto).
+/// Measure, do not model: no hard-coded per-architecture constant.
 ///
 /// `SETTLE_FRAMES` is load-bearing. Split-encode does not reach steady state
 /// on the first frame; judging immediately after a switch reads the transient
@@ -672,8 +671,8 @@ pub struct SplitArbiter {
 /// Frames discarded after a switch before the challenger is judged.
 #[cfg(any(target_os = "linux", windows))]
 const SETTLE_FRAMES: u32 = 16;
-/// Samples per arm. Long enough to median out content, short enough that
-/// arbitration finishes in well under a second at 60 fps.
+/// Samples per arm, long enough to median out content. A whole arbitration takes
+/// `2 × SAMPLE_FRAMES + SETTLE_FRAMES` frames.
 #[cfg(any(target_os = "linux", windows))]
 const SAMPLE_FRAMES: usize = 24;
 /// Challenger must beat the incumbent by this percent. Switching is a
@@ -909,10 +908,7 @@ mod tests {
     }
 
     /// `encodeCodecConfig` is a C union: the HEVC 4:4:4 arm must be codec-gated
-    /// or it stamps `hevcConfig` bytes onto another codec. Ungated, this branch
-    /// was any `chroma_444 && full_chroma_input` and stayed non-UB only because
-    /// `lib.rs` degrades 4:4:4 for non-HEVC. It also swallowed the per-codec
-    /// bit-depth arm (`if`/`else if`).
+    /// or it stamps `hevcConfig` bytes onto another codec.
     fn low_latency_cfg(codec: Codec, chroma_444: bool, bit_depth: u8) -> LowLatencyConfig {
         LowLatencyConfig {
             codec,
@@ -1047,7 +1043,7 @@ mod tests {
             nv::NV_ENC_HEVC_PROFILE_FREXT_GUID,
             "4:4:4 on AV1 must not stamp the HEVC FREXT profile"
         );
-        // The AV1 arm must still have run; the old if/else-if skipped it.
+        // The AV1 arm must still have run.
 
         // SAFETY: an AV1 session's union arm is `av1Config`.
         unsafe {
@@ -1061,8 +1057,8 @@ mod tests {
 
     #[test]
     fn split_forces_two_way_at_4k120() {
-        // 3840×2160×120 = 995,328,000 sat 0.47% under the old `> 1_000_000_000`
-        // gate and stayed AUTO — AUTO never engages at 2160 px height.
+        // 3840×2160×120 = 995,328,000 must force the split: AUTO never engages
+        // at 2160 px height.
         let four_k_120 = 3840u64 * 2160 * 120;
         assert_eq!(
             resolve_split_mode(Codec::H265, 8, four_k_120, 2, 32),
@@ -1093,7 +1089,7 @@ mod tests {
 
     #[test]
     fn split_leaves_1440p240_auto() {
-        // 884.7 Mpix/s is single-engine; the threshold move must not drag it in.
+        // 884.7 Mpix/s is single-engine; the force bar must not drag it in.
         let qhd_240 = 2560u64 * 1440 * 240;
         assert_eq!(
             resolve_split_mode(Codec::H265, 8, qhd_240, 2, 32),
@@ -1107,8 +1103,7 @@ mod tests {
         let four_k_120 = 3840u64 * 2160 * 120;
         let hd_60 = 1920u64 * 1080 * 60;
 
-        // 10-bit over the pixel-rate bar now splits. The old Main10 veto was one
-        // sample at low bits/frame; `PUNKTFUNK_SPLIT_ENCODE=0` is the escape.
+        // 10-bit over the pixel-rate bar splits; `PUNKTFUNK_SPLIT_ENCODE=0` is the escape.
         assert_eq!(
             resolve_split_mode(Codec::H265, 10, five_k_240, 2, 32),
             M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32
@@ -1124,8 +1119,7 @@ mod tests {
         );
     }
 
-    /// AV1 10-bit follows the ordinary path. The Main10 veto was an HEVC
-    /// measurement applied codec-blind.
+    /// AV1 10-bit follows the ordinary path: the Main10 veto is HEVC-only.
     #[test]
     fn av1_10bit_is_no_longer_vetoed_by_an_hevc_measurement() {
         let hd_60 = 1920u64 * 1080 * 60;
@@ -1257,7 +1251,8 @@ pub const RFI_DPB: u32 = 5;
 
 /// One loss event's recovery for timestamp-range RFI. The per-timestamp
 /// `nvEncInvalidateRefFrames` loop and `last_rfi_range`/`pending_anchor`
-/// stores stay in each backend. Slot-RFI (AMF/QSV/Vulkan) is `crate::rfi`.
+/// stores stay in `NvSession::invalidate_ref_frames`. Slot-RFI (AMF/QSV/Vulkan) is
+/// `crate::rfi`.
 pub enum RangePlan {
     /// Last successful invalidation already covers this range. Re-arm the recovery
     /// anchor: the client re-asking means the previous anchor AU may itself have
@@ -1271,8 +1266,7 @@ pub enum RangePlan {
     Decline,
 }
 
-/// Range-RFI policy, extracted from both backends' `invalidate_ref_frames`.
-/// Step order is load-bearing:
+/// Range-RFI policy for `NvSession::invalidate_ref_frames`. Step order is load-bearing:
 ///
 /// 1. nonsense range (`first < 0 || first > last`) → [`RangePlan::Decline`];
 /// 2. covering-range dedup with the client's `last`, before the DPB window,
@@ -1281,7 +1275,7 @@ pub enum RangePlan {
 ///    and not already invalidated must exist, else Decline;
 /// 4. `last` becomes `next_ts - 1`: every frame encoded since the loss predicts
 ///    from it, so the client decoded all of them against a hole. Invalidating
-///    only the frames the client named left NVENC anchoring on one of these.
+///    only the frames the client named would leave NVENC anchoring on one of these.
 ///    A `first` at or past the head is a prediction desync → Decline.
 ///
 /// `next_ts` is `frame_idx`: the next timestamp to assign. `teardown()` clears
@@ -1523,8 +1517,8 @@ pub fn session_wave_cycle(codec: Codec, height: u32, fps: u32) -> u32 {
 /// Shared `NV_ENC_INITIALIZE_PARAMS` (`preset` under ULL tuning, PTD, session dims/rate)
 /// pointing at `cfg`. The returned struct borrows `cfg` as a raw pointer; keep `cfg`
 /// alive across the NVENC call. Open and in-place reconfigure must present
-/// the same init params. `enable_async` is the Windows two-thread retrieve;
-/// Linux is sync-only (`enableEncodeAsync = 0`).
+/// the same init params. `enable_async` is Windows' async mode (completion
+/// events); Linux is sync-only (`enableEncodeAsync = 0`).
 #[allow(clippy::too_many_arguments)]
 pub fn build_init_params(
     codec_guid: nv::GUID,
@@ -1582,7 +1576,7 @@ pub fn apply_low_latency_config(cfg: &mut nv::NV_ENC_CONFIG, c: LowLatencyConfig
     // Shrink VBV with bitrate (NVENC validates it against the level ceiling),
     // but only when the GPU advertises custom-VBV — else keep the preset default.
     if c.custom_vbv {
-        // ~1-frame VBV; `PUNKTFUNK_VBV_FRAMES` scales it (parity with AMF/VAAPI/QSV).
+        // ~1-frame VBV; `PUNKTFUNK_VBV_FRAMES` scales it (parity with AMF and VAAPI).
         let vbv = ((c.bitrate as f64 / c.fps.max(1) as f64) * crate::vbv_frames_env())
             .clamp(1.0, u32::MAX as f64) as u32;
         cfg.rcParams.vbvBufferSize = vbv;
@@ -1620,9 +1614,9 @@ pub fn apply_low_latency_config(cfg: &mut nv::NV_ENC_CONFIG, c: LowLatencyConfig
     }
 
     // `encodeCodecConfig` is a C union: `hevcConfig` writes are HEVC-only.
-    // 4:4:4 (FREXT, chromaFormatIDC=3) composes with 10-bit. The codec test
-    // is load-bearing — without it this was `chroma_444 && full_chroma_input`
-    // and a non-HEVC 4:4:4 session skipped its own 10-bit arm (`if`/`else if`).
+    // 4:4:4 (FREXT, chromaFormatIDC=3) composes with 10-bit. The codec test is
+    // load-bearing: without it a non-HEVC 4:4:4 session would skip its own 10-bit
+    // arm (`if`/`else if`).
     let want_444 = c.chroma_444 && c.full_chroma_input;
     if want_444 && c.codec != Codec::H265 {
         tracing::warn!(

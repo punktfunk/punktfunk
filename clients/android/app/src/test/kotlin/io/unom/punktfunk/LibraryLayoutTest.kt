@@ -21,7 +21,7 @@ import org.robolectric.annotation.Config
 
 /** The touch library's layout lives in the console's settings document, in the console's keys. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36]) // Robolectric 4.16 has no SDK 37 image yet; the app targets 37
+@Config(sdk = [36]) // Robolectric has no SDK 37 image yet; the app targets 37
 class LibraryLayoutTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val prefs get() = context.getSharedPreferences(SkiaConsole.PREFS, Context.MODE_PRIVATE)

@@ -17,9 +17,9 @@ import XCTest
 
 final class RemoteFirstLightTests: XCTestCase {
     /// The pairing ceremony over the real LAN, exactly as the app runs it: fresh identity,
-    /// SPAKE2 with the host's arming PIN, then a pinned + identified session. Needs the
-    /// host armed (--allow-pairing) and its logged PIN in PUNKTFUNK_REMOTE_PIN. Heads-up:
-    /// every run durably adds one throwaway "remote-test" identity to the host's
+    /// SPAKE2 with the host's arming PIN, then a pinned + identified session. Needs the host
+    /// armed (`punktfunk1-host` arms at startup) and its printed PIN in PUNKTFUNK_REMOTE_PIN.
+    /// Heads-up: every run durably adds one throwaway "remote-test" identity to the host's
     /// ~/.config/punktfunk/punktfunk1-paired.json — prune those entries at will.
     func testRemotePairingThenPinnedStream() throws {
         let env = ProcessInfo.processInfo.environment
@@ -50,7 +50,7 @@ final class RemoteFirstLightTests: XCTestCase {
 
     /// Audio both ways against the real host: drain the Opus plane and decode it to PCM
     /// (host → speaker path minus the speaker), and uplink an encoded tone (mic path
-    /// minus the mic) — the host logs "punktfunk/1 virtual mic ready" on first frame.
+    /// minus the mic) — the host's mic pump logs "virtual mic ready" once its source is open.
     func testRemoteAudioBothDirections() throws {
         let env = ProcessInfo.processInfo.environment
         guard let host = env["PUNKTFUNK_REMOTE_HOST"] else {
@@ -62,8 +62,8 @@ final class RemoteFirstLightTests: XCTestCase {
             host: host, port: port, width: 1280, height: 720, refreshHz: 60)
         defer { conn.close() }
 
-        // Mic uplink: 2 s of 440 Hz mono tone (the host's mic service opens its virtual
-        // source on the first frame — check its log).
+        // Mic uplink: 2 s of 440 Hz mono tone (the host's mic pump opens its virtual
+        // source at host start — check its log).
         let encoder = try OpusEncoder()
         let chunk = AVAudioPCMBuffer(
             pcmFormat: encoder.pcmFormat, frameCapacity: encoder.framesPerPacket)!

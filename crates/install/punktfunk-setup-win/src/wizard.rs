@@ -1,4 +1,4 @@
-//! The D9 step frame over the engine's `WinScreen` (WP2.1): Welcome → Configure → Network →
+//! The D9 step frame over the engine's `WinScreen`: Welcome → Configure → Network →
 //! Install → Done. Every rule lives in `punktfunk_setup::platform::windows::screen`; this
 //! module only renders it.
 //!
@@ -555,7 +555,7 @@ fn step_title(step: WizStep, uninstall: bool) -> &'static str {
     }
 }
 
-/// The D9 stepper: dots joined by a line, filled through the current step in brand violet,
+/// The D9 stepper: dots joined by a line, filled through the current step in the accent,
 /// hollow ahead. Each step owns one equal column: a half-segment either side of its dot,
 /// stopping at the dot's edge, so the line meets every dot and the first/last halves are
 /// simply invisible.
@@ -621,8 +621,8 @@ pub fn slide_offset(forward: bool, progress: f64) -> f64 {
     }
 }
 
-/// Stepper · (title · content · button bar). The stepper stays put; the rest is the page that
-/// slides in.
+/// Header (step title · stepper) over the page (content · button bar). The header stays put;
+/// the page slides in.
 fn frame(w: &Wizard, step: WizStep, content: impl Into<View>, buttons: Vec<View>) -> View {
     let steps = w.run_steps();
     let pos = steps.iter().position(|s| *s == step).unwrap_or(0);

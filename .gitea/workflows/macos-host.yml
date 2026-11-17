@@ -2,14 +2,14 @@
 #
 # There is no macOS host backend and none is shipped. What this protects is the seam: every
 # platform-gated call site saying which platform it means, rather than assuming Linux-or-Windows
-# and only being caught when someone tries. Left ungated the seam rots quietly — it drifted from
-# 9 unguarded call sites to 11 in the four weeks after it was first measured, with nobody working
-# on macOS at all (issue #299, Tier A). A compile check is the cheapest thing that notices.
+# and only being caught when someone tries. Left ungated the seam rots quietly, with nobody
+# working on macOS at all (issue #299, Tier A). A compile check is the cheapest thing that
+# notices.
 #
 # ⚠ WHY NOT A JOB IN apple.yml, which already owns this runner. Two reasons, both load-bearing:
-#   * That workflow's `paths:` filter is deliberately narrow — punktfunk-core and the Apple client
-#     — because the mac mini is shared and an xcframework build is heavy. A host-crate edit would
-#     never have fired it, so the gate would have been decorative.
+#   * That workflow's `paths:` filter is deliberately narrow — the Apple client and the crates
+#     it links — because the mac mini is shared and an xcframework build is heavy. A host-crate
+#     edit would never fire it, so the gate would be decorative.
 #   * `distribute` there is `needs: swift`. A sibling job is fine, but anything that grows a
 #     dependency on the Swift gate can block a TestFlight upload over a host-side compile hole
 #     that has nothing to do with the client.

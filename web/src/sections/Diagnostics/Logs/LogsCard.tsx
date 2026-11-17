@@ -70,10 +70,10 @@ export interface SourceChoice {
 /**
  * The log viewer: one pane, one timeline, every producer on it.
  *
- * The source control is **multi-select**, which is the whole point rather than a detail. The old
- * `All | Host | Plugins` strip could only ever isolate one producer, so the question that actually
- * brings someone here — "the client stalled at 12:03:47; what was the host doing?" — had no view
- * at all. Any combination is now expressible, and Host + one device is the interesting one.
+ * The source control is **multi-select**, which is the whole point rather than a detail. The
+ * question that brings someone here — "the client stalled at 12:03:47; what was the host doing?"
+ * — needs two producers on one timeline. Any combination is expressible, and Host + one device
+ * is the interesting one.
  *
  * A line that does not parse still renders (see `rows.ts`), and the level/search filters treat an
  * unparsed row as level-less rather than hiding it: a filter must never be the reason a log looks
@@ -131,9 +131,9 @@ export const LogsCard: FC<{
 		return rows.filter(
 			(r) =>
 				selected.has(r.source) &&
-				// An unparsed row has no level to rank. Ranking it as 0 would hide it behind any
-				// filter above DEBUG, which is the one outcome a fail-soft parser must not produce —
-				// so it is always in range and only the text search can exclude it.
+				// An unparsed row has no level to rank. Ranking it as 0 would hide it behind every
+				// level filter (DEBUG is rank 1), which is the one outcome a fail-soft parser must
+				// not produce — so it is always in range and only the text search can exclude it.
 				(r.level === "" || (RANK[r.level] ?? 0) >= min) &&
 				(q === "" ||
 					r.msg.toLowerCase().includes(q) ||
@@ -154,14 +154,13 @@ export const LogsCard: FC<{
 	// Keep the tail in view while following.
 	//
 	// Keyed on the newest RENDERED key, not on `visible.length`: `visible` is `matched.slice(-SHOW)`,
-	// so once the filter matches SHOW rows its length is pinned at SHOW forever. The effect then
-	// stopped re-running and follow-mode quietly stopped following — exactly when the log is busy
-	// enough to need it. The newest key keeps changing for as long as lines arrive.
+	// so once the filter matches SHOW rows its length is pinned at SHOW and the effect would stop
+	// re-running, exactly when the log is busy enough to need it. The newest key keeps changing
+	// for as long as lines arrive.
 	const newestVisible = visible.at(-1)?.key ?? "";
 	// NOTE: biome flags `newestVisible` as an unnecessary dependency (it is not read in the body) and
 	// offers to remove it. Do NOT take that fix — it is a TRIGGER, the signal that new lines arrived.
-	// Removing it reinstates the bug this replaced: the effect stops re-running and follow-mode
-	// quietly stops following. The same warning was here before, on `visible.length`.
+	// Removing it stops the effect re-running, and follow-mode quietly stops following.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: newestVisible is a deliberate trigger, not a read — see the note above; removing it stops follow-mode from following.
 	useEffect(() => {
 		if (!follow) return;
@@ -171,9 +170,7 @@ export const LogsCard: FC<{
 
 	return (
 		<Card>
-			{/* No CardHeader here, and that no longer needs saying: CardContent keeps its top inset
-			    unless something precedes it. This card used to restore it by hand at both
-			    breakpoints. */}
+			{/* No CardHeader here: CardContent keeps its top inset unless something precedes it. */}
 			<CardContent className="flex flex-col gap-3">
 				{/* The card names itself under the page's "Troubleshooting" heading. Follow sits
 				    beside it; the rest of what acts on the whole log is in ⋯. */}
@@ -303,9 +300,9 @@ export const LogsCard: FC<{
 					className="max-h-[65vh] overflow-auto rounded-md border bg-card/40 p-2 font-mono text-xs leading-5"
 				>
 					{visible.length === 0 ? (
-						// An empty list has four quite different causes and used to render one sentence
-						// for all of them: the host is quiet, the request failed, it hasn't answered yet,
-						// or every source is switched off.
+						// An empty list has four quite different causes, each worded apart: the host is
+						// quiet, the request failed, it hasn't answered yet, or every source is switched
+						// off.
 						<div className="p-2">
 							{error ? (
 								<div className="space-y-2 font-sans">
@@ -351,8 +348,7 @@ export const LogsCard: FC<{
 								    case where no bundle is loaded at all. */}
 								{/* Theme-aware, unlike LEVEL_CLASS above: one fixed mid shade is legible on
 								    exactly one of the two palettes, and this tag is the thing that has
-								    to stay readable for a merged view to be worth having. Checked in
-								    both themes, not inferred. */}
+								    to stay readable for a merged view to be worth having. */}
 								{r.device && (
 									<span className="text-violet-600 dark:text-violet-400">
 										[{r.device}]{" "}

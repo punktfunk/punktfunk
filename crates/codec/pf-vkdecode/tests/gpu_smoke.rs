@@ -4,7 +4,7 @@
 //! 48 AUs of the vendored 25fps vector through `vkCmdDecodeVideoKHR` while the
 //! consumer holds [`CLIENT_HOLD`] frames. Every `RESULT_STATUS_ONLY` query must
 //! read COMPLETE before release. A pool that ignores DPB depth or that hold
-//! starves here. A missing codec extension is a skip, not a failure.
+//! starves here. A box missing a codec's extension fails that leg; it does not skip.
 //!
 //! Pixels, presenter interop (`value + 1` write-back), soak, and both vendors'
 //! DPB layouts belong to `gpu_parity` and on-glass tests. Releases pass `false`
@@ -185,8 +185,8 @@ fn h264_decodes_48_aus_holding_four_frames_like_the_real_client() {
 
     let setup = common::bring_up(&common::Request {
         codec: common::H264,
-        // Decode-only is enough (nothing else submits) and exercises EXCLUSIVE
-        // picture-pool sharing.
+        // Decode-only is enough (nothing else submits). A device with no graphics
+        // family falls back to the decode family and gets EXCLUSIVE pool sharing.
         graphics: common::Graphics::DecodeFamilyIsFine,
         report_families: false,
     });
@@ -297,8 +297,9 @@ fn av1_decodes_48_aus_holding_four_frames_like_the_real_client() {
 }
 
 // CPU guards (not ignored): [`MIN_DELIVERED`] vs what each planner emits from
-// the first [`AUS`] AUs. GPU legs do not run in CI; a deeper-reorder vector
-// must fail here, not as pool starvation on hardware.
+// the first [`AUS`] AUs. In CI the GPU legs run only nightly (`bench-gpu.yml`,
+// report-only); a deeper-reorder vector must fail here, not as pool starvation
+// on hardware.
 
 #[test]
 fn the_delivery_floor_is_under_what_the_planners_emit_from_the_first_48_aus() {

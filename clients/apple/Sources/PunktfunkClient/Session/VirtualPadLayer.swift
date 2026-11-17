@@ -94,7 +94,8 @@ final class PadControlUIView: UIView {
     private var active = false
 
     #if os(visionOS)
-    /// visionOS has no haptics, so the pad's tick is silent there.
+    /// `UIImpactFeedbackGenerator` is unavailable on visionOS (XROS 27.0 SDK), so the pad's tick
+    /// is silent there.
     private struct SilentTick {
         func prepare() {}
         func impactOccurred() {}

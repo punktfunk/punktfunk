@@ -1,4 +1,4 @@
-// Synthetic 4:4:4 HEVC keyframes used only by `Stage444Probe` to probe decode capability.
+// Synthetic 4:4:4 HEVC keyframes for `Stage444Probe`'s decode-capability probe, and its tests.
 //
 // Each is the first IDR access unit (VPS + SPS + PPS + IDR slice, Annex-B) of a 256×256 HEVC
 // Range-Extensions clip — `chroma_format_idc = 3` — generated offline with libx265:

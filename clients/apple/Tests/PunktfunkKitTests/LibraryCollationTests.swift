@@ -176,7 +176,7 @@ final class LibraryCollationTests: XCTestCase {
         XCTAssertEqual(order, ["heroic", "steam", "c", "a", "b"])
         // Nothing running: byte-identical.
         XCTAssertEqual(LibraryOrder.display(games, running: []).map(\.id), games.map(\.id))
-        // A running GAME never jumps ahead of a launcher — the bug this replaced.
+        // A running GAME never jumps ahead of a launcher.
         XCTAssertEqual(
             LibraryOrder.display(games, running: ["b"]).map(\.id), ["steam", "heroic", "b", "a", "c"])
     }

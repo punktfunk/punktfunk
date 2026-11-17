@@ -1,11 +1,11 @@
-//! Runs the REAL `punktfunk` binary and pins its self-documentation contract: help goes
-//! to stdout and exits 0, an unknown verb refuses on stderr with the not-found code.
+//! Runs the REAL `punktfunk` binary and pins its contract: help goes to stdout and exits 0,
+//! an unknown verb refuses on stderr with the not-found code, and the store verbs work
+//! against a scratch config dir.
 //!
 //! This exists so CI *executes* the shipped binary at least once per platform. A binary
-//! that compiles but is the wrong program passes every build/clippy/fmt gate — that is
-//! exactly how 0.22.0 shipped a stub as `punktfunk-session` — and only a gate that runs
-//! the thing catches the class. The help paths are the right probe: they touch no config
-//! stores and no network, so they are safe on any runner.
+//! that compiles but is the wrong program passes every build/clippy/fmt gate, and only a
+//! gate that runs the thing catches the class. The help paths are the right probe: they
+//! touch no config stores and no network, so they are safe on any runner.
 #![cfg(any(target_os = "linux", windows))]
 
 use std::process::Command;

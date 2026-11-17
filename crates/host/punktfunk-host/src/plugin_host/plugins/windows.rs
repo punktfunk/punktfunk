@@ -2,10 +2,10 @@
 //! read and write. A seat's runner is [`seat`]'s.
 //!
 //! The runner is a separate, unprivileged principal. It reads the scoped `plugin-token` and the
-//! TLS pin, never `mgmt-token`, and it writes only the plugin/script units, their state and the
-//! ingest drop — each grant is an explicit `icacls` call listed here rather than a directory it
-//! inherits. That policy is the whole reason this file exists: it should be readable in one
-//! place instead of found by grepping for a `cfg`.
+//! TLS pin, never `mgmt-token`, and in the config dir it writes only `plugin-state` — each grant
+//! is an explicit `icacls` call listed here rather than a directory it inherits. That policy is
+//! the whole reason this file exists: it should be readable in one place instead of found by
+//! grepping for a `cfg`.
 
 use super::ace_plan::{self, Aces};
 use super::*;
@@ -70,8 +70,8 @@ const RUNNER_STATE_DIRS: [&str; 1] = ["plugin-state"];
 
 /// Ingest inbox: `<config_dir>\ingest`. Inverse of `plugin-state`: `BUILTIN\Users`
 /// gets Modify so an interactive-user app can drop `ingest\<plugin>\…` for the
-/// LocalService runner to read. The one place in the config tree a local account
-/// may write (trusted-single-user; the reader is LocalService).
+/// LocalService runner to read. With `emulators\<id>\app` (`open_for_players`), one of the
+/// places in the config tree a local account may write (trusted-single-user).
 const RUNNER_INGEST_DIRS: [&str; 1] = ["ingest"];
 
 /// `BUILTIN\Users` (S-1-5-32-545) in icacls SID form — the ingest inbox's writer.

@@ -33,7 +33,7 @@ extension InputCapture {
         }
     }
     /// HID usage (GCKeyCode raw) → Windows VK (the host maps VK → evdev; every VK emitted
-    /// here exists in punktfunk-host/src/inject.rs::vk_to_evdev — extend the two together).
+    /// here exists in pf-inject's inject/keymap.rs::vk_to_evdev — extend the two together).
     nonisolated static let hidToVK: [Int: UInt32] = {
         var m: [Int: UInt32] = [:]
         // a–z: HID 0x04..0x1D → VK 'A'..'Z'.
@@ -83,7 +83,7 @@ extension InputCapture {
     /// path is keyed by keyCode (a layout-independent hardware position), NOT by HID usage,
     /// so it needs its own table — but it emits the EXACT SAME Windows VK integers `hidToVK`
     /// already produces for each physical key (A→0x41, Return→0x0D, KeypadEnter→0x6C, …), so
-    /// the host's vk_to_evdev (inject.rs) accepts both with zero change. Modifier keys come
+    /// the host's vk_to_evdev (keymap.rs) accepts both with zero change. Modifier keys come
     /// via flagsChanged (handleFlagsChanged), not keyDown, so they're absent here. Keys with
     /// no host evdev arm (F13–F20, KeypadEquals, the Fn key) are omitted → nil → swallowed.
     nonisolated static let keyCodeToVK: [UInt16: UInt32] = {

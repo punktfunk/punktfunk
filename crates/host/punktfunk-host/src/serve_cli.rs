@@ -202,7 +202,7 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
     if opts.token.is_none() {
         opts.token = Some(crate::mgmt_token::load_or_generate()?);
     }
-    // Installs before this build granted every local account read on the config tree.
+    // An older install may still grant every local account read on the config tree; this strips it.
     #[cfg(windows)]
     crate::plugins::converge_config_dir_acls();
     // The tray's bearer. Not fatal: the tray then shows the host as running without detail.

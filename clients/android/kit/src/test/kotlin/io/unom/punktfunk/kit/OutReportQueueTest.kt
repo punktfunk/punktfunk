@@ -8,9 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The pending-OUT queue's overflow policy. What is being pinned here is the distinction the old
- * "drop from the head until there is room" policy did not make: rumble is re-sent continuously and
- * may be thrown away, while a lightbar/player-LED/trigger report is sent once and never repeated.
+ * The pending-OUT queue's overflow policy: rumble is re-sent continuously and may be thrown away,
+ * while a lightbar/player-LED/trigger report is sent once and never repeated, so overflow drops
+ * rumble first.
  */
 class OutReportQueueTest {
     /** A report carrying a 0..255 marker so a test can tell which one came back out. */
@@ -50,8 +50,7 @@ class OutReportQueueTest {
         q.offer(report(11))
         q.offer(report(12))
         assertEquals(4, q.size)
-        // Full. The old policy dropped the head — here that is a rumble, but only by luck of
-        // ordering; what matters is that the one-shots all survive.
+        // Full: the rumble is the victim, so the one-shots all survive.
         assertTrue(q.offer(report(13)))
         assertEquals(listOf(10, 11, 12, 13), drain(q))
     }
@@ -59,9 +58,8 @@ class OutReportQueueTest {
     @Test
     fun `the one-shot the host never repeats survives a rumble storm`() {
         val q = OutReportQueue<ByteArray>(cap = 4)
-        // The exact regression: a lightbar colour queued once, then a flood of rumble. Under the
-        // old newest-wins eviction the colour was dropped from the head and never came back,
-        // leaving the pad lit wrong until the value next happened to change.
+        // A lightbar colour queued once, then a flood of rumble: the colour stays queued, since
+        // the host never repeats it.
         q.offer(report(200)) // lightbar
         repeat(50) { q.offer(report(it), OutReportQueue.KEY_RUMBLE) }
         val out = drain(q)

@@ -2,9 +2,9 @@
 //! before a connect and from a host card's "Switch profile…". The rule is
 //! `pf_client_core::profiles::picker_decision`; this file runs the fetch and draws the sheet.
 //!
-//! The sheet is a [`sheet`] overlay like the host editor, at root, so a worker thread can raise
-//! it over any screen. A profile whose seat is starting gets a second sheet of the same frame,
-//! [`SeatWait`].
+//! The sheet is a [`sheet`] overlay like the Add host sheet, at root, so a worker thread can
+//! raise it over any screen. A profile whose seat is starting gets a second sheet of the same
+//! frame, [`SeatWait`].
 
 use super::style::*;
 use super::{unlock, AppCtx, AsyncSetState, Screen, Target};

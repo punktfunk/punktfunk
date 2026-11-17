@@ -29,8 +29,8 @@ if [ ! -s "$PWFILE" ]; then
     chmod 600 "$PWFILE" 2>/dev/null || true
     # Do NOT echo the password itself. Anything this script prints is captured by systemd into
     # the PERSISTENT journal, which on Debian/Ubuntu is readable by the `adm` and
-    # `systemd-journal` groups — so printing it published a 0600 secret to every member of them,
-    # permanently. Point at the file instead: it is correctly 0600, and it stays readable only by
+    # `systemd-journal` groups — so printing it would publish a 0600 secret to every member of
+    # them, permanently. Point at the file instead: it is 0600, and it stays readable only by
     # the user who owns the console.
     echo "punktfunk web console login password generated."
     echo "Read it NOW, before your first sign-in:  sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' $PWFILE"
@@ -54,18 +54,15 @@ fi
 # The console cannot START without two things the HOST creates on its first `serve`: `mgmt-token`
 # (a MANDATORY EnvironmentFile on punktfunk-web.service) and the TLS pair `Bun.serve` listens with.
 #
-# punktfunk-web.service already says `After=punktfunk-host.service`, but that is not a readiness
-# gate: the host is `Type=simple`, so systemd considers it started the instant it is SPAWNED —
-# seconds before either file lands. Worse, the two are written far apart. `mgmt-token` is persisted
-# early in `serve` (main.rs, before the listeners), while the identity cert comes last, inside
-# `mgmt::run` -> `identity::load_or_adopt`. So waiting on the token alone would only move the
-# failure to the cert.
+# punktfunk-web.service says `After=punktfunk-host.service`, but that is not a readiness gate:
+# the host is `Type=simple`, so systemd considers it started the instant it is SPAWNED, before
+# either file lands. The two are also written at different points of `serve`: `mgmt-token` in
+# `serve_cli::prepare_serve`, the identity cert later, in `host::serve` via
+# `identity::load_or_adopt`. So waiting on the token alone would only move the failure to the cert.
 #
-# Losing that race was a HARD systemd-level failure — "Failed to load environment files: No such
-# file or directory", result 'resources' — on the very first enable of a perfectly good install,
-# and only the Restart loop brought the console up two seconds later. Field report 2026-08-28
-# (Omarchy): `punktfunk-omarchy setup` enables the host and the console back to back, so it lost
-# the race every time and reported "Failed to start punktfunk management web console".
+# A console started before the files exist fails at the systemd level ("Failed to load
+# environment files: No such file or directory", result 'resources'), and only its Restart loop
+# brings it up.
 #
 # This unit is `Type=oneshot` and punktfunk-web.service is ordered `After=` it, so blocking HERE is
 # the readiness gate that ordering already claimed to be — no new unit, no new directive, and the
@@ -85,18 +82,17 @@ host_ready() {
     return 1
 }
 
-# ponytail: a 1 s poll, not sd_notify. Making the host `Type=notify` is the real readiness
-# protocol, but it locks the unit file to the binary — and the documented install route copies
-# scripts/punktfunk-host.service into ~/.config/systemd/user BY HAND, so a new unit beside an
-# older host would hang for TimeoutStartSec and then fail to start at all. Upgrade to notify once
-# the units only ever ship alongside the binary that answers them.
+# A 1 s poll, not sd_notify. Making the host `Type=notify` is the real readiness protocol, but it
+# locks the unit file to the binary, and a source build still copies the unit by hand: a notify
+# unit beside a host that never notifies hangs for TimeoutStartSec and then fails to start at all.
+# Upgrade to notify once the units only ever ship alongside the binary that answers them.
 WAIT_SECS="${1:-30}"
 waited=0
 while ! host_ready; do
     if [ "$waited" -ge "$WAIT_SECS" ]; then
         # Not fatal: exit 0 so the console still starts and its own Restart=always retry takes
-        # over (the pre-existing behaviour). Say WHY, because the bare systemd error this replaces
-        # named a missing file and never the host that owes it.
+        # over. Say WHY, because a bare systemd error names a missing file and never the host
+        # that owes it.
         echo "punktfunk-host has not written its mgmt token + identity cert after ${WAIT_SECS}s."
         echo "Starting the console anyway — it retries every 2s until they appear."
         echo "If it stays down:  systemctl --user status punktfunk-host"

@@ -12,8 +12,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// Budget for a whole query. The pad-audio thread runs these, up to two at session end (one in
-/// flight, then `restore_profile`), and the session's terminal event waits on its join.
+/// Budget for a whole query. Pad-audio queries run on a thread the session's terminal event
+/// joins, so each can hold that event back this long.
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) struct OneShot {

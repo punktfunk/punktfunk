@@ -1,14 +1,12 @@
 #!/bin/sh
 # Behavioural gates for the guided installer, driven against the BINARY.
 #
-# These were gates 7 and 8 of check-docs-drift.sh while the installer was a shell script. The
-# script is now a stub that downloads punktfunk-setup (design/installer-v2.md D1), so the
-# behaviour they check moved with it — the cases did not change, only what runs them. They live
-# here rather than in check-docs-drift.sh because that gate runs in a bun container with no
-# cargo, and this needs a built installer.
+# scripts/install.sh is a stub that downloads punktfunk-setup (design/installer-v2.md D1), so the
+# behaviour lives in the binary. These gates are not in check-docs-drift.sh because that gate
+# runs in a bun container with no cargo, and this needs a built installer.
 #
-# The two test seams the sh installer grew are honoured by the binary unchanged:
-# PUNKTFUNK_INSTALL_OS_RELEASE fakes the distro, PUNKTFUNK_INSTALL_ETC fakes the repo config.
+# Two test seams: PUNKTFUNK_INSTALL_OS_RELEASE fakes the distro, PUNKTFUNK_INSTALL_ETC fakes the
+# repo config.
 #
 # Exit: 0 all cases held · 1 a case drifted · 2 the installer could not be built.
 set -u
@@ -104,9 +102,9 @@ switch_case apt-up   "$DEB13" "$APT_LIST" 'deb [x] https://git.unom.io/api/packa
     'debian canary main' --channel canary
 switch_case apt-down "$DEB13" "$APT_LIST" 'deb [x] https://git.unom.io/api/packages/unom/debian canary main\n' \
     '--allow-downgrades' --channel stable
-# The regression this gate exists for. A canary box missing one of the three packages, re-run with
-# no --channel at all: the missing ones must come from CANARY. Letting the flag's stable default
-# win there rewrites the repo and drags the whole box back a channel without ever saying so.
+# A canary box missing one of the three packages, re-run with no --channel at all: the missing
+# ones must come from CANARY. Letting the flag's stable default win there rewrites the repo and
+# drags the whole box back a channel without ever saying so.
 mkdir -p "$sw/partial/bin" "$sw/partial/$(dirname "$APT_LIST")"
 printf '#!/bin/sh\necho 0.0.0-test\n' > "$sw/partial/bin/punktfunk-host"
 chmod +x "$sw/partial/bin/punktfunk-host"

@@ -10,7 +10,7 @@
 //! the path. `PUNKTFUNK_LIBRARY_ART_ROOTS` replaces the default roots; the store is a root on
 //! top of whatever they are, and its files are named `sha256(url)`, so no plugin string chooses
 //! a path inside it. A URL the fetch refuses keeps a marker and stays in the catalog verbatim
-//! for the client to fetch itself, as before the store existed.
+//! for the client to fetch itself.
 
 use super::*;
 
@@ -242,11 +242,11 @@ fn percent_decode(s: &str) -> String {
 /// The proxy runs in the host process (LocalSystem on Windows) and the plugin lane supplies the
 /// path, so a missing root would make "serve this cover" equal "read any file as SYSTEM". Default
 /// is the [`users_base`] — SYSTEM's `%USERPROFILE%` is `…\config\systemprofile` and is not where
-/// launchers live — plus [`steam_art_roots`] and
-/// [`super::launch::playnite_art_roots`] (a portable Playnite keeps covers beside the exe).
-/// `PUNKTFUNK_LIBRARY_ART_ROOTS` (`;`-separated) replaces the whole default. [`art_store_dir`]
-/// is a root on top of either: its files are named `sha256(url)`, so nothing a plugin publishes
-/// picks a path inside it.
+/// launchers live — plus the platform's `extra_roots`: on Windows Steam's install and a portable
+/// Playnite (covers beside the exe), elsewhere `$HOME` and the system icon dirs.
+/// `PUNKTFUNK_LIBRARY_ART_ROOTS` (a `PATH`-style list) replaces the whole default.
+/// [`art_store_dir`] is a root on top of either: its files are named `sha256(url)`, so nothing a
+/// plugin publishes picks a path inside it.
 fn art_roots() -> Vec<PathBuf> {
     if let Some(configured) = std::env::var_os("PUNKTFUNK_LIBRARY_ART_ROOTS") {
         let mut roots: Vec<PathBuf> = std::env::split_paths(&configured)
@@ -278,8 +278,8 @@ pub(crate) fn users_base() -> Option<PathBuf> {
 /// The config-dir exclusion is unconditional even if `PUNKTFUNK_LIBRARY_ART_ROOTS` names it.
 fn art_path_is_confined(path: &Path) -> bool {
     // Refuse UNC before touching the filesystem: `canonicalize` would itself coerce the host's
-    // machine account into outbound SMB. Any two leading separators — `\\`, `//`, mixed — count;
-    // a bare `starts_with(r"\\")` missed the forms Windows accepts equally.
+    // machine account into outbound SMB. Any two leading separators — `\\`, `//`, mixed — count:
+    // Windows accepts each form equally.
     let lossy = path.to_string_lossy();
     let bytes = lossy.as_bytes();
     let is_sep = |c: u8| c == b'\\' || c == b'/';
@@ -550,7 +550,7 @@ fn art_refused_path(dir: &Path, key: &str) -> PathBuf {
 }
 
 /// True once a fetch refused this URL. [`proxy_art`] then leaves it in the catalog verbatim, so
-/// the client fetches it itself exactly as it did before the store existed.
+/// the client fetches it itself.
 fn remote_art_refused(url: &str) -> bool {
     art_refused_path(&art_store_dir(), &art_key(url)).exists()
 }
@@ -763,11 +763,10 @@ fn seat_may_serve(v: &str) -> bool {
 /// A URL a fetch already refused stays verbatim so the client can still try it, and an
 /// already-proxied path is left alone.
 ///
-/// Each path carries `?v=`, the head of the source value's own hash. Without it the path stayed
-/// the same when the operator pointed an entry at a different cover, and nothing in front of the
-/// host — a browser holding `max-age`, a client's disk cache keyed by URL — ever asked again. It
-/// costs no I/O and moves exactly when the source does; the same source serving new bytes is
-/// still the ETag's job.
+/// Each path carries `?v=`, the head of the source value's own hash, so pointing an entry at a
+/// different cover moves the path and every cache in front of the host — a browser holding
+/// `max-age`, a client's disk cache keyed by URL — asks again. It costs no I/O and moves exactly
+/// when the source does; the same source serving new bytes is still the ETag's job.
 pub fn proxy_art(id: &str, art: &mut Artwork) {
     let rw = |field: &mut Option<String>, kind: &str| {
         let proxied = field

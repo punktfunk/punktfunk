@@ -1,4 +1,5 @@
-//! The desktop's Omarchy theme, as four colours this client draws from.
+//! The desktop's Omarchy theme, as the four values this client draws from: a mode and three
+//! colours.
 //!
 //! Omarchy stores the active theme at `~/.local/state/omarchy/current/theme/`.
 //! Two files there carry colours:
@@ -9,7 +10,7 @@
 //!
 //! File read, not an API: a non-Omarchy box has no directory, so every miss
 //! is "no theme", never an error. JSON rules match
-//! `web/server/util/omarchyTheme.ts`. GTK (`clients/linux/src/omarchy.rs`)
+//! `web/server/util/omarchyTheme.ts`. GTK (`clients/linux/src/desktop/omarchy.rs`)
 //! and the console (`pf-console-ui`) consume the same `OsTheme`.
 
 pub use crate::rgb::{contrast, on_accent, readable, Rgb};

@@ -239,9 +239,9 @@ internal class StreamPeripherals(
         }
         // A Bluetooth controller's OWN gyro, through the platform sensor framework (API 31+):
         // a BT DualSense / DS4 / Switch Pro / 8BitDo is an ordinary InputDevice, so none of the
-        // capture links below ever sees it and its motion used to go nowhere at all. No separate
-        // setting — this is the pad's own IMU doing what the pad is for, and unlike the USB
-        // captures it claims nothing; forwarding being off is the only thing that silences it.
+        // capture links below ever sees it. No separate setting — this is the pad's own IMU doing
+        // what the pad is for, and unlike the USB captures it claims nothing; forwarding being
+        // off is the only thing that silences it.
         padSensors = if (settings.gamepadForwarding) {
             PadSensors(router).also { it.start() }
         } else {
@@ -299,8 +299,8 @@ internal class StreamPeripherals(
         }
         // Sony pad capture (DualSense / Edge / DualShock 4, opt-out): claim a USB-connected
         // pad's HID interface and drive it directly — rumble without a kernel force-feedback
-        // driver, plus adaptive triggers, lightbar, player LEDs and gyro/touchpad, none of which
-        // the InputDevice path can render (no platform API for any of them). Uncaptured (toggle
+        // driver, plus adaptive triggers (no platform API), the touchpad, and lightbar, player
+        // LEDs (platform path: API 33+) and gyro (API 31+). Uncaptured (toggle
         // off / permission denied / Bluetooth) the pad stays on the ordinary InputDevice path —
         // the automatic fallback. Host feedback routes back through feedback.sink; the claim
         // frees the pad's InputDevice slot itself (see DsCapture.startUsb), so the wire index
@@ -339,9 +339,9 @@ internal class StreamPeripherals(
                     override fun stop(pad: Int) = NativeBridge.nativeStopPadAudio(handle, pad)
                 }
             }
-            // Its OWN action, not the Controllers screen's [DS_USB_PERMISSION_ACTION] — that one is
-            // registered by MainActivity and the console shell too, and a stream must not answer
-            // their grants. requestCode 2: 0/1 are the SC2 stream/menu grants.
+            // Its OWN action, not [DS_USB_PERMISSION_ACTION] — the Controllers screen, MainActivity
+            // and the console shell request their grants with that one, and a stream must not
+            // answer them. requestCode 2: 0/1 are the SC2 stream/menu grants.
             ds.findUsbDevice()?.let { usbDev ->
                 dsUsbReceiver = requestUsbCapture(
                     context, usbDev, "io.unom.punktfunk.DS_USB_PERMISSION", 2, "Sony pad", ds::startUsb,

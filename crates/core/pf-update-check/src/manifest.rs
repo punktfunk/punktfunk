@@ -1,7 +1,7 @@
 //! Signed per-channel JSON that answers "is a newer build out?"
 //!
-//! Keys live in the consuming binary and are checked by [`crate::sig`]. TLS and
-//! the serving registry are transport, never trust. Host and Linux client share
+//! Keys are pinned in [`crate::OFFICIAL_UPDATE_KEYS`] and checked by [`crate::sig`].
+//! TLS and the serving registry are transport, never trust. Host and Linux client share
 //! `version`/`ci_run`/`commit`; ignore a payload leg you do not need
 //! (`windows_host` today, `windows_host_arm64` for an ARM64 host).
 //!

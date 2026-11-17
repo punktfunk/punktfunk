@@ -11,7 +11,7 @@ import org.robolectric.annotation.Config
 
 /** Reset is a fresh install's settings; the default host and every host record stay. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36]) // Robolectric 4.16 has no SDK 37 image yet; the app targets 37
+@Config(sdk = [36]) // Robolectric has no SDK 37 image yet; the app targets 37
 class SettingsResetTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 

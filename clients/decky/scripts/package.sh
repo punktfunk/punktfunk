@@ -2,7 +2,8 @@
 # Assemble the Decky plugin into the canonical store/sideload layout:
 #
 #   out/punktfunk-v<version>.zip   ->  punktfunk/{dist/index.js,main.py,py_modules/pf_decky/,
-#                                                  plugin.json,package.json,decky.pyi,LICENSE,README.md}
+#                                                  bin/,assets/,controller_config/,plugin.json,
+#                                                  package.json,decky.pyi,LICENSE,README.md}
 #   out/punktfunk/                 (the same tree, unzipped — rsync this with scripts/deploy.sh)
 #
 # The single top-level dir is the plugin's ON-DISK folder name (Decky extracts the zip as-is,
@@ -31,7 +32,8 @@ cp main.py plugin.json package.json LICENSE "$DEST/"
 # __pycache__ from a local test run must not ship.
 mkdir -p "$DEST/py_modules/pf_decky"
 cp py_modules/pf_decky/*.py "$DEST/py_modules/pf_decky/"
-# The stream-launch wrapper (target of the Steam shortcut) — must stay executable.
+# The stream-launch wrapper (target of the Steam shortcut). Shipped 0755, though the shortcut
+# runs it through /bin/sh and never needs the bit.
 cp bin/punktfunkrun.sh "$DEST/bin/punktfunkrun.sh"
 chmod 0755 "$DEST/bin/punktfunkrun.sh"
 # Steam-shortcut artwork (grid/gridwide/hero/logo/icon — committed under assets/).

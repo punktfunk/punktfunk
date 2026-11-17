@@ -1,5 +1,5 @@
 <#
-  Rebuild the punktfunk Windows host (release + NVENC) from the CURRENT source and
+  Rebuild the punktfunk Windows host (release, nvenc + qsv) from the CURRENT source and
   restart the LocalSystem service, with automatic rollback if the build fails or the
   new binary won't start.
 

@@ -9,11 +9,10 @@
 # below are permissive / attribution-only; deliberately NO GPL/LGPL/AGPL/MPL-link/SSPL/EPL.
 #
 # ⚠ KNOW THE LIMIT OF THIS GATE. cargo-about walks the CARGO graph, so it sees CRATES. A native
-# library linked through a permissively-licensed `-sys` crate is INVISIBLE to it, licence and all.
-# FFmpeg was precisely that shape while we linked it: `ffmpeg-sys-next` is WTFPL and passed
-# cleanly, while the LGPL libavcodec/libavutil/swscale it link-imported never appeared in the
-# harvest at all. Nothing links it any more (host encode went native, 2026-09), so the crate graph
-# and the linked set coincide for every artifact — but the gate is no stronger than it was.
+# library linked through a permissively-licensed `-sys` crate is INVISIBLE to it, licence and all:
+# `ffmpeg-sys-next` is WTFPL and would pass cleanly, while the LGPL libavcodec/libavutil/swscale
+# it link-imports would never appear in the harvest. Nothing links FFmpeg now, so the crate graph
+# and the linked set coincide for every artifact — but the gate sees no more than the crate graph.
 # Copyleft arriving as C behind a -sys crate is a REVIEW question, not a CI one.
 #
 # The dependency-free fallback is scripts/gen-third-party-notices.py (reads the cargo registry cache),
@@ -49,11 +48,9 @@ ignore-dev-dependencies = true
 # accepted arm on its own (MIT/Apache-2.0 are globally accepted), so it needs no entry. (It is
 # also UEFI-target-gated out of every shipped build.)
 #
-# cbindgen, below, is the one per-crate entry. `ring` used to need one (its licence is an
-# AND that includes the OpenSSL licence, which was accepted for that crate alone), but the crypto
-# backend moved to aws-lc-rs and the ureq 2 → 3 upgrade removed ring from every target we build.
-# aws-lc-sys 0.44's SPDX is an AND of ISC / Apache-2.0 / MIT / BSD-3-Clause / MIT-0 — all globally
-# accepted above — and carries no OpenSSL clause, so `OpenSSL` left the global list with ring.
+# cbindgen, below, is the one per-crate entry. The crypto backend is aws-lc-rs, whose
+# aws-lc-sys has an SPDX that is an AND of ISC / Apache-2.0 / MIT / BSD-3-Clause / MIT-0 — all
+# globally accepted above — and carries no OpenSSL clause, so `OpenSSL` is not in the global list.
 
 # cbindgen (MPL-2.0) is the library tools/gen-headers runs to write include/*.h. No shipped
 # artifact links it, and the header it writes is not a derivative work.

@@ -28,28 +28,25 @@ if (Test-Path $rustup) {
   Write-Warning "rustup not found at $rustup - has unom/infra's setup-gitea-runner-base.ps1 run on this box yet?"
 }
 
-# FFmpeg is no longer provisioned: nothing in punktfunk links libav* since the host's encode
-# backends went native (2026-09-07). Delete a stale C:\Users\Public\ffmpeg by hand; this script
-# does not remove what it no longer installs.
+# No FFmpeg here: nothing in punktfunk links libav*. A stale C:\Users\Public\ffmpeg can be deleted
+# by hand; this script does not remove what it no longer installs.
 
 
-# --- No Vulkan-Headers here any more: they existed only for pf-ffvk's bindgen over
-# libavutil/hwcontext_vulkan.h, and that crate is gone (M10). Nothing punktfunk builds on Windows
-# needs Vulkan headers at compile time - ash generates its own bindings and dlopens vulkan-1.dll,
-# which is a GPU-driver component. A stale C:\Users\Public\vulkan-headers is harmless; delete it
+# --- No Vulkan-Headers here: nothing punktfunk builds on Windows needs Vulkan headers at compile
+# time - ash generates its own bindings and dlopens vulkan-1.dll, which is a GPU-driver component.
+# A stale C:\Users\Public\vulkan-headers is harmless; delete it by hand if you want the disk back. ---
+
+# --- No Inno Setup here: the installers are packed by punktfunk-setup-win, which is a workspace
+# crate and needs nothing on the runner. A leftover Inno Setup 6 install is harmless; uninstall it
 # by hand if you want the disk back. ---
 
-# --- Inno Setup provisioning removed: the installers are packed by punktfunk-setup-win, which is
-# a workspace crate and needs nothing on the runner. A leftover Inno Setup 6 install is harmless;
-# uninstall it by hand if you want the disk back. ---
-
-# VB-CABLE provisioning removed (the audio-substrate program, 2026-08): the installer no longer
-# bundles a cable - the host mints its audio endpoints from Steam's streaming drivers on the
-# target box. A stale C:\Users\Public\vbcable on a runner is harmless and can be deleted.
+# No VB-CABLE here: the installer bundles no cable - the host mints its audio endpoints from
+# Steam's streaming drivers on the target box. A stale C:\Users\Public\vbcable on a runner is
+# harmless and can be deleted.
 
 # --- The runner daemon's punktfunk env extension point (unom/infra's
-# scripts/setup-gitea-runner-base.ps1) is now empty: FFMPEG_DIR and its PATH prepend were the only
-# entries and nothing links FFmpeg any more. Clear a file an older run wrote. ---
+# scripts/setup-gitea-runner-base.ps1) stays empty: punktfunk needs no runner env vars. Clear a
+# file an older run wrote. ---
 $projectEnv = "C:\Users\Public\act-runner\project-env.ps1"
 if (Test-Path $projectEnv) {
   Set-Content -Encoding UTF8 $projectEnv "# punktfunk needs no runner env vars"
@@ -62,13 +59,13 @@ if (Test-Path $projectEnv) {
 #
 #   1. The .NET 8 runtime. Azure.CodeSigning.Dlib.dll is a mixed-mode (C++/CLI) assembly - it ships
 #      Ijwhost.dll and a runtimeconfig.json pinning Microsoft.NETCore.App 8.0.0 - so on a box with
-#      no .NET runtime, signtool exits 3 having printed NOTHING AT ALL. Verified on .133 2026-08-14:
-#      the box had pwsh 7 (self-contained, brings no shared runtime) and no dotnet whatsoever.
+#      no .NET runtime, signtool exits 3 having printed NOTHING AT ALL. pwsh 7 is self-contained
+#      and brings no shared runtime.
 #   2. The signing client, installed MACHINE-WIDE under C:\trusted-signing rather than into a user's
 #      .nuget. The act_runner daemon runs as SYSTEM, whose USERPROFILE is
 #      C:\Windows\System32\config\systemprofile - so a per-user install under Administrator is
-#      invisible to every job that actually builds. Find-AzureDlib in both pack scripts searches
-#      this exact path for that reason; verified by resolving it from a SYSTEM scheduled task.
+#      invisible to every job that actually builds. Find-AzureDlib (packaging/windows/signing.ps1)
+#      searches this exact path for that reason.
 #
 # Both are SHA-256 pinned against version-immutable URLs (a nuget.org flat-container package and the
 # dotnet builds CDN are both immutable per version), so these fail closed on tampering rather than

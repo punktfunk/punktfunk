@@ -1,4 +1,5 @@
-// Siri / Shortcuts / Spotlight surface (design §M4, extended by client-deep-links.md §6).
+// Siri / Shortcuts / Spotlight surface (design/apple-live-activities-and-widgets.md §8, extended
+// by design/client-deep-links.md §6).
 // Deliberately thin: every action already has an internal entry point — the deep-link router
 // (connect / connect-and-launch / connect-with-a-preset, and the `browse` route into a host's
 // library), the in-process end-session hook, and the existing Wake-on-LAN path — so these

@@ -3,7 +3,7 @@
 //!
 //! Samples the display actor's cached snapshot through the capturer's `DisplayColour`
 //! (immunity plan WP9) — no `QueryDisplayConfig` on this thread, so the session-global
-//! display-config lock can no longer stall it; the actor coalesces the query and logs a slow one.
+//! display-config lock cannot stall it; the actor coalesces the query and logs a slow one.
 //! The capture loop's per-frame cost is one uncontended mutex read of the published descriptor.
 //!
 //! Last-known-good per field: a sample where the target is missing from the snapshot (briefly

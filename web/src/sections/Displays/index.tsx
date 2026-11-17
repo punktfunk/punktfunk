@@ -58,7 +58,7 @@ export const SectionDisplays: FC = () => {
 	const settings = useGetDisplaySettings();
 	const monitors = useGetDisplayMonitors();
 	// Create/release arrive on the event stream, so the timer only covers the one thing events
-	// cannot express: the per-second countdown on a kept display.
+	// cannot express: the countdown on a kept display.
 	const state = useGetDisplayState({
 		query: {
 			refetchInterval: (q) =>
@@ -110,9 +110,9 @@ export const SectionDisplays: FC = () => {
 	const write = (patch: Partial<DisplayPolicy>) => {
 		if (!policy) return;
 		save.mutate(
-			// `screen` is read back from the server on every write rather than carried
-			// through a component: the monitor rows own it, and a stale copy here is exactly how
-			// applying a preset used to un-pin a mirroring host.
+			// `screen` rides along from the stored policy rather than from a copy kept in a
+			// component: the monitor rows own it, and a stale copy would un-pin a mirroring host
+			// when a preset applies.
 			{ data: { ...policy, ...patch } },
 			{
 				onSuccess: () => {

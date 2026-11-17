@@ -83,9 +83,8 @@ export const RecordingsSection: FC<{
 			a.remove();
 			URL.revokeObjectURL(url);
 		} catch (e) {
-			// The old comment claimed the detail view surfaces this — it only does so for the SELECTED
-			// recording, and Download is offered on every row. Downloading an unselected one that
-			// failed produced a button that visibly did nothing.
+			// Download is offered on every row, but the detail view surfaces an error only for the
+			// SELECTED recording, so a failed download of any other needs its own toast.
 			toast.error(apiErrorMessage(e) ?? m.stats_download_failed());
 		}
 	};

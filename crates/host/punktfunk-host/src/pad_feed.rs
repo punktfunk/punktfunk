@@ -9,8 +9,8 @@
 //! lifecycle ring: a stick sweep is ~250 Hz and would evict `session.started` and
 //! friends out of a 1024-entry ring in seconds.
 //!
-//! Idle unless a console is attached — [`PadFeed::publish`] is one relaxed load with
-//! the page closed, and nothing is built.
+//! Idle unless a console is attached — with the page closed [`PadFeed::publish`] only
+//! reads the channel's receiver count, and nothing is built.
 
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,7 +91,7 @@ impl PadFeed {
     }
 
     /// Consume a pending resync request. Short-circuits on [`Self::watching`], so a
-    /// closed page costs the input thread one relaxed load per wake.
+    /// closed page costs the input thread one receiver-count check per wake.
     pub fn take_resync(&self) -> bool {
         self.watching() && self.resync.swap(false, Ordering::Relaxed)
     }

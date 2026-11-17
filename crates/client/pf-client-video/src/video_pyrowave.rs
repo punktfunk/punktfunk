@@ -9,7 +9,7 @@
 //! Encoder RG packing is invalid here (`pyrowave.h`). Colour is the negotiated `ColorInfo`;
 //! the bitstream has no VUI. A plane-set ring keeps decode off a set the presenter samples.
 //!
-//! pyrowave 0.4.0 needs instance/device create-infos alive for the shared device.
+//! pyrowave needs the instance/device create-infos alive for the shared device.
 //! The presenter does not pin its originals, so [`Hold`] reconstructs content-equivalent
 //! ones from [`VulkanDecodeDevice`]. Pointer identity is not required.
 //!

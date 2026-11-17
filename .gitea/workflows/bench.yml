@@ -1,8 +1,8 @@
-# Report-only CPU benchmarks, moved out of ci.yml: they never fail the build (shared CI
-# hardware is too noisy to gate on), so running them per-push only occupied a fleet slot
-# during fan-out storms. Nightly + on demand is exactly as much signal at none of the
-# queue cost. The tight regression gate + the real encode/stream path live on the
-# self-hosted GPU runner (Tier 3, bench-gpu.yml).
+# Report-only CPU benchmarks: they never fail the build (shared CI hardware is too noisy to
+# gate on), so running them per-push would only occupy a fleet slot during fan-out storms.
+# Nightly + on demand is exactly as much signal at none of the queue cost. The real
+# encode/stream path (Tier 3, also report-only) runs on the self-hosted GPU runner, in
+# bench-gpu.yml.
 name: bench
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

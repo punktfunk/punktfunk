@@ -29,25 +29,25 @@ pub const KWIN_POOL_MAX: i32 = 4;
 #[derive(Clone, Default, PartialEq)]
 pub struct ZeroCopyPolicy {
     /// VAAPI (AMD/Intel): hand raw dmabufs through instead of the EGL→CUDA
-    /// import (`encode::linux_zero_copy_is_vaapi`).
+    /// import (`pf_encode` `Resolved::zero_copy_is_vaapi`).
     pub backend_is_vaapi: bool,
     /// GPU-resident frames (everything but software). Phrases the CPU-fallback
-    /// warning (`encode::resolved_backend_is_gpu`).
+    /// warning (`pf_encode` `Resolved::is_gpu`).
     pub backend_is_gpu: bool,
     /// This session encodes PyroWave: the wavelet encoder's Vulkan device
     /// imports raw dmabufs on any vendor, so take raw-dmabuf passthrough.
     /// Per-session, unlike `backend_is_vaapi`.
     pub pyrowave_session: bool,
-    /// Encoder can ingest producer-native NV12 (`pf_encode::linux_native_nv12_ok`:
+    /// Encoder can ingest producer-native NV12 (`pf_encode` `Resolved::native_nv12_ok`:
     /// the AMD/Intel passthrough or NVENC's raw lane). Every other arm takes
     /// packed RGB; PyroWave must never see NV12.
     pub native_nv12_session: bool,
-    /// Encoder can ingest packed 10-bit PQ CUDA (`pf_encode::linux_hdr_cuda_ok`,
+    /// Encoder can ingest packed 10-bit PQ CUDA (`pf_encode` `Resolved::hdr_cuda_ok`,
     /// direct-SDK NVENC only). No other arm reads those 2:10:10:10 words as
     /// anything but garbage, so do not produce them unless this holds.
     pub hdr_cuda_ok: bool,
     /// The NVENC encoder takes held dmabufs and lets its zero-copy worker convert them
-    /// straight into its input slots (`pf_encode::linux_nvenc_raw_dmabuf_ok`). The capture
+    /// straight into its input slots (`pf_encode` `Resolved::nvenc_raw_dmabuf_ok`). The capture
     /// then imports nothing; a producer that cannot be held keeps the import path.
     pub nvenc_raw_dmabuf: bool,
     /// The gamescope producer fixates a tiled modifier (`pf_vdisplay::gamescope_tiled_capture`).

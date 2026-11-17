@@ -131,10 +131,9 @@ describe("discovery", () => {
 	});
 
 	test("a plugin's LIBRARY is not a unit — top-level dependencies win", () => {
-		// Regression from a live install: `@punktfunk/plugin-kit` is the framework kit-built
-		// plugins depend on. It matches the `plugin-*` convention exactly and lands in
-		// node_modules transitively, so a convention-only scan would import and run the framework
-		// as if it were a plugin.
+		// `@punktfunk/plugin-kit` is the framework kit-built plugins depend on. It matches the
+		// `plugin-*` convention exactly and lands in node_modules transitively, so a
+		// convention-only scan would import and run the framework as if it were a plugin.
 		const d = mkdirs("discover-toplevel");
 		for (const name of ["plugin-real", "plugin-kit"]) {
 			write(
@@ -171,7 +170,7 @@ describe("discovery", () => {
 		// `bun remove` drops the `dependencies` key when the last plugin goes, while orphaned
 		// transitive packages linger in node_modules. Falling back to the naming convention there
 		// would start running a plugin's LIBRARY right after the operator removed the only real
-		// plugin — seen on-glass.
+		// plugin.
 		const d = mkdirs("discover-emptied");
 		write(
 			path.join(d.pluginsDir, "node_modules", "@punktfunk", "plugin-kit", "package.json"),

@@ -33,10 +33,9 @@ fn render_scale_label(scale: f64) -> String {
 }
 /// Decode backend presets: `(stored value, label)`. A label is a message, read when the page
 /// renders; a format or product name is a literal.
-// A stored legacy value that matches no preset (the D3D11VA-era "hardware", and since M10
-// the bare "vulkan"/"d3d11va" that named libavcodec's rungs) shows as Automatic — which is
-// how the session's ladder reads "hardware", and near enough for the other two, which
-// `pf_client_core::video::migrate_decoder_pref` maps onto the entries below anyway.
+// A stored value that matches no preset (the legacy "hardware") shows as Automatic, which is
+// how the session's ladder reads it. "vulkan" and "d3d11va" are mapped onto the entries below
+// by `migrate_decoder_pref` before the lookup.
 const DECODERS: &[(&str, Label)] = &[
     ("auto", client::player_decoder_auto),
     ("native-vulkan", || "Vulkan Video"),
@@ -326,9 +325,9 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
     let comp_combo = setting_combo(cx, scope, "compositor", comp_names, comp_i, |s, i| {
         s.compositor = COMPOSITORS[i].0.to_string();
     });
-    // Migrated for the LOOKUP only (the store is left alone): a pre-M10 settings file
-    // holds `vulkan`/`d3d11va`, which match no preset — the combo would show Automatic and
-    // a save would silently rewrite the user's hardware preference to `auto`.
+    // Migrated for the LOOKUP only (the store is left alone): an older settings file may hold
+    // `vulkan`/`d3d11va`, which match no preset — the combo would show Automatic and a save
+    // would silently rewrite the user's hardware preference to `auto`.
     let stored_decoder = pf_client_core::video::migrate_decoder_pref(&s.decoder);
     let (dec_names, dec_i) = presets(&labeled(DECODERS), |v| *v == stored_decoder);
     let decoder_combo = setting_combo(cx, scope, "decoder", dec_names, dec_i, |s, i| {
@@ -595,8 +594,7 @@ pub(super) fn display_section(cx: &Cx) -> Vec<View> {
             scale_control,
             client::player_render_scale_hint(),
         ),
-        // First sentence shared with the GTK client (its chroma_row); the constraint
-        // sentence names the real gate (host: PyroWave || NVENC).
+        // The hint is the message the GTK client's `CHROMA` row shares; it names the gate.
         described_overridable(
             cx,
             &rows::CHROMA,

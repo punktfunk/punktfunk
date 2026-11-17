@@ -1,25 +1,27 @@
-// The parity harness: proof that a library plugin reproduces the in-host scanner it replaces.
+// The parity harness: proof that a library plugin reproduces the built-in scanner it replaced.
 //
-// This is the acceptance gate for every extracted scanner (design M5). Ported unit tests are
+// This is the acceptance gate for every extracted scanner
+// (library-scanner-plugins-implementation-plan.md M5). Ported unit tests are
 // necessary but nowhere near sufficient — they pin the PARSERS, while what actually has to hold is
 // that the whole pipeline lands the same entries, with the same ids, launch recipes and detect
 // signals, on a real box with a real launcher installed. A plugin that parses perfectly and emits
 // `steam:440` as `steam:440.0` breaks every Moonlight pin on the host and no parser test notices.
 //
-// It lives in the KIT, not in a plugin, because it is identical for all six: capture what the host
-// reports while its built-in scanner is doing the work, then check the plugin produces the same set.
+// It lives in the KIT, not in a plugin, because it is identical for every scanner: capture what a
+// host reports while its built-in scanner is doing the work, then check the plugin produces the
+// same set.
 // (One plugin per repo is the house pattern, so anything shared has to be published, not adjacent.)
 //
 // Usage, per plugin, on a box with that launcher installed:
 //
 //   punktfunk-plugin-steam parity --snapshot before.json   # host still on its built-in scanner
-//   punktfunk-plugin-steam parity --compare before.json    # offline: runs THIS plugin's scan
+//   punktfunk-plugin-steam parity --compare before.json    # runs THIS plugin's scan
 //
 // `--compare` runs the plugin's own scan directly rather than installing it first, so a mismatch is
 // visible before anything is published — and the run is repeatable while you fix it.
 import type { ProviderEntry } from "../wire.js";
 
-/** The four art slots, in the order the host's box-art ladder tries them. */
+/** The four art slots, in the order of the host's `ArtKind::ALL`. */
 const ART_KINDS = ["portrait", "hero", "logo", "header"] as const;
 type ArtKind = (typeof ART_KINDS)[number];
 

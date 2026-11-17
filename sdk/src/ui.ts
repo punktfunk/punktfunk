@@ -29,7 +29,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Punktfunk } from "./index.js";
 
-/** How often the lease is renewed (host TTL is 90 s — two missed ticks of slack). */
+/** How often the lease is renewed: the host's `LEASE_TTL` (plugin_host/registry.rs) outlasts two
+ *  missed ticks. */
 const DEFAULT_RENEW_MS = 30_000;
 
 export interface PluginUiOptions {
@@ -47,8 +48,8 @@ export interface PluginUiOptions {
 	/**
 	 * What KIND of plugin this is (`[a-z][a-z0-9-]{0,31}`). The console groups and filters on it —
 	 * and notably keeps `"library"` plugins **out of the nav**, because a scanner's entry point is
-	 * the Library section's Game sources surface, not a sidebar item of its own. Six installed
-	 * scanners would otherwise flood the sidebar.
+	 * the Library section's Game sources surface, not a sidebar item of its own. Every installed
+	 * scanner would otherwise add a sidebar item.
 	 *
 	 * `@punktfunk/plugin-kit`'s `defineLibraryPlugin` sets this for you. Set it by hand only if you
 	 * are building a library plugin without the kit — and omit it if your plugin wants a full page
@@ -70,8 +71,9 @@ export interface PluginUiOptions {
 	};
 	/**
 	 * Stages this plugin holds, like `"game.launching"`. The host POSTs the event to `/__hold` and
-	 * waits for a 2xx, up to `holdTimeoutMs` (default 30 000, at most 120 000). Needs `fetch` to
-	 * answer `/__hold`; `@punktfunk/plugin-kit`'s `serveUi({ holds })` does.
+	 * waits for a 2xx, up to `holdTimeoutMs` (the host's `HOLD_DEFAULT_MS` when absent, at most
+	 * `HOLD_MAX_MS`; both in plugin_host/registry.rs). Needs `fetch` to answer `/__hold`;
+	 * `@punktfunk/plugin-kit`'s `serveUi({ holds })` does.
 	 */
 	holds?: readonly string[];
 	holdTimeoutMs?: number;

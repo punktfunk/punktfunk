@@ -13,7 +13,7 @@ import org.junit.Test
  * The aspect assertions are the point: a [androidx.compose.ui.graphics.vector.VectorPainter] maps
  * the viewport onto the vector's default size with independent x and y scales, so a mark whose
  * default size does not carry its viewport's ratio renders STRETCHED — silently, with no crash and
- * no warning. That is exactly how Tux and the Apple mark used to look on a phone.
+ * no warning.
  */
 class OsIconsTest {
     /** `ImageVector.name` is "OsIcon.<token>" — the only handle on which mark got resolved. */

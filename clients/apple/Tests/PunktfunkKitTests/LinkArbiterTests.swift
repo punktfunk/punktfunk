@@ -33,7 +33,7 @@ final class LinkArbiterTests: XCTestCase {
     }
 
     /// iPadOS and visionOS: the scene in front takes a link at once, and one behind it only if
-    /// the front one did not, not whichever window subscribed first (R2-3).
+    /// the front one did not, not whichever window subscribed first.
     func testTheIPadOrVisionWindowInFrontTakesALinkFirst() {
         XCTAssertEqual(decide(.link(.scenes), front: true), .runHere)
         XCTAssertEqual(decide(.link(.scenes), front: false), .retryAfter(0.25))

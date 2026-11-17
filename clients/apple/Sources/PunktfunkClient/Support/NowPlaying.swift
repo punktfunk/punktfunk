@@ -17,7 +17,7 @@ final class NowPlayingStore: ObservableObject {
     static let shared = NowPlayingStore()
 
     /// Each host's title, "" for nothing up. 20 s, short on purpose (see the file note); the
-    /// surfaces that call `refresh` already tick about this often for reachability.
+    /// presence beat that calls `refresh` (`HostStore.presencePeriod`) ticks faster than this.
     private var cache = TTLCache<String>(ttl: 20)
 
     /// The title `host` last said it has up, or nil for nothing running, an unpaired or

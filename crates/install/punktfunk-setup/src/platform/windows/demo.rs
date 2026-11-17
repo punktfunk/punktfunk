@@ -7,7 +7,7 @@
 //!
 //! One Windows-only extra: `WinExecutor`'s `RemoveFiles` deletes with `std::fs`, not through
 //! the runner, so the uninstall preset's install location MUST be a sandbox path — a canned
-//! `C:\Program Files\punktfunk` would point a real `remove_dir_all` at a real install.
+//! `C:\Program Files\punktfunk` would point a real sweep at a real install.
 //! `sandbox_app_dir` is that path; the wizard stages a marker file there so the removal has
 //! something honest to remove.
 
@@ -18,7 +18,7 @@ use crate::seam::{CommandRunner, Output, RunFailed, Stdin};
 use super::plan::Artifact;
 use super::{NetCategory, NetProfile, TaskState, WinFacts, WinInstall};
 
-/// One per flow worth reviewing (WP2.3's list, plus M4's client manage mode).
+/// One per flow worth reviewing.
 pub const WIN_PRESETS: [&str; 9] = [
     "win11-fresh",
     "win11-upgrade",

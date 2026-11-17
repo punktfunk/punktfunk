@@ -75,12 +75,11 @@ BAZ='ID=bazzite\nID_LIKE="fedora"\nVERSION_ID=43\nPRETTY_NAME="Bazzite"\n'
 NOB='ID=nobara\nID_LIKE="fedora"\nVERSION_ID=43\nPRETTY_NAME="Nobara Linux"\n'
 SIL='ID=fedora\nVARIANT_ID=silverblue\nVERSION_ID=44\nPRETTY_NAME="Fedora Linux 44 (Silverblue)"\n'
 
-# Desktop seat: only the couch/HTPC distros flip group + linger on.
-# D4 (2026-08-31) flipped the punktfunk group to YES on every box, not couch boxes only, and the
-# clipboard followed on 2026-09-01: each client still opts in per host, so a shared clipboard on
-# the host grants nothing on its own. The rows below assert both flips; the couch cases still
-# carry their own why-text, and the opt-out case proves --no-punktfunk-group still wins. The
-# grant is named in the label on purpose: under --yes this summary is the only place it is stated.
+# Desktop seat: the punktfunk group and the shared clipboard default to yes on every family;
+# linger only on the couch/HTPC distros. Each client opts in per host, so a shared clipboard on
+# the host grants nothing on its own. The couch cases carry their own why-text, and the opt-out
+# case proves --no-punktfunk-group still wins. The grant is named in the label on purpose: under
+# --yes this summary is the only place it is stated.
 defaults_case debian-desk  "$DEB"  desktop '' 'Full controller (joins the punktfunk group — grants usbip attach): yes'
 defaults_case debian-desk2 "$DEB"  desktop '' 'Third-party clients (Moonlight, Artemis): no'
 defaults_case debian-desk3 "$DEB"  desktop '' 'Shared clipboard: yes'
@@ -145,15 +144,15 @@ defaults_case silverblue2 "$SIL" desktop "$ujbin" 'Start at boot with nobody log
 # …and the narrowing must not cost Bazzite its own defaults, sysext family and all.
 defaults_case bazzite-sysext "$BAZ" desktop "$ujbin" 'Full controller (joins the punktfunk group — grants usbip attach): yes  (Bazzite — virtual Steam Deck controller)'
 
-# --no-start is "don't enable the services", not "don't configure": linger was promised in the
-# summary, so it has to actually run. Every other case here passes --no-start, so without this
-# one the matrix would happily certify a summary the run drops on the floor.
+# --no-start is "don't enable the services", not "don't configure": a linger promised in the
+# summary has to actually run. Every other case here passes --no-start, so only this one proves
+# the summary and the run agree.
 defaults_case bazzite-linger "$BAZ" desktop '' '+ sudo loginctl enable-linger'
 
 # ------------------------------------------- no flag may be injected into a sudo line
-# A `sudo` -> `sudo -n` rewrite under --yes once met the root-container shim, which is
-# `exec "$@"` — and `exec -n ...` is not a command. It cost a red smoke job. The installer's
-# --yes rewrites add package-manager flags only; nothing may touch sudo itself.
+# A `sudo` -> `sudo -n` rewrite under --yes would break the root-container shim, which is
+# `exec "$@"` — and `exec -n ...` is not a command. The installer's --yes rewrites add
+# package-manager flags only; nothing may touch sudo itself.
 # The shim itself is exercised by installer-smoke, which runs as root with no sudo present.
 printf 'ID=debian\nVERSION_ID=13\n' > "$osr/sudoflags"
 out=$(PUNKTFUNK_INSTALL_OS_RELEASE="$osr/sudoflags" "$PF" --dry-run --yes --no-start 2>&1)

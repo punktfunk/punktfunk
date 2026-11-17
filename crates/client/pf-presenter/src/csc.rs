@@ -1,6 +1,6 @@
-//! NV12→RGBA color-space conversion: CICP coefficient rows (the GL presenter's
-//! `yuv_to_rgb`, folded for the shader's push constants) and the pipeline that
-//! renders imported planes into the presenter's video image.
+//! NV12→RGBA color-space conversion: CICP coefficient rows (`csc_rows`, folded for the
+//! shader's push constants) and the pipeline that renders imported planes into the
+//! presenter's video image.
 //!
 //! The colour maths is never `VK_KHR_sampler_ycbcr_conversion`: the ext cannot express
 //! the PQ path, and range handling varies by driver. A device with no plane views takes
@@ -35,8 +35,8 @@ pub enum CscPipe {
 }
 
 impl CscPass {
-    /// `attachment_format` is the video image: R8G8B8A8 for SDR, 10-bit for PQ
-    /// (8 bits band the PQ curve).
+    /// `attachment_format` is the video image's; the presenter passes `VIDEO_FORMAT`, 10-bit
+    /// for every stream (8 bits band the PQ curve).
     pub fn new(device: &ash::Device, attachment_format: vk::Format) -> Result<CscPass> {
         Self::build(
             device,

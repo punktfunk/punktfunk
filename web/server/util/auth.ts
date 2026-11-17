@@ -2,8 +2,8 @@
  * A revocation marker for issued sessions, PERSISTED across restarts.
  *
  * The session is stateless: everything lives inside the sealed cookie, so `session.clear()` only
- * deletes the BROWSER's copy. A cookie captured beforehand stayed valid for its full 7-day TTL —
- * "log out" did not log anything out.
+ * deletes the BROWSER's copy. A cookie captured beforehand would stay valid for its full 7-day TTL
+ * and "log out" would log nothing out, so the gate also requires the current epoch.
  *
  * The counter has to survive a restart or it does not do its job: an in-memory `let epoch = 1`
  * revokes within one process run, then resets to 1 the next time the service starts, and a cookie
@@ -51,8 +51,9 @@ export function revokeAllSessions(): void {
 
 // Shared auth helpers for the Nitro server (the deployed Bun server). Single-user,
 // shared-password gate: the user logs in against PUNKTFUNK_UI_PASSWORD_HASH, which sets a SEALED
-// (h3 useSession — AES-GCM) cookie; every request is gated by server/middleware/auth.ts.
-// The management hop lives in util/mgmt.ts, the path rules in util/paths.ts.
+// cookie (h3 useSession, iron: AES-256-CBC plus an HMAC); every request is gated by
+// server/middleware/auth.ts. The management hop lives in util/mgmt.ts, the path rules in
+// util/paths.ts.
 import {
 	createHash,
 	timingSafeEqual as nodeTimingSafeEqual,
@@ -86,8 +87,8 @@ const PEER_IP_HEADER = "x-pf-peer-ip";
  *
  * `getRequestIP()` alone does NOT work under the deployed server: Nitro's `localFetch` builds a
  * synthetic request whose socket carries no `remoteAddress`, so h3 finds nothing and every caller
- * collapses onto one shared bucket — which turned the "per-IP" login throttle into a lockout any
- * LAN peer could trigger for everyone. The Bun entry stamps the real peer into PEER_IP_HEADER
+ * collapses onto one shared bucket — a "per-IP" login throttle would become a lockout any LAN
+ * peer could trigger for everyone. The Bun entry stamps the real peer into PEER_IP_HEADER
  * (unforgeable: it deletes any client-supplied copy first), so prefer that.
  *
  * `getRequestIP` is kept as the fallback for any other ingress (a plain `node`/dev run), and
@@ -167,7 +168,8 @@ declare const Bun: {
 };
 
 /** The env file the launcher loads the password line from, and the one the migration rewrites.
- * SteamOS names `web.env` here; everyone else takes the default. */
+ * SteamOS names `web.env` here and the Windows service its own `web-password`; every other
+ * install takes the default. */
 function passwordFile(): string {
 	return (
 		process.env.PUNKTFUNK_UI_PASSWORD_FILE ??
@@ -306,8 +308,8 @@ function sessionKey(token: string): string | null {
  * candidate cookies locally, no server round-trips, so the login throttle can't help. Logging out
  * and setting a new password end every session through the epoch instead.
  *
- * (3) takes the HASH when there is one: it carries a random salt, so the same human password no
- * longer gives two boxes the same seal key.
+ * (3) takes the HASH when there is one: it carries a random salt, so the same human password
+ * does not give two boxes the same seal key.
  */
 export function sessionConfig(): SessionConfig {
 	const explicit = process.env.PUNKTFUNK_UI_SECRET;
@@ -322,7 +324,7 @@ export function sessionConfig(): SessionConfig {
 					.digest("hex"));
 	return {
 		name: SESSION_NAME,
-		// h3's `useSession` calls this seal key `password` (it's the iron/AES-GCM key, not the login
+		// h3's `useSession` calls this seal key `password` (it's the iron seal key, not the login
 		// password — see the derivation above).
 		password: secret,
 		// Bounds a stolen/replayed cookie's lifetime (sets the cookie Max-Age AND the iron
@@ -335,14 +337,10 @@ export function sessionConfig(): SessionConfig {
 			// h3 defaults Secure to true, which browsers DROP over plain http:// (so login
 			// silently fails on a LAN HTTP server). Only mark Secure when actually behind TLS.
 			//
-			// Derived from whether TLS is CONFIGURED, not from `PUNKTFUNK_UI_SECURE` alone
-			// (2026-08-05 review L-20). The entry point already refuses the inverse mistake —
-			// `PUNKTFUNK_UI_SECURE` without TLS exits rather than serving a console whose cookie
-			// the browser will never store — but nothing caught this direction: TLS configured and
-			// the flag forgotten shipped a session cookie without `Secure`, which a browser will
-			// then also send over a plain-http downgrade. The env var still forces it on for a
-			// deploy terminating TLS in front of us (a reverse proxy), where this process sees no
-			// cert of its own.
+			// Derived from whether TLS is CONFIGURED, not from `PUNKTFUNK_UI_SECURE` alone: a
+			// cookie without `Secure` is also sent over a plain-http downgrade. The entry exits on
+			// `PUNKTFUNK_UI_SECURE` without TLS (nitro-entry/bun-https.mjs), so the flag alone
+			// takes effect only where that entry does not run.
 			secure: cookieSecure(),
 		},
 	};

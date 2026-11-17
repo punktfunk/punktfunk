@@ -1,13 +1,12 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Build-stage-sign-install the NEW-tree pf-vdisplay UMDF IddCx driver (packaging/windows/drivers/) for
-  local dev/test on the RTX box. The wdk-sys / windows-drivers-rs analogue of the superseded
-  vdisplay-driver/deploy-dev.ps1.
+  Stage, sign and install the pf-vdisplay UMDF IddCx driver (packaging/windows/drivers/) for local
+  dev/test, from a build you made first (see .DESCRIPTION).
 
 .DESCRIPTION
-  Stages the freshly built pf_vdisplay.dll, CLEARS its FORCE_INTEGRITY PE bit (this tree's wdk-build links
-  /INTEGRITYCHECK, which a self-signed cert can't satisfy — the old wdf-umdf tree didn't), signs it with
+  Stages the freshly built pf_vdisplay.dll, CLEARS its FORCE_INTEGRITY PE bit (wdk-build links
+  /INTEGRITYCHECK, which a self-signed cert can't satisfy), signs it with
   the self-signed test cert, stamps a STRICTLY-INCREASING DriverVer into the INF, generates + signs the
   catalog, and (with -Install) pnputil-installs it.
 
@@ -24,10 +23,10 @@
 #>
 [CmdletBinding()]
 # `-Install` signs the contents of $Stage and installs them, so the staging directory must not
-# be one any user can write — C:\Users\Public was exactly that, and this script creates the
-# directory itself. Default to a fresh per-run temp dir, as stage-pf-vdisplay.ps1 does for its
-# own work dir. $Nefconc keeps its documented location: that binary is fetched and SHA-256
-# verified by stage-pf-vdisplay.ps1, and pass -Nefconc if you staged it elsewhere.
+# be one any user can write (C:\Users\Public is one). Default to a fresh per-run temp dir, as
+# stage-pf-vdisplay.ps1 does for its own work dir. $Nefconc keeps its documented location: that
+# binary is fetched and SHA-256 verified by stage-pf-vdisplay.ps1. Pass -Nefconc if you staged
+# it elsewhere.
 param(
     [string]$Stage      = (Join-Path ([IO.Path]::GetTempPath()) ('pfvd-stage-' + [IO.Path]::GetRandomFileName())),
     [string]$Thumbprint = '6A52984E54376C45A1C236B1A2C8A746C5AB6131',

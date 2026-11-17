@@ -177,8 +177,9 @@ pub fn key_legend(k: &str) -> String {
 /// The shortcut editors' modifier toggles, in host send order.
 pub const CHORD_MODIFIERS: [&str; 4] = ["ctrl", "alt", "shift", "win"];
 
-/// Every name [`key_vk`] knows that is not a modifier, row by row as a keyboard lays them
-/// out. The console, GTK and WinUI shortcut editors all draw these rows.
+/// The keys the editors offer besides the modifiers, row by row as a keyboard lays them out;
+/// each is a name [`key_vk`] knows, which also takes aliases and `f13`-`f24`. The console, GTK
+/// and WinUI shortcut editors all draw these rows.
 pub const KEY_GRID: [&[&str]; 6] = [
     &[
         "escape", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",

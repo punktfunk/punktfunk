@@ -91,8 +91,8 @@ internal fun isTouchpadScrollDown(ev: MotionEvent): Boolean =
  *    otherwise it is hidden and the host's cursor in the video is the one you see.
  *  * **captured**: the OS pointer is grabbed ([android.view.View.requestPointerCapture]) and raw
  *    relative deltas forward as `MouseMove` — FPS mouse-look. Engaged at stream start / by
- *    clicking into the stream when the "Capture pointer for games" setting is on, and toggled
- *    any time by Ctrl+Alt+Shift+Q (the cross-client chord). Focus loss releases it (the OS
+ *    clicking into the stream when the mouse mode is [MouseMode.CAPTURE], and toggled any time
+ *    by Ctrl+Alt+Shift+Q (the default Release input chord). Focus loss releases it (the OS
  *    guarantees that); a click re-engages.
  *
  * Buttons ride [MotionEvent.ACTION_BUTTON_PRESS]/RELEASE edges (left/middle/right/back/forward →
@@ -384,7 +384,7 @@ class MouseForwarder internal constructor(
         }
     }
 
-    /** Auto-engage at stream start (setting on + a mouse actually present). */
+    /** Auto-engage at stream start (mouse mode Capture + a mouse actually present). */
     fun engageFromStart() {
         if (pointerGranted && captureWanted && !captured && !userReleased && hasPhysicalMouse()) {
             onRequestCapture?.invoke()

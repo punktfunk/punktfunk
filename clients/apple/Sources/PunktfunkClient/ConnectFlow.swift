@@ -26,7 +26,7 @@ struct ConnectFlow {
     /// "Wake Host" action is unaffected either way.
     @Binding var autoWake: Bool
     /// A fresh `pair=required`/unknown host the user tapped: drives the choice between no-PIN
-    /// delegated approval ("Request Access") and the SPAKE2 PIN ceremony (rule 3b).
+    /// delegated approval ("Request Access") and the SPAKE2 PIN ceremony.
     @Binding var approvalChoice: ApprovalRequest?
     /// A delegated-approval connect is in flight (host parks it until the operator approves):
     /// drives the cancelable "Waiting for approval" prompt and the pin-as-paired on success.
@@ -456,8 +456,8 @@ struct ConnectFlow {
 
     /// Runs `go` with the launched game's overrides: a tile's entry at once (the hold mounts in
     /// this turn), else the catalog cached for `profile`, the one this connect plays as, once
-    /// read. A title never fetched here gets nil and dials as before; the host still lowers the
-    /// mode and swaps the pad.
+    /// read. A title never fetched here gets nil and dials without overrides; the host still
+    /// lowers the mode and swaps the pad.
     private func launchOverrides(
         _ host: StoredHost, _ launchID: String?, as profile: String?,
         go: @escaping @MainActor (GameOverrides?) -> Void
@@ -555,17 +555,17 @@ struct ConnectFlow {
 
     /// Tap a discovered host: save it (so the session has a stored identity and the trust pin
     /// persists), then connect or pair per the host's advertised policy. The host is the policy
-    /// authority — TOFU is offered ONLY when it explicitly advertised `pair=optional` (rule 3a);
-    /// a `pair=required` host, or one with no/unknown `pair` field, gets the approval choice
-    /// (request access / pair with PIN) (rule 3b). (A pinned discovered host connects silently
-    /// inside `connect`.)
+    /// authority — TOFU is offered ONLY when it explicitly advertised `pair=optional`; a
+    /// `pair=required` host, or one with no/unknown `pair` field, gets the approval choice
+    /// (request access / pair with PIN). (A pinned discovered host connects silently inside
+    /// `connect`.)
     func connectDiscovered(_ d: DiscoveredHost) {
         guard !model.isBusy, !life.fetching else { return }
         let host = save(d)
         if d.allowsTofu {
             connect(host, allowTofu: true)
         } else {
-            // pair=required / unknown policy (rule 3b): offer no-PIN delegated approval or PIN.
+            // pair=required / unknown policy: offer no-PIN delegated approval or PIN.
             approvalChoice = ApprovalRequest(
                 host: host, advertisedFingerprint: pinFingerprint(d.fingerprintHex))
         }
@@ -602,8 +602,8 @@ struct ConnectFlow {
     }
 
     /// Parse an advertised cert fingerprint (lowercase hex) into the 32-byte pin the connect
-    /// expects; nil unless it's exactly a 32-byte (SHA-256) value, so a malformed advert falls
-    /// back to trust-on-first-use rather than failing the connect closed.
+    /// expects; nil unless it's exactly a 32-byte (SHA-256) value. A malformed advert is no
+    /// pin: the approval choice then offers PIN pairing only.
     private func pinFingerprint(_ hex: String?) -> Data? {
         guard let hex, let data = Data(hexString: hex), data.count == 32 else { return nil }
         return data

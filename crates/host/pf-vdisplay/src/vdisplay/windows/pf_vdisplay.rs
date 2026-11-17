@@ -10,7 +10,8 @@
 //!
 //! Lifecycle, CCD isolation, and active-mode forcing live in [`super::manager`] and
 //! `pf_win_display::win_display` — a pf-vdisplay `target_id` is a real OS target id. This module
-//! owns only GUID, IOCTL codes, request/reply structs, and the version handshake.
+//! owns the device itself: the interface GUID, the IOCTL calls, the version handshake, the probe
+//! and the adapter recovery.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -52,21 +53,19 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The driver's key for a monitor: a per-process counter.
 ///
-/// Two hosts both starting at 1 used to collide, and an `IOCTL_ADD` on a live
-/// key makes the driver depart the incumbent — so a second host's first ADD
-/// tore down the first host's display. #624 keys the driver's sessions by the
-/// requesting process, so identical counters in two hosts no longer meet.
+/// The driver keys its sessions by the requesting process and this key, so identical
+/// counters in two hosts do not meet.
 ///
-/// A fresh key per ADD is also what the preempt-and-recreate path needs: it
-/// removes the old monitor, waits up to 400 ms for the departure, then adds
-/// regardless, and a reused key turns that last add into the depart-the-
-/// incumbent branch mid-churn.
+/// A fresh key per ADD is what the preempt-and-recreate path needs: an `IOCTL_ADD` on a
+/// live key makes the driver depart the incumbent, and that path removes the old monitor,
+/// waits up to 400 ms for the departure, then adds regardless.
 fn next_session_id() -> u64 {
     NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The pf-vdisplay control device. `probe_sync` is the only constructor and opens it without
-/// `FILE_FLAG_OVERLAPPED`, so every IOCTL through it completes before `DeviceIoControl` returns.
+/// The pf-vdisplay control device. `probe_sync` is the only non-test constructor and opens it
+/// without `FILE_FLAG_OVERLAPPED`, so every IOCTL through it completes before `DeviceIoControl`
+/// returns.
 /// A borrow keeps the handle open; drop closes it.
 pub struct ControlDevice(OwnedHandle);
 
@@ -122,13 +121,6 @@ enum AdapterCycle {
     Refused(String),
 }
 
-/// Reload the pf-vdisplay adapter — in-process `reset-pf-vdisplay.ps1` step 3. A killed WUDFHost
-/// can leave the devnode "started" yet hostless (PnP OK, no process, zero interfaces).
-///
-/// Disable+enable is the script's lever, but that script stops the host first: this process
-/// still holds [`DeviceSlot`](super::manager) handles, so disable is expected to refuse.
-/// `pnputil /restart-device` reloads a device in use. Failure paths re-enable so a half cycle
-/// cannot leave the adapter disabled. Best-effort, ~6 s inside the script.
 /// The reload script. `$pin` is the devnode this process last opened. Without one, a seat
 /// host (`$seat`) takes only its own session's node, and only while ours drives it; the
 /// console host takes a node by name, never a seat's (same `%DeviceName%` in the INF, under
@@ -157,6 +149,14 @@ const CYCLE_PS: &str = "$ErrorActionPreference='SilentlyContinue'; \
         else { Enable-PnpDevice -InstanceId $id -Confirm:$false; \
             Write-Output ('REFUSED devnodes=' + $all.Count + ' live=' + $live.Count + ' status=' + $ad.Status + ' problem=' + $ad.ConfigManagerErrorCode + ' restart_exit=' + $rx + ' ' + $err) }";
 
+/// Reload the pf-vdisplay adapter — in-process `reset-pf-vdisplay.ps1` step 3. A killed WUDFHost
+/// can leave the devnode "started" yet hostless (PnP OK, no process, zero interfaces).
+///
+/// Disable+enable is the lever and refuses while a control handle is open. Callers release
+/// the manager's first (`invalidate_cached_device`); a handle still held falls to
+/// `pnputil /restart-device`, which reloads a device in use. Failure paths re-enable so a
+/// half cycle cannot leave the adapter disabled. Best-effort; [`CYCLE_PS`]'s sleeps total
+/// at most 6 s.
 fn reload_vdisplay_adapter() -> AdapterCycle {
     let ps = pf_paths::system32(pf_paths::POWERSHELL);
     let pin = LAST_INSTANCE_ID
@@ -172,7 +172,7 @@ fn reload_vdisplay_adapter() -> AdapterCycle {
         pin.replace('\'', "''")
     );
     // Bounded: this holds the RECOVERY mutex, so a wedged Disable-PnpDevice would stall the whole
-    // recovery ladder. The script's own sleeps total ~6-8 s on the happy path.
+    // recovery ladder. The script's own sleeps total at most 6 s.
     let mut cmd = std::process::Command::new(&ps);
     cmd.args([
         "-NoProfile",
@@ -295,7 +295,7 @@ fn send_add(dev: &ControlDevice, add: &control::AddRequest, out: &mut [u8]) -> R
 
 /// Pin the IddCx render GPU to `luid` before `IOCTL_ADD`. On a multi-adapter box this stops DXGI
 /// reparenting the virtual output onto a different GPU than the one we encode on (ACCESS_LOST).
-/// Callers tolerate `Err`: the driver reports the real render LUID in the shared header anyway.
+/// Callers tolerate `Err` and carry on with the natural adapter.
 fn set_render_adapter(dev: &ControlDevice, luid: LUID) -> Result<()> {
     let req = control::SetRenderAdapterRequest {
         luid_low: luid.LowPart,
@@ -325,7 +325,7 @@ pub fn send_cursor_channel(
 }
 
 /// Flip a live monitor's hardware-cursor declaration (`IOCTL_SET_CURSOR_FORWARD`, proto v6).
-/// Fails against a pre-v6 driver; callers log and keep the declared-at-ADD behavior.
+/// `NOT_FOUND` when the target is not this process's monitor; callers log a failure.
 pub fn send_cursor_forward(
     dev: &ControlDevice,
     req: &control::SetCursorForwardRequest,
@@ -341,7 +341,8 @@ pub fn send_cursor_forward(
 /// Open a monitor's in-driver encoder (`IOCTL_SET_ENCODE`, proto v7) and adopt its AU section.
 /// Same handle contract as [`send_cursor_channel`]: the section and event VALUES in `req` are
 /// already duplicated into WUDFHost, the driver owns them iff the IOCTL succeeds, and the
-/// caller reaps them on `Err`. A short reply fails closed: every field feeds the session.
+/// caller reaps them on any `Err` but the typed `encode::ReplyTooShort`. A short reply fails
+/// closed: every field feeds the session.
 pub fn send_set_encode(
     dev: &ControlDevice,
     req: &encode::SetEncodeRequest,
@@ -524,9 +525,8 @@ fn open_device() -> Result<ControlDevice> {
     probe_device().into_result().map(|(h, _)| h)
 }
 
-/// Bound on one open + `IOCTL_GET_INFO`. Both are sub-second; the driver's own silence watchdog
-/// is 3 s, so a device that has not answered in 10 s has already departed every monitor and an
-/// adapter reload costs nothing.
+/// Bound on one open + `IOCTL_GET_INFO`. Both are sub-second, so a device that has not
+/// answered in this long is wedged.
 const PROBE_BUDGET: Duration = Duration::from_secs(10);
 
 /// Probe workers abandoned past their budget and still blocked in the driver. While non-zero,
@@ -573,7 +573,6 @@ fn bounded_probe(budget: Duration, probe: fn() -> Probe) -> Probe {
     }
 }
 
-/// [`open_device`], reporting what was found rather than only success.
 /// The instance id of the devnode this process last opened a control interface on. A seats box
 /// carries several same-named adapters, so a reload must name ours, not the first healthy one.
 static LAST_INSTANCE_ID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -765,8 +764,8 @@ pub struct DriverOutdated {
 }
 
 impl DriverOutdated {
-    /// v7 replaced the video transport outright, so the floor equals this host's version: a
-    /// v6 driver has no encoder to open and a future one may have moved the section again.
+    /// The host drives `pf_driver_proto::MIN_DRIVER_PROTOCOL_VERSION` up to its own
+    /// `PROTOCOL_VERSION`; a driver outside that range is refused.
     fn check(driver: u32) -> Option<Self> {
         let host = pf_driver_proto::PROTOCOL_VERSION;
         (driver < pf_driver_proto::MIN_DRIVER_PROTOCOL_VERSION || driver > host)
@@ -787,7 +786,6 @@ impl std::fmt::Display for DriverOutdated {
 
 impl std::error::Error for DriverOutdated {}
 
-/// pf-vdisplay IOCTL surface behind [`VirtualDisplayManager`](super::manager::VirtualDisplayManager).
 /// `mode`'s rate for a driver request, in millihertz: its fraction where the driver runs
 /// one, else zero, the whole rate.
 fn exact_mhz(mode: Mode) -> u32 {
@@ -799,6 +797,7 @@ fn exact_mhz(mode: Mode) -> u32 {
     }
 }
 
+/// pf-vdisplay IOCTL surface behind [`super::manager::VirtualDisplayManager`].
 /// Wire contract: `pf_driver_proto::control` (versioned, hard-checked).
 pub(crate) struct PfVdisplayDriver;
 
@@ -824,8 +823,8 @@ impl VdisplayDriver for PfVdisplayDriver {
             info.protocol_version,
             watchdog_s
         );
-        // CLEAR_ALL needs sole ownership of the device. A reopen races sessions this process
-        // still believes live, and under a seats reservation another host owns monitors here.
+        // CLEAR_ALL departs every monitor this process holds, so a reopen would take down the
+        // sessions it still believes live. The manager sets `reap_orphans` on its first open only.
         if reap_orphans {
             if ioctl_send(&device, control::IOCTL_CLEAR_ALL, &[]).is_ok() {
                 tracing::info!("cleared orphaned virtual monitors on host startup");
@@ -885,7 +884,7 @@ impl VdisplayDriver for PfVdisplayDriver {
             refresh_mhz: exact_mhz(mode),
             _reserved: 0,
         };
-        // Opt-in; non-fatal: the driver reports the real render LUID in the shared header.
+        // Opt-in; non-fatal: a failed pin carries on with the natural adapter.
         if let Some(luid) = render_luid {
             match set_render_adapter(dev, luid) {
                 Ok(()) => tracing::info!(
@@ -963,9 +962,8 @@ impl VdisplayDriver for PfVdisplayDriver {
                 );
             }
         }
-        // `reply.adapter_luid` is the IddCx *display* adapter (`OsAdapterLuid`), not the
-        // render GPU — it cannot validate SET_RENDER_ADAPTER. Real render LUID is in the
-        // shared frame header; the IDD-push capturer rebinds on a mismatch.
+        // The reply's adapter LUID is the IddCx *display* adapter (`OsAdapterLuid`), not the
+        // render GPU — it cannot validate SET_RENDER_ADAPTER.
         Ok(AddedMonitor {
             key: MonitorKey::Session(session_id),
             target_id: reply.target_id,
@@ -1016,7 +1014,8 @@ impl VdisplayDriver for PfVdisplayDriver {
 
 /// Windows pf-vdisplay backend. Lifecycle lives in
 /// [`VirtualDisplayManager`](super::manager::VirtualDisplayManager); this only carries the
-/// connecting client's fingerprint so the manager can assign a stable per-client monitor id.
+/// session's settings to it, the client's fingerprint among them, so the manager can assign
+/// a stable per-client monitor id.
 pub struct PfVdisplayDisplay {
     /// Connecting client's cert fingerprint (`None` = anonymous/GameStream → auto id).
     client_fp: Option<[u8; 32]>,
@@ -1029,8 +1028,8 @@ pub struct PfVdisplayDisplay {
     hdr: bool,
     /// Declare an IddCx hardware cursor on the ADD.
     hw_cursor: bool,
-    /// Deliberate-quit flag (`None` = linger policy). A user "stop" tears the monitor down
-    /// immediately instead of lingering.
+    /// Deliberate-quit flag (`None` = linger policy). A user "stop" skips the linger window;
+    /// a `forever` pin stays.
     quit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// `mode_conflict: join` admitted this session: share the live display it named.
     join_live: bool,
@@ -1173,7 +1172,7 @@ const NOT_READY_GRACE: Duration = Duration::from_secs(15);
 /// a resume that briefly de-registers is not met with device surgery.
 const ABSENT_SETTLE: Duration = Duration::from_secs(3);
 
-/// Arrival window after a reload. 15 s: PnP is contended right after wake; 4 s missed it.
+/// Arrival window after a reload. PnP is contended right after wake.
 const ARRIVAL_AFTER_RELOAD: Duration = Duration::from_secs(15);
 
 /// Ceiling on the whole wait. Without it, not-ready + reload + arrival can approach a minute.
@@ -1186,9 +1185,10 @@ const BRIEF_RETRY: Duration = Duration::from_secs(3);
 /// Serializes recovery so N racing sessions perform one adapter reload, not N interleaved
 /// ones that tear down the stack the others wait on.
 ///
-/// Taken only by [`ensure_available`] (no manager lock). Order is `RECOVERY` → `device`:
-/// `invalidate_cached_device` takes `device` while this is held. [`VdisplayDriver::open`]
-/// runs *inside* `device` and must never take this lock or the orders invert and deadlock.
+/// Taken only by [`ensure_available`] and [`force_driver_cycle`] (no manager lock). Order is
+/// `RECOVERY` → `device`: `invalidate_cached_device` takes `device` while this is held.
+/// [`VdisplayDriver::open`] runs *inside* `device` and must never take this lock or the
+/// orders invert and deadlock.
 static RECOVERY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// [`is_available`] with self-heal and patience after wake. Returns the reason on failure
@@ -1209,12 +1209,13 @@ pub fn ensure_available() -> Result<()> {
     result.map(|_| ())
 }
 
-/// The `DriverCycle` recovery rung (plan §2.5): reap a dead or blocked WUDFHost and reload the
-/// adapter, so the session's rebuild reopens against a fresh host process. Reuses the
-/// hostless-zombie reload — no second lever. Never joins the WUDFHost and never opens the
-/// control device: [`reload_vdisplay_adapter`] shells out with its own timeouts and
-/// `invalidate_cached_device` drops the handle without waiting on a drain, so the control plane
-/// stays live through the seconds the display is black. The caller rebuilds the pipeline after.
+/// The `DriverCycle` recovery rung (`design/windows-video-plane-overhaul.md` §2.5): reap a
+/// dead or blocked WUDFHost and reload the adapter, so the session's rebuild reopens against
+/// a fresh host process. Reuses the hostless-zombie reload — no second lever. Never joins
+/// the WUDFHost and never opens the control device: [`reload_vdisplay_adapter`] shells out
+/// with its own timeouts and `invalidate_cached_device` drops the handle without waiting on
+/// a drain, so the control plane stays live through the seconds the display is black. The
+/// caller rebuilds the pipeline after.
 pub fn force_driver_cycle() -> Result<()> {
     let _serialize = RECOVERY.lock().unwrap_or_else(|e| e.into_inner());
     // Release our own control handle first: an open handle vetoes the PnP disable/restart.
@@ -1586,8 +1587,7 @@ mod tests {
 
     /// Hardware round trip (`#[ignore]`): open → create → hold → drop (REMOVE). Under the
     /// guard so the drop tears down NOW: with the box's real keep-alive the teardown lingers
-    /// 10 s and the next case in the file starts on a still-isolated desktop (measured on .173:
-    /// `live_force_extend` red on its precondition, the desktop restored seconds later).
+    /// and the next case in the file starts on a still-isolated desktop.
     #[test]
     #[ignore = "needs the pf-vdisplay driver on real hardware; run with --ignored"]
     fn live_create_drop() {
@@ -1773,10 +1773,10 @@ mod tests {
     /// real install is usually configured otherwise (`topology_action(client)` returns
     /// `effective_topology(client)` as soon as ANY policy is configured). `KeepAlive::Off` is equally
     /// load-bearing: every post-teardown assertion here needs the lease drop to actually tear the
-    /// monitor down — under the default 10 s linger the probe races the reaper, and under the
-    /// gaming-rig `forever` the group restore never runs at all (measured on .173: both members
-    /// PINNED, panel left dark, test red for a policy reason). Note this writes the host's
-    /// `display-settings.json`; the guard is what makes that safe to do on a real box.
+    /// monitor down — under a linger window the probe races the reaper, and under the
+    /// gaming-rig `forever` the group restore never runs at all (both members stay PINNED and
+    /// the panel stays dark). Note this writes the host's `display-settings.json`; the guard
+    /// is what makes that safe to do on a real box.
     struct ExclusiveTopology(crate::policy::DisplayPolicy);
 
     impl ExclusiveTopology {
@@ -1906,8 +1906,8 @@ mod tests {
 
         drop(out2);
         drop(out1);
-        // Bounded poll, not a fixed sleep: the reaper tick + restore + async PnP removal stack up
-        // to a box-dependent settle (the old 6 s undershot the default linger outright).
+        // Bounded poll, not a fixed sleep: the restore and the async PnP removal stack up to a
+        // box-dependent settle.
         let physicals_after = wait_for_physicals(Duration::from_secs(20)).unwrap_or_default();
         println!("physicals after teardown  : {physicals_after:?}");
         assert!(
@@ -1986,10 +1986,10 @@ mod tests {
             .collect()
     }
 
-    /// Poll for the operator's panel to come back, up to `budget`. Teardown is timer-driven even
-    /// at `KeepAlive::Off` (the linger reaper ticks at 500 ms), the CCD restore then settles, and
-    /// PnP removal is async — a fixed sleep undershoots on a slow box and wastes time on a fast
-    /// one. `Some(panel set)` the moment one is active; `None` on budget.
+    /// Poll for the operator's panel to come back, up to `budget`. The CCD restore settles
+    /// after the teardown and PnP removal is async — a fixed sleep undershoots on a slow box
+    /// and wastes time on a fast one. `Some(panel set)` the moment one is active; `None` on
+    /// budget.
     fn wait_for_physicals(budget: Duration) -> Option<Vec<(u32, String)>> {
         let deadline = std::time::Instant::now() + budget;
         loop {
@@ -2009,17 +2009,15 @@ mod tests {
     ///
     /// `force_extend_topology` both de-clones a fresh IddCx monitor and serves as
     /// `restore_displays_ccd`'s dark-desk backstop. Probed alone with one connected display it
-    /// returns rc=31 ERROR_GEN_FAILURE (nothing to extend across) and reads inert; this case is
-    /// the on-glass measurement that it works where it actually fires — active paths
-    /// `1 -> (virtual up) 1 -> (after force-EXTEND) 2`, both real call sites running with the
-    /// virtual still present (the restore fires BEFORE the REMOVE). The same run caught the clone
-    /// hazard live: only the forced EXTEND gave the arriving virtual its own active path.
+    /// returns rc=31 ERROR_GEN_FAILURE (nothing to extend across) and reads inert; this case
+    /// runs it where it actually fires, with the virtual display still present (the restore
+    /// runs before the REMOVE).
     ///
-    /// ⚠️ Residual: a restore that fails once the virtual is already gone is back to one
-    /// connected display, where EXTEND returns 31 and cannot re-light anything.
+    /// A restore that fails once the virtual is already gone is back to one connected
+    /// display, where EXTEND returns 31 and cannot re-light anything.
     ///
     /// Reports the counts rather than pinning a topology — which answer is "correct" depends on
-    /// the box. It does assert the desk is not left with zero active paths.
+    /// the box. It does assert the desk keeps an active path and the operator's panel returns.
     #[test]
     #[ignore = "needs the pf-vdisplay driver on real hardware; run with --ignored"]
     fn live_force_extend_with_a_virtual_display_present() {

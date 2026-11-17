@@ -7,7 +7,7 @@ package io.unom.punktfunk.kit
  * button word for the typed mirror + exit chord, and sticks/triggers for the degrade path.
  *
  * Protocol ground truth: SDL's `SDL_hidapi_steam_triton.c` + `steam/controller_structs.h`
- * (Valve-maintained), mirrored host-side in `punktfunk-host`'s `triton_proto.rs`.
+ * (Valve-maintained), mirrored host-side in `pf-inject`'s `triton_proto.rs`.
  */
 object Sc2Device {
     const val VID_VALVE = 0x28DE

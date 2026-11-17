@@ -1,10 +1,9 @@
-// The parser ports, tested against the SAME cases the host's Rust scanners pin.
+// The scanner parsers.
 //
-// These are not "does TypeScript work" tests. The formats here are undocumented and the host's
-// versions are the reference implementation; a port that drifts produces a library that looks fine
-// and launches nothing. Where a Rust test exists, its assertions are carried over verbatim — the
-// per-plugin parity harness (design M5) then checks the whole pipeline against a live host, but
-// these catch a drift long before that.
+// These are not "does TypeScript work" tests. The formats here are undocumented; a parser that
+// drifts produces a library that looks fine and launches nothing. The per-plugin parity harness
+// (design M5) checks the whole pipeline against a live host, but these catch a drift long before
+// that.
 
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
@@ -304,9 +303,8 @@ describe("art locations", () => {
 	});
 
 	test("finds a cover cached under Steam's newer `library_capsule` name", () => {
-		// The bug this pins: appid 2483190 (Forza Horizon 6) caches its 300×450 cover as
-		// `library_capsule.jpg`, the flat CDN URL for its `library_600x900.jpg` 404s, and the client
-		// therefore fell through to the header and drew a banner in a 2:3 poster slot.
+		// Steam caches some 300×450 covers as `library_capsule.jpg`. A miss here falls back to
+		// the flat CDN URL, which 404s for re-hashed titles, so the header lands in a 2:3 slot.
 		const dir = tmp("art-capsule");
 		const hashDir = path.join(
 			dir,
@@ -324,8 +322,8 @@ describe("art locations", () => {
 	});
 
 	test("finds art stored straight in the appid dir, with no hash dir", () => {
-		// The majority layout — 623 of 779 appids on the reference cache. A hash-dir-only walk finds
-		// none of it and silently falls back to a CDN URL that 404s for anything re-hashed.
+		// Art straight in the appid dir. A hash-dir-only walk finds none of it and silently falls
+		// back to a CDN URL that 404s for anything re-hashed.
 		const dir = tmp("art-flat");
 		const appDir = path.join(dir, "appcache", "librarycache", "813230");
 		fs.mkdirSync(appDir, { recursive: true });
@@ -335,7 +333,7 @@ describe("art locations", () => {
 			path.join(appDir, "library_600x900.jpg"),
 		);
 		// `header.jpg` is the CDN's name, but the local cache uses it too for newer entries — the
-		// two spellings are the same 460×215 asset and never appear together for one appid.
+		// two spellings are the same 460×215 asset.
 		expect(findLocalArtFile(dir, 813230, "header")).toBe(
 			path.join(appDir, "header.jpg"),
 		);
@@ -344,9 +342,8 @@ describe("art locations", () => {
 	});
 
 	test("a hash dir wins over a loose file of the same kind", () => {
-		// No appid on the reference cache carries both, so this is only about which copy is the
-		// current one if Steam ever leaves the old layout behind: the hash dir is what it re-fetches
-		// into, so that is the copy it is itself displaying.
+		// If Steam leaves the old layout behind, the hash dir is the current copy: it is what Steam
+		// re-fetches into, so that is the copy it is itself displaying.
 		const dir = tmp("art-both");
 		const appDir = path.join(dir, "appcache", "librarycache", "570");
 		const hashDir = path.join(appDir, "abc123");
@@ -408,13 +405,11 @@ describe("reg.exe output", () => {
 
 // The read-only SQLite helper, against a REAL database file.
 //
-// This exists because its absence shipped a total failure. `openReadOnly` built a
-// `file:…?immutable=1` URI but opened it with `{ readonly: true }`, which does not enable SQLite's
-// URI filename parsing — so the name was taken literally, the open threw, and `openReadOnly`
-// returned `undefined`. Every caller reads that as "this launcher isn't installed", and
-// `withReadOnlyDb(...) ?? []` turns it into an empty library. The lutris plugin therefore reported
-// "0 games" on every box, forever, while `detect` still said "present" (it only stats the file) —
-// and the only thing that caught it was a hand-run parity gate against a live host.
+// `openReadOnly` builds a `file:…?immutable=1` URI. Opened with `{ readonly: true }` instead of the
+// URI flags, SQLite does not parse it as a URI: the name is taken literally, the open throws, and
+// `openReadOnly` returns `undefined`. Every caller reads that as "this launcher isn't installed",
+// and `withReadOnlyDb(...) ?? []` turns it into an empty library while `detect` (a stat) still
+// says "present".
 //
 // So: assert the helper can actually READ, not merely that it returns something.
 describe("openReadOnly", () => {
@@ -494,17 +489,6 @@ describe("openReadOnly", () => {
 	});
 });
 
-// Subkey enumeration, against the output reg.exe ACTUALLY prints.
-//
-// This had no coverage and was broken end to end: it matched lines against the abbreviated
-// `HKLM\…` prefix it was handed, but reg.exe echoes `HKEY_LOCAL_MACHINE\…`. Nothing ever matched,
-// so it returned [] on every machine, and the GOG plugin — its only consumer — reported "no games
-// installed" rather than failing. Caught on hardware by the parity gate: the host's built-in
-// scanner found IRON NEST, the plugin found nothing.
-//
-// The fixture is the verbatim output from .173 (a blank line, then one subkey row).
-// A service account's HKCU is its own empty hive, so a read there would report no games where
-// the user has many. The home path is what tells a service from a signed-in user.
 describe("valueText", () => {
 	const wide = (text: string) => Buffer.from(text, "utf16le");
 
@@ -525,6 +509,8 @@ describe("valueText", () => {
 	});
 });
 
+// A service account's HKCU is its own empty hive, so a read there would report no games where
+// the user has many. The home path is what tells a service from a signed-in user.
 describe("validRegKey", () => {
 	const USER = "C:\\Users\\enrico";
 	const LOCAL_SERVICE = "C:\\WINDOWS\\ServiceProfiles\\LocalService";
@@ -559,6 +545,8 @@ describe("validRegKey", () => {
 	});
 });
 
+// reg.exe echoes the full hive name (`HKEY_LOCAL_MACHINE\…`), never the `HKLM\…` abbreviation
+// a caller passes, so these rows use the spelled-out form.
 describe("parseRegSubKeys", () => {
 	const KEY = "HKLM\\SOFTWARE\\WOW6432Node\\GOG.com\\Games";
 

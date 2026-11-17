@@ -13,7 +13,8 @@ use super::wire::{Rd, Wr};
 
 pub const AUDIO_MAGIC: u8 = 0xC9;
 pub const RUMBLE_MAGIC: u8 = 0xCA;
-/// Client → host Opus. The host feeds a virtual PipeWire source so apps can record it.
+/// Client → host Opus. The host feeds a virtual microphone (a PipeWire source on Linux, a
+/// virtual audio device on Windows) so apps can record it.
 pub const MIC_MAGIC: u8 = 0xCB;
 pub const RICH_INPUT_MAGIC: u8 = 0xCC;
 pub const HIDOUT_MAGIC: u8 = 0xCD;
@@ -504,7 +505,7 @@ impl RichInput {
 }
 
 /// Longest [`HidOutput::Trigger`] `effect`: DualSense mode byte plus ten parameters.
-/// Encode and decode both clamp here — the only variable-length HID-output variant.
+/// Encode and decode both clamp here.
 pub const TRIGGER_EFFECT_MAX: usize = 11;
 
 const HIDOUT_LED: u8 = 0x01;
@@ -783,7 +784,7 @@ pub fn write_hdr_meta_body(m: &HdrMeta, b: &mut Vec<u8>) {
     b.extend_from_slice(&m.max_fall.to_le_bytes());
 }
 
-/// Caller guarantees `b` is at least [`HDR_META_BODY_LEN`] (both callers `get` an exact slice).
+/// Caller guarantees `b` is at least [`HDR_META_BODY_LEN`] (both callers check the length first).
 pub fn read_hdr_meta_body(b: &[u8]) -> HdrMeta {
     let u16at = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
     let u32at = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);

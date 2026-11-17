@@ -1,7 +1,7 @@
-//! DriverEntry + driver_add — the IddCx device bring-up (STEP 2/3). wdk-build links the UMDF
+//! DriverEntry + driver_add — the IddCx device bring-up. wdk-build links the UMDF
 //! `WdfDriverStubUm` whose `FxDriverEntryUm` forwards to the exported `DriverEntry`. Adapter creation is
-//! deferred to the first `EvtDeviceD0Entry` (STEP 3); monitors are created on demand by the control
-//! plane (STEP 4). Instrumented with `dbglog!` for on-glass bring-up.
+//! deferred to the first `EvtDeviceD0Entry`; monitors are created on demand by the control
+//! plane. Instrumented with `dbglog!` for on-glass bring-up.
 
 use wdk_iddcx::nt_success;
 use wdk_sys::{
@@ -18,8 +18,7 @@ pub unsafe extern "system" fn driver_entry(
     registry_path: PCUNICODE_STRING,
 ) -> NTSTATUS {
     dbglog!("[pf-vd] DriverEntry");
-    // Names the backends whose addresses the link pinned, so a loaded DLL says so on glass
-    // instead of only in the linker's output.
+    // Names the backends linked into this DLL, so a loaded driver says so on glass.
     dbglog!(
         "[pf-vd] encode: {} linked",
         crate::encode::backends_linked().join(" ")
@@ -82,7 +81,7 @@ extern "C" fn driver_add(_driver: WDFDRIVER, mut init: PWDFDEVICE_INIT) -> NTSTA
         );
     }
 
-    // Build the IddCx client config and wire the SDR callbacks. `.Size` = size_of (1.10 structs, 1.10 fw).
+    // Build the IddCx client config. `.Size` = size_of (1.10 structs, 1.10 fw).
     let cfg = iddcx::IDD_CX_CLIENT_CONFIG {
         Size: core::mem::size_of::<iddcx::IDD_CX_CLIENT_CONFIG>() as u32,
         EvtIddCxAdapterInitFinished: Some(callbacks::adapter_init_finished),

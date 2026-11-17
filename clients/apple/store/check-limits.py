@@ -6,7 +6,8 @@ easy one to get wrong because umlauts read as one character but two bytes. Apple
 so `len()` on a `str` is the right measure — do not switch this to a byte count.
 
 Each fenced code block in the .md files here is one field. Which limit applies is inferred from the
-nearest heading above it. Exit status is non-zero if anything is over, so CI can gate on it.
+nearest heading above it, else from the block's length (kind_of). Exit status is non-zero if a block
+is over its limit or a heading's count has drifted, so CI can gate on it.
 """
 
 from __future__ import annotations

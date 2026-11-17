@@ -1,5 +1,5 @@
-// Spike 2 (plan Phase 0): prove the browser-side client strategy for the console proxy
-// prefix (`/plugin-ui/<id>/...`), headless via AtomRegistry (no React needed).
+// Proves the browser-side client strategy for the console proxy prefix
+// (`/plugin-ui/<id>-<exp>-<mac>/...`), headless via AtomRegistry (no React needed).
 //
 // The console serves the plugin SPA under a path prefix; the HttpApi contract uses
 // absolute endpoint paths ("/api/status"). This spike pins down how the derived client

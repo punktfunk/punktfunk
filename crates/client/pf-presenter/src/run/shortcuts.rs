@@ -148,7 +148,7 @@ impl Shell {
             Action::Slot(slot) => slot,
         };
         match slot {
-            // A pad's way back in and out, as the exit chord always was.
+            // A pad's way back in and out.
             SlotId::ReleaseInput if pad.is_some() => self.pad_escape(stream),
             SlotId::Shortcut(id) => self.send_key_combination(stream, id, phase, pad),
             SlotId::Host(_) | SlotId::EndGame => self.arm(stream, slot),

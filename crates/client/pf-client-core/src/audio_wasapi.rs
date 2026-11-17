@@ -7,8 +7,9 @@
 //! only the channels, stop flag, and join handle cross.
 //!
 //! Playback opens at the session-negotiated [`PlaybackFormat`], not a constant: 48 kHz Opus
-//! on `0xC9`, or 48/96 kHz lossless PCM on `0xD3` (`design/hi-res-audio.md`). Shared-mode
-//! `autoconvert` silently downsamples an over-rate stream — [`can_render_at`] is the gate.
+//! on `0xC9`, or lossless PCM on `0xD3` at any `pcm::rate_is_supported` rate
+//! (`design/hi-res-audio.md`). Shared-mode `autoconvert` silently downsamples an over-rate
+//! stream — [`can_render_at`] is the gate.
 //! Depth policy is shared `JitterPolicy` (`JitterTuning::WASAPI`).
 
 use anyhow::{anyhow, Context, Result};
@@ -83,9 +84,9 @@ pub fn devices() -> Result<(Vec<AudioDevice>, Vec<AudioDevice>)> {
         .map_err(|_| anyhow!("audio enumeration thread panicked"))?
 }
 
-/// Resolve an active endpoint by id. Do not call `DeviceEnumerator::get_device` — wasapi 0.23
-/// UAF'd the temporary `HSTRING`, and a collection scan also drops inactive endpoints.
-/// Host uses raw COM for the same bug; this crate's `windows` rev is incompatible with wasapi's.
+/// Resolve an active endpoint by id, by scanning the active collection instead of calling
+/// `DeviceEnumerator::get_device`, so an inactive endpoint never matches. Raw COM is not an
+/// option here: this crate's `windows` rev is incompatible with wasapi's.
 pub(crate) fn device_by_id(
     enumerator: &DeviceEnumerator,
     direction: &Direction,

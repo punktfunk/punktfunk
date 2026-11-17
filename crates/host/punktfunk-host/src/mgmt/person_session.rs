@@ -29,7 +29,8 @@ const MAX_SESSIONS: usize = 16;
 /// Refused redemptions in [`FAILURE_WINDOW`] after which every redemption waits it out.
 const MAX_FAILURES: usize = 10;
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
-/// How long a redeemed ticket is remembered: a ticket is fresh 60 s either side of its stamp.
+/// How long a redeemed ticket is remembered: a ticket is fresh `TICKET_TTL_SECS` either side of
+/// its stamp.
 const SPENT_FOR: Duration = Duration::from_secs(2 * crate::person_token::TICKET_TTL_SECS);
 
 /// What a person's pages read on their seat host beside their profile's routes: the host's name

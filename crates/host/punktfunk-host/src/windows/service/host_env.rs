@@ -200,7 +200,7 @@ pub(super) fn gamestream_migration(
 }
 
 /// `text` with its last live `key=` line set to `value`, else one appended. Last wins, as
-/// [`load_host_env`] and [`mgmt_port`] read it.
+/// [`load_host_env`] and `ListenPlan::from_host_env` read it.
 pub(super) fn with_env_line(text: &str, key: &str, value: &str) -> String {
     let prefix = format!("{key}=");
     let line = format!("{key}={value}");

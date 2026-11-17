@@ -9,8 +9,8 @@
 //! 1–2 s or the probe aborts and no input devices appear.
 //!
 //! After bind, LED/rumble writes stall up to 250 ms unless `0x30` reports are
-//! flowing — the manager's 8 ms silence heartbeat is that stream. Suspend/resume
-//! re-runs the whole init; nothing probe-specific is latched here.
+//! flowing — [`UhidManager::heartbeat`] is that stream, at the gap the host passes it.
+//! Suspend/resume re-runs the whole init; nothing probe-specific is latched here.
 
 use super::switch_proto::{
     parse_output, player_leds_bits, serialize_for, Half, SwitchOutput, SwitchState, SWITCH_PRODUCT,

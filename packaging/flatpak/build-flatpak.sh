@@ -8,12 +8,13 @@
 #   flatpak install --user -y flathub org.flatpak.Builder
 # Then run this script from the repo root:
 #   bash packaging/flatpak/build-flatpak.sh
-# Output: dist/punktfunk-client-<version>.flatpak  (install with `flatpak install --user <file>`)
+# Output: dist/punktfunk-client-<version>-<arch>.flatpak  (install: `flatpak install --user <file>`)
 #
 # Env knobs:
 #   VERSION=...        version string for the bundle name (default: git describe / 0.0.1-dev)
 #   ONLINE=1           skip offline cargo-sources.json; build with --share=network (fast local
-#                      iteration, non-reproducible). Default: offline (regenerates cargo-sources).
+#                      iteration, non-reproducible). Default: offline (cargo-sources.json is
+#                      reused when present, else generated; FORCE_GEN=1 regenerates it).
 #   BUILDER=...        override the flatpak-builder invocation (default: auto-detect host
 #                      flatpak-builder, else `flatpak run org.flatpak.Builder`).
 #   BRANCH=...         the flatpak branch to build and bundle (default: stable). A Deck tracking
@@ -66,7 +67,7 @@ if [ "${ONLINE:-0}" = "1" ]; then
   [ -f packaging/flatpak/cargo-sources.json ] || echo '[]' > packaging/flatpak/cargo-sources.json
 elif [ -f packaging/flatpak/cargo-sources.json ] && [ "${FORCE_GEN:-0}" != "1" ]; then
   # Reuse a cargo-sources.json that was generated elsewhere (e.g. on a dev box with network +
-  # python aiohttp/toml, then rsynced to a build host that lacks them — like the Deck). The
+  # python aiohttp/tomlkit, then rsynced to a build host that lacks them — like the Deck). The
   # offline crate cache is a pure function of Cargo.lock, so this is reproducible. FORCE_GEN=1
   # to regenerate anyway.
   echo "==> reusing existing packaging/flatpak/cargo-sources.json (FORCE_GEN=1 to regenerate)"
@@ -104,8 +105,7 @@ echo "==> flatpak-builder ($APP_ID, version $VERSION, arch $ARCH)"
 # track flatpak.unom.io. build-bundle must then be told the branch (else it defaults to `master`).
 # --disable-updates matches CI (see .gitea/workflows/flatpak.yml for the full why): every git
 # source in the manifest is commit-pinned, so re-running this script reuses the mirrors already in
-# the .flatpak-builder state dir instead of re-fetching gamescope and its submodules (~2.5 min of
-# wlroots/libliftoff/vkroots/libdisplay-info that this manifest never even builds).
+# the .flatpak-builder state dir instead of re-fetching them.
 "${FPB[@]}" --user --force-clean --disable-rofiles-fuse \
   --default-branch="$BRANCH" \
   --disable-updates \

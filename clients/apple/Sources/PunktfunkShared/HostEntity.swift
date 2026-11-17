@@ -3,8 +3,8 @@
 // *configuration* intents execute in the EXTENSION process, so the entity can't be app-only.
 //
 // AppIntents is genuinely available on macOS (13+), so this is gated on `canImport(AppIntents)`
-// (unlike ActivityKit, whose macOS types are unavailable) — it compiles on every platform and the
-// entity query reads the same shared App-Group store the widget does.
+// (unlike ActivityKit, whose macOS types are unavailable in the macOS 27.0 SDK) — it compiles on
+// every platform and the entity query reads the same shared App-Group store the widget does.
 
 #if canImport(AppIntents)
 import AppIntents

@@ -179,7 +179,7 @@ fn encode_ctl(owner: u32, request: Request) {
     request.complete(crate::encode::encode_ctl(owner, &req));
 }
 
-/// `IOCTL_ENCODE_PROBE_ARM` (spike S5): start an in-process encode run on one monitor's frames.
+/// `IOCTL_ENCODE_PROBE_ARM`: start an in-process encode run on one monitor's frames.
 #[cfg(feature = "encode-probe")]
 fn encode_probe_arm(request: Request) {
     let Some(req) = read_input::<control::EncodeProbeRequest>(&request) else {
@@ -240,11 +240,11 @@ fn add(owner: u32, request: Request) {
         wudf_pid: std::process::id(),
         // An irrevocable hardware-cursor declare from an EARLIER session excludes the pointer
         // ADAPTER-wide, not just on the declaring target, so a channel-less session on this
-        // adapter must self-composite the pointer (§8.6 gap).
+        // adapter must self-composite the pointer (design/remote-desktop-sweep.md §8.6).
         cursor_excluded: crate::registry::any_declared() as u32,
     };
     // Dual-size reply (the `cursor_excluded` tail ext): an un-upgraded host retrieves only the
-    // legacy 20-byte buffer — write the prefix it asked for instead of failing its ADD.
+    // legacy-size buffer — write the prefix it asked for instead of failing its ADD.
     write_output_prefix_complete(request, &reply, control::ADD_REPLY_LEGACY_SIZE);
 }
 

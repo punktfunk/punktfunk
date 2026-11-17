@@ -1,6 +1,6 @@
-// The network speed test as a page (roadmap §9): the host bursts probe filler over the real data
-// plane, the page charts the goodput as it lands and recommends ~70% of it as the bitrate. It runs
-// only while idle, since the host serves one session at a time. An unpinned host is probed
+// The network speed test as a page: the host bursts probe filler over the real data plane, the
+// page charts the goodput as it lands and recommends ~70% of it as the bitrate. The home grid
+// opens it only while no session is running. An unpinned host is probed
 // trust-on-first-use without persisting anything: a bandwidth number is no trust decision.
 
 import Charts
@@ -133,10 +133,11 @@ struct SpeedTestView: View {
         return false
     }
 
-    /// The check's test traffic as it lands, on a time axis that lays its rounds end to end:
-    /// each ends on a whole second, so the grid marks them. Once there is an answer: what the link carries, the recommendation
-    /// and this host's current bitrate, drawn across it. The rounds run below what the link
-    /// carries on purpose, so the curve sits under that line.
+    /// The check's test traffic as it lands, on a time axis that lays its rounds end to end.
+    /// Rounds last whole seconds, so the one-second grid marks the joins. Rules across it: this
+    /// host's current bitrate, and once there is an answer, what the link carries and the
+    /// recommendation. Toward a host with a ramp the clean round and the legs run at half the
+    /// ceiling on purpose, so the curve sits under that line.
     private var chart: some View {
         Chart {
             ForEach(trace.points, id: \.seconds) { point in
@@ -369,9 +370,8 @@ struct SpeedTestView: View {
         EffectiveSettings.resolve(host: host, catalog: presets.catalog).bitrateKbps
     }
 
-    /// ~70% of the measured goodput, whole Mbps, clamped to the host's session bitrate ceiling
-    /// (2 Gbps — it clamps any session request above that, so recommending more is pointless).
-    /// nil when the measurement carried too little signal to recommend anything.
+    /// ~70% of the measured goodput, whole Mbps, at most 2 Gbps. nil when the measurement
+    /// carried too little signal to recommend anything.
     static func recommendedKbps(_ result: PunktfunkConnection.ProbeResult) -> Int? {
         guard result.throughputKbps >= 2_000 else { return nil }
         let raw = Int(result.throughputKbps) * 7 / 10

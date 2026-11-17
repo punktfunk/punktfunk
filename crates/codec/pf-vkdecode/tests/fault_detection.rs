@@ -1,6 +1,6 @@
 //! CPU harness for [`pf_vkdecode::AuFault`]: planner warnings the client conceals on.
 //!
-//! Damages the vendored 250-AU host-shaped streams, plans each AU as
+//! Damages the vendored 250-AU streams, plans each AU as
 //! `VkH264Decoder::decode` / `VkH265Decoder::decode` would, and scores with
 //! [`pf_vkdecode::PlanWarning::is_integrity`] /
 //! [`pf_vkdecode::H265PlanWarning::is_integrity`]. Vulkan submit is omitted; it
@@ -21,7 +21,7 @@ use pf_bitstream::testing::split_h264_aus;
 use pf_bitstream::testing::split_h265_aus;
 use pf_vkdecode::{AuFault, FaultAction, FaultMode, H265PlanWarning, PlanWarning};
 
-/// 250 AUs, IDR then P — the host envelope. GPU tests share these files.
+/// 250 AUs per vector; both reorder (B pictures). GPU tests share these files.
 const TEST_25FPS_H264: &[u8] = pf_bitstream::testing::H264_25FPS;
 const TEST_25FPS_H265: &[u8] = pf_bitstream::testing::H265_25FPS;
 
@@ -34,8 +34,8 @@ fn damaged_h264(planner: &mut H264Planner, au: &[u8]) -> bool {
     }
 }
 
-/// `RaslSkipped` is not damage: `VkH265Decoder::decode` maps it to `Ok(None)`
-/// (spec 8.1.3 NOTE, open-GOP RASL). Counting it would flag a production no-op.
+/// `RaslSkipped` is not damage: `VkH265Decoder::decode` returns `Ok` for it, not an
+/// error (spec 8.1.3 NOTE, open-GOP RASL). Counting it would flag a production no-op.
 fn damaged_h265(planner: &mut H265Planner, au: &[u8]) -> bool {
     use pf_bitstream::h265::PlanError;
     match planner.plan_au(au) {
@@ -97,7 +97,7 @@ fn replay_h265(fault: Option<AuFault>) -> (Vec<bool>, usize) {
 }
 
 /// Next AU only. A dropped reference is visible on the AU that names it;
-/// "eventually" is the 500 ms freeze backstop, not this detector.
+/// "eventually" is the `REANCHOR_FREEZE_MAX` freeze backstop, not this detector.
 const DETECT_WITHIN: usize = 1;
 
 /// 50 → five faults in 250 AUs, far enough that each window is one fault.

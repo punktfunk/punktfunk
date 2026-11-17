@@ -1,9 +1,9 @@
 // GET /_auth/ui-config — the handful of deployment facts the console UI cannot work out for itself.
 //
-// Two today: where plugin UIs live, and whether the console is reachable beyond this machine.
-// They are served from a different ORIGIN than
-// the console (2026-08-05 review H-3), so the browser needs the port to build the iframe URL — and
-// it must come from the server, because only the server knows whether that listener actually bound.
+// Three: where plugin UIs live, the desktop's theme, and whether the console is reachable beyond
+// this machine. Plugin UIs are served from a different ORIGIN than the console, so the browser
+// needs the port to build the iframe URL — and it must come from the server, because only the
+// server knows whether that listener actually bound.
 //
 // Public (the `/_auth/` prefix is), which is fine: a port number is discoverable by connecting to
 // it, and nothing here is a secret. Deliberately NOT an inference the client makes for itself
@@ -45,8 +45,9 @@ export interface UiConfig {
 
 export default defineEventHandler(async (event): Promise<UiConfig> => {
 	// Read per request: `omarchy-theme-set` rewrites the file whenever the user switches theme,
-	// and the client refetches on navigation, so the console follows without a restart. A
-	// person's console takes neither: those are the owner's desktop, read with the admin token.
+	// and the client polls this route (src/api/uiConfig.ts), so the console follows without a
+	// restart. A person's console takes neither: those are the owner's desktop, read with the admin
+	// token.
 	const theme = event.context.person ? null : await resolveTheme();
 	const reachableFromNetwork = !isLoopbackBind(boundAddress());
 	const port = pluginOriginPort();

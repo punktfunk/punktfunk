@@ -1,14 +1,14 @@
 // A text field that suggests, in the console's own chrome.
 //
 // Shaped like the rest of `components/ui/*`: radix behind it, this app's tokens on it. The
-// browser's `<datalist>` did the same job in ten lines but rendered as an OS menu — a different
-// font, a different highlight, no artwork — sitting under a field that looked like ours.
+// browser's `<datalist>` does the same job in ten lines but renders as an OS menu — a different
+// font, a different highlight, no artwork — under a field that looks like ours.
 //
 // It is an AUTOCOMPLETE, not a shadcn Combobox, and the difference is deliberate: a combobox
 // yields only values from its list, and these fields have to stay free text. A hook may name a
 // game that is not installed yet or a device that has not paired, and a widget that refused to
-// write those would be worse than the plain box it replaced. So the input is the value, the list
-// only offers — which is `aria-autocomplete="list"`, the role that actually describes it.
+// write those would be worse than a plain box. So the input is the value, the list only
+// offers — which is `aria-autocomplete="list"`, the role that actually describes it.
 //
 // Scale lives here too. A library runs to five figures, so matches are filtered and capped before
 // they reach the DOM; artwork is lazy and only the shown rows request it.
@@ -152,9 +152,8 @@ export function Combobox({
 					// while it is open, so typing keeps filtering.
 					onOpenAutoFocus={(e) => e.preventDefault()}
 					// ...which makes the field itself "outside" as far as the dismissable layer is
-					// concerned. Focusing it opened the list and dismissed it in the same gesture —
-					// a flash on click, then nothing until a keystroke, because typing is not an
-					// outside interaction. The anchor is exempt; everything else still closes it.
+					// concerned: focusing it would open the list and dismiss it in the same gesture.
+					// The anchor is exempt; everything else still closes it.
 					onInteractOutside={(e) => {
 						const target = e.target as Node | null;
 						if (target && inputRef.current?.contains(target)) {

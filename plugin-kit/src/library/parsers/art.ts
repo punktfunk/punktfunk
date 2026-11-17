@@ -1,10 +1,10 @@
 // Where a title's cover art lives: Steam's local caches, its per-account `grid/` overrides, and the
-// public CDN. Ported from the host scanner's art resolution (steam.rs).
+// public CDN.
 //
-// After extraction a plugin emits art VALUES and the host serves them: a `file://` URL for anything
-// on disk (the documented local-art contract — the host proxies the bytes), or an absolute CDN URL
-// the client fetches itself. `data:` URLs remain legal but are small-logo-only: inlining covers is
-// what blew the host's 2 MB body limit at 49 titles during the playnite work.
+// A plugin emits art VALUES and the host serves them: a `file://` URL for anything on disk (the
+// documented local-art contract — the host proxies the bytes), or an absolute CDN URL the client
+// fetches itself. `data:` URLs remain legal but are small-logo-only: an inlined cover per title
+// grows the reconcile body, which the host caps (`DefaultBodyLimit` in mgmt.rs).
 import * as path from "node:path";
 import { isFile, listDir } from "./fs.js";
 
@@ -34,7 +34,7 @@ export const fileUrl = (p: string): string => {
 /**
  * The legacy flat CDN URL for a Steam appid's art kind. Correct for the many titles Valve hasn't
  * re-hashed; newer ones serve from an unpredictable per-asset-hash path, where this 404s and the
- * client falls through to its next candidate. That degradation is intentional and pre-existing.
+ * client falls through to its next candidate. That degradation is intentional.
  */
 export const steamCdnUrl = (
 	appid: number,
@@ -57,15 +57,14 @@ export const steamCdnUrl = (
 /**
  * Filenames Steam's local `librarycache` uses per kind, in preference order (2x is sharper).
  *
- * Two spellings per kind, because Steam renamed these assets and one cache holds both eras side by
- * side — on a 779-app cache, 594 appids carry `header.jpg` and 122 carry `library_header.jpg`, and
- * NO appid carries both. Same story for the cover: 46 appids have only `library_capsule.jpg`. The
- * renamed files are the same assets, byte-for-byte the same shapes (cover 300×450, header 460×215),
- * so which name wins is cosmetic — but knowing only one name loses the art outright.
+ * The cover and the header have several spellings each, because Steam renamed these assets and one
+ * cache holds both eras side by side. The renamed files are the same assets, byte-for-byte the same
+ * shapes (cover 300×450, header 460×215), so which name wins is cosmetic — but knowing only one
+ * name loses the art outright.
  *
  * Missing the cover is the one that shows: the fallback is then the flat CDN URL, which 404s for
  * anything Valve has re-hashed, so the client walks on to the header and draws a BANNER in a 2:3
- * poster slot (Forza Horizon 6 / appid 2483190 is the reference case).
+ * poster slot.
  */
 const localFilenames = (kind: ArtKind): string[] =>
 	kind === "portrait"
@@ -82,15 +81,14 @@ const localFilenames = (kind: ArtKind): string[] =>
 /**
  * This kind's file under one Steam root's `appcache/librarycache/`, or `undefined`.
  *
- * Three layouts, all of them live in the same cache at the same time — a title's art is in exactly
- * one of them, so all three have to be checked or its cover is simply not found:
+ * Three layouts, all of them live in the same cache at the same time, so all three have to be
+ * checked or a title's cover is simply not found:
  *
  *   1. `<appid>/<hash>/<name>` — per-asset-version hash dir. Steam reuses one hash dir per version,
  *      so there is normally exactly one candidate. Checked first: where a title has been re-fetched
  *      into this layout, this is the copy Steam itself is displaying.
- *   2. `<appid>/<name>` — straight in the appid dir, and the MAJORITY case (623 of 779 appids on the
- *      reference cache). A hash-dir-only walk misses every one of them, which stayed invisible only
- *      because the flat CDN URL those titles fall back to still resolves for older appids.
+ *   2. `<appid>/<name>` — straight in the appid dir. A hash-dir-only walk misses every title kept
+ *      here.
  *   3. `<appid>_<name>` flat in `librarycache/` — the oldest layout.
  */
 export const findLocalArtFile = (

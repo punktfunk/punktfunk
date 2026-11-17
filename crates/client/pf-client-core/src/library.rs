@@ -74,9 +74,8 @@ pub struct GameEntry {
     /// Free-form display string from the host's flattened `GameMeta`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    /// The rest of that `GameMeta` the launch hold has room to show. The host has sent these
-    /// since the library API existed and nothing read them until a screen wanted more than a
-    /// title. Every one is optional on the wire, so an older host simply says nothing.
+    /// The rest of that `GameMeta` the launch hold has room to show. Every one is optional on
+    /// the wire, so an older host simply says nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub developer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,8 +205,7 @@ pub fn initials(title: &str) -> String {
         .collect()
 }
 
-/// Store id → display label. One table: the console, the GTK dialog and the WinUI dialog all
-/// drew this from a copy of their own, and a store added to one never reached the others.
+/// Store id → display label. One table for the console, the GTK dialog and the WinUI dialog.
 pub fn store_label(store: &str) -> &'static str {
     store_key_label(store_key(store))
 }
@@ -323,8 +321,8 @@ pub fn agent(
     ))
 }
 
-/// One answer of `GET /api/v1/library/page`. `total` and `platforms` stay undecoded:
-/// every shell collates the whole catalog itself.
+/// One answer of `GET /api/v1/library/page`. `total`, `platforms` and `not_installed` stay
+/// undecoded: every shell collates the whole catalog itself.
 #[derive(Deserialize)]
 struct LibraryPage<T> {
     items: Vec<T>,
@@ -385,7 +383,8 @@ impl Reply {
 }
 
 /// A paired host's management API as this device: over the stream port's tunnel when
-/// `stream_port` is known (non-zero), which needs no TCP 47990, else over HTTPS on `mgmt_port`.
+/// `stream_port` is known (non-zero), which needs no TCP connection to `mgmt_port`, else over
+/// HTTPS on `mgmt_port`.
 #[cfg(desktop)]
 #[derive(Clone)]
 pub struct HostApi {
@@ -757,7 +756,7 @@ impl InstallAction {
 pub struct TileBadge {
     /// `download`, `pause` or `alert`. Each shell draws its own mark for it.
     pub icon: &'static str,
-    /// `42 %`, `26 GB`, `Not installed`, `Queued`.
+    /// `42%`, `26 GB`, `Not installed`, `Queued`.
     pub text: String,
 }
 
@@ -810,8 +809,9 @@ pub enum InstallOutcome {
 }
 
 impl InstallOutcome {
-    /// A non-2xx answer: the host's sentence from its `ApiError` body when it sent one,
-    /// worded by its code ([`crate::host_text::api_error`]), else the route is missing.
+    /// A 2xx is done. Otherwise the host's sentence from its `ApiError` body when it sent one,
+    /// worded by its code ([`crate::host_text::api_error`]); with none, 401/404/405 mean the
+    /// route is missing and any other status is a failure.
     pub fn from_reply(code: u16, body: &str) -> InstallOutcome {
         match (code, crate::host_text::api_error(body)) {
             (200..=299, _) => InstallOutcome::Done,
@@ -1206,7 +1206,7 @@ pub fn fetch_art(api: &HostApi, pinned: &ureq::Agent, url: &str) -> Result<Vec<u
         .build()
         .call()
         .map_err(classify)?;
-    // ureq 3's default body cap is below a legitimate Steam hero; raise it.
+    // ureq 3 reads at most 10 MiB by default; `ART_MAX_BYTES` is this call's ceiling.
     resp.body_mut()
         .with_config()
         .limit(ART_MAX_BYTES)
@@ -1240,10 +1240,9 @@ pub fn spawn_art_fetch(
                     return;
                 };
                 loop {
-                    // Asked before every request, not only on a hit: a title whose posters all
-                    // miss never reaches `send_blocking`, so a run of misses used to grind
-                    // through the whole queue against a page that had already been closed —
-                    // or a host that had gone away.
+                    // Checked before every job, not only after a hit: a title whose posters all
+                    // miss never reaches `send_blocking`, so a run of misses would otherwise
+                    // grind through the whole queue after the page closed.
                     if tx.is_closed() {
                         return;
                     }

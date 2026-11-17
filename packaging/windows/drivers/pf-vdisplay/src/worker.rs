@@ -1,12 +1,10 @@
 //! Thread + handle ownership for the driver's background workers.
 //!
-//! Two long-lived threads live in this driver: the cursor query→publish loop and the swap-chain
-//! drain loop. Both used to hand raw `HANDLE` values to their thread and let the THREAD close
-//! them at exit, which puts a handle's lifetime somewhere no owner can observe: a caller that
-//! copied the value out under the registry lock can hand a closed — and by then possibly reused
-//! — handle to a DDI. Everything here states the opposite rule: a handle or mapping belongs to
-//! one value, its `Drop` closes it exactly once, and a thread only ever borrows what its owner
-//! outlives.
+//! A thread that closed its own handles at exit would put a handle's lifetime where no owner can
+//! observe it: a caller that copied the value out under the registry lock could hand a closed —
+//! and by then possibly reused — handle to a DDI. The rule here is the opposite: a handle or
+//! mapping belongs to one value, its `Drop` closes it exactly once, and a thread only ever
+//! borrows what its owner outlives.
 //!
 //! [`Worker`] owns the stop event and the join handle, so dropping it signals, joins, and only
 //! then closes. [`OwnedHandle`] and [`OwnedView`] are the RAII wrappers for `CloseHandle` and

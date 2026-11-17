@@ -1,6 +1,6 @@
 //! A media plane's place on the session: at most one plane runs, a start into a running slot
-//! opens nothing, and a stop takes the plane and drops it. Every plane stops and joins its
-//! thread in `Drop`.
+//! opens nothing, and a stop takes the plane and drops it. Every plane stops its thread in
+//! `Drop` and joins it; `VideoThread` gives up the join after `VIDEO_STOP_WAIT`.
 //!
 //! The drop runs under the slot's lock, so a racing stop returns only once the plane is gone:
 //! `nativeClose` relies on that for pad audio. [`Slot`] is the rule without the lock. Every stop
@@ -343,8 +343,8 @@ mod tests {
         }
     }
 
-    /// R6-1: a stop during a slow open returns at once, and so does the running query. The
-    /// late plane is dropped on the starting thread and the slot stays empty.
+    /// A stop during a slow open returns at once, and so does the running query. The late
+    /// plane is dropped on the starting thread and the slot stays empty.
     #[test]
     fn a_stop_during_an_open_wins_without_waiting_for_it() {
         let rig = Rig::default();

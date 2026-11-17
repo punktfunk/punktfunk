@@ -14,8 +14,8 @@ import viteTsConfigPaths from "vite-tsconfig-paths";
 const serverDir = fileURLToPath(new URL("./server", import.meta.url));
 
 // The management API the console drives. The browser always talks same-origin (/api/...):
-// in `vite dev` the dev server proxies it (below); in the built Bun/Nitro server a Nitro
-// route-rule proxies it (below). Override the upstream with PUNKTFUNK_MGMT_URL.
+// in `vite dev` the dev server proxies it (below); in the built Bun/Nitro server the scanned
+// server/routes/api/[...].ts does. Override the upstream with PUNKTFUNK_MGMT_URL.
 const MGMT_URL = process.env.PUNKTFUNK_MGMT_URL ?? "https://127.0.0.1:47990";
 
 // Dev-only `/plugin-ui/<id>-<exp>-<mac>/**` proxy: the route (server/routes/plugin-ui/[...].ts)
@@ -152,8 +152,8 @@ function pluginUiDevProxy(): Plugin {
  *
  * `@unom/ui/button` pulls in `sound/defaults.js`, which resolves two sprite sheets with
  * `new URL(…, import.meta.url)` at module scope — a 4.8 MB .wav and a 2.2 MB .mp3. Vite therefore
- * emits both into `.output/public/assets/`, where they were ~7 MB of an 8.2 MB asset payload, and
- * they ride along into the Windows installer and the .deb.
+ * emits both into `.output/public/assets/`, ~7 MB that ride along into the Windows installer and
+ * the .deb.
  *
  * The console never mounts `UnomProviders`, so no sound player is bundled and not one byte of that
  * can ever be played. Stub the two files to an empty URL instead of shipping them.
@@ -187,7 +187,7 @@ export default defineConfig({
 				changeOrigin: true,
 				secure: false,
 				// Inject the management bearer, exactly as the deployed BFF does
-				// (server/routes/api/[...].ts). The host requires a token on every route now, so
+				// (server/routes/api/[...].ts). The host requires a token on every route, so
 				// without this `bun run dev` 401s on every call and `apiFetch` bounces the developer
 				// to /login — where logging in doesn't help, because dev has no login gate at all.
 				configure(proxy) {
@@ -228,19 +228,16 @@ export default defineConfig({
 			// `Bun.serve({ tls })` so the console is served over HTTPS (HTTP/1.1 over TLS) with the
 			// host's own identity cert. (No HTTP/2 — Bun.serve has no h2 server — and no HTTP/3, which a
 			// browser won't speak against a self-signed host cert.) Bun is the runtime
-			// everywhere now — the Windows installer already bundles it, and the punktfunk-web .deb
+			// everywhere — the Windows installer bundles it, and the punktfunk-web .deb
 			// vendors it (it can't be `node`: `Bun.serve` is a bun API). (dev `vite dev` is unaffected.)
 			preset: "bun",
 			entry: fileURLToPath(
 				new URL("./nitro-entry/bun-https.mjs", import.meta.url),
 			),
-			// BUNDLE every dependency into the server output (no externalized node_modules). Three wins:
-			// (1) the .output tree drops from ~47k files / 730 MB (the whole untree-shaken @unom/ui dep
-			// tree — payload, lexical, date-fns…) to a handful of tree-shaken chunks; (2) the output is a
-			// self-contained ~75-file `.output` the bundled `bun` runs directly (the Windows installer
-			// ships bun + that `.output`, not node + a node_modules forest); (3) it removes the
-			// bare external imports (`srvx`, `seroval`…) bun couldn't resolve at runtime — the reason we
-			// used to need node. node still runs the same self-contained output for the Linux .deb.
+			// BUNDLE every dependency into the server output (no externalized node_modules): the
+			// `.output` is tree-shaken and self-contained, and the bundled `bun` runs it directly
+			// (the Windows installer ships bun + that `.output`, no node_modules).
+			// No bare external import (`srvx`, `seroval`…) is left for bun to resolve at runtime.
 			noExternals: true,
 			compatibilityDate: "2026-06-10",
 			// Scan server/{middleware,routes} for the auth gate + the /api proxy.

@@ -93,7 +93,7 @@ pub struct WindowSample {
     pub activity: WindowActivity,
     /// Shards that never arrived, by their place in the frame: the first twelve data
     /// shards, the middle, and the last twelve with all parity
-    /// ([`Stats::loss_head`](crate::stats::Stats::loss_head)).
+    /// ([`LossPositions`](crate::packet::LossPositions)).
     pub head: u32,
     pub mid: u32,
     pub tail: u32,

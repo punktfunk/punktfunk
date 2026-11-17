@@ -92,7 +92,7 @@ internal fun SkiaConsole.fetchLibrary(c: JSONObject, refreshOnly: Boolean) {
     val kh = services.store.resolve(fp, addr, c.optInt("port"))
     val port = kh?.port ?: c.optInt("port")
     if (refreshOnly) {
-        // Silent path — no notice, but the failed load still gets its retry.
+        // Silent path — no notice, but blockedMessage() still re-kicks a failed identity load.
         if (id == null) { identities.blockedMessage(); return }
         // A newer fetch owns the shelf by the time a slow host answers: not its titles.
         val gen = fetchGen.get()

@@ -4,9 +4,9 @@
 //! converted to RGBA by `ID3D11VideoProcessor`, or copied into a two-plane NV12/P010 slot
 //! the presenter's CSC pass samples when it can import one ([`HandoffRing::set_planar`]).
 //!
-//! Auto's first choice on Intel — the driver advertises Vulkan Video, but that
-//! decode path is not the shipping one. NVIDIA/AMD fall back here below Vulkan
-//! Video, including mid-session demotion.
+//! Auto's first choice on GPUs other than NVIDIA and AMD (`video_ladder`): Intel's
+//! driver advertises Vulkan Video too, but that decode path is not the shipping one.
+//! NVIDIA/AMD fall back here below Vulkan Video, including mid-session demotion.
 //!
 //! Slots carry `SHARED_NTHANDLE` and sync by [`SyncMode`]. Fence: a shared `written`/`read`
 //! pair per ring generation; the decoder GPU-waits `read` before reusing a slot. Mutex:
@@ -1109,8 +1109,8 @@ fn drain_releases(rx: &mpsc::Receiver<SliceRelease>, ledger: &mut SurfaceLedger)
     }
 }
 
-/// One-second window of hand-off costs. `info` under `PUNKTFUNK_PRESENT_DEBUG=1` (the
-/// presenter's window switch) or when a frame stalled; `debug` otherwise.
+/// One-second window of hand-off costs. `info` under `PUNKTFUNK_PRESENT_DEBUG=1` or when
+/// a frame stalled; `debug` otherwise.
 struct HandoffWindow {
     start: Instant,
     frames: u32,

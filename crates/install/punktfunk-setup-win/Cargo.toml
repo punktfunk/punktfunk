@@ -1,6 +1,6 @@
 # The Windows installer wizard (design/installer-v2-windows.md D2): the punktfunk-setup
 # engine behind a WinUI 3 (windows-reactor) step frame, shipped self-contained as a single
-# extract-and-run exe. Grown from the S1 spike; the S2 overlay/pack modules land with WP3.1.
+# extract-and-run exe.
 [package]
 name = "punktfunk-setup-win"
 description = "Windows installer wizard: the punktfunk-setup engine behind a WinUI 3 step frame"
@@ -16,19 +16,19 @@ publish = false
 
 # NOT `punktfunk-setup`: the Linux engine crate already builds a binary of that name, and two
 # same-named bins collide in one workspace target dir on the Windows lanes. The pack step
-# (WP3.1) names the shipped artifact (`punktfunk-host-setup-<ver>.exe`) anyway.
+# names the shipped artifact (`punktfunk-host-setup-<ver>.exe`) anyway.
 [[bin]]
 name = "punktfunk-setup-win"
 path = "src/main.rs"
 
-# The client artifact's twin (M4): the same `entry::run`, but build.rs gives only the host bin
+# The client artifact's twin: the same `entry::run`, but build.rs gives only the host bin
 # the requireAdministrator manifest — the client installs per user and never elevates (D1/D2).
 [[bin]]
 name = "punktfunk-setup-client"
 path = "src/bin/client.rs"
 
-# The console-subsystem packer: PowerShell's `&` neither waits for nor captures a GUI exe
-# (S2), so every tool verb lives in a sibling bin.
+# The console-subsystem packer: PowerShell's `&` neither waits for nor captures a GUI exe,
+# so every tool verb lives in a sibling bin.
 [[bin]]
 name = "punktfunk-setup-pack"
 path = "src/bin/pack.rs"
@@ -40,9 +40,9 @@ punktfunk-setup = { path = "../punktfunk-setup" }
 pf-paths = { path = "../../host/pf-paths" }
 # The same admin-only-source check the host runs, for the extract root's ancestors.
 pf-paths-win = { path = "../../host/pf-paths-win" }
-# The D3 sandwich (WP3.1): tar + xz (liblzma, built statically — S2 chose xz over zstd by
-# 60 MB on the installed tree) + the footer sha. Cross-platform so the pack step and its
-# tests run on every lane; the Linux musl engine keeps its own tiny dep set (D4).
+# The D3 sandwich: tar + xz (liblzma, built statically; xz packs the installed tree smaller
+# than zstd) + the footer sha. Cross-platform so the pack step and its tests run on every
+# lane; the Linux musl engine keeps its own tiny dep set (D4).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
@@ -59,8 +59,9 @@ pf-l10n = { path = "../../../l10n", features = ["tools", "os"] }
 windows = { workspace = true, features = [
     # Done's Copy button: the password onto the clipboard.
     "ApplicationModel_DataTransfer",
-    # The admin-only extract dir (WP3.1): an SDDL-built descriptor handed to CreateDirectoryW,
-    # so the dir passes the host's `ensure_admin_only_source` by construction.
+    # The admin-only extract dir is made by `pf_paths_win::create_dir_with` (an SDDL-built
+    # descriptor handed to CreateDirectoryW), so it passes the host's
+    # `ensure_admin_only_source` by construction.
     "fileapi",
     "sddl",
     "winbase",

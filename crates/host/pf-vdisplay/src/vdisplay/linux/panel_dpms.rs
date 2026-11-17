@@ -7,16 +7,16 @@
 //! EIS socket).
 //!
 //! Each arm self-gates: KDE in-process `org_kde_kwin_dpms` then `kscreen-doctor`; sway /
-//! Hyprland / niri via native IPC; DRM CRTCs when no compositor holds master. GNOME cannot be
-//! served (Mutter exposes no client DPMS and holds DRM master); [`darken`] logs that at
-//! `warn!`.
+//! Hyprland / Umbriel / niri via native IPC; DRM CRTCs when no compositor holds master.
+//! GNOME cannot be served (Mutter exposes no client DPMS and holds DRM master); [`darken`]
+//! logs that at `warn!`.
 //!
 //! The hold is refcounted here, not floated through the registry's per-group restore —
 //! every gamescope spawn is its own display group, so group restore would re-light under
 //! a second still-streaming session. [`acquire_stream_darken`] on 0→1,
 //! [`release_stream_darken`] as per-display topology restore on 1→0. KWin and niri wake a
-//! blanked panel on input; sway and Hyprland do not, so their heads are journaled as
-//! `EnableHeads` before they go dark, and the next host wakes them when this one dies.
+//! blanked panel on input; sway, Hyprland and Umbriel do not, so their heads are journaled
+//! as `EnableHeads` before they go dark, and the next host wakes them when this one dies.
 //!
 //! [`wake_head`] is the reverse for a mirror stream: it lights the one head the stream
 //! captures, which a dark panel never paints.
@@ -756,8 +756,8 @@ fn wake_kwin_head(connector: &str) -> bool {
     !s.set_mode(DPMS_MODE_ON, Some(&named)).is_empty()
 }
 
-/// `kscreen-doctor --dpms <on|off>`. Shared `kwin.rs` budget: `Some(true)`
-/// succeeded, `Some(false)` refused, `None` killed at budget (applies first,
+/// `kscreen-doctor --dpms <on|off>` through `kscreen_verdict`, which owns the budget:
+/// `Some(true)` succeeded, `Some(false)` refused, `None` killed at budget (applies first,
 /// then waits — a kill usually means it landed).
 fn kscreen_dpms(mode: &'static str) -> Option<bool> {
     crate::kwin::kscreen_verdict(&["--dpms".to_string(), mode.to_string()])

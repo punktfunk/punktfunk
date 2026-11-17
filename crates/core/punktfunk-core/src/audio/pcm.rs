@@ -61,7 +61,7 @@ pub const fn depth_is_supported(bits: u8) -> bool {
 /// 48 kHz family (48_000 / 96_000) and 44.1 kHz family (44_100 / 88_200 /
 /// 176_400). A supported rate is not a promise the path can afford it: most
 /// 44.1 rungs floor in [`FRAME_US_LADDER`], and 176_400/24-bit stereo is 8.5 Mbps
-/// the ABR loop cannot reclaim. 192 kHz is out of scope; nothing here would reject it.
+/// the ABR loop cannot reclaim. 192 kHz is out of scope.
 pub const fn rate_is_supported(rate_hz: u32) -> bool {
     matches!(rate_hz, 44_100 | 48_000 | 88_200 | 96_000 | 176_400)
 }

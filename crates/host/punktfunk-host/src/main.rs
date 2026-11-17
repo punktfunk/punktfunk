@@ -164,9 +164,9 @@ mod native_pairing;
 mod profiles;
 // Reachable without logging in: the host as a system service on Linux.
 mod door;
+mod emulators;
 mod seats;
 // Live per-session pad tap the console's Controllers page streams.
-mod emulators;
 mod pad_feed;
 // Plugin runner, access and store; the flat names keep `crate::plugins::*`.
 mod plugin_host;
@@ -209,7 +209,7 @@ mod version;
 mod webtransport;
 // `pf-vdisplay` as `crate::vdisplay`, plus the screen a device gets (`resolve_screen`).
 mod vdisplay;
-// Shim: GPU import lives in `pf-zerocopy`; keep `crate::zerocopy::*` for `session_plan`.
+// Shim: GPU import lives in `pf-zerocopy`; keep `crate::zerocopy::*` for this crate's callers.
 #[cfg(target_os = "linux")]
 mod zerocopy {
     pub(crate) use pf_zerocopy::*;
@@ -266,7 +266,7 @@ fn main() {
     // `thread::current().name()` and `Backtrace::force_capture()` are TLS-teardown safe.
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        // `payload_as_str` needs Rust 1.91; MSRV is 1.82.
+        // `payload_as_str` needs Rust 1.91; the workspace `rust-version` is older.
         let payload = info
             .payload()
             .downcast_ref::<&str>()
@@ -403,7 +403,7 @@ fn is_management_cli(args: &[String]) -> bool {
         | Some("detect-conflicts")
         // The per-app audio pin, run as the console user by the capture thread.
         | Some("voice-route")
-        // Prints the same list `refresh_capture_monitor_anchor` would log; skip host startup.
+        // Prints the monitor list itself; skip host startup.
         | Some("list-monitors")
         | Some("-h")
         | Some("--help")
@@ -542,7 +542,7 @@ fn real_main() -> Result<()> {
             println!("cleared {files} covers, {} MiB", bytes / 1024 / 1024);
             Ok(())
         }
-        // Same JSON as `GET /api/v1/library`.
+        // Same entry type as a paired client's `GET /api/v1/library`.
         Some("library") => {
             println!("{}", serde_json::to_string_pretty(&library::all_games())?);
             Ok(())
@@ -627,7 +627,7 @@ fn settings_cli(args: &[String]) -> Result<()> {
 }
 
 /// `punktfunk1-host` flags. A bad value is an error, as in
-/// [`serve_cli::parse_serve_args`]: a typo'd port must not quietly serve 9777.
+/// [`serve_cli::parse_serve_args`]: a typo'd port must not quietly serve `NATIVE_PORT`.
 fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
     fn value<T: std::str::FromStr>(flag: &str, v: String) -> Result<T> {
         v.trim()
@@ -646,7 +646,7 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
         allow_pairing: true,
         pairing_pin: None,
         paired_store: None,
-        // QUIC idle timeout; flag overrides env; absent = core default (8 s).
+        // QUIC idle timeout; flag overrides env; absent = core's `DEFAULT_IDLE_TIMEOUT`.
         idle_timeout: native::HostKnobs::get().idle_timeout,
         mdns: discovery::mdns_enabled(),
     };
@@ -674,7 +674,7 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
             "--max-concurrent" => opts.max_concurrent = value(arg, next()?)?,
             "--allow-tofu" => opts.require_pairing = false,
             "--require-pairing" | "--allow-pairing" => {}
-            // Empty would arm SPAKE2 with an empty password (same trap as `--mgmt-token`).
+            // Empty would arm SPAKE2 with an empty password.
             "--pairing-pin" => match next()? {
                 p if p.trim().is_empty() => bail!("--pairing-pin must not be empty"),
                 p => opts.pairing_pin = Some(p),

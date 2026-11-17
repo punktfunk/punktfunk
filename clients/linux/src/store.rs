@@ -76,8 +76,8 @@ impl Store {
         Ok(r)
     }
 
-    /// [`Settings::update`], then tell the listeners. A failed write is logged by nobody, like
-    /// every settings save: it must never take a stream down.
+    /// [`Settings::update`], then tell the listeners. A failed write returns no error, like
+    /// every settings save: it must never take a stream down. `write_atomic` logs it.
     pub fn update_settings<R>(&self, f: impl FnOnce(&mut Settings) -> R) -> R {
         let mut r = None;
         let s = Settings::update(|s| {

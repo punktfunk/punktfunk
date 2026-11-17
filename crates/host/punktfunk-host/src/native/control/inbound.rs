@@ -147,8 +147,8 @@ impl ControlTask {
         Ok(())
     }
 
-    /// A rate ask, answered by [`rate::resolve`] and handed to the encoder, which rebuilds in
-    /// place: its first frame is an IDR with in-band SPS.
+    /// A rate ask, answered by [`rate::resolve`] and handed to the stream thread, which retargets
+    /// the encoder in place where it can, else rebuilds it.
     async fn on_set_bitrate(&mut self, req: SetBitrate) -> Step {
         let shared = &self.task.shared;
         let live = shared.live_bitrate.load(Ordering::Relaxed);
@@ -335,11 +335,11 @@ fn reconfigure_ask(
     if req.exclude_codecs != 0 {
         return Ask::Codec(req.exclude_codecs);
     }
-    // Same bound as the handshake: `> 0` alone acked a mode that cannot land.
+    // Same bound as the handshake.
     let valid = crate::encode::validate_refresh(mode.refresh_hz).is_ok()
         && crate::encode::validate_dimensions(codec, mode.width, mode.height).is_ok();
     if !live_reconfig {
-        // Gamescope, synthetic and per-client-mode identity: the client keeps scaling.
+        // Gamescope, a mirror, per-client-mode identity or a held display: the client scales.
         tracing::info!(
             ?mode,
             "mode switch rejected (backend cannot live-reconfigure)"

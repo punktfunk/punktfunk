@@ -28,7 +28,7 @@ quic = ["tls", "pake", "dep:quinn", "dep:quinn-udp", "dep:tokio", "dep:rcgen", "
 # hands ureq a caller-built `rustls::ClientConfig` (which is how `PinVerify` gets installed —
 # ureq's own `TlsConfig` has no hook for a custom verifier). Separate from `tls` because the
 # cdylib/staticlib embedders (Apple, Android) pin the host themselves over QUIC and have no use
-# for an HTTP stack; only the desktop clients and the tray turn this on.
+# for an HTTP stack; only the host (`ctl`), the desktop clients and the tray turn this on.
 ureq-tls = ["tls", "dep:ureq"]
 # Serde derives on the stats-overlay snapshot (`hud`), for the desktop's `stats-json:` line.
 serde = ["dep:serde"]
@@ -55,7 +55,7 @@ crc32fast = "1"                # DualSense Bluetooth output-report CRC (`audio::
 # Same RustCrypto `aead 0.6` generation as aes-gcm: identical trait/nonce/tag shapes, pure Rust,
 # cross-compiles like aes-gcm (no cmake). See design/chacha20-session-cipher.md.
 chacha20poly1305 = "0.11"
-# Optional for chacha-aws-lc-rs.
+# Optional, for chacha-aws-lc-rs and aes-aws-lc-rs.
 aws-lc-rs = { workspace = true, optional = true }
 socket2 = { version = "0.6", features = [
     "all",
@@ -69,12 +69,12 @@ zeroize = "1"
 # magic packet reaches the host's L2 segment on multi-homed clients (VPN/docker/multiple LANs),
 # not just the default route. Tiny, cross-platform (getifaddrs / GetAdaptersAddresses), no cmake.
 # `link-local` is named EXPLICITLY, not inherited. mdns-sd declares if-addrs with it, so any build
-# containing both (every host and every client) unifies it on regardless — and a crate whose
-# enumeration silently changes depending on who else is in the selection is the worst of both. On
-# means fe80::/169.254 interfaces are enumerated too, which for WoL is the behaviour we want: a NIC
-# is wake-capable whether or not it currently holds a routable address.
-# Declared in the `cfg(not(wasm))` block near the bottom of this file, not here: its Linux path is
-# netlink, which emscripten's libc does not declare.
+# containing both (the host, and every client with mDNS discovery) unifies it on regardless — and
+# a crate whose enumeration silently changes depending on who else is in the selection is the
+# worst of both. On means fe80::/169.254 interfaces are enumerated too, which for WoL is the
+# behaviour we want: a NIC is wake-capable whether or not it currently holds a routable address.
+# Declared in the `cfg(not(any(wasm, horizon)))` block near the bottom of this file, not here: its
+# Linux path is netlink, which emscripten's libc does not declare.
 
 # The aws-lc-rs crypto policy lives on the workspace entries (root Cargo.toml).
 quinn = { workspace = true, optional = true }
@@ -90,7 +90,7 @@ pf-l10n = { path = "../../../l10n", features = ["client"], optional = true }
 hmac = "0.13"
 spake2 = { version = "0.4", optional = true }
 # `io-util` for the `AsyncRead`/`AsyncWrite` extension traits the control framing is generic
-# over (`quic::io`), so the same frames run on a quinn stream or a WebTransport one.
+# over (`quic::v2::io`), so the same frames run on a quinn stream or a WebTransport one.
 tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time"] }
 # In-core Opus: `audio::plane` is the one audio-plane decoder, for the Rust clients and the C-ABI
 # `punktfunk_connection_next_audio_pcm` (Apple's AudioToolbox is stereo-only), and `audio::mic`
@@ -130,10 +130,11 @@ windows-sys = { workspace = true, features = [
     "Win32_System_LibraryLoader",
 ] }
 
-# Interface enumeration for Wake-on-LAN and for `discovery`'s address ranking — everywhere but
-# wasm. if-addrs' Linux path is netlink (`sockaddr_nl`, `NETLINK_ROUTE`), which emscripten's libc
-# does not declare, and a browser has no interface list to enumerate. Both callers already treat
-# enumeration failure as an empty list, which is exactly what the wasm arms return.
+# Interface enumeration for Wake-on-LAN, `discovery`'s address ranking and `transport::ifinfo` —
+# everywhere but wasm and Horizon. if-addrs' Linux path is netlink (`sockaddr_nl`,
+# `NETLINK_ROUTE`), which emscripten's libc does not declare, and a browser has no interface list
+# to enumerate. Every caller treats enumeration failure as no interfaces, which is what the wasm
+# and Horizon arms return.
 [target.'cfg(not(any(target_family = "wasm", target_os = "horizon")))'.dependencies]
 if-addrs = { version = "0.15", features = ["link-local"] }
 

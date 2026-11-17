@@ -22,7 +22,7 @@ pub fn defaults(client: Client, game_mode: bool, legacy_guide_gesture: &str) -> 
     };
     let ring = || Action::Ring;
     let slot = Action::Slot;
-    // The clients with their own pad path; the others' dial is their only pad chord.
+    // The clients with their own pad path: they alone bind Stats and Guide on the pad.
     let native = matches!(
         client,
         Client::Desktop | Client::Android | Client::Apple | Client::Mac

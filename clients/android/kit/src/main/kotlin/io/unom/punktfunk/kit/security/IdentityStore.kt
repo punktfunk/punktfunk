@@ -46,7 +46,10 @@ fun ClientIdentity.deviceCode(): String? = runCatching {
 internal fun deviceCodeOf(fingerprint: ByteArray): String =
     fingerprint.take(8).joinToString("") { "%02X".format(it) }.chunked(4).joinToString(" ")
 
-/** Result of [IdentityStore.load] — four states so the caller never mints over a *recoverable* error. */
+/**
+ * Result of [IdentityStore.load] — three states so the caller never mints over a *recoverable*
+ * error.
+ */
 sealed interface IdentityLoad {
     data class Ok(val identity: ClientIdentity) : IdentityLoad
 

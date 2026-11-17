@@ -24,7 +24,7 @@ final class FetchGuardTests: XCTestCase {
         XCTAssertTrue(onA.accepts(.refresh, fp: "aa"))
     }
 
-    /// R5-3: End Game on host A, then B's shelf opens before A answers. A's re-read of what
+    /// End Game on host A, then B's shelf opens before A answers. A's re-read of what
     /// runs, and its answer, never land under B's shelf, even with no list fetch since.
     func testHostAsRefreshNeverLandsUnderHostBsShelf() {
         let onB = FetchGuard(fp: "bb", serial: 3)

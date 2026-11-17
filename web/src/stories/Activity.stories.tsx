@@ -4,13 +4,13 @@ import type { ActivityEntry } from "@/api/events";
 import { ActivityCardView, ActivityList, collapse } from "@/sections/Activity";
 
 /**
- * The activity feed (design/web-console-overhaul.md §4).
+ * The activity feed (`sections/Activity`).
  *
  * Two things here only show up with a busy host, which is why they get a story rather than a
- * test: Home's card **folds** to six rows — the whole 200-entry ring pushed the rest of the page
- * off the screen — and the rows **arrive on a cadence**
- * instead of all on one frame. A screenshot pins the first; the second is why the list is a
- * motion container at all (`components/stagger.tsx`), and a reviewer sees it by opening this.
+ * test: Home's card **folds** to `CARD_MAX` rows, so the whole `ACTIVITY_MAX`-entry ring does not
+ * push the rest of the page off the screen, and the rows **arrive on a cadence** instead of all
+ * on one frame. A screenshot pins the first; the second is why the list is a motion container at
+ * all (`components/stagger.tsx`), and a reviewer sees it by opening this.
  */
 const at = (mins: number) => Date.UTC(2026, 8, 10, 14, 0) - mins * 60_000;
 
@@ -50,7 +50,7 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-/** Home's card: six rows out of seventeen, the rest under Show all. */
+/** Home's card: `CARD_MAX` rows out of seventeen, the rest under Show all. */
 export const Card: Story = {
 	render: () => (
 		<div className="max-w-3xl">
@@ -76,8 +76,8 @@ export const Rows: Story = {
 /**
  * A host that is busy RIGHT NOW: the card starts at its cap and an event lands every 900 ms, so
  * every arrival also evicts the oldest row. This is the only state where the card's height and
- * the rows' movement can go wrong — both only happen while something is arriving, which is why
- * the static stories above never showed it.
+ * the rows' movement can go wrong — both only happen while something is arriving, which the
+ * static stories above cannot show.
  */
 export const Live: Story = {
 	render: function LiveFeed() {
@@ -103,7 +103,7 @@ export const Live: Story = {
 
 /**
  * What a client CONNECTING looks like: five events inside the same instant — connected, session,
- * stream, display, game — every two seconds. Each one evicts a row, so a burst evicts five at
+ * stream, game, display — every two seconds. Each one evicts a row, so a burst evicts five at
  * once, and five rows mid-exit is the one situation that can make the card taller than its cap.
  * The one-per-900-ms story above never produces it.
  */
@@ -132,14 +132,13 @@ export const Burst: Story = {
 	},
 };
 
-/** How many ring events the Reload story replays — a busy host's ring holds up to 1024. */
+/** How many ring events the Reload story replays; the host's `RING_CAPACITY` is 1024. */
 const REPLAY = 300;
 
 /**
  * A page LOAD. The stream replays the host's whole ring the moment it connects, each frame
- * dispatched as its own task — so each one is its own render, and every event past the sixth
- * evicts a row into an exit animation. None of the stories above exercise that path, and it is
- * the one that stretched the real card below the fold and froze the page on reload.
+ * dispatched as its own task — so each one is its own render, and every event past `CARD_MAX`
+ * evicts a row into an exit animation. None of the stories above exercise that path.
  */
 export const Reload: Story = {
 	render: function ReloadFeed() {

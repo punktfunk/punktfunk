@@ -31,10 +31,10 @@ pub(crate) struct ProbeState {
     /// 0 = fewer than two probe packets; consumers use
     /// [`throughput_window_ms`](Self::throughput_window_ms).
     pub(crate) client_interval_ms: u32,
-    /// The same interval in microseconds. A bring-up step is 25 ms, so a
-    /// millisecond of rounding is 4 % of the ratio that decides a wall — more
-    /// than the 10 % the decision turns on. The stamps are nanoseconds; only
-    /// this field keeps their resolution.
+    /// The same interval in microseconds. A bring-up step is 25 ms
+    /// (`abr::probe::RAMP_STEP_MS`), so a millisecond of rounding is 4 % of
+    /// it, and the wall decision turns on 10 %. The stamps are nanoseconds;
+    /// only this field keeps their resolution.
     pub(crate) client_interval_us: u32,
     /// Host end-of-burst report.
     pub(crate) host_goodput_bytes: u64,
@@ -66,15 +66,15 @@ impl ProbeState {
     ///
     /// The host `duration_ms` is the SEND window: it closes while the
     /// bottleneck queue still drains, so client bytes / host window overstates
-    /// the link. [`crate::abr::Driver::set_ceiling`]
-    /// never lowers, so a high reading sticks for the session.
+    /// the link. [`crate::abr::Driver::set_ceiling`] only raises after its
+    /// first reading, so a high reading sticks for the session.
     pub(crate) fn measured_interval_ms(first_ns: u64, last_ns: u64, packets: u64) -> Option<u32> {
         Self::measured_interval_us(first_ns, last_ns, packets).map(|us| (us / 1_000).max(1))
     }
 
     /// The same interval in microseconds, floored at 1. What the ramp judges
     /// a step on: at a 25 ms step the millisecond form quantises the ratio by
-    /// 4 %, and four of the rig's walls were decided inside that.
+    /// 4 %.
     pub(crate) fn measured_interval_us(first_ns: u64, last_ns: u64, packets: u64) -> Option<u32> {
         if packets < 2 || first_ns == 0 || last_ns <= first_ns {
             return None;

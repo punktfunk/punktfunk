@@ -12,8 +12,8 @@
 //! the object first. Create-info plumbing stays function-local.
 //!
 //! [`ParamsLedger`] is the pure decision table; [`VideoSession`] is the Vulkan
-//! half. [`RawVideoSession`] (create, memory bind, RESET arm, destroy) and
-//! [`SetTable`] are shared with the H.265 and AV1 sessions. Pin: tests in this
+//! half. [`RawVideoSession`] (create, memory bind, RESET arm, destroy) is shared
+//! with the H.265 and AV1 sessions, [`SetTable`] with H.265. Pin: tests in this
 //! file; the AV1 retention case is [`crate::session_av1`].
 
 use std::rc::Rc;
@@ -54,7 +54,7 @@ pub enum ParamsAction {
 
 /// One kind of parameter set a parameters object stores, keyed by id AND
 /// content. In-band sets re-parse every keyframe, so pointer identity is not
-/// identity. Each codec ledger composes one table per set kind.
+/// identity. The H.264 and H.265 ledgers compose one table per set kind.
 #[derive(Debug)]
 pub(crate) struct SetTable<K, V> {
     entries: Vec<(K, V)>,
@@ -674,7 +674,7 @@ impl VideoSession {
     /// # Safety
     ///
     /// Live device. On Recreate the caller has drained every in-flight decode
-    /// (waited each output slot's newest submitted timeline). The old object
+    /// (`drain_gpu` waits the newest submission's timeline). The old object
     /// is destroyed here; a still-executing decode reading it is
     /// use-after-free. `Current` / `Add` do not destroy an object a submitted
     /// decode can read.
@@ -1043,8 +1043,8 @@ mod tests {
         );
     }
 
-    /// Both codec ledgers act on the worst verdict: a conflict or a full table
-    /// recreates, any new set adds, all stored is current.
+    /// The H.264 and H.265 ledgers act on the worst verdict: a conflict or a
+    /// full table recreates, any new set adds, all stored is current.
     #[test]
     fn a_set_table_answers_stored_new_full_or_conflict() {
         let mut table: SetTable<u8, u32> = SetTable::new(2);

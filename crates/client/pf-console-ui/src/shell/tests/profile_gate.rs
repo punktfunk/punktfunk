@@ -27,7 +27,7 @@ fn pick(id: &str, name: &str) -> Option<ProfilePick> {
     })
 }
 
-/// A pick saved without that ask: by this build's picker before Remember, or another app.
+/// A pick saved without the Remember ask, as another app saves one: its `remember` is off.
 fn old_pick(id: &str, name: &str) -> Option<ProfilePick> {
     pick(id, name).map(|p| ProfilePick {
         remember: false,
@@ -349,7 +349,7 @@ fn polled(bus: &ConsoleBus) -> bool {
         .any(|c| matches!(c, ConsoleCmd::FetchProfiles { fp_hex, .. } if fp_hex == "aa11"))
 }
 
-/// A stopped seat is woken, then the list is read every 2 s until it is ready.
+/// A stopped seat is woken, then the list is read every `SEAT_POLL` until it is ready.
 #[test]
 fn a_stopped_seat_is_woken_and_waited_for_before_the_dial() {
     let (mut s, console, bus, row) = asking(pick("kid", "Kid"));

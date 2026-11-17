@@ -220,12 +220,11 @@ impl DeviceModifiers {
 }
 
 /// BGRx/BGRA dmabuf offers. Importer lists per format; the direct-import lane's
-/// tiled seed is `ZeroCopyPolicy::encoder_modifiers`, offered only to a
-/// tiled-opted gamescope producer on VA passthrough while the refusal latch is
-/// clear; PyroWave merges its Vulkan-importable list on non-gamescope
-/// passthrough. The NVENC raw lane (`nvenc_raw`) narrows the importer's lists to
-/// what its fused convert samples. `dmabuf_modifiers_for_producer` finalizes each
-/// list. Returns `(bgrx, bgra, extend_pyrowave)` — the flag feeds the
+/// tiled seed is `ZeroCopyPolicy::encoder_modifiers`, offered where
+/// [`encoder_tiled_offer`] says; PyroWave merges its Vulkan-importable list on
+/// non-gamescope passthrough. The NVENC raw lane (`nvenc_raw`) narrows the
+/// importer's lists to what its fused convert samples. `dmabuf_modifiers_for_producer`
+/// finalizes each list. Returns `(bgrx, bgra, extend_pyrowave)` — the flag feeds the
 /// session-start log line.
 pub(super) fn packed_modifier_offers(
     cfg: &StreamConfig,
@@ -241,7 +240,7 @@ pub(super) fn packed_modifier_offers(
     let [mut modifiers, mut modifiers_bgra] = lists.packed.clone();
     // The direct-import lane's tiled offer comes from what the session encoder
     // proved (`ZeroCopyPolicy::encoder_modifiers`), per fourcc. A refused tiled
-    // offer or a non-gamescope producer keeps the importer's list alone.
+    // offer keeps the importer's list alone; `encoder_tiled_offer` picks the producers.
     let tiled_refused = ladder.refused(Refusal::Tiled);
     // PyroWave imports through Vulkan, not libva. Its per-fourcc lists come from the
     // facade so capture never calls `encode`; gamescope has its separately gated seed. A

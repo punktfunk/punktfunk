@@ -22,8 +22,8 @@ pub(super) fn composite_plan(
 /// rebuild so the two cannot drift.
 ///
 /// Returns whether "no cursor overlay" still means the pointer is off the streamed output, and
-/// clears `metadata_composite` when the negotiated mode makes it a fiction. wlr portals
-/// (`Hidden|Embedded`) paint the pointer into the frames and never send `SPA_META_Cursor`, so a
+/// clears `metadata_composite` when the negotiated mode makes it a fiction. A negotiated
+/// `Hidden` or `Embedded` (pointer burnt into the frames) never sends `SPA_META_Cursor`, so a
 /// metadata composite can never be fed and "no overlay" is not a park signal. `None` (KWin,
 /// Mutter, gamescope, Windows) leaves both answers alone.
 ///

@@ -44,15 +44,16 @@ pub fn auth_signed_message(binding: &[u8; 32], nonce: &[u8; 32]) -> Vec<u8> {
     m
 }
 
-/// `client → host`: begin pairing. `name` is the host-stored label (≤64 bytes UTF-8);
-/// `spake_a` is the client's SPAKE2 message (see [`super::pake::start`]).
+/// `client → host`: begin pairing. `name` is the host-stored label (at most
+/// [`HELLO_NAME_MAX`] bytes UTF-8); `spake_a` is the client's SPAKE2 message (see
+/// [`super::pake::start`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairRequest {
     pub name: String,
     pub spake_a: Vec<u8>,
     /// SPKI DER of the client's device key, or empty when the client has a certificate instead.
-    /// The host's identity for the ceremony is then the SHA-256 of these bytes, which is also
-    /// what it stores — so this must be the key the client can later sign with, not a copy.
+    /// The client's identity for the ceremony is then the SHA-256 of these bytes, which is also
+    /// what the host stores — so this must be the key the client can later sign with, not a copy.
     ///
     /// Trailing and optional: a host that predates it rejects a message carrying one, and only
     /// carriers without mTLS send it. Those carriers are newer than the field.

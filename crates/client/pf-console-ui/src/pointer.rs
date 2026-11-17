@@ -12,11 +12,11 @@ use pf_client_core::console::{PointerButton, PointerInput};
 use skia_safe::Rect;
 use std::collections::VecDeque;
 
-/// Max finger wander (design units × `k`) that still counts as a tap. 12 dp is
-/// classic touch slop; in device pixels it matches Android ViewConfiguration.
+/// Max finger wander (design units × `k`) that still counts as a tap. 12 dp is wider than
+/// Android's default touch slop, 8 dp (`config_viewConfigurationTouchSlop`, android-36.1).
 const TOUCH_SLOP_DP: f64 = 12.0;
-/// Dominant-axis travel (design units × `k`) per synthetic scroll tick. 56 is
-/// the menu row pitch (`widgets::ROW_H` + gap), so the list tracks the finger.
+/// Dominant-axis travel (design units × `k`) per synthetic scroll tick. 56 is just under
+/// the menu row pitch (`widgets::ROW_H` plus `ROW_GAP`), so the list tracks the finger.
 pub(crate) const DRAG_TICK_DP: f64 = 56.0;
 /// A finger held this still for this long is a long press.
 const LONG_PRESS_S: f64 = 0.5;
@@ -34,7 +34,7 @@ pub struct Pointer {
 pub enum PointerKind {
     /// Primary button down, or a finger's tap (sent at its lift) — the acting edge.
     Press,
-    /// Primary button or finger up. Ignored today; kept so a drag can close.
+    /// Primary button or finger up. Only the ring's drag reads it (to close a drag).
     Release,
     /// Motion, with or without a button held.
     Move,

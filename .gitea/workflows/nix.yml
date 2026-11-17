@@ -1,12 +1,10 @@
-# Nix packaging gate. Until this existed, NOTHING in CI ever evaluated flake.nix: the word "nix"
-# appeared in exactly one workflow file, and only in a comment about bun2nix breaking a Windows
-# step. Every Nix regression therefore reached main invisibly and was found by hand on a Nix box —
-# `nix build .#punktfunk-web` was broken for 553 commits before anyone noticed (see the bun-nix job
-# in ci.yml for that story).
+# Nix packaging gate: the only workflow that evaluates and builds flake.nix. A stale
+# web/bun.nix is caught by the bun-nix job in ci.yml and again by the `bun` tier below.
 #
 # Four tiers, because a full `nix flake check` builds the whole Rust workspace with crane and would
-# run for an hour on every push — so the two cheap tiers gate every PR and the expensive ones run
-# only where their cost buys something (a VM boot, a published cache):
+# run for an hour on every push — so the two cheap tiers run on every push and on a labelled PR
+# (the `flake` job waits for `ci:nix-rust` or `ci:all` there), and the expensive ones run only
+# where their cost buys something (a VM boot, a published cache):
 #
 #   * eval  — `nix flake check --no-build`: instantiates every package, app, check and devShell
 #             without building them. Catches the failures that actually happen to this flake — a
@@ -18,9 +16,8 @@
 #             attribute set — nothing more (nix's own source: `// FIXME: if we have a 'nixpkgs'
 #             input, use it to check the module.`). MEASURED: a module setting a nonexistent
 #             OPTION, referencing a nonexistent `pkgs` attribute AND calling a nonexistent `lib`
-#             function passes clean, printing `checking NixOS module ... all checks passed!`. This
-#             header used to claim the module was covered here; it was not, for the module's whole
-#             life. It is covered NOW because `checks.<system>.nixos-module`
+#             function passes clean, printing `checking NixOS module ... all checks passed!`.
+#             The module is covered because `checks.<system>.nixos-module`
 #             (packaging/nix/module-check.nix) evaluates it against real nixpkgs and asserts on the
 #             rendered systemd units — and because those assertions are pure Nix, INSTANTIATING
 #             that check runs them, so `--no-build` is enough. Keep them pure: a shell script in
@@ -63,8 +60,8 @@
 # `cache` run compiles it, so a flake.lock bump that breaks it goes red here within a day; the
 # dispatch input below is for checking it on a branch before merging.
 #
-# ⚠ pull_request is deliberately present. flatpak.yml shipped with push-only triggers and manifest
-# breakage reached main invisibly for weeks — do not "simplify" this workflow by dropping it.
+# ⚠ pull_request is deliberately present: with push-only triggers, breakage reaches main before
+# anything runs — do not "simplify" this workflow by dropping it.
 # ⚠ The two path lists are duplicated on purpose: a YAML anchor would be tidier, but Gitea's
 # workflow parser is not a place to bet on anchor support. scripts/ci/check-workflow-paths.py
 # fails when they differ, or when a file packaging/nix or flake.nix names is not in them.
@@ -262,20 +259,18 @@ jobs:
       - name: Trust the checkout
         run: git config --global --add safe.directory "$PWD"
 
-      # Diagnostics. This fleet ran a runner out of disk on 2026-08-06 (the ci.yml `web` job died
-      # with "no space left on device" mid-`bun install`), and a Nix build is the heaviest thing
-      # here — so record the headroom, or a future failure is a guess.
+      # Diagnostics. A Nix build is the heaviest thing on this fleet, so record the disk
+      # headroom, or a "no space left on device" failure is a guess.
       - name: Environment
-        # Disk AND memory. This job's recurring failure is an OOM kill, and `df` cannot explain
-        # one — a run that dies at exit 137 with only disk numbers in the log is a guess.
+        # Disk AND memory. `df` cannot explain an OOM kill — a run that dies at exit 137 with
+        # only disk numbers in the log is a guess.
         run: |
           df -h / /nix /tmp || true
           free -h 2>/dev/null || grep -E '^(MemTotal|MemAvailable|SwapTotal)' /proc/meminfo || true
           nproc 2>/dev/null || true
-          # THE number for this job's recurring exit 137. `free` and /proc/meminfo report the HOST
-          # inside a container, so they showed 125Gi total / 48Gi available on a run that then got
-          # bun SIGKILLed (19444) — a cgroup cap is invisible to them and is the only remaining
-          # explanation. cgroup v2 first, then v1; "max" means uncapped.
+          # THE number for an exit 137. `free` and /proc/meminfo report the HOST inside a
+          # container, so a cgroup cap is invisible to them. cgroup v2 first, then v1; "max"
+          # means uncapped.
           cat /sys/fs/cgroup/memory.max 2>/dev/null \
             || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null \
             || echo "no cgroup memory limit readable"
@@ -285,9 +280,9 @@ jobs:
         run: |
           "$NIX" flake check --no-build --show-trace
 
-      # The bun packages, built for real. This is the leg that would have caught the stale
-      # web/bun.nix end to end: the derivation's offline `bun install` runs against a store cache
-      # built strictly from bun.nix, so a lockfile that cache does not cover fails here.
+      # The bun packages, built for real. The derivation's offline `bun install` runs against a
+      # store cache built strictly from bun.nix, so a lockfile that cache does not cover (a stale
+      # web/bun.nix included) fails here.
       # Path-filtered, so it runs only when the packaging or a lockfile actually moves. If it ever
       # starts going red on runner disk rather than on real defects, demote it to the dispatch
       # opt-in below rather than leaving an infra-red gate on the board.
@@ -331,7 +326,7 @@ jobs:
       # cache miss (see packaging/nix/server/Caddyfile). unom-1 already serves the flatpak repo
       # this way from a cloud IP; a Nix cache is the same static-files-behind-caddy shape.
       #
-      # Gitea itself cannot host this at all: it has 23 package registry types and none is Nix, and
+      # Gitea itself cannot host this at all: none of its package registry types is Nix, and
       # the binary cache protocol wants fixed anonymous paths at a URL root (/nix-cache-info,
       # /<hash>.narinfo, /nar/<hash>.nar.xz) that /api/packages/{owner}/generic/… cannot express.
       - name: Cache publish preflight
@@ -347,8 +342,8 @@ jobs:
           # Pushes a nixpkgs bump to main and moves the nix-* channel branch after the publish.
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         # Guard BEFORE the build, not before the upload: an unconfigured cache must not cost an
-        # hour of rustc first. No-ops cleanly until the secret exists, exactly as flatpak.yml's
-        # repo deploy does, so this workflow stays green through setup.
+        # hour of rustc first. No-ops cleanly while a secret is unset, as flatpak.yml's repo
+        # deploy does, so this workflow stays green.
         run: |
           set -eu
           skip() { echo "go=false" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
@@ -403,9 +398,9 @@ jobs:
             git reset -q --hard "$GITHUB_SHA"
             build
           fi
-          # This is now the heaviest job on the fleet — a full workspace build plus gamescope fills
-          # the store with tens of GB, and this fleet ran a runner out of disk on 2026-08-06. Record
-          # the headroom AFTER the build too, or a future "no space left on device" is a guess.
+          # This is the heaviest job on the fleet — a full workspace build plus gamescope fills
+          # the store with tens of GB. Record the headroom AFTER the build too, or a
+          # "no space left on device" failure is a guess.
           df -h / /nix /tmp || true
 
       - name: Sign + publish to nix.unom.io
@@ -542,11 +537,9 @@ jobs:
       # Accept BOTH shapes. A checkbox dispatched from the Gitea UI arrives as the STRING
       # "true", but an API dispatch (scripts, cross-repo automation) can deliver a real JSON
       # boolean, and `== 'true'` silently misses it — the step is skipped, the run goes green,
-      # and the log looks identical to a run that genuinely had nothing to do. MEASURED
-      # 2026-08-19: dispatched with build-gamescope while verifying a flake.lock bump, and this
-      # step skipped while the job reported success — a green that proved nothing about the
-      # very package being fixed. Still no `inputs.*`: that context is the thing Gitea's parser
-      # is least reliable about, which is why this file used github.event.inputs to begin with.
+      # and the log looks identical to a run that genuinely had nothing to do. No `inputs.*`:
+      # that context is the thing Gitea's parser is least reliable about, which is why this
+      # file uses github.event.inputs.
       - name: Build the Rust packages (dispatch opt-in)
         if: ${{ github.event.inputs.build-rust == 'true' || github.event.inputs.build-rust == true }}
         run: |

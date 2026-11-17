@@ -16,9 +16,9 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The same Roborazzi harness as ScreenshotTest, at Android TV geometry: 960×540dp in the
  * `television` UI mode at xhdpi (2.0×) = 1920×1080 px — the Play Store's 16:9 TV screenshot size,
- * captured 1:1 with no resampling. Only the screens that exist on a TV are shot here: the
- * gamepad-console shell (what LEANBACK_LAUNCHER opens into) and the in-stream view. Files are
- * prefixed `tv-` so the artifact separates the form factors.
+ * captured 1:1 with no resampling. Only the in-stream view is shot here: the gamepad-console
+ * shell (what LEANBACK_LAUNCHER opens into) is the Skia shell, which Roborazzi cannot render.
+ * Files are prefixed `tv-` so the artifact separates the form factors.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)

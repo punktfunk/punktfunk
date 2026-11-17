@@ -333,7 +333,7 @@ mod tests {
         }
     }
 
-    /// Every row is the drain's behaviour before the step existed; each names what it pins.
+    /// Each row names what it pins.
     #[test]
     fn the_paced_drain_steps_by_the_table() {
         use Intent::*;

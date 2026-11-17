@@ -1,4 +1,4 @@
-//! `loss-harness` — sweep packet loss against the FEC and report recovery (plan §10).
+//! `loss-harness` — sweep packet loss against the FEC and report recovery.
 //!
 //! Drives access units through the in-process loopback at increasing loss rates, for
 //! both FEC schemes, and prints how many frames survive. A pure-software stand-in for
@@ -39,7 +39,7 @@ fn config(role: Role, scheme: FecScheme, drop_period: u32) -> Config {
 /// Returns (frames_completed, frames_attempted) for a loss setting. `streamed` feeds each AU
 /// through the VIDEO_CAP_STREAMED_AU path (three encoder-chunk pushes + finish — sentinel
 /// blocks then real totals) instead of one whole-AU submit, so the two wire shapes' recovery
-/// curves can be compared directly (the Phase-2 "more, smaller units must not regress FEC" gate).
+/// curves can be compared directly.
 fn run(
     scheme: FecScheme,
     drop_period: u32,
@@ -73,8 +73,8 @@ fn run(
         if streamed {
             let mut au = host.begin_streamed_frame_at(f as u64, 0, f as u32).unwrap();
             for chunk in frame.chunks(frame_len / 3 + 1) {
-                // slice_end=false: the harness exercises the legacy full-FEC-block granularity
-                // (its loopback client never advertises the P2 slice wire).
+                // slice_end=false: full-FEC-block granularity. Slice cuts need
+                // USER_FLAG_SLICE_STREAM, which the harness never sets.
                 let wires = host.seal_streamed_chunk(&mut au, chunk, false).unwrap();
                 send_wires(&mut host, wires);
             }
@@ -115,7 +115,7 @@ fn run(
 //  3. the stress rows      — the same sweep at higher loss, where the gap becomes measurable.
 
 /// The realistic PyroWave wire geometry: 1500-MTU IPv4 shards, 200 data shards per FEC block,
-/// and **FEC pinned OFF** (the Phase-4 recipe — parity would mask exactly the loss under study).
+/// and **FEC pinned OFF** (parity would mask exactly the loss under study).
 fn partial_config(role: Role) -> Config {
     Config {
         role,
@@ -146,7 +146,7 @@ impl Rng {
         self.0 = x;
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
-    /// True with probability `pct`/10000 (basis points, so 2 % = 200).
+    /// True with probability `bp`/10000 (basis points, so 2 % = 200).
     fn hits(&mut self, bp: u32) -> bool {
         (self.next_u64() % 10_000) < bp as u64
     }
@@ -207,9 +207,9 @@ fn run_partial(
     final_only: bool,
     seed: u64,
 ) -> Outcome {
-    // Flush frames: `advance_window` only ages a frame out once something NEWER exists and the
-    // capture-time fuse has passed (PARTIAL_WINDOW_NS = 30 ms vs a 16.67 ms frame period), so
-    // the tail of the run needs successors before its verdicts land.
+    // Flush frames: `advance_window` retires a frame only when a NEWER frame opens (an unpinned
+    // streamed one also waits out PARTIAL_WINDOW_NS), so the tail of the run needs successors
+    // before its verdicts land.
     const FLUSH: usize = 8;
     const FRAME_NS: u64 = 16_666_667;
 

@@ -13,7 +13,7 @@
 //! pictures. Binding only the current sets would drop a long-term anchor
 //! between pin and use; a driver may treat that gap as retirement. Vulkan's
 //! `pReferenceSlots` is the slots this decode uses, so that rung is right to
-//! bind the current sets. Surfaces are slots: see [`crate::pic`].
+//! bind the current sets. Slots and surfaces: see [`crate::pic`].
 //!
 //! A lost reference is absent from the RPS (`PlanWarning::MissingReference`);
 //! the index arrays compact past it. There is no surface to point at.
@@ -55,7 +55,7 @@ const _: () = assert!(pf_bitstream::h265::RPS_UNUSED == UNUSED_ENTRY);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DxvaRefH265 {
-    /// Decode texture array `ArraySlice` — the DPB slot.
+    /// DPB slot; the decode texture `ArraySlice` under [`Surfaces::Identity`].
     pub slot: u8,
     pub id: PicId,
     pub is_long_term: bool,

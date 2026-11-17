@@ -34,8 +34,8 @@ final class PyroWaveQualityTests: XCTestCase {
             "1920×1080 at 60 Hz: 199 Mbit/s")
     }
 
-    /// HDR is on by default, and an SDR display gets an 8-bit stream: its rate is the 8-bit one,
-    /// not the 10-bit one a display that shows HDR is offered.
+    /// With HDR on, an SDR display still gets an 8-bit stream: its rate is the 8-bit one, not
+    /// the 10-bit one a display that shows HDR is offered.
     func testHDROnAnSDRDisplayPricesEightBits() {
         var s = EffectiveSettings()
         s.hdrEnabled = true

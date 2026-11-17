@@ -14,8 +14,8 @@ import Foundation
 
 /// The order hosts appear in.
 public enum HostSort: String, CaseIterable, Identifiable, Sendable {
-    /// Oldest first — the order they were added, and what the grid did before it could sort at
-    /// all. The default for exactly that reason: an update shouldn't rearrange anyone's grid.
+    /// Oldest first — the order they were added, which is the stored order. The default for
+    /// that reason (`SettingDefault.hostSort`): an update shouldn't rearrange anyone's grid.
     case added
     case name
     case lastConnected
@@ -112,7 +112,7 @@ public struct HostGroup: Identifiable, Equatable, Sendable {
 
 public enum HostArrangement {
     /// Group, then sort within each group. `online` is the set of host ids currently reachable —
-    /// the caller owns that (mDNS plus the reachability probe), this only reads it.
+    /// the caller owns that, this only reads it.
     public static func groups(
         hosts: [StoredHost], catalog: PresetCatalog, online: Set<UUID>,
         sort: HostSort, grouping: HostGrouping

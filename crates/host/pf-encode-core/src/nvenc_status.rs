@@ -1,7 +1,7 @@
 //! Operator-actionable causes for `NVENCSTATUS` failures, shared by the
-//! Windows (`encode/windows/nvenc.rs`) and Linux (`encode/linux/nvenc_cuda.rs`)
-//! direct-SDK backends. [`call_err`] folds the cause into the `anyhow::Error`
-//! so `{e:#}` logs already name the real failure.
+//! Windows (`pf-encode-win/src/windows/nvenc.rs`) and Linux
+//! (`pf-encode/src/enc/linux/nvenc_cuda.rs`) direct-SDK backends. [`call_err`] folds
+//! the cause into the `anyhow::Error` so `{e:#}` logs already name the real failure.
 //!
 //! `NV_ENC_ERR_INVALID_VERSION` is two failures: header/kernel skew (no session
 //! has opened) and exhausted per-process driver state (a session already did).

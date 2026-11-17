@@ -153,7 +153,8 @@ impl AudioPlane {
 /// Audio is outside ABR, so this is not "video adapts around 25 %". Separate from
 /// [`plan_audio_budget`](punktfunk_core::audio::plan_audio_budget)'s 5 % Opus ladder: hi-res
 /// is opt-in, never a new rung. Stereo 48/16 (1 536 kbps) needs ≥ 6.1 Mbps of video;
-/// 176.4/24 7.1 needs ≥ 33.9. AC-3 5.1 (448 kbps) needs ≥ 1.8; E-AC-3 7.1 (1 024) ≥ 4.1.
+/// 176.4/24 7.1 (33.9 Mbps) needs ≥ 135.5. AC-3 5.1 (448 kbps) needs ≥ 1.8; E-AC-3 7.1
+/// (1 024) ≥ 4.1.
 const HIRES_MAX_VIDEO_SHARE_PCT: u32 = 25;
 
 /// Blocks in one E-AC-3 access unit: 16 ms. AC-3 is always 6.
@@ -781,7 +782,7 @@ pub(super) async fn negotiate(
     punktfunk_core::quic::v2::msg::decode::<Ready>(ty, &body)
         .map_err(|e| anyhow!("Ready decode: {e:?}"))?;
     n.bringup.mark("start");
-    // `wire_mtu::spawn_watch` is started by `serve_session` once the control-task channels
+    // `wire_mtu::spawn_watch` is started by `wire_session` once the control-task channels
     // exist; it also drives mid-session shard renegotiation (needs the control writer).
     Ok(Negotiated {
         terms,
@@ -994,10 +995,9 @@ fn welcome(n: &Negotiation<'_>, t: &SessionTerms) -> Welcome {
             fec_percent: n.knobs.fec_pct.unwrap_or(FEC_ADAPTIVE_START),
             max_data_per_block: 4096,
         },
-        // Largest even payload whose sealed datagram fits an unfragmented UDP packet on a
-        // 1500 MTU for this client's address family (1408 IPv4, 1388 IPv6 — v6 routers do
-        // not fragment). Order: jumbo re-proof, `PUNKTFUNK_WIRE_MTU`, a prior session's
-        // learned path budget, then this family default. See `wire_mtu.rs`.
+        // Order: jumbo re-proof, `PUNKTFUNK_WIRE_MTU`, a prior session's learned path
+        // budget, then the address family's default (`config::mtu1500_shard_payload_for`).
+        // A browser's datagram size clamps it after. See `wire_mtu.rs`.
         shard_payload: t.shard_payload as u16,
         frames: match n.source {
             Punktfunk1Source::Synthetic => n.frames,
@@ -1428,7 +1428,7 @@ async fn admit_mode(
 }
 
 /// `Welcome::host_caps`: what this host does for this session. `0x80` is the last bit; the next
-/// capability needs a second byte and an ABI bump.
+/// capability goes in [`welcome_host_caps2`].
 fn welcome_host_caps(n: &Negotiation<'_>, t: &SessionTerms) -> u8 {
     // Sequence-gated gamepad snapshots; capable clients send those, not per-transition events.
     punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE
@@ -1446,8 +1446,8 @@ fn welcome_host_caps(n: &Negotiation<'_>, t: &SessionTerms) -> u8 {
         } else {
             0
         }
-        // Client turns its local renderer on only when it sees this bit; serve_session
-        // wires forwarding by reading the bit back.
+        // Client turns its local renderer on only when it sees this bit; `negotiate`
+        // reads the bit back into `cursor_forward` for the session's wiring.
         | if cursor_forward(
             t.hello.client_caps,
             t.compositor,
@@ -1957,7 +1957,7 @@ fn codec_carries_sdr10(codec: crate::encode::Codec, real_source: bool) -> bool {
 }
 
 /// Whether Hello carried a format at all. Decode maps an absent one to 48 kHz/16-bit, so
-/// that pair (or a bare zero) is "nothing asked" — the rule `Hello::encode` applies.
+/// that pair (or a bare zero) is "nothing asked".
 fn audio_format_asked(rate_hz: u32, bits: u8) -> bool {
     use punktfunk_core::audio::{pcm, SAMPLE_RATE_HZ};
     (rate_hz != 0 && rate_hz != SAMPLE_RATE_HZ) || (bits != 0 && bits != pcm::BITS_16)
@@ -2708,7 +2708,7 @@ pub(crate) mod tests {
     }
 
     /// The negotiation line names the preference, and a preference that lost says which
-    /// side lacks it — the reporter's 0x0b client against a 0x0f host, and the reverse.
+    /// side lacks it — a 0x0b client against a 0x0f host, and the reverse.
     #[test]
     fn a_lost_codec_preference_names_the_missing_side() {
         use punktfunk_core::quic::{

@@ -11,8 +11,8 @@ use ash::vk;
 use ash::vk::Handle;
 
 /// Presenter's decode-capable device as raw integers so the type stays FFI-plain.
-/// Same shape as `pf-client-core`'s `VulkanDecodeDevice`; this crate does not
-/// depend on it.
+/// `pf-client-video`'s `VulkanDecodeDevice` carries the same handles; this crate
+/// does not depend on it.
 ///
 /// Caller contract (checked where cheap, otherwise trusted):
 /// - All four handles stay live for every object this crate builds from them.
@@ -82,9 +82,9 @@ impl Drop for QueueSubmitGuard<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceError {
     NullHandle(&'static str),
-    /// Decode family advertises no op for this codec: extension missing at
-    /// device create, or `decode_qf` is the wrong family. Caps queries ask the
-    /// PHYSICAL device and would still green-light an unenabled codec.
+    /// Decode family advertises no op for this codec: the hardware lacks it, or
+    /// `decode_qf` is the wrong family. The family query reads the PHYSICAL
+    /// device, so an extension the device never enabled passes it.
     NoCodecOperation {
         family: u32,
         /// Codec name as the caller would write it (`"H.264 decode"`).
@@ -355,7 +355,7 @@ impl DecodeDevice {
     }
 
     /// `VK_KHR_external_memory_fd` entry points. The caller enabled the extension when
-    /// it asked for a dma-buf export; without it the calls fail cleanly.
+    /// it asked for a dma-buf export; without it ash's stub for the missing entry point panics.
     #[cfg(unix)]
     pub(crate) fn external_memory_fd(&self) -> ash::khr::external_memory_fd::Device {
         ash::khr::external_memory_fd::Device::new(&self.instance, &self.device)
@@ -370,8 +370,8 @@ impl DecodeDevice {
     }
 
     /// Refuse unless the decode family advertises `op`. Call before any caps
-    /// query: those answer for the hardware and would green-light a codec the
-    /// VkDevice never enabled.
+    /// query. Like those, it reads the physical device, so a codec the VkDevice
+    /// never enabled still passes.
     pub(crate) fn require_codec_op(
         &self,
         op: vk::VideoCodecOperationFlagsKHR,

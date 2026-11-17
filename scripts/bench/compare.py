@@ -5,8 +5,9 @@ Reads the median time of every benchmark from target/criterion/**/new/estimates.
 `cargo bench -p punktfunk-core`), diffs each against scripts/bench/baseline.json, and prints a
 markdown table (also appended to $GITHUB_STEP_SUMMARY in CI). A metric slower than the baseline by
 more than the regression threshold is flagged ⚠, but the script ALWAYS exits 0 — CI timing is noisy
-(shared hardware), so this is report-only by design; the tight gate lives on the dedicated Tier-3
-GPU runner. Use --update to (re)write the baseline from the current run.
+(shared hardware), so this is report-only by design; the dedicated Tier-3 GPU runner
+(scripts/bench/gpu-stream.sh) compares against a tighter threshold, also report-only. Use
+--update to (re)write the baseline from the current run.
 
   python3 scripts/bench/compare.py [--threshold 0.5] [--update]
 """

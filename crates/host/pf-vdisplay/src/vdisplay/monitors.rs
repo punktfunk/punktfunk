@@ -1,8 +1,9 @@
 //! Physical-monitor enumeration: heads the compositor already has.
 //!
-//! Read-only. Everything else in this crate creates and owns virtual outputs;
-//! this module only reports existing heads so an operator can pin capture
-//! (`PUNKTFUNK_CAPTURE_MONITOR`) and the console can render a picker.
+//! [`list`] and [`resolve`] only report existing heads, so an operator can pin capture
+//! (`PUNKTFUNK_CAPTURE_MONITOR`) and the console can render a picker. The `exclusive`
+//! topology's darken and relight (`disable_for_exclusive`, `dpms_others`, `relight`) live
+//! here too; each backend supplies the per-head call.
 //! See `design/per-monitor-portal-capture.md`.
 //!
 //! Lives here because enumeration is per-compositor and this crate already
@@ -47,8 +48,8 @@ pub struct PhysicalMonitor {
     pub primary: bool,
     /// Enabled (driven). A disabled head is still listed, so "why can't I pick it?" has an answer.
     pub enabled: bool,
-    /// Best-effort: we created this output. Only KWin names them distinctly;
-    /// other backends leave this `false` rather than guess. Grey out, never filter.
+    /// Best-effort: this host created the output, judged from its connector name (on Windows,
+    /// the IddCx device path). The gamescope listing leaves it `false`. Grey out, never filter.
     pub managed: bool,
 }
 
@@ -104,7 +105,7 @@ impl PhysicalMonitor {
     }
 }
 
-/// Every head `compositor` reports, in compositor order.
+/// Every head `compositor` reports, sorted by `(x, y, connector)`; gamescope sorts by connector.
 ///
 /// Backend unreachable is an error; `Ok(vec![])` means reached it, no heads.
 /// A picker can treat both as empty; a pin resolver must not (see [`resolve`]).
@@ -213,9 +214,9 @@ pub fn resolve<'a>(monitors: &'a [PhysicalMonitor], want: &str) -> Result<&'a Ph
 }
 
 /// Does `exclusive` turn this head off? Enabled, not ours, not a managed sibling's
-/// output, and not on the operator's `keep_monitors` list (§5.5). The list matches
-/// case-insensitively: it arrives from the console, a config file and the compositor,
-/// and `DP-1` / `dp-1` are the same screen to the person who typed it.
+/// output, and not on the operator's `keep_monitors` list (`design/web-console-overhaul.md`
+/// §5.5). The list matches case-insensitively: it arrives from the console, a config file
+/// and the compositor, and `DP-1` / `dp-1` are the same screen to the person who typed it.
 pub(crate) fn darkens(
     name: &str,
     enabled: bool,
@@ -369,8 +370,8 @@ pub struct MonitorNotFound {
     pub available: Vec<String>,
 }
 
-/// The operator line. The session pipeline matches its `no monitor named` prefix to
-/// refuse a retry, so the opening is a contract, not a wording choice.
+/// The operator line. `is_permanent_build_error` looks for `no monitor named` in the error
+/// chain to refuse a retry, so the opening is a contract, not a wording choice.
 impl std::fmt::Display for MonitorNotFound {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let want = &self.want;

@@ -112,11 +112,10 @@ private extension Image {
 /// Decode cover art at the size it will be DRAWN, not the size the CDN shipped.
 ///
 /// A Steam capsule is 600×900 (some custom art 1000×1500); decoded, that is 2–6 MB per poster
-/// and stays resident for as long as its tile does. A grid on an iPad Pro or an Apple TV holds
-/// forty, and Apple TV's memory ceiling is the lowest of the three.
-/// This is the desktop console's own lesson (its grid was a slideshow until posters were decoded
-/// at twice their cell size): `CGImageSourceCreateThumbnailAtIndex` decodes straight to a
-/// bounded bitmap and never materialises the full-size one. `maxPixels` is the longer edge, in
+/// and stays resident for as long as its tile does. A grid holds dozens at once, and Apple TV's
+/// memory ceiling is the lowest of the platforms this runs on.
+/// `CGImageSourceCreateThumbnailAtIndex` decodes straight to a bounded bitmap and never
+/// materialises the full-size one. `maxPixels` is the longer edge, in
 /// PIXELS (the caller multiplies its point size by the screen scale, ×2 for headroom under the
 /// focus pop). nil ⇒ decode as shipped — still capped by DECLARED pixels, since the wire bound
 /// caps bytes, not those. Either way the bitmap is decoded HERE, off the main actor: a plain
@@ -145,7 +144,7 @@ private func decodePoster(_ data: Data, maxPixels: Int?) -> PlatformImage? {
 
 /// `data` decoded as shipped — but only if its declared dimensions pass the cap. A 16 MB body
 /// can name 100 000×100 000 pixels; decoding that at draw time is a memory bomb the wire bound
-/// can't see, so anything past ~4× the biggest real capsule is refused instead of a hole.
+/// can't see, so an image of more pixels than 4096×4096 is refused instead of a hole.
 private let maxFullDecodePixels = 16_777_216 // 4096×4096
 
 private func imageWithinPixelCap(_ data: Data) -> PlatformImage? {
@@ -227,7 +226,7 @@ struct PosterImage: View {
 
     /// What re-runs the load task: the next candidate, or a loader arriving. A remounted
     /// shelf draws its restored tiles a tick before `load()` has built one, and keying on
-    /// `index` alone spent every candidate on `nil` — the placeholder for good.
+    /// `index` alone would spend every candidate on a `nil` loader — the placeholder for good.
     private struct LoadKey: Equatable {
         var index: Int
         var hasLoader: Bool
@@ -237,13 +236,9 @@ struct PosterImage: View {
         Group {
             if let image {
                 // `Color.clear` is what takes the proposed size; the art rides along as its
-                // overlay, where it can be DRAWN but never MEASURED. Handing the image the sizing
-                // role instead is what let a fallback banner escape the tile: `scaledToFill`
-                // reports a size that covers the proposal, and the flexible frame below clamps it
-                // to `.infinity` — i.e. not at all. Measured offscreen, a 460×215 `header.jpg` in a
-                // 170pt grid column resolved the tile to 545×255 and overran its neighbours, while
-                // a 300×450 cover in the same chain came out correct — which is why this only ever
-                // showed on the titles whose cover was missing.
+                // overlay, where it can be DRAWN but never MEASURED. As the sizing view,
+                // `scaledToFill` reports a size that covers the proposal, and the flexible frame
+                // below clamps it to `.infinity`: a fallback banner would overrun the tile.
                 Color.clear
                     .overlay {
                         Image(platformImage: image)
@@ -314,7 +309,7 @@ struct PosterImage: View {
             // A launcher's brand mark, drawn at poster size and tinted like the text it replaces.
             // `scaledToFit` inside a fraction of the card keeps a non-square master (the Steam mark
             // is 496×512, Playnite's 1024×1024) in its own aspect ratio rather than stretched.
-            // Falling back to the title is the pre-icon design, so an unshipped mark loses nothing.
+            // Without a mark the title shows instead, so an unshipped mark loses nothing.
             if let mark = launcherIconImage(for: icon) {
                 GeometryReader { geo in
                     mark

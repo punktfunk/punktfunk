@@ -1,6 +1,6 @@
-//! Widgets every page uses.
+//! Widgets the shell's pages share.
 
-// The guarded FlowBox `child-activated → activate` bridge every card grid needs.
+// The guarded FlowBox `child-activated → activate` bridge the host card grid uses.
 pub mod flow;
 // The shell's icons: Lucide marks stroked from the console's own shared table.
 pub mod lucide;

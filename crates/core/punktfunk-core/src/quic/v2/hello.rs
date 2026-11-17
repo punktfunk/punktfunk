@@ -2,9 +2,9 @@
 //!
 //! A [`ClientHello`] decodes to a [`Hello`] plus what the client adds beside it, a
 //! [`ServerHello`] to a [`Welcome`]. Decoding folds what this build cannot honour onto its
-//! default (unknown codec to HEVC, unsupported rate to 48 kHz, bad name to none), so host and
-//! client logic only sees values it can act on; `tests::hellos_settle_after_one_trip` pins that
-//! one trip settles both.
+//! default (unknown codec to HEVC, unsupported rate to [`crate::audio::SAMPLE_RATE_HZ`], bad name
+//! to none), so host and client logic only sees values it can act on;
+//! `tests::hellos_settle_after_one_trip` pins that one trip settles both.
 //!
 //! The hellos carry no wire version (ALPN picks the wire), no data port (media rides the QUIC
 //! path) and no session key (both ends derive it).

@@ -24,16 +24,13 @@ pub(super) const MAX_BITRATE_KBPS: u32 = 8_000_000;
 /// A rate this session's encoder was seen to refuse, and the clock that tests
 /// that refusal again.
 ///
-/// One transient short apply used to cap the session for good. This is the
-/// client's own learned-cap lifecycle on the host side: cleared when the
+/// The client's own learned-cap lifecycle on the host side: cleared when the
 /// encoder opens at a different configuration, and re-tested once the wait has
-/// run out — the wait doubles each time the refusal is still there, so an
-/// encoder that means it costs one ask every few minutes.
+/// run out. The wait doubles each time the refusal is still there.
 pub(super) struct EncoderCeiling {
     cap: punktfunk_core::abr::LearnedCap,
     /// When the cap was last written. The wait is `reprobe_after` report
-    /// windows of real time, the same 12 s → 96 s ladder the client re-probes
-    /// its own caps on.
+    /// windows of real time, the same ladder the client re-probes its own caps on.
     written_at: std::time::Instant,
 }
 
@@ -383,7 +380,7 @@ fn pyrowave_parity_pct(
 
 /// Audio reservation from the resolved Welcome: PCM cost, the fixed AC-3 / E-AC-3 rate, else
 /// the budget the audio thread runs ([`audio_budget`](super::handshake::audio_budget), the
-/// operator's `audio.quality` included), with redundancy only when `HOST_CAP_AUDIO_RED` was
+/// operator's `audio_quality` included), with redundancy only when `HOST_CAP_AUDIO_RED` was
 /// granted.
 pub(super) fn audio_reserved_kbps(welcome: &punktfunk_core::quic::Welcome) -> u32 {
     use punktfunk_core::audio::bitstream;

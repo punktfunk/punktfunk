@@ -21,10 +21,9 @@ final class PresentPacingTests: XCTestCase {
         XCTAssertEqual(gate.drainForced(), 0, "no stale present was force-cleared")
     }
 
-    /// Depth 2 (the PUNKTFUNK_GATE_DEPTH ladder rung — no longer a default; see
-    /// `SessionPresenter.gateDepth`'s standing-queue post-mortem): a second present may queue
-    /// behind the flip scanning out — the bound only bites at the THIRD. One release (a glass
-    /// callback) reopens exactly one slot.
+    /// Depth 2 (the PUNKTFUNK_GATE_DEPTH ladder rung off macOS, see `SessionPresenter.gateDepth`):
+    /// a second present may queue behind the flip scanning out — the bound only bites at the
+    /// THIRD. One release (a glass callback) reopens exactly one slot.
     func testGateDepthTwoAdmitsTwoInFlightPresents() {
         let gate = PresentGate(capacity: 2)
         XCTAssertTrue(gate.tryAcquire(now: 0))
@@ -173,8 +172,8 @@ final class PresentPacingTests: XCTestCase {
 
     // MARK: - LinkStallPolicy (stage-4's stale-link ladder)
 
-    /// First stall relinks; a stall inside the window after that relink rebuilds (the field
-    /// shape: one vend, then silence); a link that ran clean past the window relinks afresh.
+    /// First stall relinks; a stall inside the window after that relink rebuilds (a wedged
+    /// layer vends once, then falls silent); a link that ran clean past the window relinks afresh.
     func testLinkStallPolicyRelinksOnceThenRebuilds() {
         var policy = LinkStallPolicy(rebuildWindow: 2)
         XCTAssertEqual(policy.onStall(now: 10), .relink, "the first stall gets a relink")
@@ -216,8 +215,8 @@ final class PresentPacingTests: XCTestCase {
         XCTAssertEqual(dog.lastVend, 100.625)
     }
 
-    /// The field shape of a wedged layer: a relink, one vend, silence again within 2 s. The
-    /// report fires once, then the watchdog holds until the system shows a frame.
+    /// A wedged layer: a relink, one vend, silence again within 2 s. The report fires once,
+    /// then the watchdog holds until the system shows a frame.
     func testWatchdogReportsAWedgeOnceThenHoldsUntilGlass() {
         var dog = LinkWatchdog(now: 100)
         XCTAssertEqual(
@@ -298,8 +297,8 @@ final class PresentPacingTests: XCTestCase {
 
     // MARK: - PresenterChoice
 
-    /// iOS and tvOS default to the deadline link, macOS to arrival-paced Metal. No selection, an
-    /// empty env var or an unknown value falls back to the platform choice.
+    /// No selection, an empty env var or an unknown value falls back to
+    /// `PresenterChoice.platformDefault`, which decides each platform's presenter.
     func testPresenterChoiceFallsBackToPlatformDefault() {
         #if os(iOS) || os(visionOS) || os(tvOS)
         XCTAssertEqual(PresenterChoice.platformDefault, .stage4)
@@ -345,8 +344,9 @@ final class PresentPacingTests: XCTestCase {
 
     // MARK: - Session pacing
 
-    /// Stage-2 is arrival pacing for every codec, PyroWave included: the glass gate cost about a
-    /// refresh per frame and never prevented the DCP panic. Explicit stages keep their pacing.
+    /// Stage-2 is arrival pacing for every codec, PyroWave included: the glass gate costs a
+    /// refresh whenever its callback's latency pushes the next present past a vsync. Explicit
+    /// stages keep their pacing.
     func testPacingMapsStagesTheSameForEveryCodec() {
         XCTAssertEqual(SessionPresenter.pacing(for: .stage2, codec: .pyrowave), .arrival)
         XCTAssertEqual(SessionPresenter.pacing(for: .stage2, codec: .hevc), .arrival)
@@ -744,10 +744,8 @@ final class PresentPacingTests: XCTestCase {
 
     // MARK: - Glass-gate depth
 
-    /// The in-flight present budget is 1 EVERYWHERE: any deeper gate keeps a standing queue —
-    /// the 2026-07 iPad depth-2 experiment regressed display latency 14→22–28 ms (see
-    /// `SessionPresenter.gateDepth`'s post-mortem). macOS additionally pins the env lever (glass
-    /// there is the swapID-panic mitigation — strict serialization is its point);
+    /// The in-flight present budget is 1 EVERYWHERE: any deeper gate keeps a standing queue (see
+    /// `SessionPresenter.gateDepth`). macOS additionally pins the env lever;
     /// PUNKTFUNK_GATE_DEPTH still reproduces the standing-queue ladder on iOS/tvOS.
     /// Out-of-range/garbage values are ignored.
     func testGateDepthPlatformDefaultsAndEnvOverride() {

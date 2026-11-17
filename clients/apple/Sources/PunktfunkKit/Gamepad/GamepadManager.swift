@@ -12,7 +12,7 @@
 // one, else the most recently connected extended gamepad) that the Settings / launcher / menu
 // UI reads. GCController has no stable hardware serial, so the pin is a fingerprint of
 // vendorName|productCategory (+ a connect-order suffix for twins); identical twin controllers
-// may swap a pin across reconnects, which the Settings footer documents.
+// may swap a pin across reconnects.
 //
 // A singleton (not a SwiftUI environment object) because macOS shows Settings in its own
 // `Settings{}` scene — there is no common ancestor view to inject from.
@@ -39,9 +39,8 @@ public final class GamepadManager: ObservableObject {
         public let productCategory: String
         /// The full extended profile exists — only these are forwardable.
         public let isExtended: Bool
-        /// The virtual-pad type a physical match resolves to under `.auto`: DualSense →
-        /// `.dualSense`, DualShock 4 → `.dualShock4`, an Xbox pad → `.xboxOne`, anything
-        /// else → `.xbox360`. (`.auto` is never stored here.)
+        /// The virtual-pad type a physical match resolves to under `.auto` (`padKind` decides).
+        /// `.auto` is never stored here.
         public let kind: PunktfunkConnection.GamepadType
         public let hasLight: Bool
         public let hasHaptics: Bool
@@ -51,12 +50,11 @@ public final class GamepadManager: ObservableObject {
         /// `hasRotationRate`, which is GameController's own answer to the question we mean.
         public let hasMotion: Bool
         public let hasAdaptiveTriggers: Bool
-        /// Specifically a DualSense (incl. the Edge — same feedback surface) — gates the
-        /// DualSense-only feedback (adaptive triggers, player LEDs) and the PlayStation glyph
-        /// in Settings.
+        /// Specifically a DualSense (incl. the Edge — same feedback surface); the controller
+        /// tester draws the PlayStation glyph off it.
         public var isDualSense: Bool { kind == .dualSense || kind == .dualSenseEdge }
-        /// A PlayStation pad with a touchpad + motion (DualSense family OR DualShock 4) — gates
-        /// rich-input CAPTURE (touchpad contacts + gyro/accel on plane 0xCC).
+        /// A PlayStation pad with a touchpad + motion (DualSense family OR DualShock 4); the
+        /// Settings controller row draws the PlayStation glyph off it.
         public var hasTouchpadAndMotion: Bool {
             kind == .dualSense || kind == .dualSenseEdge || kind == .dualShock4
         }
@@ -91,9 +89,9 @@ public final class GamepadManager: ObservableObject {
     /// `lowest_free_index`). Recomputed by `assignPadIndices` whenever `forwarded` changes.
     private var padIndexByController: [ObjectIdentifier: UInt8] = [:]
 
-    /// Wire pad indices reserved by EXTERNAL (non-GameController) captures — today the Steam
-    /// Controller 2 BLE passthrough (`Sc2Capture`), whose device GameController never surfaces
-    /// and so can never appear in the identity-keyed table above. Sharing ONE allocator
+    /// Wire pad indices reserved by EXTERNAL (non-GameController) captures — the Steam
+    /// Controller 2 passthrough (`Sc2Capture`) and the on-screen pad (`VirtualPad`), which have
+    /// no GCController to key the table above. Sharing ONE allocator
     /// (`takenIndices` feeds both `assignPadIndices` and `reserveExternalPadIndex`) is what
     /// makes a GC pad and an external capture unable to collide on an index.
     private var externalIndices: Set<UInt8> = []

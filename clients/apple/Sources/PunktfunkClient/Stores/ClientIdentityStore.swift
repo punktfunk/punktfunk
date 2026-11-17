@@ -2,7 +2,7 @@
 // generated once and stored in the data-protection Keychain, this-device-only (with a legacy
 // file-keychain fallback for unsigned builds — see `query(dataProtection:)`). The certificate's
 // fingerprint is how hosts recognize this client after PIN pairing — losing the key un-pairs this
-// Mac from every host, so the pair is presented on every connect but never regenerated once
+// device from every host, so the pair is presented on every connect but never regenerated once
 // stored (and never leaves this device: see `add`). That invariant drives the error handling
 // below: a Keychain that *refuses access* (locked, ACL denied) is an error, not a first run —
 // minting a replacement would silently shadow the durable identity and break every existing

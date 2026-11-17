@@ -9,7 +9,7 @@
 # the display's colour mode, and session 0 gets ACCESS_DENIED on every SetDisplayConfig.
 # Reuses s5-prep.ps1 (checkout + probe driver + test binary + redeploy) and probe-run.ps1
 # (service stop, live_encode_probe, Annex-B extraction, ffmpeg) -- this script only sequences
-# them, sets the two new PF_PROBE_* knobs, and judges the rows.
+# them, sets the PF_PROBE_HDR and PF_PROBE_444 knobs, and judges the rows.
 #
 # No commas and no colons in any parameter value: kick-task's -ScriptArgs mangles both.
 
@@ -133,7 +133,7 @@ foreach ($r in $results) {
   } else {
     $capsIs444 = $r.Tag -like '*+444'
     $inputIsFullChroma = ($r.Tag -like 'Bgra*') -or ($r.Tag -like 'Rgb10*') -or ($r.Tag -like 'Planar*')
-    # Rule 2 from the brief -- the exact shape of the bug being fixed.
+    # Caps that advertise 4:4:4 over a subsampled input are the regression this matrix guards.
     if ($capsIs444 -and -not $inputIsFullChroma) {
       $why += 'REGRESSION -- caps advertise 4:4:4 over a subsampled input'
     }

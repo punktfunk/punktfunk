@@ -20,7 +20,7 @@ pub(super) fn host_cap(asked: bool, enabled: bool) -> bool {
 }
 
 /// Stream `kinds` (bit 0 = haptics, bit 1 = speaker) toward `conn`. `stop` is this handle's own
-/// flag. `None` if the slot has no endpoint (failed/still-running provision, or pad ≥
+/// flag. `None` if the slot has no endpoint (failed/still-running provision, or slot ≥
 /// `PUNKTFUNK_PAD_AUDIO_SLOTS`) or spawn fails; the pad still works, without audio.
 ///
 /// `pad` addresses the client's wire pad; `slot` is the host-wide OS slot whose endpoint —

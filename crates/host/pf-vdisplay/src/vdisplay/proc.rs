@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 const POLL: Duration = Duration::from_millis(20);
 
 /// The wait after the n-th empty `try_wait`: 1 ms, doubling to [`POLL`]. `hyprctl` and
-/// `swaymsg` answer in a few milliseconds; a fixed 20 ms slice cost every call that much,
-/// and a connect makes dozens.
+/// `swaymsg` answer in a few milliseconds; a fixed 20 ms slice would cost every call that
+/// much, and a connect makes dozens.
 fn nap_after(polls: u32) -> Duration {
     Duration::from_millis(1u64 << polls.min(5)).min(POLL)
 }
@@ -452,8 +452,8 @@ fn undecorate(name: &str) -> &str {
 /// Ending the *tree* the helper started, not just the process we spawned.
 ///
 /// [`std::process::Child::kill`] is one `TerminateProcess`: the process we launched.
-/// On Windows every helper is reached through a shell (`cmd /c …`), so the process
-/// that hangs is a **grandchild**. Killing the shell leaves it holding our stdio and
+/// A helper that starts children (a shell such as `cmd /c …`) can hang in a
+/// **grandchild**. Killing the launched process leaves it holding our stdio and
 /// working directory — the budget has not bounded anything.
 ///
 /// A Job object is the mechanism: membership is inherited across `CreateProcess`, so
@@ -1009,9 +1009,8 @@ mod tests_windows {
 
     /// The budget must end the whole tree, not just the process we spawned.
     ///
-    /// Every Windows helper is reached through a shell, so the process that hangs is a
-    /// grandchild `Child::kill` cannot see. Left alive it keeps our stdio handles and
-    /// working directory.
+    /// A helper reached through a shell can hang in a grandchild `Child::kill` cannot see.
+    /// Left alive it keeps our stdio handles and working directory.
     #[test]
     fn the_budget_ends_the_whole_tree_not_just_the_child() {
         let scratch = Scratch::new();

@@ -21,12 +21,13 @@ pub(crate) struct Knobs {
     /// `PUNKTFUNK_VULKAN_INFLIGHT`: Vulkan Video captures in flight, clamped to 2..=6.
     pub(crate) vulkan_inflight: Option<usize>,
     /// `PUNKTFUNK_VULKAN_QUALITY`: the Vulkan Video quality level, fastest first. The open clamps
-    /// it to the driver's `maxQualityLevels`; unset is 0.
+    /// it below the driver's `maxQualityLevels`; unset is 0.
     pub(crate) vulkan_quality: Option<u32>,
     /// `PUNKTFUNK_VULKAN_RGB_DIRECT`: the RGB-direct (EFC) encode source
-    /// (`design/vulkan-rgb-direct-encode.md`). `Some(false)` turns it off; `Some(true)` forces it
-    /// on a session with no pointer to blend, which EFC cannot; `None` is the default, on wherever
-    /// the probe passes. An unrecognised value is `None`, never a force.
+    /// (`design/vulkan-rgb-direct-encode.md`). `Some(false)` turns it off. `Some(true)` acts as
+    /// `None`, the default: on wherever the probe passes, and on a session that composites the
+    /// pointer only while no cursor is visible, since EFC cannot blend. An unrecognised value is
+    /// `None`.
     pub(crate) vulkan_rgb_direct: Option<bool>,
     /// `PUNKTFUNK_VULKAN_RGB_TRUE_EXTENT`, default on: an unaligned EFC source imports at its true
     /// size so RADV pads it in firmware. Off restores the padded copy.
@@ -113,8 +114,7 @@ mod tests {
         }
     }
 
-    /// Unset, empty, and unrecognised values mean default — never a force-on. Anything-but-`"0"`
-    /// as force-on made a trailing space on `=0` enable the path the operator was disabling.
+    /// Unset, empty, and unrecognised values mean default — never a force-on.
     #[test]
     fn rgb_direct_knob_never_force_enables_on_an_unrecognised_value() {
         assert_eq!(parse_rgb_request(None), None);

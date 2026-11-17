@@ -4,7 +4,9 @@
 //! CPU-testable half: everything between a [`pf_bitstream`] access-unit plan and
 //! the buffers `vaRenderPicture` delivers. It links no libva, names no `VA*`
 //! handle type, and compiles on macOS. The `cfg(target_os = "linux")` rung lives
-//! in `pf-client-core`; this crate holds layouts, conversion, and export walk.
+//! in `pf-client-video`; this crate holds layouts, conversion, and export walk.
+//! [`enc_h264`], [`enc_h265`], [`enc_params`], [`hevc`], and [`vpp`] are the same
+//! idea for the host's VAAPI encoder, whose libva calls live in `pf-libva`.
 //!
 //! [`va`] / [`va_h265`] / [`va_av1`] hand-declare the libva decode buffers;
 //! sizes and offsets are measured by `layout-probe.c` and pinned as compile-time

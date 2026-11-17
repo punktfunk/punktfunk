@@ -1,9 +1,8 @@
 //! The scenario table, and the field calibration that accepts the simulator.
 //!
-//! C1–C5 reproduce behaviours from the 09-16/17 traces and Klos54's 70
-//! sessions with the controller untouched; the rest have no field trace and
-//! simply record what today's controller does. Every tuned number carries the
-//! reading it came from.
+//! C1–C7 replay the conditions of the 09-16/17 traces and Klos54's 70
+//! sessions; the other rows are modelled cases, some sized from a field
+//! reading. Every tuned number carries the reading it came from.
 
 use super::client::{ClientCfg, DecodeCfg, Repair};
 use super::host::{ContentPhase, HostCfg};
@@ -31,8 +30,8 @@ fn with_ramp(mut sc: Scenario) -> Scenario {
         s.host.ramp = true;
         s.host.bringup_ms = s.join_ms + BRINGUP_MS;
         s.client.ramp = true;
-        // An injected ceiling replayed a host that paused video for its
-        // burst. The ramp is that measurement now, so it runs instead.
+        // An injected ceiling replays a host that paused video for its
+        // burst. The ramp is that measurement, so it runs instead.
         if s.client.ceiling_at.take().is_some() {
             s.client.probe = true;
         }
@@ -190,15 +189,15 @@ pub(super) fn wifi_good() -> Scenario {
     }
 }
 
-/// C6 — the 0.39 regression: the burst takes the picture with it.
+/// C6 — the burst takes the picture with it.
 ///
 /// The burst runs beside live video (#1146), so on a link it overdrives the
 /// video frames beside it die. The client freezes and asks for a keyframe
 /// every 100 ms until one lands; the host answers most asks with an
 /// intra-refresh wave (`host173` 09-17 09:53–09:54: `keyframe_req=9 idr=2
 /// rfi=8`), which does not unfreeze a client that lost its reference. The
-/// asks that outlive the discarded tail window are the first thing the
-/// controller judges, and four of them are severe.
+/// asks that outlive the discarded tail window land in the first judged
+/// window, and four of them reach `RECOVERY_KF_SEVERE`.
 pub(super) fn wifi_tv_probe_damage() -> Scenario {
     let mut s = tv_session(
         20_000,
@@ -239,12 +238,10 @@ pub(super) fn wifi_tv_probe_damage() -> Scenario {
     }
 }
 
-/// C7 — the same burst, the quieter half of the regression: the freeze is
-/// short enough that only two or three asks reach a judged window. Two is
-/// under the severe bar but at `RECOVERY_KF_BAD`, so the window is bad, and
-/// a bad window ends slow start for the session. Nothing cuts, so nothing in
-/// any log marks it; the session simply crawls at +6 % for the rest of its
-/// life.
+/// C7 — the same burst, quieter: the freeze is short enough that only two or
+/// three asks reach a judged window. Two is under the severe bar but at
+/// `RECOVERY_KF_BAD`: judged, they would make the window bad and end slow
+/// start with no cut for any log to mark, and the session would crawl at +6 %.
 ///
 /// The second field session of 09-17 (`host173` 10:03): probe complete
 /// 10:03:20.3, then 25 955 · 27 578 · 29 302 · 31 134, no cut anywhere, and
@@ -257,7 +254,7 @@ pub(super) fn wifi_tv_probe_stalled() -> Scenario {
     sc
 }
 
-/// C3 — one severe window inside the first 10 s, then the +6 % crawl.
+/// C3 — one lost frame inside the first 10 s, on a link with room.
 pub(super) fn slow_start_spent() -> Scenario {
     Scenario {
         name: "slow_start_spent",
@@ -349,8 +346,8 @@ pub(super) fn gpu_saturated() -> Scenario {
     }
 }
 
-/// An encoder whose time really is a function of the rate: past 60 Mbps
-/// every extra megabit costs 40 µs against a 6 060 µs budget.
+/// An encoder whose time really is a function of the rate: past 40 Mbps
+/// every extra megabit costs 200 µs against a 6 060 µs budget.
 ///
 /// The notch is answered here, so it is kept and the next rise takes another:
 /// the session must walk down to where the encoder keeps up instead of
@@ -436,11 +433,8 @@ pub(super) fn wan_wg_12(seed: u64, duration_ms: u64) -> Scenario {
 /// The rig's tunnel, long enough for the re-probe clock to lift into the wall
 /// and for what follows to be read.
 ///
-/// Round 6 ran this shape for 600 s three times and averaged 58 % of the link
-/// with 12–21 cuts and 41–87 lost frames per ten minutes: a lift ~5 % over the
-/// wall, a queue that fills for the best part of a minute while the delay
-/// baseline learns the rise, and then a tail drop the controller answers with
-/// four cuts in five seconds. Static, so nothing but the session moves it.
+/// The hazard: a lift over the wall, a queue that fills for the best part of a
+/// minute while the delay baseline learns the rise, and then a tail drop.
 pub(super) fn wan_lift_overshoot() -> Scenario {
     Scenario {
         name: "wan_lift_overshoot",
@@ -460,7 +454,7 @@ pub(super) fn wan_lift_overshoot() -> Scenario {
         },
         sessions: vec![wg_session()],
         // Three quarters of nominal: what a session that respects a link
-        // wandering ±30 % can hold, and the bar round 7 is judged against.
+        // wandering ±30 % can hold.
         achievable_kbps: 9_375,
         blip_at_ms: None,
     }
@@ -541,9 +535,7 @@ fn repairing(mut sc: Scenario, name: &'static str, repair: Repair) -> Scenario {
 ///
 /// A clean window therefore delivers 78 % of the rate — the content is the
 /// limiter, not the link — and one airtime stall is enough to make the delay
-/// read badly for a window. Round 6 answered that with nine cuts to the
-/// 2 000 kbps floor, three of them while the wire carried 103–190 % of the
-/// rate it was cutting from.
+/// read badly for a window.
 pub(super) fn wifi_content_bound() -> Scenario {
     let s = tv_session(
         20_000,
@@ -754,8 +746,8 @@ pub(super) fn lte_variable() -> Scenario {
     }
 }
 
-/// Two sessions over one tunnel. `join_ms` decides which of the three
-/// shared-path cases this is.
+/// Two sessions over one tunnel. `second_join_ms` and `second_fixed` decide
+/// which shared-path case this is.
 fn shared(name: &'static str, second_join_ms: u64, second_fixed: bool) -> Scenario {
     let mut first = wg_session();
     first.client.start_kbps = 20_000;
@@ -820,8 +812,8 @@ pub(super) fn shared_leaver() -> Scenario {
     sc
 }
 
-/// August's Phase 3 cases: a still desktop that starts moving, and a source
-/// that never fills the wall-clock target.
+/// A desktop that goes still for 20 s, then moves again with one frame five
+/// times normal size every 10 s.
 pub(super) fn static_then_motion() -> Scenario {
     let mut s = tv_session(20_000, None, full());
     s.host.content = vec![
@@ -892,6 +884,7 @@ pub(super) fn calm_desktop_lossy() -> Scenario {
     }
 }
 
+/// A source that never fills the wall-clock target: 21 % of a 165 Hz session's frames.
 pub(super) fn frame_driven_35fps() -> Scenario {
     let mut s = tv_session(
         20_000,
@@ -1473,9 +1466,8 @@ pub(super) fn host_rebuild_stall() -> Scenario {
 /// start, which is the whole of what it costs.
 ///
 /// Where the stall falls inside its window is the whole scenario, so the
-/// offset follows the window phase: the ramp's confirmation step moved every
-/// boundary by ~50 ms and six asks were landing in the judged window, which
-/// is the sibling row's case, not this one's.
+/// offset follows the window phase; an offset that lands six asks in the
+/// judged window is the sibling row's case, not this one's.
 pub(super) fn host_rebuild_wave() -> Scenario {
     host_rebuild("host_rebuild_wave", 0x7A_7000, 20_000, 4_550)
 }
@@ -1900,10 +1892,11 @@ pub(super) fn wifi_menu_fill() -> Scenario {
 
 /// Every scenario the baseline pins, in table order.
 ///
-/// Every row but `old_host` runs against a host that serves the ramp; the
-/// seven calibrations run a second time against one that does not, because
-/// what they replay are field sessions from before it existed. The two WAN
-/// paths run again at the tail with each loss repair (`_nack`, `_ack`).
+/// Every row but `old_host` and `decoder_warmup` runs against a host that
+/// serves the ramp; the seven calibrations run a second time against one that
+/// does not, because what they replay are field sessions from before it
+/// existed. The two WAN paths run again at the tail with each loss repair
+/// (`_nack`, `_ack`).
 pub(super) fn all() -> Vec<Scenario> {
     let mut table: Vec<Scenario> = vec![
         lan_10g(),
@@ -2084,8 +2077,7 @@ mod tests {
 
     /// The bring-up ramp's arithmetic, on three links whose answers differ:
     /// a 1 GbE wall above what the stream can use, a 12.5 Mbps wall three
-    /// steps in, and the G5's Wi-Fi, where the measurement used to cost a
-    /// 900 ms freeze.
+    /// steps in, and the G5's Wi-Fi.
     ///
     /// Steps, bytes and milliseconds are pinned here rather than in the
     /// baseline, which cannot see them: what the measurement costs the link
@@ -2365,10 +2357,6 @@ mod tests {
     /// C2: at the ceiling with nothing else wrong, one unrecoverable frame is
     /// a blip. The rate does not move and the session holds 171 294 kbps for
     /// the rest of its run.
-    ///
-    /// Before: ×0.7 to 119 905 on that one window, then six additive steps —
-    /// 127 400 · 135 363 · 143 824 · 152 814 · 162 365 · 171 294 — and 28 s at
-    /// 30 % less picture. The 09-16 sawtooth, once every minute or two.
     #[test]
     fn c2_one_lost_frame_after_a_clean_run_is_not_a_cut() {
         let r = run(&wifi_good());
@@ -2467,10 +2455,6 @@ mod tests {
     /// the keyframe asks that outlive the discarded tail are the burst's own.
     /// They are not judged, and the session climbs on the ceiling it just
     /// measured instead of cutting.
-    ///
-    /// Before: four asks in the window after the tail were severe, the session
-    /// went 20 000 → 14 000 with `dropped=0` and `loss_windows=0`, and never
-    /// reached 90 % of the measured ceiling in the minute it ran.
     #[test]
     fn c6_the_startup_burst_no_longer_cuts_the_session_it_measures() {
         let r = run(&wifi_tv_probe_damage());
@@ -2501,7 +2485,7 @@ mod tests {
 
     /// The starved decoder's asks go out and are counted apart: nothing cuts, and the
     /// session reaches the rate its ramp measured. Judged as recovery asks, every other
-    /// window was bad and it stayed at the ramp's opening 122 899 kbps.
+    /// window would be bad and hold the session at the ramp's opening rate.
     #[test]
     fn a_starved_decoder_keeps_its_rate() {
         let sc = with_ramp(starved_decoder());
@@ -2548,10 +2532,6 @@ mod tests {
     /// C7: the quieter half — two or three asks, under the severe bar but at
     /// `RECOVERY_KF_BAD`. Disowned with the rest of the burst's aftermath,
     /// they leave slow start armed and the session doubles to its ceiling.
-    ///
-    /// Before: that one window ended slow start with no cut and no entry in
-    /// any log, and the session crawled +6 % a step — 31 134 kbps a minute in,
-    /// against a ceiling of 168 000 (`host173` 09-17 10:03).
     #[test]
     fn c7_the_quiet_ask_pair_no_longer_ends_slow_start() {
         let r = run(&wifi_tv_probe_stalled());
@@ -2587,10 +2567,6 @@ mod tests {
     /// C4: host encode over its budget costs one notch. The encoder does not
     /// answer it, so the rate comes straight back and the down-driver stands
     /// down until a clean run re-probes it 16 windows later.
-    ///
-    /// Before: three ×0.7 cuts before the stand-down — 164 418 → 115 092 →
-    /// 80 564 → 56 394, a third of the picture for nothing, and the same
-    /// cascade on every re-arm (`.21` gamescope 4K165, 40 → 14 Mbps).
     #[test]
     fn c4_a_saturated_encoder_costs_one_notch_not_three_cuts() {
         let r = run(&gpu_saturated());
@@ -2687,11 +2663,8 @@ mod tests {
     /// C5: an open at four times the tunnel, and a wall the session keeps
     /// walking back into — his 70-session aggregate.
     ///
-    /// The first cut and the return trips are the link's and still stand. The
-    /// collapse behind them is the package's business: the rate 30 s in was
-    /// 4 287–9 292 kbps across the ten seeds and is 4 648–13 321 now, so the
-    /// old `<= 10 000` bound no longer says anything about the controller.
-    /// What is left is a band — not at the floor, not above what the session
+    /// The first cut and the return trips are the link's. The rate 30 s in is
+    /// held to a band — not at the floor, not above what the session
     /// negotiated.
     #[test]
     fn c5_the_tunnel_backs_off_early_and_keeps_re_finding_its_wall() {
@@ -2715,11 +2688,8 @@ mod tests {
                 .count() as u64;
             minutes += duration_ms / 60_000;
         }
-        // The return trips are the link's and do not go away, but the package
-        // is meant to make them rarer: 65 per 100 min before it, 37 with the
-        // cut and the cap, 31 once a measurement's wall became a cap too, 28
-        // once a cut was sized against the wire's own norm. The bound
-        // ratchets downward with them.
+        // The return trips are the link's and do not go away; the bound
+        // ratchets down as the controller makes them rarer.
         let per_min = wall_cuts * 100 / minutes;
         assert!(
             (10..=35).contains(&per_min),
@@ -2754,10 +2724,9 @@ mod tests {
 
     /// The tunnel's delay reading survives its own cascade.
     ///
-    /// Four windows of Klos54's run carried no completed AU at all, so the
-    /// detector went blind exactly where the queue was deepest. A shard
-    /// arrives whether or not its frame does: every window that received
-    /// video now has a delay reading, ramp or no ramp.
+    /// A cascade can leave a window with no completed AU, exactly where the
+    /// queue is deepest. A shard arrives whether or not its frame does, so
+    /// every window that received video has a delay reading, ramp or no ramp.
     #[test]
     fn the_tunnel_never_goes_delay_blind_again() {
         for sc in [
@@ -2782,8 +2751,8 @@ mod tests {
         }
     }
 
-    /// What the rig found on Klos54's tunnel: the ramp's reading became a
-    /// ceiling for the session's life and left 30 % of the link unused.
+    /// On Klos54's tunnel the ramp reads low (`wan_ramp_reads_low`), so its
+    /// reading held as a ceiling leaves link unused for the session's life.
     ///
     /// As a cap it is asked again on the long clock, and the session walks up
     /// to what the link carries without buying it with frames: parity sized
@@ -2820,11 +2789,8 @@ mod tests {
     /// A lift the tunnel refuses costs the step it was testing, not a third
     /// of the session.
     ///
-    /// Round 6 answered every refused lift with a blind ×0.7 — 9 794 down to
-    /// 6 855 with a 9 527 cap standing — and spent the next ten seconds
-    /// climbing back into it. The lift is a probe now: what it retreats to is
-    /// the cap it came from, so no cut on this link lands under the wall the
-    /// session had already learned.
+    /// The lift is a probe: what it retreats to is the cap it came from, so no
+    /// cut on this link lands under the wall the session had already learned.
     #[test]
     fn a_lift_the_tunnel_refuses_costs_the_cap_step() {
         let r = run(&with_ramp(wan_lift_overshoot()));
@@ -3029,8 +2995,8 @@ mod tests {
 
     /// Two sessions on one path close on each other, a step at a time.
     ///
-    /// The nested loop the maintainer named on #1135: the host's share sits
-    /// above each client's own controller, and either could chase the other.
+    /// The nested loop: the host's share sits above each client's own
+    /// controller, and either could chase the other.
     /// The newcomer reaches its share on its link cap's ladder — a share is
     /// an allowance, not evidence about its own air — so the two are still
     /// closing when the run ends. What the run shows is the direction: over
@@ -3213,7 +3179,8 @@ mod tests {
             "stamp" => encoder_stall_stamp(),
             _ => wifi_tv(),
         };
-        // As the table has it. `SIM_LEGACY=1` reads the calibration instead.
+        // Served the ramp, as most table rows are. `SIM_LEGACY=1` reads the calibration
+        // instead.
         let sc = if std::env::var("SIM_LEGACY").is_ok() {
             sc
         } else {
@@ -3250,9 +3217,9 @@ mod tests {
     }
 
     /// `cargo test … repair_readout -- --ignored --nocapture`: waves, lost frames
-    /// and kB past the budget per ten minutes, today and with each repair, over 16
-    /// seeds. One seed is one trajectory, and a repaired frame moves every draw
-    /// after it, so a single row reads noise as effect.
+    /// and kB past the budget per ten minutes, under `Repair::Rfi` and each other
+    /// repair, over 16 seeds. One seed is one trajectory, and a repaired frame
+    /// moves every draw after it, so a single row reads noise as effect.
     #[test]
     #[ignore = "a reading aid, not a check"]
     fn repair_readout() {

@@ -11,8 +11,8 @@
 //! encoder (IDR); [`MAX_UNACKED`] unanswered requests wait for an answer, and
 //! one still unanswered after [`ACK_GIVE_UP`] is silence.
 //!
-//! Caps are learned: two identical short host acks latch `host_cap_kbps`; two
-//! similar decode-driven backoffs latch `decode_cap_kbps`, and so does decode
+//! Caps are learned: two identical short host acks latch the host cap; two
+//! similar decode-driven backoffs latch the decode cap, and so does decode
 //! headroom on a clean window (park at 80 % of the frame budget, retreat a
 //! notch at 90 %, each step kept only if the decoder's latency follows the
 //! rate; one that does not stands the decode signal down). Both re-probe on
@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 /// link is better served soft than lossy. First descent below
 /// [`LOW_RATE_WARN_KBPS`] logs once.
 pub(super) const FLOOR_KBPS: u32 = 2_000;
-/// One-shot quality warning. 5 Mbps was the old floor; riding under it is the
-/// new territory worth flagging.
+/// One-shot quality warning: under this the picture is visibly soft, and the
+/// first descent logs once.
 const LOW_RATE_WARN_KBPS: u32 = 5_000;
 /// Fully-idle windows (every AU a host-marked repeat) before the next active
 /// window re-arms slow start. 4 × 750 ms ≈ 3 s of stillness.
@@ -65,7 +65,7 @@ const ANSWER_PCT: i64 = 5;
 /// enough that a signal which does follow the rate says so within the
 /// window's own noise.
 const RETREAT_DIV: u32 = 8;
-/// Two decode-driven backoffs latch [`decode_cap_kbps`] only when their
+/// Two decode-driven backoffs latch the decode cap only when their
 /// pre-backoff rates agree within ±1/8. A cascade's second backoff sits at
 /// ×0.7 of the first — outside the band by construction — so only a
 /// climbed-to rate (`climb_since_backoff`) can sample the knee.
@@ -223,12 +223,14 @@ fn pct(kbps: u32, share: u32) -> u32 {
 
 /// One decision per report window; `Some(kbps)` = send a [`crate::quic::SetBitrate`].
 pub(crate) struct BitrateController {
-    /// `false` = permanently off (explicit bitrate, old host, or ack silence).
+    /// `false` = permanently off (explicit bitrate, old host, ack silence, or a
+    /// pinned rate).
     enabled: bool,
     /// Host-acked encoder rate. Requests are not assumed applied.
     pub(super) current_kbps: u32,
-    /// Climb ceiling: negotiated start until [`set_ceiling`](Self::set_ceiling)
-    /// raises it from the startup probe.
+    /// Climb ceiling: the negotiated start until a measurement or its absence
+    /// settles it ([`set_ceiling`](Self::set_ceiling),
+    /// [`no_link_evidence`](Self::no_link_evidence)).
     pub(super) ceiling_kbps: u32,
     /// `PUNKTFUNK_ABR_MAX_MBPS` in kbps, injected so tests never touch the env.
     /// `None` = no cap.
@@ -245,7 +247,7 @@ pub(crate) struct BitrateController {
     pub(super) probing: bool,
     /// The last bad window named something the rate is the lever for: the
     /// link, or a decoder past its budget. Slow start is not given back over
-    /// one of those — doubling into a real wall is what sawed the tunnel.
+    /// one of those — doubling back into a real wall saws it.
     rate_verdict: bool,
     /// Clean utilised windows since a verdict the rate did not cause.
     rearm_windows: u32,
@@ -258,10 +260,11 @@ pub(crate) struct BitrateController {
     /// blip exemption is spent once; a link losing a frame every window is
     /// not a recovery-plane event however clean each window looks.
     blip_hold: u32,
-    /// Where the link stopped carrying what it was asked for. Latched from
-    /// two deliveries at the same rate (the ramp's wall counts as one), it
-    /// holds the climb a tenth under that rate and is re-tested on the same
-    /// clock the other two caps use.
+    /// Where the link stopped carrying what it was asked for. Latched a tenth
+    /// under the second of two deliveries at the same rate, or at the rate one
+    /// measured wall licenses ([`note_measured_wall`](Self::note_measured_wall));
+    /// it holds the climb there and is re-tested on the same clock the other
+    /// two caps use.
     pub(super) link_cap: LearnedCap,
     /// Previous delivered mark (`0` = none): a cut's in target units, a
     /// measurement's as it read. Two within ±1/5 are a wall.
@@ -433,8 +436,7 @@ impl BitrateController {
     /// No measurement is not no authority. What the stream can use is a bound
     /// on the absurd, not a claim about the link (L1), and the growth law
     /// still has to earn every step up to it — so it becomes the ceiling
-    /// instead of the rate the Welcome guessed, which bounded nothing and
-    /// pinned every un-probed session at 20 Mbps (#1175).
+    /// instead of the rate the Welcome guessed, which bounds nothing.
     pub(crate) fn no_link_evidence(&mut self, stream_cap_kbps: u32) {
         if !self.blind || !self.enabled {
             return;
@@ -556,13 +558,14 @@ impl BitrateController {
     }
 
     /// Host [`crate::quic::BitrateChanged`]: the clamp is authoritative, and any
-    /// ack proves the host renegotiates. Two identical short acks latch
-    /// [`host_cap_kbps`](Self::host_cap_kbps); one can be a failed rebuild.
+    /// ack proves the host renegotiates. Two identical short acks latch the
+    /// host cap (`host_cap`); one can be a failed rebuild.
     ///
     /// [`AckReason`] says which limit answered. A pinned session has no rate to
     /// control; a cadence refusal is a busy GPU, held on a clock and never
     /// latched; a governor share is a ceiling, not an answer to anything this
-    /// session asked. An ack with no reason is an older host, read as today.
+    /// session asked. An ack with no reason (an older host, or a code this
+    /// build does not know) reads as an encoder limit.
     pub(crate) fn on_ack(&mut self, kbps: u32, why: Option<AckReason>) {
         if why == Some(AckReason::Pinned) {
             self.on_pinned(kbps);
@@ -1001,11 +1004,8 @@ impl BitrateController {
     /// on the clock, re-latched with a doubled wait when the wall answers,
     /// dropped when two lifts go unanswered. That is the whole point: a
     /// measurement that binds for the session's life is a bound with no
-    /// expiry (L1), and on Klos54's tunnel it cost 45 % of the link.
+    /// expiry (L1).
     pub(crate) fn note_measured_wall(&mut self, park_kbps: u32, delivered_kbps: u32) {
-        // A wall that licenses more than this stream can use is not a limit
-        // on the session: the stream's own shape is, and it is already the
-        // ceiling.
         // A wall licensing more than the stream can use is not a limit on
         // the session: its own shape is, and that is already the ceiling.
         if !self.enabled || park_kbps == 0 || self.stream_cap_kbps.is_some_and(|c| park_kbps >= c) {
@@ -1098,11 +1098,9 @@ impl BitrateController {
     /// The rate a cut is measured from: the ask still in flight, when there is
     /// one.
     ///
-    /// A `BitrateChanged` waits behind the same queue the video does — 3.3 s on
-    /// the rig's cell — and every window until it lands still reads the rate
-    /// the session has already asked to leave. Cutting from that rate three
-    /// times took a session to 2 464 kbps where one cut would have left it at
-    /// about 2 480.
+    /// A `BitrateChanged` waits behind the same queue the video does, and every
+    /// window until it lands still reads the rate the session has already asked
+    /// to leave. A cut measured from that rate repeats the cut already asked for.
     fn cut_base_kbps(&self) -> u32 {
         self.acks
             .last_requested_kbps
@@ -1129,8 +1127,8 @@ impl BitrateController {
     }
 
     /// Where a link-attributed cut lands: what the window delivered in target
-    /// units, less the margin that drains the queue, and never further than
-    /// one ×0.7-sized step from the rate the session is running at.
+    /// units, less the margin that drains the queue, kept between
+    /// [`LINK_CUT_FLOOR_PCT`] and [`LINK_CUT_PCT`] of the rate the cut leaves from.
     fn link_cut_kbps(&self, target_kbps: u32) -> u32 {
         let base = self.cut_base_kbps();
         pct(target_kbps, LINK_CUT_PCT)
@@ -1235,7 +1233,8 @@ impl BitrateController {
             self.streak_cut = Some(v.reason);
             self.clean_windows = 0;
             self.decode.note_bad(v, self.rate());
-            // Any congestion ends slow start until a later idle-onset re-arm.
+            // Any congestion ends slow start until a re-arm: idle onset, a
+            // refuted verdict, or a wall that moved.
             self.probing = false;
         } else if !v.quiet {
             // Stillness is neither climb credit nor a cleared streak.
@@ -1350,11 +1349,10 @@ impl BitrateController {
                      interval — the wall moved, dropping it and doubling after it"
                 );
             } else {
-                // Freeze what the session's delay looked like before the ask.
-                // Everything after this judges the lift against this number,
-                // not against a baseline that will learn the rise. No delay
-                // at this rate is no reference: the ordinary verdict keeps
-                // the lift, as it did before there was a probe.
+                // Freeze the session's delay before the ask: everything after
+                // judges the lift against it, not a baseline that learns the
+                // rise. No delay at this rate is no reference, and the
+                // ordinary verdict alone judges the lift.
                 self.lift = self.norms.delay_mean_us().map(|ref_us| LiftProbe {
                     cap_kbps: from,
                     ref_us,
@@ -1494,7 +1492,7 @@ impl BitrateController {
         }
     }
 
-    /// First descent below the old 5 Mbps floor: log once, naming the signal
+    /// First descent below [`LOW_RATE_WARN_KBPS`]: log once, naming the signal
     /// that drove the rate there.
     fn warn_low_rate(&mut self, next_kbps: u32, cause: Option<Reason>) {
         if next_kbps < LOW_RATE_WARN_KBPS && !self.low_rate_warned {
@@ -1554,9 +1552,9 @@ impl BitrateController {
         // the proration took it out of.
         let cap = eff_ceiling.min(growth::proven_target_cap(self.proven.mark(), proration));
         if self.current_kbps < eff_ceiling && utilized && cap > self.current_kbps {
-            // A blip holds the doubling for as long as it holds the next lost
-            // frame's exemption. The additive climb already waits six clean
-            // windows; slow start would take its step one window later, and
+            // A blip holds the doubling for as long as it holds the next lost frame's
+            // exemption. The additive climb already waits `CLEAN_WINDOWS_TO_INCREASE`
+            // clean windows; slow start would take its step one window later, and
             // half again a rate a frame has just died at is a wall's cascade.
             let slow_start = self.probing && self.clean_windows >= 1 && self.blip_hold == 0;
             if slow_start || self.clean_windows >= CLEAN_WINDOWS_TO_INCREASE {
@@ -1618,8 +1616,8 @@ impl Drain {
     /// caused?
     ///
     /// The queue is the measure, not one window's slope: a queue still filling
-    /// reads as rising, and standing down there is what turned one cut into
-    /// four. The guard ends when the delay is back where clean windows had it
+    /// reads as rising, and standing down there cascades one cut into
+    /// several. The guard ends when the delay is back where clean windows had it
     /// before the cut, or when its budget runs out — after that the next cut
     /// is an ordinary one.
     fn note(&mut self, w: &WindowSample) -> bool {
@@ -1876,7 +1874,7 @@ mod tests {
         assert_eq!(cut(4_000), Some(10_000));
         // A window that delivered nothing measured no capacity at all.
         assert_eq!(cut(0), Some(10_000));
-        // The link handed over what it was asked for: today's arithmetic.
+        // The link handed over what it was asked for: the blind ×0.7 step.
         assert_eq!(cut(20_000), Some(14_000));
     }
 
@@ -2465,9 +2463,8 @@ mod tests {
     ///
     /// Standing delay, lost frames and loss inside the guard are that queue's
     /// tail, whether the fit says it is falling yet or not: a queue that has
-    /// not peaked still reads as rising, and cutting there is the cascade the
-    /// rig recorded. Only the delay coming back to where it was, or the
-    /// budget, ends it.
+    /// not peaked still reads as rising, and cutting there cascades. Only the
+    /// delay coming back to where it was, or the budget, ends it.
     #[test]
     fn damage_while_the_last_cut_drains_is_not_a_second_verdict() {
         let start = Instant::now();
@@ -2810,8 +2807,7 @@ mod tests {
     /// Three windows cannot cut from one number.
     ///
     /// Until the host's ack lands, `current_kbps` is a rate the session has
-    /// already asked to leave: on the rig's cell three windows cut from the
-    /// same 4 043 in 4.5 s. Each cut measures from the ask in flight.
+    /// already asked to leave. Each cut measures from the ask in flight.
     #[test]
     fn a_cut_while_a_request_is_unacked_measures_from_the_ask() {
         let mut c = BitrateController::new(20_000, None);
@@ -3021,9 +3017,8 @@ mod tests {
     }
 
     /// A disabled controller learns nothing, and the FIRST measurement binds
-    /// whichever way it points: a 10 Mbps wall under a blind 20 Mbps start is
-    /// the tunnel case, and discarding it is what left #1131 climbing into it.
-    /// Later measurements only raise.
+    /// whichever way it points: a 10 Mbps wall under a blind 20 Mbps start is a
+    /// wall, not noise to discard. Later measurements only raise.
     #[test]
     fn set_ceiling_is_ignored_when_disabled_and_the_first_one_binds() {
         let mut c = BitrateController::new(0, None);
@@ -3115,13 +3110,13 @@ mod tests {
         assert_eq!(d.ceiling_kbps, 0);
     }
 
-    /// One-shot warning on first descent below the old 5 Mbps floor.
+    /// One-shot warning on first descent below [`LOW_RATE_WARN_KBPS`].
     #[test]
     fn the_low_rate_warning_fires_once_below_the_old_floor() {
         let mut c = BitrateController::new(6_000, None);
         let start = Instant::now();
         assert!(!c.low_rate_warned);
-        // 6000 × 0.7 = 4200: under the old floor, over the new one.
+        // 6000 × 0.7 = 4200: under `LOW_RATE_WARN_KBPS`, over `FLOOR_KBPS`.
         assert_eq!(
             c.on_window(&WindowSample {
                 dropped: 1,
@@ -3648,10 +3643,10 @@ mod tests {
         assert!(c.current_kbps >= 100_000);
     }
 
-    /// The field trace: a pipelined decoder whose latency swings at every
-    /// rate. Each swing is a severe rise over the rolling minimum, so the
-    /// retreat has to be answered through the damage, and once the driver
-    /// has stood down the swing cuts nothing.
+    /// A pipelined decoder whose latency swings at every rate. Each swing is a
+    /// severe rise over the rolling minimum, so the retreat has to be answered
+    /// through the damage, and once the driver has stood down the swing cuts
+    /// nothing.
     #[test]
     fn a_swinging_decoder_answers_the_retreat_and_stops_cutting_once_stood_down() {
         let (mut c, start, mut t) = seeded_120(100_000);
@@ -3697,7 +3692,7 @@ mod tests {
         assert!(c.current_kbps >= 100_000);
     }
 
-    /// The field trace at its worst: no window is ever clean, so the bands
+    /// That swinging decoder at its worst: no window is ever clean, so the bands
     /// never get to retreat and the verdict cuts straight from the first
     /// swing. The cut is judged by the verdict it came from: still bad at the
     /// lower rate is not the rate's, and the rate comes back.

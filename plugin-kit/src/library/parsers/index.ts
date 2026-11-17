@@ -1,9 +1,9 @@
-// The launcher-file parsing toolkit: what the six in-host scanners hand-rolled, hoisted so a
-// library plugin is its scan function and nothing else.
+// The launcher-file parsing toolkit shared by library plugins, so a plugin is its scan function
+// and nothing else.
 //
-// Everything here is total — a missing launcher, a truncated file, a schema drift in a launcher
-// upgrade all degrade to "no titles from this source", never to a thrown error. A scanner that dies
-// on one odd file takes the user's whole library with it.
+// The readers and parsers here are total — a missing launcher, a truncated file, a schema drift
+// in a launcher upgrade all degrade to "no titles from this source", never to a thrown error. A
+// scanner that dies on one odd file takes the user's whole library with it.
 export {
 	ART_KINDS,
 	type ArtKind,

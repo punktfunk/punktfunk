@@ -1,8 +1,8 @@
 // /api/** → the management API. By the time we get here the gate (middleware/auth.ts) has
 // confirmed an authenticated session. We inject the management bearer token server-side
 // (the browser never sees it) and drop the browser's own cookies/auth from the upstream
-// request, then proxy. The management API itself binds loopback only — this proxy is the
-// ONLY path to it from the LAN, and it's authenticated.
+// request, then proxy. The management API takes the admin bearer from loopback only
+// (mgmt/auth.rs), so this proxy is the LAN's path to the admin surface, and it's authenticated.
 import { defineEventHandler, getRequestURL, setResponseStatus } from "h3";
 import { relayToMgmt } from "../../util/mgmt";
 import { normalizePath } from "../../util/paths";

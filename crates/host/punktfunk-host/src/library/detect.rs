@@ -10,8 +10,8 @@
 //! expose nothing else; a sharper signal (Steam's launch reaper) still applies for that
 //! store.
 //!
-//! [`DetectSpec`] is host-internal (`#[serde(skip)]` on [`super::GameEntry`]) so a scan
-//! that already read these paths is not walked twice.
+//! [`DetectSpec`] is host-internal (`#[serde(skip)]` on [`super::GameEntry`]): it names
+//! local paths, so catalog JSON never carries it.
 
 use super::*;
 

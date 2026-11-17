@@ -8,7 +8,7 @@ gamescope makes the compositor reject the client's swapchain_feedback, and every
 on a black screen with sound and input and no error. So a compositor we ship needs the layer we
 built beside it — which means two gamescope WSI layers on one box.
 
-Three fields make that safe, and the loader is why:
+Three edits make that safe, and the loader is why:
 
 * `name` — the Vulkan loader deduplicates implicit layers by name, and with both called
   VK_LAYER_FROG_gamescope_wsi which one wins is unspecified. A distinct name is what lets both sit

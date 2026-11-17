@@ -12,7 +12,7 @@ export interface ActivityEntry {
 	data: Record<string, unknown>;
 }
 
-/** How much history the ring keeps. The /activity page shows all of it. */
+/** How much history the ring keeps. Show all on Home expands the whole of it. */
 export const ACTIVITY_MAX = 200;
 
 /**

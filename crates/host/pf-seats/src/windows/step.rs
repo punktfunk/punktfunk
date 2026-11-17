@@ -331,7 +331,7 @@ pub(crate) enum Action {
     StartGate,
     /// Read the gate's output and remove it: empty output fails the gate.
     CollectGate,
-    /// Start the host, in place of one that exited.
+    /// Start the host in the session: first in a cycle, and again after one exited.
     StartHost,
     /// Log that the host exited with this code and starts again.
     LogHostExit(u32),

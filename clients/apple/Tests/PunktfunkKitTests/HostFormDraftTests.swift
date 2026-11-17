@@ -1,4 +1,4 @@
-// The add-or-edit-host form's rules, which three screens used to answer three different ways.
+// The add-or-edit-host form's rules, shared by every screen that adds or edits a host.
 
 import XCTest
 
@@ -16,8 +16,8 @@ final class HostFormDraftTests: XCTestCase {
     }
 
     func testPortOutOfRangeIsRefusedRatherThanClamped() {
-        // 65535 clamped, or silently replaced by the default, are the two behaviours that used to
-        // save a different record than the user typed.
+        // Clamping to 65535, or silently replacing the port with the default, would save a
+        // different record than the user typed.
         XCTAssertEqual(HostFormDraft(address: "nuc.local", port: "99999").problem, .badPort)
         XCTAssertEqual(HostFormDraft(address: "nuc.local", port: "0").problem, .badPort)
         XCTAssertEqual(HostFormDraft(address: "nuc.local", port: "no").problem, .badPort)
@@ -71,7 +71,7 @@ final class HostFormDraftTests: XCTestCase {
     }
 
     /// A stored address is bare: the deep link brackets an IPv6 literal itself, and a record that
-    /// kept its brackets made `[[fd7a:115c::1]]:7777`, which the parser refuses.
+    /// kept its brackets would make `[[fd7a:115c::1]]:7777`, which the parser refuses.
     func testBracketedIPv6IsStoredBareAndSurvivesALink() throws {
         for typed in ["[fd7a:115c::1]", "[fd7a:115c::1]:7777"] {
             var host = StoredHost(name: "", address: "")
@@ -154,14 +154,14 @@ final class HostFormDraftTests: XCTestCase {
         XCTAssertNil(host.macAddresses)
     }
 
-    /// R4-4: the record moved under untouched fields, and a save writes nothing back.
+    /// The record moved under untouched fields, and a save writes nothing back.
     func testASaveWithNothingChangedKeepsWhatTheRecordMovedTo() {
         var host = Self.moved
         Self.loaded.commit(to: &host, changedFrom: Self.loaded)
         XCTAssertEqual(host, Self.moved)
     }
 
-    /// R4-4: each field the player changed goes in; the rest keep what the record moved to.
+    /// Each field the player changed goes in; the rest keep what the record moved to.
     func testEachChangedFieldGoesInAlone() {
         let edits: [(WritableKeyPath<HostFormDraft, String>, String, (inout StoredHost) -> Void)] = [
             (\.name, "Den", { $0.name = "Den" }),

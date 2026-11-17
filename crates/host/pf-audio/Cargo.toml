@@ -1,4 +1,4 @@
-# Host audio (plan §W6): desktop capture (PipeWire stream sink / WASAPI loopback), the virtual
+# Host audio: desktop capture (PipeWire stream sink / WASAPI loopback), the virtual
 # microphone, pad audio and the Windows wiring plan, behind the AudioCapturer / VirtualMic traits.
 # Consumes punktfunk_core::audio and never reaches the orchestrator: the voice-chat pin's host
 # services arrive through `voice_route::HOST_HOOKS`, set at host startup.
@@ -15,7 +15,7 @@ publish = false
 # `audio` (Opus layouts, gain) lives outside the `quic` feature.
 punktfunk-core = { path = "../../core/punktfunk-core", default-features = false }
 pf-host-config = { path = "../pf-host-config" }
-# Real-time priority for the capture and mic threads.
+# Real-time priority for the capture threads.
 pf-frame = { path = "../pf-frame" }
 anyhow = "1"
 tracing = "0.1"
@@ -36,7 +36,7 @@ pf-paths = { path = "../pf-paths" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 pf-paths-win = { path = "../pf-paths-win" }
-# Config dir, owner-private writes, the seat marker and `pnputil /remove-device`.
+# Config dir, atomic file replace, the seat id and role, and `pnputil /remove-device`.
 pf-paths = { path = "../pf-paths" }
 # The seat pad ring's names and layout, shared with `pf_seat_audio.dll` (seat_pad.rs).
 pf-driver-proto = { path = "../pf-driver-proto" }

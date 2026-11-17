@@ -12,7 +12,7 @@
 # the crash: with no `SpeakerHaptic` the card's only playback route is the 1-channel `Speaker`
 # split, PipeWire offers exactly one sink, GE-Proton mints its synthetic "Sony controller
 # speaker" endpoint from it, and a game that opens that endpoint overruns it
-# (EXCEPTION_ACCESS_VIOLATION, reliably ~74 s into Marvel's Spider-Man Remastered).
+# (EXCEPTION_ACCESS_VIOLATION).
 #
 # How it runs without hardware
 # ----------------------------

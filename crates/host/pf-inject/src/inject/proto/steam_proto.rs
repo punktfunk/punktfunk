@@ -660,9 +660,8 @@ pub fn sc_hold_trackpads(set: &mut [u8]) {
     }
 }
 
-/// Wire u8 `0..=255` → Deck u16 `0..=32767`. `v * 128` tops out at 32640
-/// (full pull never reaches the declared max). Inverse `>> 7` still
-/// round-trips: `32767 >> 7 == 255`.
+/// Wire u8 `0..=255` → Deck u16 `0..=32767`. Full pull reaches the declared max; `v * 128`
+/// would stop at 32640. Inverse `>> 7` round-trips: `32767 >> 7 == 255`.
 fn trigger_u16(v: u8) -> u16 {
     ((v as u32 * 32767) / 255) as u16
 }

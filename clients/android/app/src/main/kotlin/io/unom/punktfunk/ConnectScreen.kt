@@ -90,8 +90,8 @@ fun ConnectScreen(
     // The host streams at exactly this mode; "Native" settings resolve from the device display.
     val (w, h, hz) = settings.effectiveMode(context)
 
-    // Back from the background the browse sat idle with its re-query interval doubling: ask again,
-    // so returning to the screen is enough. Not on first entry, where ON_RESUME fires right after
+    // Back from the background the browse is idle, its re-query interval doubling: ask again, so
+    // returning to the screen is enough. Not on first entry, where ON_RESUME fires right after
     // the effect below starts the browse.
     DisposableEffect(Unit) {
         val lifecycle = (context as? LifecycleOwner)?.lifecycle
@@ -138,7 +138,7 @@ fun ConnectScreen(
                     knownHostStore.learnOs(kh, dh.os)
                     any = true
                 }
-                // And the mgmt port, so a host that moved off 47990 keeps its library once this
+                // And the mgmt port, so a host off DEFAULT_MGMT_PORT keeps its library once this
                 // device can no longer see the advert (VPN, routed subnet, multicast-dead Wi-Fi).
                 val mgmt = dh.mgmtPort
                 if (mgmt != null && kh.mgmtPort != mgmt) {
@@ -284,12 +284,10 @@ fun ConnectScreen(
         ctl.refreshHosts()
     }
 
-    // "Copy link" — the self-emitted form every other client already hands out
-    // (design/client-deep-links.md §4): the host's STABLE id first, with `host=` and `fp=` alongside,
-    // so a link written today still lands on the right box after the host changes address or this
-    // client is reinstalled. A PINNED card copies its own preset with it, because that combination
-    // is the thing being copied; a host card copies no preset at all and so keeps honouring the
-    // host's binding, exactly like a tap on it does.
+    // "Copy link" — the self-emitted form (design/client-deep-links.md §4): the host's STABLE id
+    // first, with `host=` and `fp=` alongside, so it survives an address change and degrades to a
+    // confirmation sheet when the record is gone. A PINNED card copies its own preset; a host card
+    // copies none and keeps honouring the host's binding, like a tap on it.
     fun copyLink(kh: KnownHost, pin: StreamPreset?) {
         val url = DeepLinks.forHost(kh, preset = pin?.id).toUrl()
         val copied = putLinkOnClipboard(context, url)
@@ -488,10 +486,8 @@ fun ConnectScreen(
         )
     }
 
-    // Add Host stayed behind while the other modals moved into ConnectPrompts: its form fields are
-    // remembered HERE, on purpose, so a half-typed address survives the sheet being dismissed and
-    // reopened. Moving the block without moving that state would quietly change what a dismiss
-    // costs; moving both is a separate decision from this one.
+    // Add Host is not in ConnectPrompts: its form fields are remembered HERE, so a half-typed
+    // address survives the sheet being dismissed and reopened.
     if (showManualSheet) {
         AddHostSheet(
             hostName = hostName,
@@ -622,7 +618,8 @@ fun ConnectScreen(
 /**
  * One entry in the saved-hosts grid: a host's own card ([pin] null), or one of its pinned
  * host+preset cards. Pins are additive presentation state on the host record — never duplicated
- * host entries, which would fork pairing, trust and renames (design §5.2a).
+ * host entries, which would fork pairing, trust and renames
+ * (design/client-settings-profiles.md §5.2a).
  */
 internal data class HostCardEntry(val host: KnownHost, val pin: StreamPreset?) {
     val key: String get() = "card-${host.id}-${pin?.id ?: "primary"}"
@@ -667,11 +664,11 @@ internal fun KnownHost.matches(dh: DiscoveredHost): Boolean {
 /**
  * True when a saved host is reachable RIGHT NOW: it answered the last QUIC probe. Deliberately NOT
  * "advertising on mDNS" — an advert is a cache entry a sleeping host keeps alive for up to 75
- * minutes, so reading it as presence left the pip green and Wake-on-LAN silent for exactly the
- * machine that needed waking. It also never covered a routed host (Tailscale/VPN), which answers a
- * dial it never advertised for.
+ * minutes, so reading it as presence would leave the pip green and Wake-on-LAN silent for exactly
+ * the machine that needs waking. It also never covers a routed host (Tailscale/VPN), which answers
+ * a dial it never advertised for.
  *
- * `internal`, not private: the touch grid draws the same pip in its own file now, and the console's
- * tile builder is handed this as a lambda so it never has to know what "reachable" is made of.
+ * `internal`, not private: ConnectGrid draws the same pip. The console tests `id in reachable`
+ * itself (ConsoleJson).
  */
 internal fun KnownHost.isOnline(reachable: Set<String>): Boolean = id in reachable

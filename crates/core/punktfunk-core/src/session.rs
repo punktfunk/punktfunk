@@ -42,7 +42,7 @@ pub struct Frame {
     pub pts_ns: u64,
     pub flags: u32,
     /// Config generation the host stamped (`punktfunk/2`): the `StreamConfig` this frame
-    /// decodes under. Always 0 on `punktfunk/1`.
+    /// decodes under.
     pub epoch: u8,
     /// The video stream it rode ([`crate::packet::screen_stream`]): 0 for the first screen.
     /// Epochs count per stream.
@@ -63,7 +63,8 @@ pub struct Frame {
     /// `Some` on the first frame handed out under a format other than the one before it: build
     /// the decoder for this format before decoding this frame. Set by
     /// [`NativeClient::next_frame`](crate::client::NativeClient::next_frame), only under
-    /// [`FEATURE_FORMAT_EPOCH`](crate::quic::v2::registry::FEATURE_FORMAT_EPOCH).
+    /// [`FEATURE_FORMAT_EPOCH`](crate::quic::v2::registry::FEATURE_FORMAT_EPOCH), and always
+    /// on [`NativeClient::next_screen_frame`](crate::client::NativeClient::next_screen_frame).
     pub new_format: Option<crate::quic::VideoFormat>,
 }
 
@@ -102,7 +103,7 @@ pub struct Session {
     /// `Arc` so the second seal lane can share the cipher; uncontended otherwise.
     crypto: Option<std::sync::Arc<SessionCrypto>>,
     /// Receive-side anti-replay over the peer's authenticated sequence. `Some` exactly when
-    /// `crypto` is — the plaintext probe path has no sequence to filter on.
+    /// `crypto` is: an unsealed packet's number is not authenticated.
     replay: Option<ReplayWindow>,
     /// Client: the newest `punktfunk/2` epoch a delivered frame carried ([`Session::set_epoch`]).
     newest_epoch: Option<u8>,
@@ -110,7 +111,7 @@ pub struct Session {
     packetizer: Packetizer,
     reassembler: Reassembler,
     stats: StatsCounters,
-    /// Monotonic wire sequence, also the AES-GCM nonce counter.
+    /// Monotonic wire sequence, also the AEAD nonce counter.
     next_seq: u64,
     /// Client: the received batch being consumed, decrypted in place datagram by datagram
     /// across [`poll_frame`](Self::poll_frame) calls from byte `recv_off`.
@@ -126,8 +127,9 @@ pub struct Session {
     /// Send-path stage timing (`PUNKTFUNK_PERF`); [`take_seal_perf`](Self::take_seal_perf)
     /// reads and resets. Same arming and branch-cost contract as `perf`.
     seal_perf: Option<SealPerf>,
-    /// Second seal lane, spawned by the first frame that crosses [`TWO_LANE_MIN_PACKETS`].
-    /// Host only — client sessions never seal frames.
+    /// Second seal lane, spawned by the first frame that crosses
+    /// [`seal::TWO_LANE_MIN_PACKETS`] or the first pipelined one. Host only — client sessions
+    /// never seal frames.
     seal_lane: Option<SealLane>,
     /// Parity worker of the chunk pipeline, spawned with the seal lane by the first
     /// pipelined frame. Host only.
@@ -775,8 +777,6 @@ impl Session {
         self.wire_pool = wires;
     }
 
-    /// Host: send one chunk of already-sealed packets as one batch. Returns how many the
-    /// kernel accepted; the rest are send-buffer drops. Whole frame, or per paced chunk.
     /// Host: keep a copy of every packet's plaintext as it is staged, for [`Self::reseal`].
     pub fn tap_plaintext(&mut self, on: bool) {
         self.plain_tap = on.then(PlainTap::default);
@@ -816,6 +816,8 @@ impl Session {
         StatsCounters::add(if filled { &c.nack_filled } else { &c.nack_sent }, 1);
     }
 
+    /// Host: send one chunk of already-sealed packets as one batch. Returns how many the
+    /// kernel accepted; the rest are send-buffer drops. Whole frame, or per paced chunk.
     pub fn send_sealed(&self, packets: &[&[u8]]) -> Result<usize> {
         // GSO where the transport has it, else a batch — same short-count drop contract.
         let sent = self.transport.send_gso(packets)?;
@@ -980,8 +982,7 @@ impl Session {
     }
 
     /// Client: whether a frame of `epoch` predates the newest seen, wrapping (1–128 behind).
-    /// It was encoded before a mode switch, so its decoder is gone. `punktfunk/1` frames are
-    /// all epoch 0.
+    /// It was encoded before a mode switch, so its decoder is gone.
     fn behind_epoch(&mut self, epoch: u8) -> bool {
         let newest = *self.newest_epoch.get_or_insert(epoch);
         let ahead = epoch.wrapping_sub(newest);
@@ -1306,7 +1307,7 @@ mod wire_equivalence_tests {
                         // smaller and vice versa).
                         opt.reclaim_wires(got);
                     }
-                    // 20000 bytes (~469 packets at shard 64) crosses TWO_LANE_MIN_PACKETS:
+                    // 20000 bytes (313 data shards at shard 64) crosses TWO_LANE_MIN_PACKETS:
                     // equality above must have held through the two-lane split, not a fallback.
                     if encrypt {
                         assert!(

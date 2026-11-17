@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # Source before launching headless Sway / the punktfunk host on an NVIDIA VM:
 #   source scripts/headless/env.sh
-# These are the wlroots-on-NVIDIA workarounds the research turned up (gles2 is the
-# known-good renderer; Vulkan is flaky on the proprietary driver — try it only later).
+# These are the wlroots-on-NVIDIA workarounds (gles2 is the known-good renderer; Vulkan is
+# flaky on the proprietary driver).
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export XDG_CURRENT_DESKTOP=sway          # so xdg-desktop-portal selects the wlr backend

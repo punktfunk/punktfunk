@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The link cap on a real stream: every row WP4 claims, in one unattended pass.
+# The link cap on a real stream: every link-cap row, in one unattended pass.
 #
 #   scripts/abr-rig/linkcap-rounds.sh
 set -euo pipefail
@@ -22,9 +22,9 @@ echo "== 5: nowall_720p 120 s, the control =="
 "$HERE/run.sh" nowall_720p 120 > "$OUT/lc-nowall-1.run" 2>&1 && keep lc-nowall-1 nowall_720p
 echo "  done"
 
-# Three runs, not two: round 6's two split 35 % / 73 % and a coin flip needs a
-# third face. PUNKTFUNK_PERF puts the host's send-loop percentiles in its log,
-# which is how a standing delay at a low rate is read.
+# Three runs, not two: a split between two has no majority. PUNKTFUNK_PERF puts the
+# host's send-loop percentiles in its log, which is how a standing delay at a low
+# rate is read.
 echo "== 4: wifi_tv_probe_damage 300 s x3, decoder hold, host perf =="
 for r in 1 2 3; do
   PF_RIG_DECODER_HOLD=1 PUNKTFUNK_PERF=1 "$HERE/run.sh" wifi_tv_probe_damage 300 \

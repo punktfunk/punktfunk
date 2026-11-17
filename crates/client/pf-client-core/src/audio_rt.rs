@@ -8,8 +8,9 @@
 //! is 0); then the Realtime portal when `/.flatpak-info` exists (rtkit looks up `/proc/<pid>`
 //! with sandbox numbers and gets ENOENT); otherwise rtkit `MakeThreadHighPriorityWithPID` on
 //! the system bus. Polkit `acquire-high-priority` allows the user's session and session-less
-//! user services, not ssh. Never `setcap`/`SCHED_RR`: `cap_sys_nice` took down KDE sessions,
-//! and nice is enough.
+//! user services, not ssh. Never `setcap`: KWin cannot read a capped process's
+//! `/proc/<pid>/exe`. Never `SCHED_RR`: realtime can preempt the compositor
+//! (`pf_frame::thread_qos`). Nice is enough.
 //!
 //! Windows: MMCSS "Pro Audio" plus `THREAD_PRIORITY_HIGHEST`. The MMCSS handle is leaked
 //! (thread-lifetime; the OS reverts at exit), matching `pf_frame::session_tuning::on_hot_thread`.
@@ -79,7 +80,7 @@ mod linux_bus {
 
 #[cfg(windows)]
 pub fn boost_current_thread() -> Boost {
-    // Local FFI, not the `windows` crate: two stable Win32 exports, same spelling as
+    // Local FFI, not the `windows` crate: three stable Win32 exports, same spelling as
     // `pf_frame::session_tuning`.
     #[link(name = "avrt")]
     unsafe extern "system" {

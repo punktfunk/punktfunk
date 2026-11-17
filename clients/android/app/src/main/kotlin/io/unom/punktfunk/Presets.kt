@@ -285,27 +285,26 @@ class PresetStore(context: Context) {
 
 /**
  * Chip colours a preset can wear. Chosen to stay legible on a dark surface and to be
- * distinguishable from each other at the size they are actually used — a 6dp dot on a chip and a
- * tint on a pinned card — and held at one saturation and lightness so no single swatch shouts
- * over its neighbours. Deliberately NOT the presence green ([HostCard]'s online dot), which means
- * something else entirely.
+ * distinguishable from each other at the size they are actually used — a dot on a chip and a
+ * tint on a pinned card. Deliberately NOT the presence green ([HostCard]'s online dot), which
+ * means something else entirely.
  *
  * **Ordered by hue**, so the picker reads as one sweep of the colour wheel rather than a bag of
- * colours; the degrees are in the comments to keep it that way when one is swapped out. That order
- * is also the order [nextAccent] hands them out in, so a user creating presets one after another
- * walks the spectrum instead of getting an arbitrary sequence.
+ * colours; the HSL degrees are in the comments to keep it that way when one is swapped out. That
+ * order is also the order [nextAccent] hands them out in, so a user creating presets one after
+ * another walks the spectrum instead of getting an arbitrary sequence.
  */
 val PRESET_ACCENTS = listOf(
     "#FF8A4C", // orange   21°
-    "#FBBF24", // amber    45°
-    "#A3E635", // lime     82°
-    "#34D399", // green   160°
-    "#22D3EE", // cyan    187°
+    "#FBBF24", // amber    43°
+    "#A3E635", // lime     83°
+    "#34D399", // green   158°
+    "#22D3EE", // cyan    188°
     "#60A5FA", // blue    213°
-    "#818CF8", // indigo  239°
-    "#A78BFA", // violet  258°
-    "#F472B6", // pink    330°
-    "#FB7185", // rose    350°
+    "#818CF8", // indigo  235°
+    "#A78BFA", // violet  255°
+    "#F472B6", // pink    329°
+    "#FB7185", // rose    351°
 )
 
 /** The first accent no existing preset is using, so two presets don't look alike by accident. */

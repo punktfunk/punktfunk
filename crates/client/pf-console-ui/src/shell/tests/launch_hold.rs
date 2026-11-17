@@ -166,8 +166,8 @@ fn the_hold_names_what_the_host_set_for_the_game() {
     );
 }
 
-/// B belongs to the dial while it is in flight: the hold stands where the connect
-/// card used to, so it has to answer for it.
+/// B belongs to the dial while it is in flight: the hold takes the connect card's place,
+/// so it has to answer for it.
 #[test]
 fn back_cancels_the_dial_while_the_hold_is_still_connecting() {
     let (mut s, _library, _bus) = on_shelf();
@@ -201,8 +201,8 @@ fn the_hold_ignores_state_read_before_the_launch_and_says_so_without_a_lease() {
     );
     at(&mut s, 100.0 + LAUNCH_NO_LEASE);
     s.sync();
-    // Sliding away here is what #1072 calls the silence: the player lands on a desktop
-    // they did not ask for and cannot tell a refusal from a slow start.
+    // Sliding away here would land the player on a desktop they did not ask for, unable to
+    // tell a refusal from a slow start.
     assert!(
         !s.in_stream && s.holds_stream(),
         "the hold keeps the screen"

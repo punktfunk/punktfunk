@@ -208,7 +208,7 @@ mod tests {
         }
     }
 
-    /// The order each path runs in today: the owner is tracked before its pads go live, a made
+    /// The order each path runs in: the owner is tracked before its pads go live, a made
     /// seat and a person once the unit started; a person's stop untracks before it ends presence;
     /// a made seat's proxy goes before its pads park.
     #[test]

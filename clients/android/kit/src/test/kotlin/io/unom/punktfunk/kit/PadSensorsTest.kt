@@ -9,10 +9,9 @@ import org.junit.Test
  * shared converters it goes through ([Gamepad.motionGyroWire] / [Gamepad.motionAccelWire]). Pure
  * JVM — the two `*ToWire` functions take plain float arrays and touch no Android class.
  *
- * The scale is MEASURED FACT (`punktfunk_core::input::gamepad`: 20 LSB/°·s, 10000 LSB/g) and must
- * not drift. The axis mapping is straight through and NOT yet verified against hardware — see
- * [PadSensors.gyroToWire] for the measurement that would settle it. [straightThroughFrame] exists
- * to make a future remap a deliberate, visible edit rather than a quiet one.
+ * The scale is the wire contract (`punktfunk_core::input::gamepad`: 20 LSB/°·s, 10000 LSB/g) and
+ * must not drift. The axis mapping is straight through; [straightThroughFrame] makes a remap a
+ * deliberate, visible edit rather than a quiet one.
  * Run: `./gradlew :kit:testDebugUnitTest`.
  */
 class PadSensorsTest {
@@ -50,9 +49,9 @@ class PadSensorsTest {
 
     /**
      * The frame: component i of the sensor sample becomes component i of the wire triple, for both
-     * planes, with no permutation and no negation. UNVERIFIED against hardware — if a Bluetooth
-     * DualSense says otherwise, the remap goes into [PadSensors.gyroToWire] and this test changes
-     * with it. Distinct magnitudes per axis so a swap or a flip cannot cancel out.
+     * planes, with no permutation and no negation. A device that needs a remap gets it in
+     * [PadSensors.gyroToWire], and this test changes with it. Distinct magnitudes per axis so a
+     * swap or a flip cannot cancel out.
      */
     @Test
     fun straightThroughFrame() {
