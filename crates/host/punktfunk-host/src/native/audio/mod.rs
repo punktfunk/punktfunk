@@ -755,13 +755,16 @@ fn split_unit(
     true
 }
 
-/// Whether the datagram buffer has room for all of `parts`, waiting up to `wait` for the
-/// connection to drain it: microseconds on a clear wire. The buffer evicts its oldest
-/// datagram once full, which after a back-to-back frame is a part of that frame, so on
-/// `false` the caller drops this frame whole. Spins: the wait is shorter than a sleep the OS
-/// grants.
+/// Sleep between checks of a full datagram buffer. Each check takes quinn's connection lock,
+/// which the driver needs to drain the buffer.
+const ROOM_POLL: std::time::Duration = std::time::Duration::from_micros(100);
+
+/// Whether the datagram buffer (`space`) has room for all of `parts`, checked again every
+/// [`ROOM_POLL`] for up to `wait`. The buffer evicts its oldest datagram once full, which after
+/// a back-to-back frame is a part of that frame, so on `false` the caller drops this frame
+/// whole.
 fn parts_have_room(
-    conn: &super::link::SessionLink,
+    space: impl Fn() -> Option<usize>,
     parts: &[Vec<u8>],
     wait: std::time::Duration,
 ) -> bool {
@@ -770,11 +773,11 @@ fn parts_have_room(
     let record = punktfunk_core::config::DATAGRAM_QUEUE_OVERHEAD;
     let need = (parts.iter().map(|d| d.len() + 1 + record).sum::<usize>()).saturating_sub(record);
     let t0 = std::time::Instant::now();
-    while conn.datagram_space().is_some_and(|free| free < need) {
+    while space().is_some_and(|free| free < need) {
         if t0.elapsed() >= wait {
             return false;
         }
-        std::thread::yield_now();
+        std::thread::sleep(ROOM_POLL);
     }
     true
 }
@@ -793,6 +796,8 @@ struct Egress {
     oversized_drops: u64,
     /// Frames in parts the datagram buffer had no room for, for the session.
     congested_drops: u64,
+    /// The last frame in parts found no room; until one fits, a frame checks once.
+    stalled: bool,
 }
 
 impl Egress {
@@ -805,6 +810,7 @@ impl Egress {
             last_departure: None,
             oversized_drops: 0,
             congested_drops: 0,
+            stalled: false,
         }
     }
 
@@ -844,6 +850,27 @@ impl Egress {
             );
         }
         self.seq = self.seq.wrapping_add(1);
+    }
+
+    /// Whether a frame's `parts` fit the datagram buffer (`space`). The first frame of a stall
+    /// waits up to `interval` for room; while the buffer stays full, each later frame checks
+    /// once. One that does not fit is dropped through [`Self::congested`].
+    fn parts_fit(
+        &mut self,
+        space: impl Fn() -> Option<usize>,
+        parts: &[Vec<u8>],
+        interval: std::time::Duration,
+    ) -> bool {
+        let wait = if self.stalled {
+            std::time::Duration::ZERO
+        } else {
+            interval
+        };
+        self.stalled = !parts_have_room(space, parts, wait);
+        if self.stalled {
+            self.congested();
+        }
+        !self.stalled
     }
 
     /// A frame in parts the datagram buffer had no room for within one frame: the connection
@@ -1035,10 +1062,9 @@ fn run_plane(args: &PlaneArgs, plane: super::handshake::AudioPlane, seq_io: &mut
             // A PCM frame's parts queue together or not at all, within one frame's time.
             if fmt.pcm
                 && datagrams.len() > 1
-                && !parts_have_room(&args.conn, &datagrams, fmt.interval)
+                && !egress.parts_fit(|| args.conn.datagram_space(), &datagrams, fmt.interval)
             {
                 datagrams.clear();
-                egress.congested();
                 continue;
             }
             // Four `SendDatagramError` outcomes; only `ConnectionLost` ends the session. A
@@ -1350,7 +1376,10 @@ mod tests {
                 assert!(wire.datagrams(seq, 0, &silence, max_datagram, &mut out));
                 assert!(out.len() > 1, "{max_datagram} B a datagram");
                 queued += out.len() as u64;
-                assert!(parts_have_room(&link, &out, wait), "the connection drains");
+                assert!(
+                    parts_have_room(|| link.datagram_space(), &out, wait),
+                    "the connection drains"
+                );
                 for d in out.drain(..) {
                     assert!(matches!(
                         link.send_datagram(d),
@@ -1376,6 +1405,35 @@ mod tests {
             queued,
             "a part the buffer evicted never leaves"
         );
+    }
+
+    /// A full datagram buffer is re-checked after a sleep, not in a spin, for one frame. While
+    /// it stays full each later frame checks once; a frame that fits ends the stall.
+    #[test]
+    fn a_full_datagram_buffer_costs_one_check_per_frame_once_stalled() {
+        use std::cell::Cell;
+        let (full, checks) = (Cell::new(true), Cell::new(0u32));
+        let space = || {
+            checks.set(checks.get() + 1);
+            Some(if full.get() { 0 } else { 1 << 20 })
+        };
+        let parts = vec![vec![0u8; 1200]; 3];
+        let wait = MS(50);
+        let mut egress = Egress::new(0, 2_000);
+        let frame = |e: &mut Egress| {
+            checks.set(0);
+            (e.parts_fit(space, &parts, wait), checks.get())
+        };
+        let (fit, n) = frame(&mut egress);
+        // A sleep never ends early: 50 ms of 100 µs steps is at most 500 more checks.
+        assert!(!fit && (2..=502).contains(&n), "{n} checks");
+        assert_eq!(frame(&mut egress), (false, 1), "stalled: one check");
+        full.set(false);
+        assert_eq!(frame(&mut egress), (true, 1));
+        full.set(true);
+        let (fit, n) = frame(&mut egress);
+        assert!(!fit && n >= 2, "a new stall waits again: {n} checks");
+        assert_eq!((egress.congested_drops, egress.seq), (3, 3));
     }
 
     /// The number this clock exists for, pinned exactly.
