@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Package an already-built punktfunk-gamescope binary as an RPM, for the Gitea RPM registry.
 #
-# WHY this exists: before it, the only ways to get punktfunk-gamescope were the Bazzite/Atomic
-# sysext, the Arch package, the SteamOS installer, a NixOS option — or building gamescope from
-# source yourself. A traditional Fedora-family box (Nobara, plain Fedora, Nobara-derived HTPCs)
-# had no packaged route at all, which is how a field report ended up on a stock gamescope streaming
-# a session that told every game the display was 60 Hz.
+# WHY this exists: a traditional Fedora-family box (Nobara, plain Fedora, Nobara-derived HTPCs) has
+# no other packaged route to punktfunk-gamescope. The Bazzite/Atomic sysext, the Arch package, the
+# SteamOS installer and the NixOS option serve other platforms; the alternative is building
+# gamescope from source.
 #
 # Nothing is BUILT here; CI builds once per Fedora major and caches the staged tree
 # (.gitea/workflows/rpm.yml). See punktfunk-gamescope.spec's header for why repacking beats
@@ -14,7 +13,7 @@
 # `--stage` is the DESTDIR that build-punktfunk-gamescope.sh wrote, not a single binary: that tree
 # carries the compositor AND the WSI layer built beside it, and a game gets an HDR10 swapchain from
 # that layer or from nowhere. Taking the whole tree rather than a file per artifact is deliberate —
-# it is what stops the next file added to the package needing a new flag in four packaging scripts.
+# it is what stops the next file added to the package needing a new flag in every packaging script.
 #
 # Usage:
 #   bash packaging/gamescope/build-gamescope-rpm.sh \
@@ -51,8 +50,7 @@ LAYER_JSON="$STAGE/usr/lib/punktfunk/vulkan/implicit_layer.d/punktfunk_gamescope
 # gamescope starts every session's first child through its reaper.
 [ -x "$REAPER" ] || { echo "ERROR: $REAPER missing from the stage — a session would run nothing" >&2; exit 1; }
 # Hard, not best-effort. A package that carries the compositor without its layer looks completely
-# healthy and then silently denies every game an HDR10 swapchain — the failure this whole change
-# exists to end. Better to fail the packaging step than to ship that quietly again.
+# healthy and then silently denies every game an HDR10 swapchain.
 for f in "$LAYER_SO" "$LAYER_JSON"; do
   [ -f "$f" ] || { echo "ERROR: $f missing from the stage — no game HDR without it" >&2; exit 1; }
 done

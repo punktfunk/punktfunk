@@ -1,6 +1,6 @@
 # punktfunk Nix packages — built with crane (github:ipetkov/crane).
 #
-# Two derivations, mirroring the RPM's `punktfunk` / `punktfunk-client` split (packaging/rpm/
+# The host and client mirror the RPM's `punktfunk` / `punktfunk-client` split (packaging/rpm/
 # punktfunk.spec) so a headless streaming host never drags in the GTK client closure:
 #
 #   * punktfunk-host   — the streaming host + status tray (punktfunk-host, punktfunk-tray).
@@ -11,12 +11,14 @@
 #   * punktfunk-client — the native Linux client: the GTK4/libadwaita shell (punktfunk-client) plus
 #                        the Vulkan/ash session streamer it execs (punktfunk-session).
 #
+# The tray, the seat supervisor, the web console and the plugin runner are derivations of their
+# own, further down.
+#
 # Why crane and not rustPlatform.buildRustPackage:
-#   * The lockfile carries `windows 0.62.2` (and friends) from BOTH crates.io AND a pinned
-#     microsoft/windows-rs git rev — the Windows client uses the git one. importCargoLock keys its
-#     vendor dir by `name-version`, so those same-name-same-version-different-source entries collide;
-#     crane vendors per-source and handles it. (Those crates are `cfg(windows)`-gated and never
-#     COMPILE on Linux — they only need to be vendored to satisfy the lock.)
+#   * The lockfile carries `windows` crates from crates.io (0.62.2) and from two pinned
+#     microsoft/windows-rs git revs (0.100.x and 0.101.x); crane vendors per source. (Those crates
+#     are `cfg(windows)`-gated and never COMPILE on Linux — they only need to be vendored to
+#     satisfy the lock.)
 #   * Git checkouts have unpacked hashes so evaluation does not fetch GitHub. This keeps
 #     `nix flake check --no-build` offline after its flake inputs are available.
 #
@@ -79,8 +81,8 @@ let
   # no `ci` in it, so the update check never reads it as a CI run.
   buildVersion = "${version}-nix" + lib.optionalString (rev != null) "+g${rev}";
 
-  # `cargo build --release --locked` scoped to the crates each package ships. crane appends this to
-  # both the vendor step and the compile.
+  # What every Rust package shares. Each sets its own `cargoExtraArgs` to scope `cargo build
+  # --locked` to the crates it ships.
   commonArgs = {
     inherit src version;
     strictDeps = true;
@@ -123,7 +125,7 @@ let
       mit
       asl20
     ];
-    platforms = [ "x86_64-linux" ]; # NVENC desktop host; matches the RPM's ExclusiveArch: x86_64
+    platforms = [ "x86_64-linux" ]; # NVENC desktop host; the RPM's ExclusiveArch also lists aarch64
     maintainers = [ ];
   };
 
@@ -140,8 +142,9 @@ let
       pname = "punktfunk-tray";
       cargoExtraArgs = "--locked -p punktfunk-tray";
       PUNKTFUNK_BUILD_VERSION = buildVersion;
-      # Pure-Rust leaf: ksni/zbus talk to the dbus socket, ureq+rustls(ring) + punktfunk-core `tls` —
-      # nothing to link (no buildInputs) and no GPU driver runpath (it never dlopens libcuda/EGL/vulkan).
+      # Pure-Rust leaf: ksni/zbus talk to the dbus socket, ureq+rustls(aws-lc-rs) + punktfunk-core
+      # `tls` — nothing to link (no buildInputs) and no GPU driver runpath (it never dlopens
+      # libcuda/EGL/vulkan).
       meta = meta // {
         description = "punktfunk host status tray (Linux StatusNotifierItem)";
         mainProgram = "punktfunk-tray";
@@ -174,10 +177,10 @@ in
         pipewire # libpipewire-0.3 + libspa-0.2 (portal capture + the `pipewire` crate)
         wayland # libwayland-client (wlr / KWin fake_input backends)
         libxkbcommon # virtual-keyboard keymap build/validate
-        libGL # src/linux/zerocopy/egl.rs `#[link(name = "GL")]`
-        gbm # src/linux/zerocopy/egl.rs `#[link(name = "gbm")]`
+        libGL # pf-zerocopy's imp/egl/gl.rs `#[link(name = "GL")]`
+        gbm # pf-zerocopy's imp/gbm.rs `#[link(name = "gbm")]`
         vulkan-loader # ash (Vulkan-Video encode + the dmabuf→VK bridge); loaded at runtime
-        libva # pf-libva (native VAAPI encode); dlopen'd, and no longer transitively via FFmpeg
+        libva # pf-libva (native VAAPI encode); dlopen'd
       ];
 
       # KWin resolves a streaming client to a .desktop by matching /proc/<pid>/exe against `Exec`, so
@@ -237,7 +240,7 @@ in
 
       # Run AFTER fixup, and add every dlopen'd library by hand. A `buildInputs` entry only reaches
       # RUNPATH when something DT_NEEDEDs it, and nothing links these: ash and volk dlopen
-      # libvulkan.so.1, pf-libva dlopens libva.so.2. The driver link is the third entry and covers
+      # libvulkan.so.1, pf-libva dlopens libva.so.2. The driver link (`addDriverRunpath`) covers
       # libcuda.so.1 / libnvidia-encode.so.1 / libnvidia-ml.so.1 / libEGL.so.1 and the vendor ICD,
       # but carries neither the Khronos loader nor libva. A miss here is silent: the codepath just
       # reports "unavailable" and falls back.
@@ -348,8 +351,9 @@ in
       # (rust-skia releases) — impossible in Nix's network-less build sandbox, and a from-source Skia
       # build needs the full gn/ninja/python toolchain + network-fetched third-party. The `ui` feature
       # is explicitly droppable (clients/session/Cargo.toml: "same streaming, stats on stdout only"),
-      # so build the session without it. The GTK shell (punktfunk-client-linux) is skia-free and full.
-      # Re-adding the Skia OSD under Nix is tracked in packaging/nix/README.md.
+      # so build the session without it. The GTK shell (punktfunk-client-linux) is skia-free; its
+      # `console` feature goes with the session's, so the shell drops the Console doorway.
+      # The Skia OSD being off under Nix is noted in packaging/nix/README.md.
       cargoExtraArgs =
         "--locked -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli "
         + "--no-default-features --features punktfunk-client-session/pyrowave";
@@ -448,9 +452,7 @@ in
     # devDependency's postinstall hook, and committed) lists ONE `fetchurl` per package, keyed by
     # the lockfile's own integrity hash — including the @unom scope, whose tarball URLs the
     # lockfile records in full (web/.npmrc → https://git.unom.io/api/packages/unom/npm/, read-public,
-    # the same anonymous pull CI's rpm/deb builds do). That replaces the old single fixed-output
-    # `bun install` derivation whose aggregate `outputHash` had to be hand-bumped on every lockfile
-    # change — the failure mode this design removes.
+    # the same anonymous pull CI's rpm/deb builds do). No aggregate deps hash to bump.
     bunDeps = bun2nix.fetchBunDeps { bunNix = src + "/web/bun.nix"; };
     # `src` is the whole repo; the console (and its lockfile) live in web/.
     bunRoot = "web";
@@ -467,8 +469,8 @@ in
       done
     '';
     # The install-time `prepare` codegen is run explicitly in buildPhase instead (below), matching
-    # the deb/rpm builders — and the dependency lifecycle scripts stay off, as they were under the
-    # old `--ignore-scripts` FOD (playwright's would try to download browsers).
+    # the deb/rpm builders — and the dependency lifecycle scripts stay off (playwright's would
+    # try to download browsers).
     dontRunLifecycleScripts = true;
     # We drive the build/install ourselves; don't let the hook default them to `bun build`/`bun test`.
     dontUseBunBuild = true;
@@ -490,10 +492,9 @@ in
     # ⚠ "Offline" is load-bearing and NOT self-enforcing. inlang resolves the plugins in
     # web/project.inlang/settings.json `modules`, and a failed import is only a WARNING there:
     # paraglide then prints "Successfully compiled", exits 0, and emits ZERO messages, so the
-    # console builds fine and dies at SSR time with every `m.foo()` undefined. That is exactly
-    # what a CDN URL in `modules` did in this network-less sandbox. The plugin is now a normal
-    # devDependency referenced by path, and `bun run codegen` ends in tools/check-i18n.mjs, which
-    # fails the build on a remote module or a short message count. Keep both properties.
+    # console builds fine and dies at SSR time with every `m.foo()` undefined. The plugin is a
+    # normal devDependency referenced by path, and `bun run codegen` ends in tools/check-i18n.mjs,
+    # which fails the build on a remote module or a short message count. Keep both properties.
     buildPhase = ''
       runHook preBuild
       # node_modules is already in place: the bun2nix hook ran an offline `bun install` in web/
@@ -552,8 +553,8 @@ in
   # can do). Mirrors the Debian punktfunk-scripting .deb / the RPM's `--with scripting` subpackage,
   # which the host package Recommends. Its systemd --user unit ships here too.
   #
-  # Unlike the deb/rpm we don't `bun build` into a bundle + vendor bun; we still bundle (one
-  # self-contained JS, effect inlined) but the launcher execs `pkgs.bun` from the store.
+  # Like the deb/rpm we `bun build` the runner into one self-contained JS (effect inlined), but
+  # the launcher execs `pkgs.bun` from the store instead of a vendored bun.
   punktfunk-scripting = stdenvNoCC.mkDerivation {
     pname = "punktfunk-scripting";
     inherit src version;

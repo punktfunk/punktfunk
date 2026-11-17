@@ -9,7 +9,7 @@
 //! A hardware cursor moves without DWM composing, so while the pool blends, a publish that
 //! changes what the client would see is DAMAGE: the cell marks itself dirty and wakes the
 //! pool's encode thread, which re-encodes its stash with the pointer where it is now
-//! (`encode/drive.rs`). No DDI here.
+//! (`pf_encode_session::drive`). No DDI here.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};

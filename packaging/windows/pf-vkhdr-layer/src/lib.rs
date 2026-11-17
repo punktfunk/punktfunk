@@ -102,7 +102,8 @@ const _: () = {
     assert!(offset_of!(NegotiateLayerInterface, pfn_gpdpa) == 5 * word);
 };
 
-// raw mirror of VkSurfaceFormat2KHR (avoid ash lifetime generics in fn-pointer types)
+// Raw mirrors of VkWin32SurfaceCreateInfoKHR and VkPhysicalDeviceSurfaceInfo2KHR: no ash
+// lifetime generics in the fn-pointer types.
 #[repr(C)]
 struct Win32SurfaceCreateInfoRaw {
     _s_type: vk::StructureType,
@@ -143,9 +144,9 @@ struct SurfaceFormat2Raw {
     p_next: *mut c_void,
     surface_format: vk::SurfaceFormatKHR,
 }
-// Layout proof for the mirror: scratch arrays of it are handed to the ICD, and the caller's
-// VkSurfaceFormat2KHR array is read and stamped through it, so a size or alignment drift would
-// corrupt either side.
+// Layout proof for SurfaceFormat2Raw, the mirror of VkSurfaceFormat2KHR: scratch arrays of it
+// are handed to the ICD, and the caller's array is read and stamped through it, so a size or
+// alignment drift would corrupt either side.
 const _: () = assert!(
     std::mem::size_of::<SurfaceFormat2Raw>() == std::mem::size_of::<vk::SurfaceFormat2KHR>()
 );
@@ -185,7 +186,7 @@ type FnDestroySurface = unsafe extern "system" fn(vk::Instance, vk::SurfaceKHR, 
 
 // Both maps' values are raw `extern "system"` fn pointers plus plain handles; fn pointers are
 // process-global code addresses and implement Send/Sync intrinsically, so the auto traits hold
-// and no `unsafe impl Send` is needed (two used to sit here as unproven markers).
+// and no `unsafe impl Send` is needed.
 struct InstanceData {
     instance: vk::Instance,
     next_gipa: PfnGipa,

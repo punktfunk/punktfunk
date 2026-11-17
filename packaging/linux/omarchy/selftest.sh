@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Self-check for the pieces of `punktfunk-omarchy` that parse or generate a file the USER owns,
-# plus the firewall source list — all without root or an Omarchy box.
+# its option parsing, the `mode` verbs and the firewall source list — all without root or an
+# Omarchy box.
 #
 #     bash packaging/linux/omarchy/selftest.sh
 #
@@ -24,7 +25,7 @@ check() {  # check <name> <expected-file> <actual-file>
 }
 
 # Source the script's functions without running its dispatcher: it dispatches on "$1", and "help"
-# only prints. `set +e` around it because the script itself sets -e.
+# only prints.
 # shellcheck disable=SC1090
 source "$SCRIPT" help >/dev/null
 
@@ -106,8 +107,8 @@ echo "omarchy menu merge"
 # merge gets the same scrutiny as the picker restore.
 menudir="$WORK/menu/omarchy/extensions"
 mkdir -p "$menudir"
-# The URL row matters: `//` inside a STRING is not a comment, and the first validator treated it
-# as one — truncating the row mid-string and refusing to touch a file the user never broke.
+# The URL row matters: `//` inside a STRING is not a comment, so a validator that strips comments
+# must not truncate the row mid-string and refuse a file the user never broke.
 cat > "$menudir/omarchy-menu.jsonc" <<'EOF'
 {
   // a comment the user wrote
@@ -174,10 +175,9 @@ check "a config we cannot parse is left alone" "$WORK/menu-broken" "$f"
 echo "app menu"
 
 # `setup_webapp` must run to its END on a box with nothing of ours installed yet — no pre-rename
-# entry, no applications dir at all. That is the ordinary first install, and it is where a bare
-# `x=$(grep … | head -1)` under `set -e` + `pipefail` killed the script dead: the step header had
-# already printed, so the operator saw "==> App menu" and then nothing, and every later step
-# (plugin, menu, hooks, theme, status) silently never ran. Reaching `setup_menu` is the proof.
+# entry, no applications dir at all (the ordinary first install). A bare `x=$(grep … | head -1)`
+# under `set -e` + `pipefail` would end the script there, and every later step (plugin, menu,
+# hooks, theme, status) would silently never run. Reaching `setup_menu` is the proof.
 mkdir -p "$WORK/bin" "$WORK/webapp"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/omarchy-webapp-install"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/omarchy-webapp-remove"
@@ -218,8 +218,8 @@ fi
 echo "setup options"
 
 # The installer asks for every optional step on its own screen and passes the answers here, so
-# nothing in `setup` may prompt. A stray `read`, a missing case or a silently accepted value all
-# put an Omarchy box back to two rounds of questions, which is what these four checks catch.
+# nothing in `setup` may prompt. A stray `read`, a missing case or a silently accepted value would
+# ask the questions a second time, which is what these four checks catch.
 if grep -q 'read -r -p' "$SCRIPT"; then
   printf '  FAIL setup still prompts for something\n'; fails=$((fails + 1))
 else

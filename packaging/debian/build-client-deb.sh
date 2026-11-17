@@ -70,7 +70,7 @@ install -Dm0644 packaging/linux/io.unom.punktfunk.desktop \
 install -Dm0644 packaging/linux/io.unom.punktfunk.console.desktop \
                 "$STAGE/usr/share/applications/io.unom.punktfunk.console.desktop"
 # The app icon the desktop entry (and the About dialog) name. Without it the launcher falls
-# back to a generic monitor glyph, which is what shipped until now.
+# back to a generic monitor glyph.
 install -Dm0644 packaging/linux/icons/hicolor/scalable/apps/io.unom.punktfunk.svg \
                 "$STAGE/usr/share/icons/hicolor/scalable/apps/io.unom.punktfunk.svg"
 # The CamelCase icon name, which desktop entries users already have still name.

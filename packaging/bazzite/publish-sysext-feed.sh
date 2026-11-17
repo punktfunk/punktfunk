@@ -8,9 +8,9 @@
 # without re-publishing anything).
 #
 # Signing uses RPM_GPG_PRIVATE_KEY — the SAME packages@unom.io key that signs the RPMs, so boxes
-# have one key to trust and we have one key to rotate. Without checksums-plus-signature the feed
-# was self-certifying: SHA256SUMS sits on the same registry as the images it describes, so whoever
-# could swap an image could swap its checksum in the same breath.
+# have one key to trust and we have one key to rotate. Checksums alone certify themselves:
+# SHA256SUMS sits on the same registry as the images it describes, so whoever can swap an image
+# can swap its checksum in the same breath.
 #
 # Usage: TOKEN=… [KEEP=6] bash publish-sysext-feed.sh <feed> <image.raw>
 #        TOKEN=… bash publish-sysext-feed.sh --seal <feed>
@@ -49,12 +49,8 @@ FETCHED="$WORK/SHA256SUMS.fetched"   # exactly what the registry served, before 
 #
 # -L is not optional here. The registry answers a file GET with a 303 See Other pointing at
 # presigned object storage, and `curl -f` does NOT treat a 3xx as an error — so without -L the call
-# "succeeds" and hands back the redirect's HTML body ('<a href="…">See Other</a>.'). Both callers
-# then took that page for the manifest: every publish prepended a stale redirect page and dropped
-# every prior image line, and --seal signed a page whose presigned URL expired 300 seconds later —
-# a signature over bytes that exist nowhere. Clients fetch WITH -L, so they checked the real
-# manifest against that signature and refused the feed, which from a Bazzite box is indistinguishable
-# from someone having tampered with it.
+# "succeeds" and hands back the redirect's HTML body ('<a href="…">See Other</a>.'), which both
+# callers would take for the manifest: a publish would then drop every prior image line.
 #
 # The line filter is the second layer, and the one that does not depend on getting curl's flags
 # right: whatever the transport hands back, only well-formed "<sha256>  <filename>" lines are ever
@@ -69,13 +65,13 @@ read_manifest() {
 #
 # A bare checksum list binds nothing: the signature proves "we signed these bytes", never "…for the
 # stable feed, this month". So anyone who can WRITE the registry without holding the key — a leaked
-# write:package token, the kind that sits in half our CI jobs — can copy this feed's manifest,
-# signature and images into another channel's path, or put an old pair back, and every box verifies
-# them happily and merges the result over /usr. punktfunk-sysext(8) refuses a manifest whose FEED is
-# not the feed it fetched and one whose SERIAL is below the highest it has accepted, which is the
-# same channel-binding + monotonic-serial pair the Rust updater enforces on its own manifest
-# (crates/core/pf-update-check/src/manifest.rs). Comment lines, so a `#`-skipping checksum reader and the
-# clients' image-line parsers are both unaffected by them.
+# write:package token — can copy this feed's manifest, signature and images into another
+# channel's path, or put an old pair back, and every box verifies them happily and merges the
+# result over /usr. punktfunk-sysext(8) refuses a manifest whose FEED is not the feed it fetched
+# and one whose SERIAL is below the highest it has accepted, which is the same channel-binding
+# + monotonic-serial pair the Rust updater enforces on its own manifest
+# (crates/core/pf-update-check/src/{manifest,floor}.rs). Comment lines, so a `#`-skipping checksum
+# reader and the clients' image-line parsers are both unaffected by them.
 bind_manifest() {
   local serial prev
   serial="$(date +%s)"
@@ -139,7 +135,7 @@ require_signature() {
 if [ "$SEAL" = 1 ]; then
   read_manifest || { echo "no SHA256SUMS at $BASE — nothing to seal" >&2; exit 1; }
   # An empty result means the manifest was ALL junk. Signing that would hand clients a feed that
-  # verifies and offers no images, which reads as "up to date" to `punktfunk-sysext update`.
+  # verifies and offers no images, so `punktfunk-sysext update` stops at "no image in the feed".
   if [ ! -s "$SUMS" ]; then
     echo "$BASE/SHA256SUMS lists no images — refusing to seal it (feed needs a republish)" >&2
     exit 1
@@ -170,8 +166,7 @@ SHA="$(sha256sum "$RAW" | cut -d' ' -f1)"
 # Merge into the existing manifest: drop any prior line for this filename, append ours.
 if read_manifest; then
   sed -i "\| $FNAME\$|d" "$SUMS"
-  # Said out loud on purpose. A manifest that silently shrinks is how a feed loses its rollback
-  # history, and that went unnoticed precisely because nothing ever reported the carry-over.
+  # Said out loud on purpose: a manifest that silently shrinks loses the feed's rollback history.
   echo "carrying forward $(grep -c '' <"$SUMS") image(s) from the existing manifest"
 else
   echo "no manifest at $BASE yet — starting a new feed"

@@ -2,8 +2,8 @@
 """Write a copy of a Cargo.lock with the microsoft/windows-rs git packages removed.
 
 The punktfunk workspace lockfile includes the windows-rs git dependencies — the whole
-microsoft/windows-rs tree (windows-reactor + ~13 `windows-*` crates, all pinned to one git
-rev) declared by `punktfunk-client-windows` and `pf-client-core` (D3D11VA). The flatpak
+microsoft/windows-rs tree (windows-reactor and the `windows-*` crates, at the two git revs the
+root Cargo.toml pins), which members depend on only under cfg(windows). The flatpak
 builds ONLY the Linux binaries, which never compile them, but `flatpak-cargo-generator.py`
 walks the whole lock and emits a `type: git` source for windows-rs; `flatpak-builder` then
 FULL-clones that multi-GB repo at "Downloading sources" → "No space left on device",
@@ -12,7 +12,7 @@ sandbox too — see prune-windows-toml.py — since `cargo --offline` needs ever
 dependency's source even for cfg(windows)-gated entries it never compiles.)
 
 Stripping those packages from the lock the generator sees is safe: the committed Cargo.lock is
-left untouched for the `--locked` build, and `cargo --offline` only needs vendored sources for
+left untouched, and `cargo --offline` only needs vendored sources for
 the crates it actually compiles (none of the windows-rs crates are in the Linux client's
 dependency closure).
 

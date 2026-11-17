@@ -7,12 +7,12 @@
 # Counterpart to ../arch/build-sysext.sh (which wraps a pacman package for SteamOS). This one
 # wraps the Fedora RPMs (punktfunk, -web, -scripting, -seats, -bun) and additionally:
 #   * relocates the RPMs' /etc payload to /usr/share/punktfunk/etc/ (a sysext carries ONLY /usr;
-#     punktfunk-sysext(8) copies these into the real /etc on install),
+#     punktfunk-sysext(8) copies the gamescope-session drop-in into the real /etc on install),
 #   * bakes SELinux labels in as squashfs pseudo-xattrs, computed with matchpathcon from the
 #     build container's targeted policy. Without them every file is unlabeled_t at runtime:
 #     fine for the user session + systemd --user units (unconfined), but system daemons are
-#     DENIED — udev couldn't read 60-punktfunk.rules and systemd-sysctl couldn't read the
-#     sysctl drop-in (validated live on Bazzite 43, SELinux enforcing, 2026-07-04),
+#     DENIED — udev can't read 60-punktfunk.rules and systemd-sysctl can't read the sysctl
+#     drop-in,
 #   * pins compatibility via ID=fedora + VERSION_ID: merges on Bazzite/Silverblue/Aurora of the
 #     SAME Fedora major (ID_LIKE matching, systemd >= 256) and is REFUSED after a major rebase
 #     instead of running soname-broken binaries (`punktfunk-sysext update` then re-resolves),
@@ -32,8 +32,8 @@
 # /usr/bin/punktfunk-gamescope, which is what lets the gamescope backend stream 10-bit BT.2020 PQ.
 # It is NOT built here: it is a C++ meson build with gamescope's whole dependency set, so CI builds
 # it in the same Fedora container beforehand (`bash packaging/gamescope/build-punktfunk-gamescope.sh
-# --destdir stage --prefix /usr`) and passes that DESTDIR in. Omit it and the image is exactly what
-# it was — the host then stays SDR on that backend, by design.
+# --destdir stage --prefix /usr`) and passes that DESTDIR in. Omit it and the image carries no
+# punktfunk-gamescope — the host then stays SDR on that backend, by design.
 #
 # A directory rather than the binary, because the tree also carries the Vulkan WSI layer built beside
 # the compositor. That layer is the only route to an HDR10 swapchain for a game nested under
@@ -90,8 +90,9 @@ if [ -e "$STAGE/usr/bin/punktfunk-web-server" ] || [ -e "$STAGE/usr/bin/punktfun
     echo "the punktfunk-bun RPM must be among the inputs — web and scripting run on it" >&2; exit 1; }
 fi
 
-# A sysext carries only /usr. Relocate the RPMs' /etc payload (the gamescope-session drop-in)
-# under /usr/share/punktfunk/etc/ — punktfunk-sysext copies it into /etc.
+# A sysext carries only /usr. Relocate the RPMs' /etc payload (the gamescope-session drop-in, the
+# scripting AppArmor profile) under /usr/share/punktfunk/etc/ — punktfunk-sysext copies the
+# drop-in into /etc.
 if [ -d "$STAGE/etc" ]; then
   mkdir -p "$STAGE/usr/share/punktfunk/etc"
   cp -a "$STAGE/etc/." "$STAGE/usr/share/punktfunk/etc/"
@@ -119,10 +120,10 @@ fi
 # A sysext carries only /usr, and RPM scriptlets never run from one — so the `systemctl --global
 # enable` the .rpm/.deb do at install time has no equivalent here, and without this the runner would
 # ship present-but-off on exactly the platform (Bazzite / Fedora Atomic) where an operator is least
-# likely to go hunting for it. The game-library scanners are plugins now (design D9), so an
+# likely to go hunting for it. The game-library scanners are plugins (design D9), so an
 # unenabled runner means an empty library.
 #
-# Opt-out is unchanged and still wins: `systemctl --user mask punktfunk-scripting` in the user's own
+# Opt-out wins: `systemctl --user mask punktfunk-scripting` in the user's own
 # ~/.config/systemd/user takes precedence over anything under /usr.
 if [ -f "$STAGE/usr/lib/systemd/user/punktfunk-scripting.service" ]; then
   install -d "$STAGE/usr/lib/systemd/user/default.target.wants"

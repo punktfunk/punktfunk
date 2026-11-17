@@ -74,7 +74,7 @@ let
   # copy of the host then wins the race for the fixed ports and the desktop user's copy fails
   # forever on `bind RTSP 48010: Address already in use` — with every other listener in its log
   # having bound fine, so it reads like a clash with some unrelated program rather than a second
-  # copy of itself. MEASURED 2026-08-14 on a fresh NixOS 26.05 box.
+  # copy of itself.
   #
   # `host.users` is already documented as "the host runs as these users' systemd --user service",
   # so it is the right scope. When it is empty we cannot name the intended user, so fall back to
@@ -83,12 +83,12 @@ let
   #
   # ⚠ The `|` prefix is load-bearing: it makes each entry a TRIGGERING condition, and systemd ORs
   # those. Plain repeated `ConditionUser=` lines are ANDed, so a two-user list would match NOBODY.
-  # Non-triggering conditions on the same unit (punktfunk-web-init's ConditionPathExists) still
-  # have to hold, which is the behaviour we want.
+  # Non-triggering conditions on the same unit (punktfunk-host's and punktfunk-web's
+  # ConditionPathExists) still have to hold, which is the behaviour we want.
   userScope = if cfg.host.users == [ ] then [ "!@system" ] else map (u: "|${u}") cfg.host.users;
 
   # What the seat supervisor, seat-session and the door helper run: useradd/groupadd/usermod,
-  # setpriv/runuser/flock, awk, setfacl, loginctl/systemctl, pkill, a compositor. The system
+  # setpriv/runuser, setfacl, loginctl/systemctl, pkill, a compositor. The system
   # profile carries kwin if the desktop has it; the patched gamescope is the same one the host
   # unit puts on its PATH.
   seatPath = [
@@ -522,7 +522,7 @@ in
       # `punktfunk` is the SECOND group 60-punktfunk.rules needs: it owns the usbip vhci
       # attach/detach nodes, and is deliberately not `input` because writing `attach` materialises
       # an arbitrary emulated USB device — a root-only kernel primitive that must not ride on the
-      # group every gamepad guide tells you to join (security-review 2026-08-05 M-4). Declaring the
+      # group every gamepad guide tells you to join. Declaring the
       # group is not optional: the rule shells out to `chgrp punktfunk`, which fails outright if
       # nothing ever created it, leaving the nodes root-only and the virtual Steam Deck pad unable
       # to attach. Membership follows `host.users`, which is already the explicit "these users run
@@ -542,9 +542,8 @@ in
       };
 
       # NO CAP_SYS_NICE wrapper for the HOST — deliberately, and note there is deliberately one for
-      # the WORKER just below; the difference is the whole point. 0.26.0-1 gave the host a
-      # `security.wrappers.punktfunk-host` carrying `cap_sys_nice=ep` for the GPU-priority lever,
-      # and that broke desktop streaming on every KDE box.
+      # the WORKER just below; the difference is the whole point. A `cap_sys_nice=ep` wrapper on
+      # the host breaks desktop streaming on every KDE box.
       #
       # KWin advertises its restricted Wayland protocols (zkde_screencast_unstable_v1 for the
       # virtual output, org_kde_kwin_fake_input for input) only to a client it can IDENTIFY, by
@@ -579,8 +578,7 @@ in
       # the host falls back to its in-process encoder at default GPU priority — one warn, never a
       # dead session. What the capability buys: PyroWave encodes on the GPU shader cores a game
       # saturates, and every driver tested (NVIDIA and RADV) refuses EVERY elevated
-      # VK_KHR_global_priority class without CAP_SYS_NICE. Measured on an RTX 5070 Ti under load:
-      # encode p99 6.4 -> 4.4 ms.
+      # VK_KHR_global_priority class without CAP_SYS_NICE.
       #
       # Narrow: CAP_SYS_NICE permits raising scheduling priority only — no filesystem, network or
       # user-switching privilege, and the wrapper is capability-based, NOT setuid.
@@ -599,7 +597,7 @@ in
       # ever enters the host's permitted set and the KWin identification above stays intact.
       # NixOS is the one distro family where rtkit is not a given, hence the default here;
       # mkDefault so an operator who runs without rtkit can turn it off (the host then keeps its
-      # pre-0.29 best-effort no-op behaviour, a pacing cost only).
+      # best-effort no-op, a pacing cost only).
       security.rtkit.enable = mkDefault true;
 
       # The unit is the package's own (scripts/punktfunk-host.service); this is its NixOS drop-in.

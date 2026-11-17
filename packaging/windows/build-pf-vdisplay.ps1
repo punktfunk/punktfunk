@@ -1,12 +1,8 @@
 <#
 .SYNOPSIS
-  Build + sign the pf-vdisplay UMDF IddCx virtual-display driver FROM SOURCE, in CI, and stage it for the
-  host installer. This REPLACES the old vendored-prebuilt-binary model (packaging/windows/pf-vdisplay/) -
-  the binary went stale (frozen mid-June while the driver source kept moving), which silently shipped two
-  field bugs: (1) the catalog no longer covered the edited INF (pnputil SPAPI_E_FILE_HASH_NOT_IN_CATALOG on
-  every box), and (2) the binary predated IOCTL_SET_RENDER_ADAPTER that the host needs to pin the IDD render
-  GPU on hybrid/Optimus boxes. Building every release from source keeps the .dll/.inf/.cat in lockstep and
-  ships current driver features.
+  Build + sign the pf-vdisplay UMDF IddCx virtual-display driver FROM SOURCE, in CI, and stage it
+  for the host installer. Building every release from source keeps the .dll/.inf/.cat in lockstep
+  with the driver source, so the catalog always covers the INF it was cut from.
 
 .DESCRIPTION
   Mirrors packaging/windows/drivers/deploy-dev.ps1 but for CI (release build, output to -Out, cert from a
