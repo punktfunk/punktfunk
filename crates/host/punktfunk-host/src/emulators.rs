@@ -683,16 +683,22 @@ fn prepare_as(
 }
 
 /// The emulator opens what a plugin hands it as the session's player, and a plugin's state is
-/// the runner's alone. Each such file gets that player's read ACE, on the file itself and only
-/// while it is the plugin's own; a file outside every plugin's state is left as it is.
+/// the runner's alone. Each such file gets a read ACE on the file itself: that player's while
+/// it is the plugin's own, every account's while it is the host's copy of it
+/// ([`handover::Scratch`]). Any other file is left as it is.
 #[cfg(windows)]
 fn let_player_read(files: &[PathBuf]) {
-    let Some(sid) = crate::windows::theme::session_sid() else {
-        return;
-    };
+    /// `BUILTIN\Users`. A host copy holds game files and no secret, and an installer reads it
+    /// as whoever is signed in.
+    const USERS: &str = "S-1-5-32-545";
+    let session = crate::windows::theme::session_sid();
+    let copies: Vec<PathBuf> = (handover::scratch_base().canonicalize().ok())
+        .into_iter()
+        .collect();
     let mut roots: Vec<PathBuf> = [pf_paths::config_dir(), pf_paths::seat::library_dir()]
         .iter()
         .filter_map(|d| d.join("plugin-state").canonicalize().ok())
+        .chain(copies.iter().cloned())
         .collect();
     roots.dedup();
     for file in files {
@@ -705,7 +711,14 @@ fn let_player_read(files: &[PathBuf]) {
         }) else {
             continue;
         };
-        if let Err(error) = pf_paths_win::grant_read_inside(&real, &own, &sid) {
+        let sid = match copies.iter().any(|c| real.starts_with(c)) {
+            true => USERS,
+            false => match &session {
+                Some(sid) => sid.as_str(),
+                None => continue,
+            },
+        };
+        if let Err(error) = pf_paths_win::grant_read_inside(&real, &own, sid) {
             tracing::warn!(file = %real.display(), %error, "plugin file not opened to the player");
         }
     }
@@ -765,7 +778,8 @@ pub fn units(
     })
 }
 
-/// Each named unit written into `out`, a tar for a folder.
+/// Each named unit written into `out`, a tar for a folder. A unit is one the copy lists
+/// ([`units`]): the listing is where a save folder's own pattern holds.
 pub fn export_units(
     account: Option<&Path>,
     id: &str,
@@ -781,9 +795,17 @@ pub fn export_units(
     })?;
     on_best_in(account, id, |h, e, i| {
         let platform = platform_id(h, platform);
+        let listed = e.units(i, &platform, game)?;
         units
             .iter()
-            .map(|(kind, name)| Ok((*kind, e.export_unit(i, &platform, game, *kind, name, out)?)))
+            .map(|(kind, name)| {
+                if !listed.iter().any(|u| u.kind == *kind && u.name == *name) {
+                    return Err(hermir::Error::Invalid(format!(
+                        "no unit {name} on this copy"
+                    )));
+                }
+                Ok((*kind, e.export_unit(i, &platform, game, *kind, name, out)?))
+            })
             .collect()
     })
 }
@@ -826,6 +848,22 @@ pub fn install_content(
     on_best(id, |h, e, i| {
         e.install_content(i, &platform_id(h, platform), kind, files)
     })
+}
+
+/// Whether `id` keeps the path of a `kind` add-on of `platform`: Ryujinx registers the file
+/// where it lies; every other way copies it in or runs an installer on it.
+pub fn content_keeps_path(id: &str, platform: &str, kind: &str) -> bool {
+    let Ok(h) = open_in(None) else { return false };
+    let Ok(emulator) = h.emulator(id) else {
+        return false;
+    };
+    let content = emulator.entry().content.get(&platform_id(&h, platform));
+    let method = match (content, kind) {
+        (Some(c), "update") => &c.update,
+        (Some(c), "dlc") => &c.dlc,
+        _ => return false,
+    };
+    matches!(method, hermir::ContentMethod::Adapter { adapter, .. } if adapter == "ryujinx")
 }
 
 /// Whether the best copy has `platform`'s firmware; `None` when the platform needs none.
@@ -942,7 +980,7 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
         Some(library_id),
         &spec.value,
         platform,
-        staged.as_deref(),
+        staged.as_ref().map(handover::Scratch::path),
         pad,
         slots,
     ) {
@@ -959,21 +997,32 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU
     }
 }
 
-/// `<plugin-state>/<provider>/firmware/<platform>` in the library this host reads (a seat's is
-/// the copy of the box's), when it is a folder inside that plugin's own state: a link out of it
-/// would hand the emulator files the plugin could never write.
-fn staged_firmware(provider: &str, platform: &str) -> Option<PathBuf> {
-    staged_firmware_in(&pf_paths::seat::library_dir(), provider, platform)
+/// The plain files of `<plugin-state>/<provider>/firmware/<platform>` in the library this host
+/// reads (a seat's is the copy of the box's), copied into a scratch folder of the host's own.
+/// hermir reads the copy: a link the plugin swaps into its folder reaches nothing.
+fn staged_firmware(provider: &str, platform: &str) -> Option<handover::Scratch> {
+    let dir = staged_firmware_in(&pf_paths::seat::library_dir(), provider, platform)?;
+    handover::staged(&dir)
+        .inspect_err(
+            |error| tracing::warn!(provider, platform, %error, "staged firmware not copied"),
+        )
+        .ok()
 }
 
-fn staged_firmware_in(base: &Path, provider: &str, platform: &str) -> Option<PathBuf> {
+/// That folder, held open below the plugin's state folder ([`handover::Dir`]), when it is one.
+/// The walk starts at that folder's canonical path: only the person can make it a link, since
+/// no sandbox binds the state root.
+fn staged_firmware_in(base: &Path, provider: &str, platform: &str) -> Option<handover::Dir> {
+    let mut parts = Path::new(provider).components();
+    let (Some(std::path::Component::Normal(_)), None) = (parts.next(), parts.next()) else {
+        return None;
+    };
     let own = base
         .join("plugin-state")
         .join(provider)
         .canonicalize()
         .ok()?;
-    let dir = own.join("firmware").join(platform).canonicalize().ok()?;
-    (dir.is_dir() && dir.starts_with(&own)).then_some(dir)
+    handover::Dir::open(&own, &Path::new("firmware").join(platform), false).ok()
 }
 
 /// A core name as the buildbot spells it: `snes9x`, `mupen64plus_next`.
@@ -986,6 +1035,572 @@ pub fn valid_core(core: &str) -> bool {
 /// The grant a plugin's request asks for: read-only, on the emulator's folder.
 pub fn grant_target(id: &str) -> (PathBuf, bool) {
     (home_of(id), false)
+}
+
+/// Files a plugin hands the host, or takes back, in a folder it may rewrite while the host works:
+/// its own state folder, or a game folder in a root it may reach. A path is walked below that
+/// root one real folder at a time and its file opened without following a link: a link swapped
+/// in after a check reaches nothing. hermir reads and writes a [`Scratch`] folder of the
+/// host's own, or a [`mirror`] of the plugin's content there. Only a file an emulator keeps by
+/// its path goes to hermir as it lies, checked and held ([`hold`]).
+pub(crate) mod handover {
+    use std::ffi::OsStr;
+    use std::fs::File;
+    use std::io;
+    use std::path::{Component, Path, PathBuf};
+
+    /// A folder below a plugin's state folder, held open.
+    pub(crate) struct Dir {
+        path: PathBuf,
+        #[cfg(unix)]
+        fd: std::os::fd::OwnedFd,
+        #[cfg(windows)]
+        root: PathBuf,
+        /// Each folder from the root down, open without delete sharing: none is renamed away.
+        #[cfg(windows)]
+        _held: Vec<File>,
+    }
+
+    fn refused(what: &Path) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{} is no plain folder or file below the state folder",
+                what.display()
+            ),
+        )
+    }
+
+    /// `name` when it is one plain path component.
+    fn plain(name: &OsStr) -> io::Result<&OsStr> {
+        let mut parts = Path::new(name).components();
+        match (parts.next(), parts.next()) {
+            (Some(Component::Normal(n)), None) if n == name => Ok(name),
+            _ => Err(refused(Path::new(name))),
+        }
+    }
+
+    /// `file` when it is a plain file, not a folder, a pipe or a device.
+    fn plain_file(file: File, name: &OsStr) -> io::Result<File> {
+        if file.metadata()?.is_file() {
+            return Ok(file);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is no plain file", Path::new(name).display()),
+        ))
+    }
+
+    impl Dir {
+        /// `rel` below `root`, a canonical folder its plugin can't replace: each component a
+        /// real folder, never a link, made when `make` and missing. `..` or an absolute `rel` is
+        /// refused.
+        pub(crate) fn open(root: &Path, rel: &Path, make: bool) -> io::Result<Dir> {
+            let names = rel
+                .components()
+                .map(|c| match c {
+                    Component::Normal(name) => Ok(name),
+                    _ => Err(refused(rel)),
+                })
+                .collect::<io::Result<Vec<_>>>()?;
+            sys::open(root, &names, make)
+        }
+
+        /// The plain file `name` in this folder, opened without following a link.
+        pub(crate) fn read(&self, name: &OsStr) -> io::Result<File> {
+            plain_file(sys::read(self, plain(name)?)?, name)
+        }
+
+        /// A new file `name` in this folder, in place of a file or link of that name.
+        pub(crate) fn create(&self, name: &OsStr) -> io::Result<File> {
+            sys::create(self, plain(name)?)
+        }
+    }
+
+    /// A fresh folder of the host's own, outside every root a plugin may bind; it goes when
+    /// dropped.
+    pub(crate) struct Scratch(PathBuf);
+
+    /// Where every [`Scratch`] lives: owner-only, in the host's config folder.
+    pub(crate) fn scratch_base() -> PathBuf {
+        pf_paths::config_dir().join("emulator-files")
+    }
+
+    impl Scratch {
+        pub(crate) fn new() -> io::Result<Scratch> {
+            Self::new_in(&scratch_base())
+        }
+
+        pub(crate) fn new_in(base: &Path) -> io::Result<Scratch> {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            pf_paths::create_private_dir(base)?;
+            let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // What a crashed or restarted host left: no folder outlives the longest install,
+            // four hours, so one older than six is nobody's.
+            if next == 0 {
+                let stale = std::time::Duration::from_secs(6 * 3600);
+                for entry in std::fs::read_dir(base)?.flatten() {
+                    let age = entry.metadata().and_then(|m| m.modified());
+                    if age.is_ok_and(|at| at.elapsed().is_ok_and(|age| age > stale)) {
+                        let _ = std::fs::remove_dir_all(entry.path());
+                    }
+                }
+            }
+            let dir = base.join(format!("{}-{next}", std::process::id()));
+            // One of this name is a dead process's.
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir(&dir)?;
+            Ok(Scratch(dir))
+        }
+
+        pub(crate) fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The plain files directly in `dir`, hard-linked into a new [`Scratch`] under their own
+    /// names, copied where no link can be made and on Windows, where an installer reads them
+    /// as the player ([`link`]). A link or a folder in it is left out.
+    pub(crate) fn staged(dir: &Dir) -> io::Result<Scratch> {
+        staged_in(dir, &scratch_base())
+    }
+
+    pub(crate) fn staged_in(dir: &Dir, base: &Path) -> io::Result<Scratch> {
+        let scratch = Scratch::new_in(base)?;
+        for entry in std::fs::read_dir(&dir.path)?.flatten() {
+            let name = entry.file_name();
+            if let Ok(mut from) = dir.read(&name) {
+                let to = scratch.path().join(&name);
+                if !(cfg!(unix) && sys::hard_link(&from, dir, &name, &to).is_ok()) {
+                    io::copy(&mut from, &mut File::create_new(&to)?)?;
+                }
+            }
+        }
+        Ok(scratch)
+    }
+
+    /// The host's file `from` copied into `into` under its own name. The copy is written
+    /// beside it and renamed over it, so what was there stays whole until the new bytes are.
+    pub(crate) fn place(from: &Path, into: &Dir) -> io::Result<()> {
+        let name = plain(from.file_name().ok_or_else(|| refused(from))?)?;
+        let mut part = name.to_os_string();
+        part.push(".punktfunk-part");
+        let written = io::copy(&mut File::open(from)?, &mut into.create(&part)?)
+            .and_then(|_| sys::rename(into, &part, name));
+        if written.is_err() {
+            let _ = sys::remove(into, &part);
+        }
+        written
+    }
+
+    /// A plain file below a root its plugin may rewrite, opened without following a link and
+    /// held open: for an emulator that keeps the path it is given, where a copy would only be
+    /// a second file to store. On Windows the handles pin the name: while this lives, neither
+    /// the file nor a folder above it is renamed or replaced, so what hermir opens by that
+    /// path is this file. Elsewhere a name can't be pinned; hermir reads the file's ticket by
+    /// path, as the host's own account, and tells the plugin none of what it read.
+    pub(crate) struct Held {
+        path: PathBuf,
+        _dir: Dir,
+        _file: File,
+    }
+
+    impl Held {
+        pub(crate) fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    /// [`Held`] for `rel` below `root`. A folder, a link or a missing file is refused.
+    pub(crate) fn hold(root: &Path, rel: &Path) -> io::Result<Held> {
+        let name = rel.file_name().ok_or_else(|| refused(rel))?;
+        let dir = Dir::open(root, rel.parent().unwrap_or(Path::new("")), false)?;
+        let file = dir.read(name)?;
+        Ok(Held {
+            path: root.join(rel),
+            _dir: dir,
+            _file: file,
+        })
+    }
+
+    /// `rel` below `root`, a plain file or a folder, mirrored at `into.join(rel)`, a place in
+    /// a [`Scratch`], as it is now:
+    /// each folder made, each plain file linked ([`link`]), nothing taken through a link. A file
+    /// in a title folder (`meta/meta.xml` up to four folders above it, where hermir looks)
+    /// brings that whole folder. Answers the mirror's path for `rel`.
+    pub(crate) fn mirror(root: &Path, rel: &Path, into: &Path) -> io::Result<PathBuf> {
+        let at = into.join(rel);
+        if Dir::open(root, rel, false).is_ok() {
+            tree(root, rel, into)?;
+            return Ok(at);
+        }
+        let parent = rel.parent().unwrap_or(Path::new(""));
+        let name = rel.file_name().ok_or_else(|| refused(rel))?;
+        let title = parent.ancestors().take(4).find(|a| {
+            Dir::open(root, &a.join("meta"), false)
+                .and_then(|meta| meta.read("meta.xml".as_ref()))
+                .is_ok()
+        });
+        if let Some(title) = title {
+            tree(root, title, into)?;
+        }
+        let dir = Dir::open(root, parent, false)?;
+        std::fs::create_dir_all(into.join(parent))?;
+        link(dir.read(name)?, &dir, name, &at)?;
+        Ok(at)
+    }
+
+    /// The folder `rel` below `root` mirrored at `into.join(rel)`. Only names come from the
+    /// listing; each is opened below the held folder. A link, pipe or device is left out; any
+    /// other entry that fails fails the mirror, so no half a title is installed.
+    fn tree(root: &Path, rel: &Path, into: &Path) -> io::Result<()> {
+        let dir = Dir::open(root, rel, false)?;
+        let to = into.join(rel);
+        std::fs::create_dir_all(&to)?;
+        for entry in std::fs::read_dir(&dir.path)? {
+            let entry = entry?;
+            let (name, kind) = (entry.file_name(), entry.file_type()?);
+            if kind.is_dir() {
+                tree(root, &rel.join(&name), into)?;
+            } else if kind.is_file() {
+                link(dir.read(&name)?, &dir, &name, &to.join(&name))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `file`, open as `name` in `dir`, at the host's own `dest`, in place of what was there: a
+    /// hard link where the system makes one, else a copy. Windows always copies, since a read
+    /// is granted only on a file with one name (`let_player_read`).
+    fn link(mut file: File, dir: &Dir, name: &OsStr, dest: &Path) -> io::Result<()> {
+        // Made beside `dest` and renamed over it: a copy that fails leaves the old file whole.
+        let mut part = dest.as_os_str().to_os_string();
+        part.push(".punktfunk-part");
+        let part = PathBuf::from(part);
+        let _ = std::fs::remove_file(&part);
+        let made = if cfg!(unix) && sys::hard_link(&file, dir, name, &part).is_ok() {
+            Ok(())
+        } else {
+            File::create_new(&part).and_then(|mut to| io::copy(&mut file, &mut to).map(drop))
+        };
+        let made = made.and_then(|()| std::fs::rename(&part, dest));
+        if made.is_err() {
+            let _ = std::fs::remove_file(&part);
+        }
+        made
+    }
+
+    #[cfg(unix)]
+    mod sys {
+        use super::{refused, Dir};
+        use std::ffi::{CString, OsStr};
+        use std::fs::File;
+        use std::io;
+        use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::path::Path;
+
+        fn c(name: &OsStr) -> io::Result<CString> {
+            Ok(CString::new(name.as_bytes())?)
+        }
+
+        /// `name` in `dir`, never through a link.
+        fn at(
+            dir: &OwnedFd,
+            name: &OsStr,
+            flags: libc::c_int,
+            mode: libc::c_uint,
+        ) -> io::Result<OwnedFd> {
+            let name = c(name)?;
+            let flags = flags | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            // SAFETY: `dir` is open for the call and `name` is NUL-terminated and outlives it.
+            let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags, mode) };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: a non-negative `openat` result is a new descriptor nothing else owns.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        }
+
+        pub(super) fn open(root: &Path, names: &[&OsStr], make: bool) -> io::Result<Dir> {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let mut fd: OwnedFd = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(root)?
+                .into();
+            for name in names {
+                if make {
+                    let c_name = c(name)?;
+                    // SAFETY: `fd` is open for the call; `c_name` is NUL-terminated and outlives it.
+                    if unsafe { libc::mkdirat(fd.as_raw_fd(), c_name.as_ptr(), 0o777) } != 0 {
+                        let e = io::Error::last_os_error();
+                        if e.kind() != io::ErrorKind::AlreadyExists {
+                            return Err(e);
+                        }
+                    }
+                }
+                fd = at(&fd, name, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(|e| {
+                    // A link fails as a file does; only a link is a way out.
+                    match at(&fd, name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
+                        Err(probe) if probe.raw_os_error() == Some(libc::ELOOP) => {
+                            refused(Path::new(name))
+                        }
+                        _ => e,
+                    }
+                })?;
+            }
+            let path = names.iter().fold(root.to_path_buf(), |p, n| p.join(n));
+            Ok(Dir { path, fd })
+        }
+
+        pub(super) fn read(dir: &Dir, name: &OsStr) -> io::Result<File> {
+            at(&dir.fd, name, libc::O_RDONLY | libc::O_NONBLOCK, 0).map(File::from)
+        }
+
+        /// A hard link at `dest` to the open `file` itself, through its `/proc` entry, so no
+        /// path the plugin can change is resolved.
+        pub(super) fn hard_link(file: &File, _: &Dir, _: &OsStr, dest: &Path) -> io::Result<()> {
+            let from = c(OsStr::new(&format!("/proc/self/fd/{}", file.as_raw_fd())))?;
+            let to = c(dest.as_os_str())?;
+            // SAFETY: both strings are NUL-terminated and outlive the call.
+            let linked = unsafe {
+                libc::linkat(
+                    libc::AT_FDCWD,
+                    from.as_ptr(),
+                    libc::AT_FDCWD,
+                    to.as_ptr(),
+                    libc::AT_SYMLINK_FOLLOW,
+                )
+            };
+            if linked != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        /// `from` renamed to `to`, both in `dir`. A file or link at `to` is replaced itself.
+        pub(super) fn rename(dir: &Dir, from: &OsStr, to: &OsStr) -> io::Result<()> {
+            let (from, to) = (c(from)?, c(to)?);
+            let fd = dir.fd.as_raw_fd();
+            // SAFETY: `dir.fd` is open for the call; both names are NUL-terminated and outlive it.
+            if unsafe { libc::renameat(fd, from.as_ptr(), fd, to.as_ptr()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        /// The file or link `name` in `dir`, removed.
+        pub(super) fn remove(dir: &Dir, name: &OsStr) -> io::Result<()> {
+            let name = c(name)?;
+            // SAFETY: `dir.fd` is open for the call; `name` is NUL-terminated and outlives it.
+            if unsafe { libc::unlinkat(dir.fd.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        pub(super) fn create(dir: &Dir, name: &OsStr) -> io::Result<File> {
+            let c_name = c(name)?;
+            // SAFETY: `dir.fd` is open for the call; `c_name` is NUL-terminated and outlives it.
+            // Flags 0 remove a file or the link itself, never a folder or what a link names.
+            if unsafe { libc::unlinkat(dir.fd.as_raw_fd(), c_name.as_ptr(), 0) } != 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() != io::ErrorKind::NotFound {
+                    return Err(e);
+                }
+            }
+            let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL;
+            at(&dir.fd, name, flags, 0o666)
+                .map(File::from)
+                .map_err(|e| match e.kind() {
+                    io::ErrorKind::AlreadyExists => refused(&dir.path.join(name)),
+                    _ => e,
+                })
+        }
+    }
+
+    #[cfg(windows)]
+    mod sys {
+        use super::{refused, Dir};
+        use std::ffi::OsStr;
+        use std::fs::File;
+        use std::io;
+        use std::path::{Path, PathBuf};
+
+        enum Kind {
+            Dir,
+            Read,
+            /// A new file.
+            Create,
+            /// A new file that goes when its handle closes.
+            Pin,
+            /// What is there now, opened to delete: a link itself, never what it names.
+            Old,
+        }
+
+        /// `path` opened without following a reparse point, kept only when its real path lies
+        /// inside `root`, only [`Kind::Old`] when it is a reparse point, and for [`Kind::Dir`]
+        /// only when it is a folder. A file made elsewhere through a link swapped in meanwhile
+        /// is deleted again through its own handle.
+        fn checked(path: &Path, root: &Path, kind: Kind) -> io::Result<File> {
+            use ::windows::Win32::Storage::FileSystem::{
+                DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+                FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE,
+                FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            };
+            use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+            let flags = FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS;
+            let flags = match kind {
+                Kind::Pin => flags | FILE_FLAG_DELETE_ON_CLOSE,
+                _ => flags,
+            };
+            let mut options = std::fs::OpenOptions::new();
+            options
+                .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+                .custom_flags(flags.0);
+            match kind {
+                Kind::Dir | Kind::Read => options.read(true),
+                Kind::Create | Kind::Pin => options
+                    .write(true)
+                    .create_new(true)
+                    .access_mode((FILE_GENERIC_WRITE | DELETE).0),
+                Kind::Old => options.access_mode((DELETE | FILE_READ_ATTRIBUTES).0),
+            };
+            let file = options.open(path)?;
+            let meta = file.metadata()?;
+            let link = meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0;
+            let inside = (!link || matches!(kind, Kind::Old))
+                && final_path(&file).is_some_and(|real| real.starts_with(root));
+            if !inside {
+                if matches!(kind, Kind::Create)
+                    && let Err(error) = delete(&file)
+                {
+                    tracing::warn!(%error, "file made outside a state folder not deleted");
+                }
+                return Err(refused(path));
+            }
+            if matches!(kind, Kind::Dir) && !meta.is_dir() {
+                return Err(io::ErrorKind::NotADirectory.into());
+            }
+            Ok(file)
+        }
+
+        /// Where `file` really is, in the spelling `canonicalize` gives.
+        fn final_path(file: &File) -> Option<PathBuf> {
+            use ::windows::Win32::Foundation::HANDLE;
+            use ::windows::Win32::Storage::FileSystem::{
+                GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED,
+            };
+            use std::os::windows::{ffi::OsStringExt as _, io::AsRawHandle as _};
+            let mut buf = vec![0u16; 32_768];
+            let handle = HANDLE(file.as_raw_handle());
+            // SAFETY: `handle` is `file`'s, open for the call, which writes at most `buf.len()`.
+            let n = unsafe { GetFinalPathNameByHandleW(handle, &mut buf, FILE_NAME_NORMALIZED) };
+            let n = n as usize;
+            (n > 0 && n < buf.len()).then(|| std::ffi::OsString::from_wide(&buf[..n]).into())
+        }
+
+        /// `file` goes when its last handle closes.
+        fn delete(file: &File) -> io::Result<()> {
+            use ::windows::Win32::Foundation::HANDLE;
+            use ::windows::Win32::Storage::FileSystem::{
+                FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+            };
+            use std::os::windows::io::AsRawHandle as _;
+            let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+            let size = std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32;
+            // SAFETY: the handle is `file`'s, opened with DELETE; `info` lives for the call and
+            // `size` is its size.
+            unsafe {
+                SetFileInformationByHandle(
+                    HANDLE(file.as_raw_handle()),
+                    FileDispositionInfo,
+                    (&raw const info).cast(),
+                    size,
+                )
+            }
+            .map_err(io::Error::other)
+        }
+
+        pub(super) fn open(root: &Path, names: &[&OsStr], make: bool) -> io::Result<Dir> {
+            let mut path = root.to_path_buf();
+            let mut held = vec![checked(&path, root, Kind::Dir)?];
+            for name in names {
+                path.push(name);
+                let next = match checked(&path, root, Kind::Dir) {
+                    Err(e) if make && e.kind() == io::ErrorKind::NotFound => make_dir(&path, root),
+                    next => next,
+                };
+                held.push(next?);
+            }
+            Ok(Dir {
+                path,
+                root: root.to_path_buf(),
+                _held: held,
+            })
+        }
+
+        /// The new folder `path`, its parent held open. A file of the host's own sits in that
+        /// parent meanwhile, and only an empty folder turns into a mount point: the new folder
+        /// lands inside.
+        fn make_dir(path: &Path, root: &Path) -> io::Result<File> {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let pin = path.with_file_name(format!(".punktfunk-{}-{n}", std::process::id()));
+            let _pin = checked(&pin, root, Kind::Pin)?;
+            match std::fs::create_dir(path) {
+                Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+                _ => {}
+            }
+            checked(path, root, Kind::Dir)
+        }
+
+        pub(super) fn read(dir: &Dir, name: &OsStr) -> io::Result<File> {
+            checked(&dir.path.join(name), &dir.root, Kind::Read)
+        }
+
+        /// A hard link at `dest` to `name` in `dir`. `_file` holds that name without delete
+        /// sharing, as `dir` holds every folder above it, so the name still is that file.
+        pub(super) fn hard_link(
+            _file: &File,
+            dir: &Dir,
+            name: &OsStr,
+            dest: &Path,
+        ) -> io::Result<()> {
+            std::fs::hard_link(dir.path.join(name), dest)
+        }
+
+        /// `from` renamed to `to`, both in `dir`, whose folders are all held open. A file or
+        /// link at `to` is replaced itself, never what a link names.
+        pub(super) fn rename(dir: &Dir, from: &OsStr, to: &OsStr) -> io::Result<()> {
+            std::fs::rename(dir.path.join(from), dir.path.join(to))
+        }
+
+        /// The file or link `name` in `dir`, removed through its own handle.
+        pub(super) fn remove(dir: &Dir, name: &OsStr) -> io::Result<()> {
+            delete(&checked(&dir.path.join(name), &dir.root, Kind::Old)?)
+        }
+
+        /// What is there now goes through its own handle, opened inside the root, before the
+        /// new file is made.
+        pub(super) fn create(dir: &Dir, name: &OsStr) -> io::Result<File> {
+            let path = dir.path.join(name);
+            match checked(&path, &dir.root, Kind::Old) {
+                Ok(old) => delete(&old)?,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            checked(&path, &dir.root, Kind::Create)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1153,16 +1768,123 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         let base = tempfile::tempdir().unwrap();
         let firmware = base.path().join("plugin-state/rom-manager/firmware");
         std::fs::create_dir_all(firmware.join("ps2")).unwrap();
-        let found = staged_firmware_in(base.path(), "rom-manager", "ps2");
-        assert_eq!(found, firmware.join("ps2").canonicalize().ok());
-        assert_eq!(staged_firmware_in(base.path(), "rom-manager", "psx"), None);
-        assert_eq!(staged_firmware_in(base.path(), "other", "ps2"), None);
+        let found = |provider, platform| staged_firmware_in(base.path(), provider, platform);
+        assert!(found("rom-manager", "ps2").is_some());
+        assert!(found("rom-manager", "psx").is_none());
+        assert!(found("other", "ps2").is_none());
+        assert!(found("rom-manager", "..").is_none());
         #[cfg(unix)]
         {
             let outside = tempfile::tempdir().unwrap();
             std::os::unix::fs::symlink(outside.path(), firmware.join("psx")).unwrap();
-            assert_eq!(staged_firmware_in(base.path(), "rom-manager", "psx"), None);
+            assert!(found("rom-manager", "psx").is_none());
+            // A state folder the person moved elsewhere by a link is read where it lies.
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(elsewhere.path().join("firmware/ps2")).unwrap();
+            std::os::unix::fs::symlink(elsewhere.path(), base.path().join("plugin-state/linked"))
+                .unwrap();
+            assert!(found("linked", "ps2").is_some());
+            assert!(found("linked/firmware", "..").is_none());
         }
+    }
+
+    /// Content a plugin hands over is mirrored with its title folder, and a link the plugin
+    /// planted, at the file or inside the folder, brings nothing from outside.
+    #[cfg(unix)]
+    #[test]
+    fn a_content_mirror_takes_nothing_through_a_link() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, outside) = (tmp.path().join("state"), tmp.path().join("outside"));
+        let title = state.join("dl/title");
+        std::fs::create_dir_all(title.join("meta")).unwrap();
+        std::fs::create_dir_all(title.join("code")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), b"theirs").unwrap();
+        std::fs::write(title.join("meta/meta.xml"), b"<title_id>0</title_id>").unwrap();
+        std::fs::write(title.join("code/app.rpx"), b"app").unwrap();
+        symlink(outside.join("secret"), title.join("code/stolen")).unwrap();
+        symlink(outside.join("secret"), state.join("dl/key.rap")).unwrap();
+        std::fs::write(state.join("dl/plain.rap"), b"rap").unwrap();
+        let state = state.canonicalize().unwrap();
+        let into = tmp.path().join("mirror");
+
+        let at = handover::mirror(&state, Path::new("dl/title/code/app.rpx"), &into).unwrap();
+        assert_eq!(at, into.join("dl/title/code/app.rpx"));
+        assert_eq!(std::fs::read(&at).unwrap(), b"app");
+        assert!(into.join("dl/title/meta/meta.xml").is_file());
+        assert!(!into.join("dl/title/code/stolen").exists());
+
+        let rap = handover::mirror(&state, Path::new("dl/plain.rap"), &into).unwrap();
+        assert_eq!(std::fs::read(&rap).unwrap(), b"rap");
+        assert!(handover::mirror(&state, Path::new("dl/key.rap"), &into).is_err());
+        assert!(!into.join("dl/key.rap").exists());
+
+        // A file an emulator keeps by its path is handed over where it lies, held; a link or a
+        // folder is not.
+        let held = handover::hold(&state, Path::new("dl/plain.rap")).unwrap();
+        assert_eq!(held.path(), state.join("dl/plain.rap"));
+        assert!(handover::hold(&state, Path::new("dl/key.rap")).is_err());
+        assert!(handover::hold(&state, Path::new("dl/title")).is_err());
+        drop(held);
+
+        // A file the plugin replaced under the same name is mirrored anew.
+        std::fs::remove_file(state.join("dl/plain.rap")).unwrap();
+        std::fs::write(state.join("dl/plain.rap"), b"rap v2").unwrap();
+        handover::mirror(&state, Path::new("dl/plain.rap"), &into).unwrap();
+        assert_eq!(std::fs::read(&rap).unwrap(), b"rap v2");
+    }
+
+    /// A plugin's link in its state folder reaches nothing outside it: a placed file replaces
+    /// the link, a linked folder or file is refused, and staged firmware leaves links out.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_a_state_folder_reaches_nothing_outside() {
+        use std::ffi::OsStr;
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, outside) = (tmp.path().join("state"), tmp.path().join("outside"));
+        std::fs::create_dir_all(state.join("out")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("hooks.json"), b"theirs").unwrap();
+        symlink(outside.join("hooks.json"), state.join("out/Mcd001.ps2")).unwrap();
+        symlink(&outside, state.join("linked")).unwrap();
+        symlink(outside.join("hooks.json"), state.join("from.ps2")).unwrap();
+        std::fs::write(state.join("plain.ps2"), b"plain").unwrap();
+        let state = state.canonicalize().unwrap();
+        let scratch = tmp.path().join("scratch");
+
+        let exported = handover::Scratch::new_in(&scratch).unwrap();
+        let unit = exported.path().join("Mcd001.ps2");
+        std::fs::write(&unit, b"save").unwrap();
+        let out = handover::Dir::open(&state, Path::new("out"), true).unwrap();
+        handover::place(&unit, &out).unwrap();
+        assert_eq!(
+            std::fs::read(outside.join("hooks.json")).unwrap(),
+            b"theirs"
+        );
+        assert_eq!(
+            std::fs::read(state.join("out/Mcd001.ps2")).unwrap(),
+            b"save"
+        );
+        for rel in ["linked", "linked/new", "../outside"] {
+            assert!(
+                handover::Dir::open(&state, Path::new(rel), true).is_err(),
+                "{rel}"
+            );
+        }
+        assert!(!outside.join("new").exists());
+
+        let own = handover::Dir::open(&state, Path::new(""), false).unwrap();
+        assert!(own.read(OsStr::new("from.ps2")).is_err());
+        assert!(own.read(OsStr::new("out/Mcd001.ps2")).is_err());
+        let staged = handover::staged_in(&own, &scratch).unwrap();
+        let names: Vec<_> = std::fs::read_dir(staged.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names, ["plain.ps2"]);
     }
 
     #[test]

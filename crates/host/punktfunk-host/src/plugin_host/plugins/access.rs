@@ -1654,7 +1654,13 @@ impl AccessStore {
 
     /// May the runner see `real`, asked for as `spelled`, by [`bind_refusal`]? A missing root is
     /// the drop-in's `-` prefix's business, and a root may be a file.
-    fn may_bind(&self, spelled: &Path, real: &Path, write: bool, operator: bool) -> bool {
+    pub(crate) fn may_bind(
+        &self,
+        spelled: &Path,
+        real: &Path,
+        write: bool,
+        operator: bool,
+    ) -> bool {
         let facts = PathFacts {
             is_dir: true,
             ..path_facts(real)
