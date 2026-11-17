@@ -48,7 +48,11 @@ const Cover: FC<{ art?: string }> = ({ art }) => (
 	</div>
 );
 
-/** The row frame: who, what, the facts line, then its actions. Rows rise in one after another. */
+/**
+ * The row frame: who, what, the facts line, then its actions; the folded details under them, at
+ * the row's width. From `md` the actions drop below text that would get under 16rem. Rows rise in
+ * one after another.
+ */
 const Frame: FC<{
 	lead: ReactNode;
 	title: ReactNode;
@@ -58,15 +62,19 @@ const Frame: FC<{
 }> = ({ lead, title, facts, details, actions }) => (
 	<motion.li
 		variants={ROW}
-		className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
+		className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 py-3 first:pt-0 last:pb-0"
 	>
-		<div className="flex w-10 shrink-0 items-center justify-center">{lead}</div>
-		<div className="min-w-0 flex-1">
-			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">{title}</div>
-			<p className="mt-0.5 text-xs text-muted-foreground">{facts}</p>
-			{details}
+		<div className="flex w-10 items-center justify-center">{lead}</div>
+		<div className="flex items-center gap-x-3 gap-y-2 md:flex-wrap">
+			<div className="min-w-0 flex-1 md:basis-64">
+				<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+					{title}
+				</div>
+				<p className="mt-0.5 text-xs text-muted-foreground">{facts}</p>
+			</div>
+			<div className="ml-auto flex shrink-0 items-center gap-1">{actions}</div>
 		</div>
-		<div className="flex shrink-0 items-center gap-1">{actions}</div>
+		{details && <div className="col-start-2">{details}</div>}
 	</motion.li>
 );
 
@@ -99,13 +107,16 @@ const Field: FC<{ label: string; value: string }> = ({ label, value }) => (
 	</div>
 );
 
-/** The numbers behind a row, folded: a fact is a line in a disclosure (R4). */
+/**
+ * The numbers behind a row, folded: a fact is a line in a disclosure (R4). Its content is a size
+ * container, so a grid inside picks its columns from the room it has.
+ */
 const Details: FC<{ children: ReactNode }> = ({ children }) => (
 	<details className="group mt-1">
 		<summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
 			{m.common_details()}
 		</summary>
-		<div className="mt-2">{children}</div>
+		<div className="@container mt-2">{children}</div>
 	</details>
 );
 
@@ -269,7 +280,7 @@ export const SessionRowView: FC<
 				<Details>
 					<p className="text-xs text-muted-foreground">{more.join(" · ")}</p>
 					{stream && (
-						<dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+						<dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 break-words @lg:grid-cols-4">
 							{streamFields(stream, info).map(([label, value]) => (
 								<Field key={label} label={label} value={value} />
 							))}
