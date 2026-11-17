@@ -351,9 +351,37 @@ pub(crate) fn sync(state: &Arc<AppState>) -> Result<()> {
 ///
 /// The launch is read live: no `/launch` → drop every datagram (nothing on this port is
 /// legitimate yet; `accept_connect` agrees). With a launch, only the owner's IP passes.
+///
+/// ENet dispatches what a receive pass read only once `receive` reports none. So a pass's
+/// first read waits up to `idle`, the loop's tick, and every read after a datagram is
+/// non-blocking: the pass ends at the first empty read, not one `idle` later.
 struct OwnerFilteredSocket {
     inner: UdpSocket,
     state: Arc<AppState>,
+    /// The read timeout of a pass's first read: [`IDLE_TICK`] in service.
+    idle: Duration,
+    /// The socket is non-blocking: this pass read a datagram.
+    draining: bool,
+}
+
+impl OwnerFilteredSocket {
+    fn new(inner: UdpSocket, state: Arc<AppState>, idle: Duration) -> OwnerFilteredSocket {
+        OwnerFilteredSocket {
+            inner,
+            state,
+            idle,
+            draining: false,
+        }
+    }
+
+    /// Non-blocking while a pass drains what is queued; blocking under `idle` otherwise.
+    fn drain(&mut self, on: bool) -> std::io::Result<()> {
+        if self.draining != on {
+            self.inner.set_nonblocking(on)?;
+            self.draining = on;
+        }
+        Ok(())
+    }
 }
 
 impl rusty_enet::Socket for OwnerFilteredSocket {
@@ -362,11 +390,11 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
 
     fn init(&mut self, opts: rusty_enet::SocketOptions) -> Result<(), std::io::Error> {
         rusty_enet::Socket::init(&mut self.inner, opts)?;
-        // Blocking socket, 2 ms read timeout, re-asserted after inner init (which may set
-        // nonblocking). Idle tick is the empty receive; an arriving datagram wakes immediately.
-        // `receive` maps the timeout back to the non-blocking contract rusty_enet expects.
+        // Blocking under the `idle` read timeout, re-asserted after the inner init sets
+        // non-blocking. `receive` maps the timeout to the none rusty_enet expects.
         self.inner.set_nonblocking(false)?;
-        self.inner.set_read_timeout(Some(Duration::from_millis(2)))
+        self.draining = false;
+        self.inner.set_read_timeout(Some(self.idle))
     }
 
     fn send(&mut self, address: Self::Address, buffer: &[u8]) -> Result<usize, std::io::Error> {
@@ -377,12 +405,14 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
         &mut self,
         buffer: &mut [u8; rusty_enet::MTU_MAX],
     ) -> Result<Option<(Self::Address, rusty_enet::PacketReceived)>, std::io::Error> {
-        // Keep reading past a dropped non-owner datagram so it cannot starve an owner one, but
-        // yield after `MAX_DROPS_PER_RECEIVE` so ENet's ACK and timeout pass still runs.
-        // Timeout is `WouldBlock` on Unix and `TimedOut` on Windows; both map to `Ok(None)`.
+        // Any datagram, kept or dropped, turns the reads after it non-blocking; every return
+        // without one turns the socket back to the `idle` wait, so the loop never spins. Past
+        // `MAX_DROPS_PER_RECEIVE` drops it reports none, so ENet's ACK and timeout pass runs.
+        // Timeout is `WouldBlock` on Unix and `TimedOut` on Windows; both mean empty.
         for _ in 0..MAX_DROPS_PER_RECEIVE {
             match rusty_enet::Socket::receive(&mut self.inner, buffer) {
                 Ok(Some((addr, received))) => {
+                    self.drain(true)?;
                     // Decide before rusty_enet allocates per-peer reassembly. No live
                     // launch → drop; launch with a known owner IP → keep only that IP.
                     let launch = *self.state.launch.lock().unwrap_or_else(|e| e.into_inner());
@@ -392,26 +422,34 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
                         _ => return Ok(Some((addr, received))),
                     }
                 }
-                Ok(None) => return Ok(None),
+                Ok(None) => break,
                 Err(e)
                     if matches!(
                         e.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    return Ok(None)
+                    break
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    self.drain(false)?;
+                    return Err(e);
+                }
             }
         }
+        self.drain(false)?;
         Ok(None)
     }
 }
 
 /// Datagrams one [`OwnerFilteredSocket::receive`] reads and drops before it reports none.
 /// ENet sends ACKs, checks timeouts and dispatches only once `receive` returns none, and a
-/// flood from another host never leaves the 2 ms read timeout to expire.
+/// flood from another host never leaves the read empty.
 const MAX_DROPS_PER_RECEIVE: usize = 64;
+
+/// The control loop's tick: the longest a receive pass waits for a datagram, and about the
+/// longest the pumps (force-feedback answers, rumble, key repeat) wait between runs.
+const IDLE_TICK: Duration = Duration::from_millis(2);
 
 /// Admit a fresh ENet connect only behind a live `/launch` (Moonlight connects after
 /// RTSP, so there is no legitimate connect without one). When both sides captured the
@@ -428,13 +466,9 @@ fn accept_connect(launch: Option<LaunchSession>, from: Option<IpAddr>) -> bool {
 
 fn spawn(state: Arc<AppState>) -> Result<Running> {
     let socket = UdpSocket::bind(("0.0.0.0", CONTROL_PORT)).context("bind control UDP")?;
-    // Blocking-with-timeout, not nonblocking: `Host::new` calls `init`, which installs
-    // the 2 ms read timeout that wakes the service loop on packet arrival.
+    // `Host::new` calls `init`, which installs the idle read timeout that paces the loop.
     let mut host = Host::new(
-        OwnerFilteredSocket {
-            inner: socket,
-            state: state.clone(),
-        },
+        OwnerFilteredSocket::new(socket, state.clone(), IDLE_TICK),
         HostSettings {
             peer_limit: 4,
             // Moonlight uses CTRL_CHANNEL_COUNT (0x30) and sends gamepad on 0x10+n.
@@ -478,7 +512,10 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                 // below then tells the client.
                 state.end_if_preempted();
                 tick_access(&mut access, &state, &mut peer, &inj_tx);
-                loop {
+                // Events as they come, but a steady stream still yields to the pumps below once
+                // a tick. What ENet holds back goes out first in the next pass.
+                let pump_by = std::time::Instant::now() + IDLE_TICK;
+                while std::time::Instant::now() < pump_by {
                     match host.service() {
                         Ok(Some(event)) => match event {
                             Event::Connect { peer: p, .. } => {
@@ -563,8 +600,8 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                 }
                 peer.pump_outbound(&mut host, &state);
                 peer.pump_repeat(&inj_tx, access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL));
-                // ENet handshake/keepalive/retransmit pacing is the socket's 2 ms read
-                // timeout in the drain above. Do not sleep on top of it.
+                // ENet handshake/keepalive/retransmit pacing is the receive pass's idle wait
+                // above. Do not sleep on top of it.
             }
         })
         .context("spawn control thread")?;
@@ -1096,16 +1133,8 @@ mod tests {
     #[test]
     fn a_non_owner_flood_does_not_hold_receive() {
         use rusty_enet::Socket;
-        let inner = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        inner
-            .set_read_timeout(Some(std::time::Duration::from_millis(500)))
-            .unwrap();
-        let to = inner.local_addr().unwrap();
         let state = super::super::test_state();
-        let mut sock = super::OwnerFilteredSocket {
-            inner,
-            state: state.clone(),
-        };
+        let (mut sock, to) = filtered(&state, std::time::Duration::from_millis(500));
         let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let other: std::net::IpAddr = "10.9.9.9".parse().unwrap();
         *state.launch.lock().unwrap() = launched(Some(other));
@@ -1119,6 +1148,91 @@ mod tests {
             sock.receive(&mut buf).unwrap().is_some(),
             "the datagrams behind the cap stay queued for the owner"
         );
+    }
+
+    /// A filtered socket on loopback, initialised as `Host::new` does, whose first read of a
+    /// pass waits `idle`.
+    fn filtered(
+        state: &std::sync::Arc<crate::host::AppState>,
+        idle: std::time::Duration,
+    ) -> (super::OwnerFilteredSocket, std::net::SocketAddr) {
+        use rusty_enet::Socket;
+        let inner = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let to = inner.local_addr().unwrap();
+        let mut sock = super::OwnerFilteredSocket::new(inner, state.clone(), idle);
+        sock.init(rusty_enet::SocketOptions {
+            receive_buffer: 0,
+            send_buffer: 0,
+        })
+        .unwrap();
+        (sock, to)
+    }
+
+    /// The read after a datagram never waits, since ENet dispatches that datagram only once a
+    /// read comes back empty. The next pass's first read waits the idle timeout again.
+    #[test]
+    fn the_read_after_a_datagram_does_not_wait() {
+        use rusty_enet::Socket;
+        let idle = std::time::Duration::from_millis(500);
+        let state = launched_state();
+        let (mut sock, to) = filtered(&state, idle);
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(&[1], to).unwrap();
+        let mut buf = [0u8; rusty_enet::MTU_MAX];
+        assert!(sock.receive(&mut buf).unwrap().is_some());
+        let drained = std::time::Instant::now();
+        assert!(sock.receive(&mut buf).unwrap().is_none());
+        assert!(
+            drained.elapsed() < idle / 2,
+            "the pass ends at the first empty read"
+        );
+        let waited = std::time::Instant::now();
+        assert!(sock.receive(&mut buf).unwrap().is_none());
+        assert!(waited.elapsed() >= idle / 2, "an idle pass waits");
+    }
+
+    /// Through a real ENet pair: a packet's `Event::Receive` leaves the pass that read it, not
+    /// one idle timeout later.
+    #[test]
+    fn an_enet_packet_is_dispatched_without_the_idle_wait() {
+        use rusty_enet::{Event, Host, HostSettings, Packet};
+        use std::time::{Duration, Instant};
+        let idle = Duration::from_millis(500);
+        let (sock, to) = filtered(&launched_state(), idle);
+        let (tx, rx) = channel();
+        let server = std::thread::spawn(move || {
+            let mut host = Host::new(sock, HostSettings::default()).unwrap();
+            let end = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < end {
+                if let Ok(Some(Event::Receive { .. })) = host.service() {
+                    let _ = tx.send(Instant::now());
+                    return;
+                }
+            }
+        });
+        let client_sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut client = Host::new(client_sock, HostSettings::default()).unwrap();
+        let id = client.connect(to, 1, 0).unwrap().id();
+        let end = Instant::now() + Duration::from_secs(20);
+        while !matches!(client.service(), Ok(Some(Event::Connect { .. }))) {
+            assert!(Instant::now() < end, "the client connects");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let sent = Instant::now();
+        client
+            .peer_mut(id)
+            .send(0, &Packet::reliable(&[1, 2, 3][..]))
+            .unwrap();
+        client.flush();
+        let got = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the host receives the packet");
+        assert!(
+            got.duration_since(sent) < idle / 2,
+            "dispatched {:?} after the send",
+            got.duration_since(sent)
+        );
+        server.join().unwrap();
     }
 
     /// Wrong type table or reason endianness is ignored by the client (frozen stream or
