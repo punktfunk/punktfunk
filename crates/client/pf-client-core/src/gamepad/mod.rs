@@ -159,23 +159,17 @@ impl GamepadService {
     /// binary (video+events on its main thread) cannot use [`start`]. Feed every event
     /// to [`GamepadPump::handle_event`] and [`GamepadPump::tick`] once per loop.
     ///
-    /// Valve HIDAPI is held off here too late — `subsystem` means enumeration already
-    /// ran. Call [`preinit_disable_valve_hidapi`] with the other pre-`SDL_Init` hints.
-    /// This still re-asserts off after an earlier session.
-    pub fn pumped(subsystem: sdl3::GamepadSubsystem) -> (GamepadService, GamepadPump) {
-        set_valve_hidapi(false);
+    /// The pump idles until [`GamepadPump::bind`] hands it the subsystem. What the service
+    /// is told before then waits for the first tick after it.
+    pub fn pumped() -> (GamepadService, GamepadPump) {
         let pads = Arc::new(Mutex::new(Vec::new()));
         let active = Arc::new(Mutex::new(None));
         let (ctl, ctl_rx) = std::sync::mpsc::channel();
         let (menu_tx, menu_rx) = async_channel::unbounded();
         let (shortcut_tx, shortcut_rx) = async_channel::unbounded();
-        let worker = Worker::new(
-            subsystem,
-            pads.clone(),
-            active.clone(),
-            menu_tx,
-            shortcut_tx,
-        );
+        let (p, a) = (pads.clone(), active.clone());
+        let seed: Box<dyn FnOnce(sdl3::GamepadSubsystem) -> Worker> =
+            Box::new(move |subsystem| Worker::new(subsystem, p, a, menu_tx, shortcut_tx));
         (
             GamepadService {
                 pads,
@@ -185,7 +179,11 @@ impl GamepadService {
                 menu_rx,
                 shortcut_rx,
             },
-            GamepadPump { worker, ctl_rx },
+            GamepadPump {
+                worker: None,
+                seed: Some(seed),
+                ctl_rx,
+            },
         )
     }
 
@@ -337,25 +335,41 @@ impl GamepadService {
     }
 }
 
-/// Caller-pumped half of [`GamepadService::pumped`]: events plus a periodic tick.
+/// Caller-pumped half of [`GamepadService::pumped`]: events plus a periodic tick, each a
+/// no-op until [`Self::bind`].
 pub struct GamepadPump {
-    worker: Worker,
+    worker: Option<Worker>,
+    /// Builds the worker at [`Self::bind`].
+    seed: Option<Box<dyn FnOnce(sdl3::GamepadSubsystem) -> Worker>>,
     ctl_rx: Receiver<Ctl>,
 }
 
 impl GamepadPump {
+    /// Start the worker on `subsystem`; a second call does nothing. Valve HIDAPI is held off
+    /// here too late, since enumeration already ran: call [`preinit_disable_valve_hidapi`]
+    /// with the other pre-`SDL_Init` hints. This still re-asserts off after an earlier session.
+    pub fn bind(&mut self, subsystem: sdl3::GamepadSubsystem) {
+        if let Some(seed) = self.seed.take() {
+            set_valve_hidapi(false);
+            self.worker = Some(seed(subsystem));
+        }
+    }
+
     pub fn handle_event(&mut self, event: sdl3::event::Event) {
-        self.worker.handle_event(event);
+        if let Some(w) = &mut self.worker {
+            w.handle_event(event);
+        }
     }
 
     /// Per-wakeup work: ctl drain, shortcut holds, menu repeat, rumble/HID. ≲30 ms keeps
     /// shortcut holds and haptics inside the threaded worker's tolerances.
     pub fn tick(&mut self) {
-        let _ = self.worker.drain_ctl(&self.ctl_rx);
-        self.worker.shortcut_poll();
-        self.worker.menu_poll();
-        self.worker.battery_poll();
-        self.worker.render_feedback();
+        let Some(w) = &mut self.worker else { return };
+        let _ = w.drain_ctl(&self.ctl_rx);
+        w.shortcut_poll();
+        w.menu_poll();
+        w.battery_poll();
+        w.render_feedback();
     }
 
     /// Close every forwarded slot now. [`GamepadService::detach`] only posts `Ctl::Detach`;
@@ -363,7 +377,9 @@ impl GamepadPump {
     /// that silences them. Closes directly rather than draining ctl: this also runs from
     /// `Drop`, and `drain_ctl` would `unwrap` a poisoned lock during unwind.
     pub fn shutdown(&mut self) {
-        self.worker.close_all_slots();
+        if let Some(w) = &mut self.worker {
+            w.close_all_slots();
+        }
     }
 }
 
@@ -372,5 +388,33 @@ impl GamepadPump {
 impl Drop for GamepadPump {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An unbound pump runs nothing: what the service is told waits for the worker, and Auto
+    /// reads no pad, as it did when the pump was built bound.
+    #[test]
+    fn an_unbound_pump_keeps_what_the_service_is_told() {
+        let (service, mut pump) = GamepadService::pumped();
+        service.set_kind_override(GamepadPref::Auto);
+        service.set_forwarding(false);
+        pump.tick();
+        pump.shutdown();
+        assert!(service.active().is_none());
+        let no_pad = if is_steam_deck() {
+            GamepadPref::SteamDeck
+        } else {
+            GamepadPref::Auto
+        };
+        assert_eq!(service.auto_pref(), no_pad);
+        let queued: Vec<Ctl> = pump.ctl_rx.try_iter().collect();
+        assert!(matches!(
+            queued[..],
+            [Ctl::KindOverride(GamepadPref::Auto), Ctl::Forwarding(false)]
+        ));
     }
 }

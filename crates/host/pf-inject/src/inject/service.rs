@@ -150,14 +150,16 @@ impl InjectorSlot {
     }
 }
 
-/// Lazy-open worker over an [`InjectorSlot`]. Exits when every sender drops (host shutdown, or
-/// session end for a pin). `pin` is the gamescope relay ([`InjectorService::start_at`]); `None`
-/// follows [`default_backend`]. Each wake drains the backlog through [`coalesce`], so a slow
-/// backend cannot queue stale relative-mouse/scroll; buttons, keys, and absolute moves stay ordered.
+/// Lazy-open worker over an [`InjectorSlot`], raised by the [`crate::set_thread_boost`] hook.
+/// Exits when every sender drops (host shutdown, or session end for a pin). `pin` is the
+/// gamescope relay ([`InjectorService::start_at`]); `None` follows [`default_backend`]. Each
+/// wake drains the backlog through [`coalesce`], so a slow backend cannot queue stale
+/// relative-mouse/scroll; buttons, keys, and absolute moves stay ordered.
 fn injector_service_thread(
     rx: std::sync::mpsc::Receiver<InputEvent>,
     pin: Option<std::path::PathBuf>,
 ) {
+    crate::boost_this_thread();
     let mut slot = InjectorSlot::default();
     let mut warped_gen = crate::aim().generation;
     while let Some(batch) = slot.next_batch(&rx) {

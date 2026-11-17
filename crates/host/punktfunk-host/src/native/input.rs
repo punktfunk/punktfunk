@@ -1620,6 +1620,10 @@ pub(super) fn input_thread(
     counters: Arc<crate::session_status::SessionCounters>,
     knobs: super::SessionKnobs,
 ) {
+    // Input is the first leg of input-to-photon: it runs above a game, as send does. Windows
+    // raises the whole process for a session instead.
+    #[cfg(target_os = "linux")]
+    pf_frame::thread_qos::boost_thread_priority(false);
     let mut lp = InputLoop {
         pads: Pads::new(gamepad, pad_id, knobs.steam_force),
         pad_streams: PadAudioSlots::new(),

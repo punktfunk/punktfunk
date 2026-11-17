@@ -48,6 +48,35 @@ fn encoder_modifiers(
     })
 }
 
+/// Ask the box's fused-convert verdict and packed-RGB modifiers on a helper thread, so a first
+/// session's probe runs while its display comes up. The session's own ask waits on that probe's
+/// lock instead of starting a second. Once per process, and only where [`zero_copy_policy`]
+/// would probe: direct-SDK NVENC off the VA plane (`hdr_cuda_ok`) with the raw lane on.
+#[cfg(target_os = "linux")]
+pub(crate) fn prewarm_fused_convert(encoder: &std::sync::Arc<crate::encode::Resolved>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if !encoder.hdr_cuda_ok()
+        || !pf_zerocopy::nvenc_raw_enabled()
+        || STARTED.swap(true, Ordering::Relaxed)
+    {
+        return;
+    }
+    let encoder = encoder.clone();
+    let spawned = std::thread::Builder::new()
+        .name("pf-fused-probe".into())
+        .spawn(move || {
+            if encoder.nvenc_raw_dmabuf_ok() {
+                for fourcc in [pf_zerocopy::drm::XR24, pf_zerocopy::drm::AR24] {
+                    pf_zerocopy::fused_convert_modifiers(fourcc);
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::debug!(error = %e, "fused convert probe thread did not start");
+    }
+}
+
 /// Encode route and per-fourcc import verdicts for one Linux capture session, read off the
 /// session's `encoder` so pf-capture never reaches back into encode.
 #[cfg(target_os = "linux")]

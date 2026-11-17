@@ -8,6 +8,7 @@
 
 use crate::console::{Console, ConsoleEntry, ConsoleHandles, FrameCost};
 use crate::shell::{ConsoleOptions, Shell};
+use crate::stream_chrome::{chrome_px, chrome_w, draw_hint_pill, draw_hud, Hud};
 use crate::theme::{fill, Fonts, W};
 use anyhow::{anyhow, Context as _, Result};
 use ash::vk as avk;
@@ -16,11 +17,12 @@ use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use pf_client_core::trust::HudCorner;
 use pf_presenter::overlay::{
     FrameCtx, HudLine, Overlay, OverlayAction, OverlayFrame, PointerInput, RingCommand, RingInput,
-    Role, SessionPhase, SharedDevice,
+    SessionPhase, SharedDevice,
 };
 use skia_safe::gpu::vk as skvk;
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
-use skia_safe::{Canvas, Color4f, Point, RRect, Rect, Surface};
+use skia_safe::{Canvas, Color4f, Rect, Surface};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// An idle console redraws at most this often. 30 Hz keeps the aurora moving.
@@ -39,6 +41,8 @@ struct Slot {
     width: u32,
     height: u32,
     ten_bit: bool,
+    /// What the last render drew, as [`OverlayFrame::rects`]: `None` until a HUD-only render.
+    rects: Option<Arc<[avk::Rect2D]>>,
 }
 
 impl Slot {
@@ -49,6 +53,7 @@ impl Slot {
             format: self.format,
             width: self.width,
             height: self.height,
+            rects: self.rects.clone(),
         }
     }
 }
@@ -79,20 +84,6 @@ struct Drawn {
     resize_step: u16,
     /// Ring draw state (`0` = closed). Opening animates every frame; settled is free.
     ring: u64,
-}
-
-/// Chrome metrics in px at 100 % (96 dpi). Multiply by `FrameCtx::scale`: the overlay
-/// is 1:1 in physical pixels, so an unscaled 14 px OSD is half-size on a 200 % panel.
-mod base {
-    /// OSD/hint size; scale is a multiplier on this.
-    pub const FONT_PX: f32 = 14.0;
-    pub const OSD_MARGIN: f32 = 12.0;
-    pub const OSD_PAD_X: f32 = 10.0;
-    pub const OSD_PAD_Y: f32 = 8.0;
-    pub const OSD_RADIUS: f32 = 8.0;
-    pub const PILL_PAD_X: f32 = 14.0;
-    pub const PILL_PAD_Y: f32 = 8.0;
-    pub const PILL_BOTTOM: f32 = 24.0;
 }
 
 pub struct SkiaOverlay {
@@ -473,6 +464,9 @@ impl Overlay for SkiaOverlay {
                 ctx.pad_pref,
                 ctx.pads,
             );
+            slot.rects = None; // opaque, window-wide
+            let budget = crate::shell::gpu_cache_budget(shell.gpu_cache_bytes, shell.last_k);
+            set_cache_limit(&mut gpu.context, budget);
             {
                 // Queue external sync vs FFmpeg's pump-thread submits (same queue).
                 let _q = gpu.queue_lock.guard();
@@ -507,6 +501,10 @@ impl Overlay for SkiaOverlay {
         // A cost window never spans a stream: it would report minutes for a few frames.
         self.console_at = None;
         self.console_cost = FrameCost::default();
+        // The console's covers stay cached through a stream only up to the unscaled budget.
+        let base = (self.shell.as_ref())
+            .map_or(crate::shell::DEFAULT_GPU_CACHE_BYTES, |s| s.gpu_cache_bytes);
+        set_cache_limit(&mut self.gpu.as_mut().expect("init ran").context, base);
 
         let banner_alpha = self.banner_alpha(ctx);
         let banner_step = (banner_alpha * 32.0).round() as u8;
@@ -583,50 +581,22 @@ impl Overlay for SkiaOverlay {
         if let Some(phase) = resize_phase {
             draw_resize_scrim(canvas, ui, fonts, ctx.width, ctx.height, phase, scale);
         }
-        if let Some(stats) = &want.stats {
-            let osd_scale = scale * ctx.stats_scale.clamp(0.5, 4.0);
-            let size = (ctx.width, ctx.height);
-            draw_osd_panel(canvas, fonts, stats, size, osd_scale, ctx.stats_corner);
-        }
-        // Top-right, stacked in a fixed order, and top-left while the stats panel holds the
-        // top right: never under the panel or the bottom pill, even at stats Off. A host
-        // mute stands; the player's own switches say so for a moment and go.
-        let left = want.stats.is_some() && ctx.stats_corner == HudCorner::TopRight;
-        let mut row = 0;
-        if let Some(muted) = want.mic_notice {
-            let at = (ctx.width, row, left);
-            let text = punktfunk_core::client::mic_mute_label(muted);
-            corner_pill(canvas, fonts, text, muted, at, scale);
-            row += 1;
-        }
-        if !want.audio_mute.is_empty() {
-            let at = (ctx.width, row, left);
-            corner_pill(canvas, fonts, &want.audio_mute, true, at, scale);
-            row += 1;
-        }
-        // The access chip (preset label + countdown) stacks under them. A full-control
-        // permanent session has none.
-        if let Some(access) = &want.access {
-            corner_pill(canvas, fonts, access, false, (ctx.width, row, left), scale);
-        }
-        // Access toast outranks the capture hint for its few seconds.
-        if let Some(notice) = &want.notice {
-            draw_hint_pill(canvas, fonts, notice, ctx.width, ctx.height, 1.0, scale);
-        } else if let Some(hint) = &want.hint {
-            draw_hint_pill(canvas, fonts, hint, ctx.width, ctx.height, 1.0, scale);
-        } else if banner_step > 0 {
-            // The exit hint, fading out.
-            if let Some(text) = &self.banner_text {
-                draw_hint_pill(
-                    canvas,
-                    fonts,
-                    text,
-                    ctx.width,
-                    ctx.height,
-                    banner_alpha as f32,
-                    scale,
-                );
-            }
+        let hud = Hud {
+            stats: want.stats.as_deref(),
+            stats_corner: ctx.stats_corner,
+            stats_scale: ctx.stats_scale,
+            mic_notice: want.mic_notice,
+            audio_mute: &want.audio_mute,
+            access: want.access.as_deref(),
+            // Access toast outranks the capture hint for its few seconds.
+            pill: want.notice.as_deref().or(want.hint.as_deref()),
+        };
+        let hud_rects = draw_hud(canvas, fonts, &hud, (ctx.width, ctx.height), scale);
+        // The exit hint, fading out, where no other pill stands.
+        let banner = hud.pill.is_none() && banner_step > 0;
+        if let Some(text) = self.banner_text.as_ref().filter(|_| banner) {
+            let alpha = banner_alpha as f32;
+            draw_hint_pill(canvas, fonts, text, ctx.width, ctx.height, alpha, scale);
         }
 
         // Ring on top.
@@ -638,6 +608,10 @@ impl Overlay for SkiaOverlay {
                 self.ring_k = f64::from(scale);
             }
         }
+        // The scrim, the banner and the ring are blended over the whole window, the HUD
+        // only where it drew.
+        let hud_only = resize_phase.is_none() && !banner && ring_key == 0;
+        slot.rects = hud_only.then(|| hud_rects.iter().map(vk_rect).collect());
 
         // Flush on the shared queue, ending SHADER_READ_ONLY on our family
         // (the layout the composite samples). Lock: vs FFmpeg's pump submits.
@@ -708,6 +682,8 @@ impl SkiaOverlay {
 
     /// `ten_bit` follows the swapchain: a deep slot under an 8-bit blit gains nothing. F16,
     /// not 10/10/10/2: the overlay blends over video, and two bits of alpha step its fades.
+    /// Unbudgeted: the slot lives as long as the surface, and in the budget it would only
+    /// crowd out the covers (two 4K F16 slots are 133 MB).
     fn ensure_slot(&mut self, i: usize, width: u32, height: u32, ten_bit: bool) -> Result<()> {
         if self.slots[i]
             .as_ref()
@@ -735,7 +711,7 @@ impl SkiaOverlay {
         );
         let mut surface = gpu::surfaces::render_target(
             &mut gpu.context,
-            gpu::Budgeted::Yes,
+            gpu::Budgeted::No,
             &info,
             None,
             SurfaceOrigin::TopLeft,
@@ -780,8 +756,30 @@ impl SkiaOverlay {
             width,
             height,
             ten_bit,
+            rects: None,
         });
         Ok(())
+    }
+}
+
+/// Skia's cache ceiling to `bytes`; a lower one purges down to it at once.
+fn set_cache_limit(context: &mut DirectContext, bytes: usize) {
+    if context.resource_cache_limit() != bytes {
+        context.set_resource_cache_limit(bytes);
+    }
+}
+
+/// A drawn rect as [`OverlayFrame::rects`] holds it.
+fn vk_rect(r: &skia_safe::IRect) -> avk::Rect2D {
+    avk::Rect2D {
+        offset: avk::Offset2D {
+            x: r.left,
+            y: r.top,
+        },
+        extent: avk::Extent2D {
+            width: r.width().max(0) as u32,
+            height: r.height().max(0) as u32,
+        },
     }
 }
 
@@ -807,28 +805,6 @@ fn key_of(sc: sdl3::keyboard::Scancode) -> Option<crate::input::Key> {
     })
 }
 
-/// Chrome text size at `scale`, px. Chrome draws in Medium; a line is laid out on Geist's
-/// metrics, and a fallback run sits on Geist's baseline.
-fn chrome_px(scale: f32) -> f64 {
-    f64::from(base::FONT_PX * scale)
-}
-
-/// [`Fonts::measure`] for chrome text at `scale`.
-fn chrome_w(fonts: &Fonts, text: &str, scale: f32) -> f32 {
-    fonts.measure(text, W::Medium, chrome_px(scale))
-}
-
-/// Shrink `scale` until `width_at_scale` (linear in scale) fits `budget`. DPI-up
-/// is only an improvement while the result still fits: the capture hint is ~150
-/// chars and already fills a 1280 px window at 100 %.
-fn fit_scale(scale: f32, width_at_scale: f32, budget: f32) -> f32 {
-    if width_at_scale > budget && width_at_scale > 0.0 {
-        (scale * budget / width_at_scale).max(0.1)
-    } else {
-        scale
-    }
-}
-
 /// How to leave a stream, in one line: the pad's End stream when a pad is forwarded, else the
 /// keyboard's. `None` when neither ends it.
 pub(crate) fn exit_hint(
@@ -840,121 +816,6 @@ pub(crate) fn exit_hint(
     pad.then(|| leave_line(shortcuts, Device::Pad))
         .flatten()
         .or_else(|| leave_line(shortcuts, Device::Keyboard))
-}
-
-/// Stats OSD: translucent rounded panel in `corner`, one line each, painted by role.
-fn draw_osd_panel(
-    canvas: &Canvas,
-    fonts: &Fonts,
-    lines: &[HudLine],
-    (width, height): (u32, u32),
-    scale: f32,
-    corner: HudCorner,
-) {
-    // Width is linear in scale; measure once, then fit so Detailed-tier lines stay in-window.
-    let widest_at = |s: f32| {
-        (lines.iter())
-            .map(|l| chrome_w(fonts, &l.text, s))
-            .fold(0.0f32, f32::max)
-    };
-    let width_at = |s: f32| widest_at(s) + 2.0 * (base::OSD_PAD_X + base::OSD_MARGIN) * s;
-    let scale = fit_scale(scale, width_at(scale), width as f32);
-
-    let (_, metrics) = fonts.font(W::Medium, chrome_px(scale)).metrics();
-    let line_h = metrics.descent - metrics.ascent + metrics.leading;
-    let widest = widest_at(scale);
-    let (pad_x, pad_y) = (base::OSD_PAD_X * scale, base::OSD_PAD_Y * scale);
-    let (w, h) = (
-        widest + 2.0 * pad_x,
-        line_h * lines.len() as f32 + 2.0 * pad_y,
-    );
-    let margin = base::OSD_MARGIN * scale;
-    let x = if corner.right() {
-        width as f32 - w - margin
-    } else {
-        margin
-    };
-    let y = if corner.bottom() {
-        height as f32 - h - margin
-    } else {
-        margin
-    };
-    let panel = Rect::from_xywh(x, y, w, h);
-    let radius = base::OSD_RADIUS * scale;
-    canvas.draw_rrect(
-        RRect::new_rect_xy(panel, radius, radius),
-        &fill(Color4f::new(0.0, 0.0, 0.0, 0.62)),
-    );
-    for (i, line) in lines.iter().enumerate() {
-        fonts.draw(
-            canvas,
-            &line.text,
-            f64::from(x + pad_x),
-            f64::from(y + pad_y - metrics.ascent + line_h * i as f32),
-            W::Medium,
-            chrome_px(scale),
-            role_color(line.role),
-        );
-    }
-}
-
-/// Headline bright, breakdowns softer, asides dimmer, warnings in status red.
-fn role_color(role: Role) -> Color4f {
-    match role {
-        Role::Primary => Color4f::new(1.0, 1.0, 1.0, 0.92),
-        Role::Detail => Color4f::new(1.0, 1.0, 1.0, 0.78),
-        Role::Muted => Color4f::new(1.0, 1.0, 1.0, 0.6),
-        Role::Warn => crate::theme::ERROR,
-    }
-}
-
-/// A standing pill in a top corner, `row` pills down: words, led by an error-colour dot when
-/// `dot`. `at` is the window width, the row and whether it sits top-left. Drawn from state,
-/// not from the stats text, so it survives stats Off. Words, not a mute glyph Geist lacks.
-/// Every pill is one line tall, so rows stack on one pitch.
-fn corner_pill(
-    canvas: &Canvas,
-    fonts: &Fonts,
-    text: &str,
-    dot: bool,
-    (width, row, left): (u32, usize, bool),
-    scale: f32,
-) {
-    // Short; it fits any stream window, so take the display scale as-is.
-    let (_, metrics) = fonts.font(W::Medium, chrome_px(scale)).metrics();
-    let line_h = metrics.descent - metrics.ascent;
-    let (pad_x, pad_y) = (base::PILL_PAD_X * scale, base::PILL_PAD_Y * scale);
-    let dot_r = 4.0 * scale;
-    let lead = if dot { 2.0 * dot_r + 8.0 * scale } else { 0.0 };
-    let w = chrome_w(fonts, text, scale) + lead + 2.0 * pad_x;
-    let h = line_h + 2.0 * pad_y;
-    let margin = base::OSD_MARGIN * scale;
-    let x = if left {
-        margin
-    } else {
-        width as f32 - w - margin
-    };
-    let y = margin + row as f32 * (h + 8.0 * scale);
-    canvas.draw_rrect(
-        RRect::new_rect_xy(Rect::from_xywh(x, y, w, h), h / 2.0, h / 2.0),
-        &fill(Color4f::new(0.0, 0.0, 0.0, 0.62)),
-    );
-    if dot {
-        canvas.draw_circle(
-            Point::new(x + pad_x + dot_r, y + h / 2.0),
-            dot_r,
-            &fill(crate::theme::ERROR),
-        );
-    }
-    fonts.draw(
-        canvas,
-        text,
-        f64::from(x + pad_x + lead),
-        f64::from(y + pad_y - metrics.ascent),
-        W::Medium,
-        chrome_px(scale),
-        Color4f::new(1.0, 1.0, 1.0, 0.92),
-    );
 }
 
 /// Mid-stream resize cover: full-screen scrim + spinner + "Resizing…". The overlay
@@ -988,44 +849,5 @@ fn draw_resize_scrim(
         W::Medium,
         chrome_px(scale),
         Color4f::new(1.0, 1.0, 1.0, 0.9),
-    );
-}
-
-/// Capture hint / start banner: centered pill near the bottom. `scale` is the
-/// display UI scale, a multiplier on [`base::FONT_PX`].
-fn draw_hint_pill(
-    canvas: &Canvas,
-    fonts: &Fonts,
-    text: &str,
-    width: u32,
-    height: u32,
-    alpha: f32,
-    scale: f32,
-) {
-    // Capture hint already fills most of a 1280 px window at 100 %; fit to the
-    // window (4 % gutter) so 2× scale does not overrun both edges.
-    let pill_w = |s: f32| chrome_w(fonts, text, s) + 2.0 * base::PILL_PAD_X * s;
-    let scale = fit_scale(scale, pill_w(scale), width as f32 * 0.96);
-
-    let (_, metrics) = fonts.font(W::Medium, chrome_px(scale)).metrics();
-    let line_h = metrics.descent - metrics.ascent;
-    let text_w = chrome_w(fonts, text, scale);
-    let (pad_x, pad_y) = (base::PILL_PAD_X * scale, base::PILL_PAD_Y * scale);
-    let w = text_w + 2.0 * pad_x;
-    let h = line_h + 2.0 * pad_y;
-    let x = (width as f32 - w) / 2.0;
-    let y = height as f32 - h - base::PILL_BOTTOM * scale;
-    canvas.draw_rrect(
-        RRect::new_rect_xy(Rect::from_xywh(x, y, w, h), h / 2.0, h / 2.0),
-        &fill(Color4f::new(0.0, 0.0, 0.0, 0.62 * alpha)),
-    );
-    fonts.draw(
-        canvas,
-        text,
-        f64::from(x + pad_x),
-        f64::from(y + pad_y - metrics.ascent),
-        W::Medium,
-        chrome_px(scale),
-        Color4f::new(1.0, 1.0, 1.0, 0.92 * alpha),
     );
 }

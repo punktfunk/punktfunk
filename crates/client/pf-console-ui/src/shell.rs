@@ -312,6 +312,18 @@ pub const DEFAULT_GPU_CACHE_BYTES: usize = 160 << 20;
 /// It is a ceiling, not an allocation.
 pub const MIN_GPU_CACHE_BYTES: usize = 96 << 20;
 
+/// The desktop overlay's budget for a surface drawn at `k`: `base` through 1080p (`k` 1.35),
+/// then growing with the surface's area, as covers and offscreens do, to 4× at 4K (`k` 2.7).
+/// A taller surface gets no more.
+#[cfg(any(
+    test,
+    all(any(target_os = "linux", windows), feature = "vulkan-overlay")
+))]
+pub(crate) fn gpu_cache_budget(base: usize, k: f64) -> usize {
+    let grow = (k / 1.35).powi(2).clamp(1.0, 4.0);
+    (base as f64 * grow) as usize
+}
+
 /// The full-screen card that owns input: the connect's phase, else the wake card, else the
 /// speed test. A woken host goes on to connect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -406,8 +418,9 @@ pub(crate) struct Shell {
     /// Full surface of the last layout, insets included. A backdrop paints here,
     /// not in the safe rect, or it seams at the cutout edge.
     last_full: (f32, f32),
-    /// Design-unit scale of the last frame. Touch slop and drag ticks grow with it.
-    last_k: f64,
+    /// Design-unit scale of the last frame. Touch slop, drag ticks and the overlay's cache
+    /// budget grow with it.
+    pub(crate) last_k: f64,
     /// Finger state. The stream overlay resets it while the ring owns the pointer.
     pub(crate) touch: Touch,
     pub(crate) gpu_cache_bytes: usize,

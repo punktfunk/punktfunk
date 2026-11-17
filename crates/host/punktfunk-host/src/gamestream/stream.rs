@@ -115,18 +115,21 @@ pub struct GameLifetime {
     pub on_game_exit: super::OnSessionLost,
 }
 
-/// The registry handles this session's loop keeps current: what `GET /status` and the
-/// console's cards read while it streams. Snapshotting them at launch would freeze the
-/// bitrate at the client's ask and leave the capture card empty.
+/// The handles this session's loop keeps current: what `GET /status` and the console's cards
+/// read while it streams, and the source's poke for the control thread. Snapshotting them at
+/// launch would freeze the bitrate at the client's ask and leave the capture card empty.
 struct LiveTelemetry {
     bitrate_kbps: Arc<std::sync::atomic::AtomicU32>,
     capture_health: Arc<std::sync::Mutex<Option<pf_capture::CaptureHealth>>>,
+    /// [`super::GsState::video_poke`], set from every source the loop runs.
+    poke: super::VideoPoke,
 }
 
 /// Spawn the video stream thread (idempotent via `running`). Stops when `running` clears.
-/// `force_idr` is set by the control stream on a client recovery request; `video_cap` holds
-/// the persistent capturer the thread borrows for the stream's duration. The thread is
-/// tracked on `media`, for `/resume` and the next `/launch` to wait on.
+/// `force_idr` is set by the control stream on a client recovery request, and `video_poke`
+/// ends the loop's wait for it; `video_cap` holds the persistent capturer the thread borrows
+/// for the stream's duration. The thread is tracked on `media`, for `/resume` and the next
+/// `/launch` to wait on.
 #[allow(clippy::too_many_arguments)]
 pub fn start(
     cfg: StreamConfig,
@@ -136,6 +139,7 @@ pub fn start(
     rfi_range: RfiSlot,
     loss: Arc<super::GsLossStats>,
     video_hdr: super::VideoHdr,
+    video_poke: super::VideoPoke,
     // Session rikey, only when `cfg.encrypt_video`. Not a `StreamConfig` field: that
     // struct is `Debug`-logged at stream start.
     gcm_key: Option<[u8; 16]>,
@@ -194,6 +198,7 @@ pub fn start(
             let live = LiveTelemetry {
                 bitrate_kbps: Arc::new(std::sync::atomic::AtomicU32::new(cfg.bitrate_kbps)),
                 capture_health: Arc::new(std::sync::Mutex::new(None)),
+                poke: video_poke,
             };
             // The control loop bumps these without a session handle, so they are cleared
             // here rather than made fresh: the summary must not carry the last session's input.
@@ -270,6 +275,7 @@ pub fn start(
             drop(live_session);
             running.store(false, Ordering::SeqCst);
             *video_hdr.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *live.poke.lock().unwrap_or_else(|e| e.into_inner()) = None;
             drop(stream_marker);
             crate::events::emit(crate::events::EventKind::ClientDisconnected {
                 client: event_client,
@@ -1718,9 +1724,19 @@ impl GsWindow {
     }
 }
 
+/// Hand the control thread `capturer`'s poke: its feed's, or its remote encoder's, which
+/// reaches every proxy the capturer opens. `None` from a source with neither: an ask then
+/// waits for the next tick.
+pub(super) fn publish_poke(capturer: &mut dyn Capturer, slot: &super::VideoPoke) {
+    let poke = (capturer.feed().and_then(|f| f.arrival_poke()))
+        .or_else(|| capturer.remote_encoder().and_then(|r| r.arrival_poke()));
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = poke;
+}
+
 impl GsLoop<'_> {
     /// The tick loop. Every phase is a method; the order is the contract.
     fn run(mut self) -> Result<()> {
+        publish_poke(&mut **self.capturer, &self.live.poke);
         while self.running.load(Ordering::SeqCst) {
             self.publish_health();
             // An operator stop ends the session the way a lost client does — `on_lost` clears
@@ -1827,9 +1843,9 @@ impl GsLoop<'_> {
     }
 
     /// Rebuild a lost source in place ([`rebuild_after_capture_loss`]) — send, packetizer,
-    /// socket and RTP survive — and reopen the encoder on its first frame. `Err` with no
-    /// rebuild to run, once [`count_capture_loss`] has spent the rebuilds, or when no source
-    /// comes up within the budget.
+    /// socket and RTP survive — publish its poke, and reopen the encoder on its first frame.
+    /// `Err` with no rebuild to run, once [`count_capture_loss`] has spent the rebuilds, or
+    /// when no source comes up within the budget.
     fn rebuild_source(&mut self, e: anyhow::Error) -> Result<()> {
         let Some(rebuild) = self.rebuild else {
             return Err(e).context("capture frame");
@@ -1857,6 +1873,7 @@ impl GsLoop<'_> {
         if let Some(feed) = self.capturer.feed() {
             feed.set_active(true);
         }
+        publish_poke(&mut **self.capturer, &self.live.poke);
         self.frame = self
             .capturer
             .next_frame(pf_capture::FirstFrame::Default)

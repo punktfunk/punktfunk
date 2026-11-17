@@ -7,7 +7,7 @@ use std::process::Stdio;
 /// Run `cmd` inside the live session (managed / SteamOS / attach — [`spawn()`]'s nesting does not
 /// apply). The env is a gamescope child's ([`as_gamescope_child`]), read from a process already
 /// inside; with no such process, host env (a `steam steam://…` still reaches the running Steam
-/// over its pipe).
+/// over its pipe). The program starts unraised ([`pf_frame::thread_qos::unraised`]).
 pub fn launch_into_session(cmd: &str, seat: Option<&str>) -> Result<std::process::Child> {
     let flatpak = shape_flatpak_command(cmd);
     let mut c = Command::new("sh");
@@ -33,7 +33,8 @@ pub fn launch_into_session(cmd: &str, seat: Option<&str>) -> Result<std::process
              in the session)"
         ),
     }
-    c.spawn()
+    pf_frame::thread_qos::unraised(&mut c)
+        .spawn()
         .context("spawn launch command into gamescope session")
 }
 

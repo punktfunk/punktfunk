@@ -14,8 +14,11 @@ import io.unom.punktfunk.kit.library.GameOverrides
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
 import io.unom.punktfunk.models.ActiveSession
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -172,12 +175,27 @@ internal fun Settings.streamAsk(
 }
 
 /**
+ * The vendor keys the caps line logs ([VideoDecoders.readVendorKeys]), read once per process off
+ * the main thread. [readVendorKeysAtStart] starts it with the app; a connect waits for it before
+ * the dial, since a box with one hardware decoder can't open the stream's while this holds one.
+ */
+private val vendorKeys = CoroutineScope(Dispatchers.IO).async(start = CoroutineStart.LAZY) {
+    VideoDecoders.readVendorKeys()
+}
+
+/** Starts the one vendor-key read, so a connect seldom waits for it. */
+fun readVendorKeysAtStart() {
+    vendorKeys.start()
+}
+
+/**
  * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode
  * and view ([streamAsk]), HDR and gamepad settings the host needs from [spec]'s settings under its
- * game overrides, keeps the codecs and 10-bit a hardware decoder takes at that mode
- * ([VideoDecoders.probe]), waits for the last session's close, and dials off the main thread. The
- * dial cannot be interrupted, so it runs `NonCancellable`. [unlock] crosses as byte arrays and is
- * wiped when the native call returns. Returns the session handle, or `0` on failure.
+ * game overrides, keeps the codecs and 10-bit a hardware decoder takes at that mode from one walk
+ * of the codec list ([VideoDecoders.snapshot]), waits for the last session's close and the vendor
+ * key read, and dials off the main thread. The dial cannot be interrupted, so it runs
+ * `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call returns.
+ * Returns the session handle, or `0` on failure.
  */
 suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = null): Long {
     val settings = spec.settings.underHost(spec.overrides)
@@ -205,15 +223,16 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         // Transport-level half of "Low-latency mode" (DSCP marking on the media sockets) —
         // must be applied before connect, since sockets are tagged at creation.
         NativeBridge.nativeSetLowLatencyMode(settings.lowLatencyMode)
-        val multiSlice = VideoDecoders.multiSliceTolerant()
-        val studioRange = VideoDecoders.showsFullRangeAsStudio()
-        val partialFrame = VideoDecoders.partialFrameCapable()
+        // A codec, and 10-bit, only where a hardware decoder takes them at this mode.
+        val need = DecodeNeed(w, h, hz, hdrEnabled || tenBitSdr)
+        val decoders = VideoDecoders.snapshot(need)
+        val multiSlice = decoders.multiSliceTolerant
+        val studioRange = decoders.showsFullRangeAsStudio
+        val partialFrame = decoders.partialFrameCapable
         // Slice-progressive delivery: decoder truth AND the low-latency toggle — parts are part of
         // the fast pipeline, and the toggle's "off" is the conservative configuration throughout.
         val frameParts = settings.lowLatencyMode && partialFrame
-        // A codec, and 10-bit, only where a hardware decoder takes them at this mode.
-        val need = DecodeNeed(w, h, hz, hdrEnabled || tenBitSdr)
-        val decode = VideoDecoders.probe(need)
+        val decode = decoders.decode
         val codecBits = decode.codecBits
         // Automatic codec: "Automatic" prefers AV1 when its bit is set AND the device lacks
         // FEATURE_PartialFrame — a partial-frame device keeps HEVC, whose slice overlap AV1
@@ -223,7 +242,8 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             ?: if (codecBits and 4 != 0 && !partialFrame) 4 else 0
         // The connect-time capability readout (`adb logcat -s pf.caps`): the P2 slice pipeline
         // is client-inert unless BOTH probes pass — this line says which decoder failed one.
-        val caps = VideoDecoders.capsReport() +
+        vendorKeys.await()
+        val caps = decoders.capsReport() +
             " → multiSlice=$multiSlice parts=$frameParts studioRange=$studioRange" +
             " codecs=$codecBits tenBit=${decode.tenBit} prefer=$preferredCodec" +
             " (lowLatency=${settings.lowLatencyMode})"
@@ -231,7 +251,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         // `Log` never reaches a "Send logs" bundle; the ring does.
         runCatching {
             NativeBridge.nativeLogCaps(caps)
-            NativeBridge.nativeLogCaps("decoders at ${w}x$h@$hz: ${VideoDecoders.census(need)}")
+            NativeBridge.nativeLogCaps("decoders at ${w}x$h@$hz: ${decoders.census}")
         }
         val request = ConnectRequest(
             host = spec.host, port = spec.port, width = w, height = h, refreshHz = hz,

@@ -86,6 +86,9 @@ impl XFixesCursorSource {
         let join = std::thread::Builder::new()
             .name("pf-gs-cursor".into())
             .spawn(move || {
+                // The pointer rides every frame: raised like send. A stream thread RealtimeKit
+                // raised passes no raise to what it spawns.
+                pf_frame::thread_qos::boost_thread_priority(false);
                 // On this thread, not the caller's: an Xwayland that accepts and never
                 // answers holds the X handshake, which has no read timeout.
                 let mut displays = Vec::new();

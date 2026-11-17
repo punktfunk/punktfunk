@@ -789,6 +789,26 @@ fn a_screenful_of_covers_fits_the_gpu_budget() {
     }
 }
 
+/// The desktop overlay keeps its slots out of the budget and grows it with the surface: a 4K
+/// screenful of the largest art fits, and 1080p keeps the budget it had.
+#[test]
+fn a_4k_screenful_of_covers_fits_the_grown_budget() {
+    use crate::shell::{gpu_cache_budget, DEFAULT_GPU_CACHE_BYTES as BASE};
+    let k = 2160.0 / 800.0;
+    let (w, h) = art_cache_size((1000, 1500), k);
+    let covers = w as usize * h as usize * 4 * 4 / 3 * SCREENFUL;
+    let budget = gpu_cache_budget(BASE, k);
+    assert!(
+        covers < budget,
+        "{} MB of covers over {} MB",
+        covers >> 20,
+        budget >> 20
+    );
+    assert_eq!(gpu_cache_budget(BASE, 1.35), BASE);
+    assert_eq!(gpu_cache_budget(BASE, 0.75), BASE);
+    assert_eq!(gpu_cache_budget(BASE, 3.0), 4 * BASE);
+}
+
 /// The floor a memory-tight host may pass, pinned to what 1080p actually needs.
 ///
 /// A television is `k` 1.35. A TV client should copy this number, not a fraction of the
