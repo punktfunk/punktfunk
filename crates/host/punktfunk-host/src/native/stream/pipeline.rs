@@ -632,7 +632,8 @@ pub(super) fn open_session_encoder_with(
     Ok((enc, framed))
 }
 
-/// Acquire a display at `req`'s mode and attach capture and an encoder to it.
+/// Acquire a display at `req`'s mode and attach capture and an encoder to it. On Linux the
+/// capture's fused-convert probe starts beside the acquire (`prewarm_fused_convert`).
 pub(super) fn build_pipeline(
     vd: &mut Box<dyn crate::vdisplay::VirtualDisplay>,
     req: &BuildRequest,
@@ -642,6 +643,8 @@ pub(super) fn build_pipeline(
     trace: Option<&crate::bringup::Trace>,
 ) -> Result<Pipeline> {
     let display_mode = display_mode_for(req.intent.mode(), vd.name());
+    #[cfg(target_os = "linux")]
+    crate::capture::prewarm_fused_convert(&req.terms.encoder);
     let vout = crate::vdisplay::registry::acquire(vd, display_mode, quit.clone(), supersedes)
         .context("create virtual output")?;
     if let Some(t) = trace {
