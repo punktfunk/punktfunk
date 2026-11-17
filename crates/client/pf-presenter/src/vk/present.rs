@@ -1101,11 +1101,13 @@ impl Presenter {
     }
 
     /// Blend `overlay` over `plan`'s swapchain image, which the overlay pass leaves ready to
-    /// present; without one, move the image from `swap_layout` to PRESENT_SRC. An HDR
-    /// switch swaps in a fresh overlay pipe and leaves the swapchain to
-    /// `recreate_swapchain`, which keeps the old one while the window has no extent (a
-    /// display-topology flip). Until that recreate lands the pipe has no framebuffers:
-    /// the video presents alone rather than index past them.
+    /// present; without one, or with nothing drawn, move the image from `swap_layout` to
+    /// PRESENT_SRC. The pass loads and stores the bounds of the overlay's drawn rects and
+    /// blends each rect alone; outside them the overlay is transparent. An HDR switch swaps
+    /// in a fresh overlay pipe and leaves the swapchain to `recreate_swapchain`, which keeps
+    /// the old one while the window has no extent (a display-topology flip). Until that
+    /// recreate lands the pipe has no framebuffers: the video presents alone rather than
+    /// index past them.
     ///
     /// # Safety
     /// `self.cmd_buf` is recording, after the composite, and `bind_overlay` pointed the
@@ -1118,7 +1120,10 @@ impl Presenter {
     ) {
         let index = plan.index as usize;
         let swap_image = self.targets.images[index];
-        let Some(o) = overlay.filter(|_| index < self.targets.overlay.framebuffers.len()) else {
+        let drawn = overlay
+            .filter(|_| index < self.targets.overlay.framebuffers.len())
+            .and_then(|o| Some((o, o.scissors(self.targets.extent)?)));
+        let Some((o, (area, scissors))) = drawn else {
             barrier(
                 &self.device,
                 self.cmd_buf,
@@ -1144,19 +1149,16 @@ impl Presenter {
             swap_layout,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         );
-        let full = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: self.targets.extent,
-        };
         // SAFETY: `cmd_buf` is recording (`# Safety` above); the pipe, its framebuffer for
-        // `index` and its set are owned here, and the set points at `overlay`.
+        // `index` and its set are owned here, and the set points at `overlay`. `area` and
+        // each scissor lie inside the extent, and `area` holds every scissor.
         unsafe {
             self.device.cmd_begin_render_pass(
                 self.cmd_buf,
                 &vk::RenderPassBeginInfo::default()
                     .render_pass(self.overlay_pipe.pass.render_pass)
                     .framebuffer(self.targets.overlay.framebuffers[index])
-                    .render_area(full),
+                    .render_area(area),
                 vk::SubpassContents::INLINE,
             );
             self.device.cmd_bind_pipeline(
@@ -1176,7 +1178,6 @@ impl Presenter {
                     max_depth: 1.0,
                 }],
             );
-            self.device.cmd_set_scissor(self.cmd_buf, 0, &[full]);
             self.device.cmd_bind_descriptor_sets(
                 self.cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1185,7 +1186,12 @@ impl Presenter {
                 &[self.overlay_pipe.desc_set],
                 &[],
             );
-            self.device.cmd_draw(self.cmd_buf, 3, 1, 0, 0);
+            // The full-extent triangle under each rect's scissor keeps the image's UVs.
+            for scissor in &scissors {
+                self.device
+                    .cmd_set_scissor(self.cmd_buf, 0, std::slice::from_ref(scissor));
+                self.device.cmd_draw(self.cmd_buf, 3, 1, 0, 0);
+            }
             self.device.cmd_end_render_pass(self.cmd_buf);
         }
     }

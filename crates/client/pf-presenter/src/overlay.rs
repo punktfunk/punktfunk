@@ -93,6 +93,56 @@ pub struct OverlayFrame {
     pub format: vk::Format,
     pub width: u32,
     pub height: u32,
+    /// Every texel with any alpha lies in one of these, in the image's pixels. `None`: the
+    /// image may hold ink anywhere.
+    pub rects: Option<std::sync::Arc<[vk::Rect2D]>>,
+}
+
+impl OverlayFrame {
+    /// The render area and scissors that blend this image over a swapchain of `extent`,
+    /// stretched to fill it. Each rect grows by a texel, the linear sampler's reach, then
+    /// scales and rounds out. `rects: None` is the whole extent; `None` is nothing to blend.
+    pub fn scissors(&self, extent: vk::Extent2D) -> Option<(vk::Rect2D, Vec<vk::Rect2D>)> {
+        let full = vk::Rect2D {
+            offset: vk::Offset2D::default(),
+            extent,
+        };
+        let Some(rects) = &self.rects else {
+            return Some((full, vec![full]));
+        };
+        // [lo, lo + len) of `from` texels, widened by one, as a span of `to` pixels.
+        let span = |lo: i32, len: u32, from: u32, to: u32| {
+            let (from, to) = (u64::from(from.max(1)), u64::from(to));
+            let start = (i64::from(lo) - 1).max(0) as u64;
+            let end = (i64::from(lo) + i64::from(len) + 1).max(0) as u64;
+            (
+                (start * to / from).min(to) as u32,
+                (end * to).div_ceil(from).min(to) as u32,
+            )
+        };
+        let rect = |(x0, y0, x1, y1): (u32, u32, u32, u32)| vk::Rect2D {
+            offset: vk::Offset2D {
+                x: x0 as i32,
+                y: y0 as i32,
+            },
+            extent: vk::Extent2D {
+                width: x1 - x0,
+                height: y1 - y0,
+            },
+        };
+        let mut area = None;
+        let mut scissors = Vec::with_capacity(rects.len());
+        for r in rects.iter() {
+            let (x0, x1) = span(r.offset.x, r.extent.width, self.width, extent.width);
+            let (y0, y1) = span(r.offset.y, r.extent.height, self.height, extent.height);
+            if x1 > x0 && y1 > y0 {
+                scissors.push(rect((x0, y0, x1, y1)));
+                let a = area.get_or_insert((x0, y0, x1, y1));
+                *a = (a.0.min(x0), a.1.min(y0), a.2.max(x1), a.3.max(y1));
+            }
+        }
+        Some((rect(area?), scissors))
+    }
 }
 
 // Shared with the Android GL host; lives in `pf_client_core::console`
@@ -193,5 +243,69 @@ pub trait Overlay {
     /// Drain one ring command. Each iteration while streaming.
     fn take_ring_command(&mut self) -> Option<RingCommand> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect((x, y, width, height): (i32, i32, u32, u32)) -> vk::Rect2D {
+        vk::Rect2D {
+            offset: vk::Offset2D { x, y },
+            extent: vk::Extent2D { width, height },
+        }
+    }
+
+    fn tuple(r: vk::Rect2D) -> (i32, i32, u32, u32) {
+        (r.offset.x, r.offset.y, r.extent.width, r.extent.height)
+    }
+
+    /// `(area, scissors)` for a `width`×`height` image holding `rects`, over a 1080p swapchain.
+    #[allow(clippy::type_complexity)]
+    fn blend(
+        (width, height): (u32, u32),
+        rects: Option<&[(i32, i32, u32, u32)]>,
+    ) -> Option<((i32, i32, u32, u32), Vec<(i32, i32, u32, u32)>)> {
+        let frame = OverlayFrame {
+            image: vk::Image::null(),
+            view: vk::ImageView::null(),
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            width,
+            height,
+            rects: rects.map(|r| r.iter().copied().map(rect).collect()),
+        };
+        let (area, scissors) = frame.scissors(vk::Extent2D {
+            width: 1920,
+            height: 1080,
+        })?;
+        Some((tuple(area), scissors.into_iter().map(tuple).collect()))
+    }
+
+    /// Each rect grows by the sampler's texel, clamps to the swapchain and scales out when
+    /// the image is stale-sized. No rects blends nothing; unbounded ink blends everything.
+    #[test]
+    fn scissors_hold_each_rect_and_the_sampler_reach() {
+        let hud = [(100, 50, 200, 80), (1700, 1000, 220, 80)];
+        let (area, scissors) = blend((1920, 1080), Some(&hud)).unwrap();
+        assert_eq!(scissors, [(99, 49, 202, 82), (1699, 999, 221, 81)]);
+        assert_eq!(area, (99, 49, 1821, 1031));
+        let corner = [(-5, -5, 10, 10)];
+        assert_eq!(
+            blend((1920, 1080), Some(&corner)).unwrap().1,
+            [(0, 0, 6, 6)]
+        );
+        let small = [(10, 10, 20, 20)];
+        assert_eq!(
+            blend((960, 540), Some(&small)).unwrap().1,
+            [(18, 18, 44, 44)]
+        );
+        assert_eq!(
+            blend((1280, 720), Some(&small)).unwrap().1,
+            [(13, 13, 34, 34)]
+        );
+        assert_eq!(blend((1920, 1080), Some(&[])), None);
+        let full = (0, 0, 1920, 1080);
+        assert_eq!(blend((1280, 720), None), Some((full, vec![full])));
     }
 }

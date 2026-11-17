@@ -67,6 +67,12 @@ mod screens;
 mod shell;
 #[cfg(all(any(target_os = "linux", windows), feature = "vulkan-overlay"))]
 mod skia_overlay;
+// The overlay's stream HUD; built for tests everywhere, which prove its drawn rects.
+#[cfg(any(
+    test,
+    all(any(target_os = "linux", windows), feature = "vulkan-overlay")
+))]
+mod stream_chrome;
 #[cfg(test)]
 mod textprobe;
 /// The settings rows' engine — ids, platform gate, spec, step — for a shell that lays the
