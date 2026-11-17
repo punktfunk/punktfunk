@@ -59,10 +59,8 @@ export const MoonlightPairingSection: FC = () => {
 	// Clear the previous attempt's outcome when a NEW pairing knock arrives.
 	//
 	// The mutation's success flag outlives the form — the section never unmounts, only the inner
-	// <form> is conditional — so the green "PIN sent" note was still on screen above an empty PIN
-	// box the next time Moonlight asked. Resetting inside `onSubmit` (the first attempt at this)
-	// does nothing: `mutate` moves the status to pending in the same update, so `isSuccess` was
-	// already about to go false. The transition that matters is `pin_pending` going false → true.
+	// <form> is conditional. Resetting inside `onSubmit` does nothing: `mutate` moves the status
+	// to pending in the same update. The transition that matters is `pin_pending` false → true.
 	const pending = pairing.data?.pin_pending ?? false;
 	const wasPending = useRef(pending);
 	useEffect(() => {
@@ -98,8 +96,8 @@ export const MoonlightPairingSection: FC = () => {
 					setLabel("");
 					setPassword("");
 					qc.invalidateQueries({ queryKey: getGetPairingStatusQueryKey() });
-					// The success message tells the operator to check the paired list, so refresh it —
-					// both planes, since this card's count spans them.
+					// The success message points at the paired list; a Moonlight pairing lands in the
+					// Moonlight list.
 					qc.invalidateQueries({ queryKey: getListPairedClientsQueryKey() });
 				},
 				onError: refusal.classify,
@@ -187,8 +185,7 @@ export const MoonlightPairing: FC<{
 					<p className="text-sm">{m.pairing_waiting()}</p>
 					{/* Name the ceremony the PIN answers, so the operator pairs the device
 							    they can SEE — and, with several parked, picks the one they mean; the
-							    host delivers the PIN only to the named handshake (security-review
-							    2026-08-31 H-4). */}
+							    host delivers the PIN only to the named handshake. */}
 					{!picking && ceremonies[0] && (
 						<p className="font-mono text-xs text-muted-foreground">
 							{m.pairing_ceremony_device({

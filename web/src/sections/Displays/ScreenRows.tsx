@@ -52,7 +52,7 @@ export const ScreenRows: FC<{
 	busy?: boolean;
 	releasing?: boolean;
 	onPick: (connector: string | null) => void;
-	/** Keep this monitor lit through an exclusive stream (KWin, Hyprland, sway only). */
+	/** Keep this monitor lit through an exclusive stream; given only where the host honours it. */
 	onKeepLit?: (connector: string, keep: boolean) => void;
 	onRelease: (slot: number) => void;
 }> = ({
@@ -71,8 +71,8 @@ export const ScreenRows: FC<{
 }) => {
 	// Our own virtual displays show up as heads on KWin; they are the streamed rows already.
 	const heads = monitors.filter((mon) => !mon.managed);
-	// A pin naming a monitor the host does not have fails every session until it changes, so it
-	// gets a row of its own and a warning.
+	// A pin naming a monitor the host does not have makes every device stream its own screen
+	// instead (`ScreenReason::Missing`), so it gets a row of its own and a warning.
 	const danglingPin =
 		pinned &&
 		!monitors.some(

@@ -3,8 +3,8 @@ import { getLocale } from "@/paraglide/runtime";
 /**
  * Date/time and number formatting that follows the CONSOLE's locale, not the browser's.
  *
- * A bare `toLocaleString()` uses `navigator.language`, so a console switched to German still
- * rendered US-style timestamps (and vice versa) — the app said one thing and its dates another.
+ * A bare `toLocaleString()` uses `navigator.language`, so a console switched to German would
+ * render US-style timestamps (and vice versa) — the app would say one thing and its dates another.
  * `getLocale()` is Paraglide's resolved locale, which is what every string on screen uses.
  *
  * `Intl` formatters are expensive to construct and these run per table row, so they are cached
@@ -81,7 +81,6 @@ export function fmtSpan(secs: number): string {
 	return rest ? `${hours} ${unit("minute", rest)}` : hours;
 }
 
-/** A number with the console locale's separators — never a hand-rolled `toFixed`. */
 /** A link rate in kbps as a player reads it: `940 Mbit/s`, `2.5 Gbit/s`. */
 export function fmtLinkRate(kbps: number): string {
 	if (kbps >= 1_000_000) {
@@ -97,6 +96,7 @@ export function deviceCode(fingerprint: string): string {
 	return (digits.match(/.{1,4}/g) ?? []).join(" ");
 }
 
+/** A number with the console locale's separators — never a hand-rolled `toFixed`. */
 export function fmtNumber(value: number, digits = 0): string {
 	return new Intl.NumberFormat(getLocale(), {
 		minimumFractionDigits: digits,

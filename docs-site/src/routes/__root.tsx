@@ -8,7 +8,7 @@ import Footer from '@/components/Footer'
 import { type Footer as FooterData, findFooter } from '@/lib/cms'
 import appCss from '@/styles/app.css?url'
 
-// The footer is global and shared with the marketing site (one CMS global).
+// The footer is shared with the marketing site (one per-tenant CMS collection, see lib/cms.ts).
 // Fetch it once at the root, server-side, falling back to null so a CMS hiccup
 // never breaks the page.
 const getFooter = createServerFn({ method: 'GET' }).handler(

@@ -1,6 +1,7 @@
-// Calls to the management API. Every one goes through `mgmtFetch`, and the two relays share its
-// pieces in util/mgmt.ts: server-side bearer injection, the loopback TLS pin, and 401 → 502 so a
-// host-token misconfiguration can't bounce a logged-in user into a redirect loop.
+// Calls to the management API with the console's bearer. All but the two relays go through
+// `mgmtFetch`; `relayToMgmt` (util/mgmt.ts) shares its pieces: server-side bearer injection, the
+// loopback TLS pin, and 401 → 502 so a host-token misconfiguration can't bounce a logged-in user
+// into a redirect loop.
 import {
 	createError,
 	type H3Event,

@@ -88,7 +88,7 @@ describe("resolvePins", () => {
 		).toHaveLength(1);
 	});
 
-	// The sidebar lists every page already; a pinned route only listed it a second time.
+	// The sidebar lists every page already; a pinned route would list it a second time.
 	test("a route never resolves", () => {
 		expect(resolvePins(["/diagnostics", "/host"], [])).toEqual([]);
 	});

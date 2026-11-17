@@ -50,7 +50,8 @@ export type { PairedProtocol, PairedRow };
 /**
  * ALL paired devices in one list: the native (punktfunk/1) clients and the GameStream/Moonlight
  * clients — two host endpoints — merged and tagged by protocol, each unpair routed back to its
- * own endpoint. `dialogs` are the access, display and rename sheets, mounted once by the page.
+ * own endpoint. `dialogs` are the access and display sheets and the password confirm, mounted
+ * once by the page.
  */
 export function usePairedDevices() {
 	const qc = useQueryClient();
@@ -306,8 +307,8 @@ export function usePairedDevices() {
 /**
  * One paired device. Its protocol and fingerprint ride the details line. What can be changed is
  * what you click, each with a pencil: the name (a Moonlight device's, whose certificate carries
- * none), the access chip, the display line. Unpair is the row's one button. A Moonlight device
- * has full control and says so: the GameStream plane is not governed by grants.
+ * none), the access chip, the display line. Unpair is the row's one button. A Moonlight row
+ * carries no access fields and reads "Full (ungoverned)".
  */
 export const PairedRowView: FC<{
 	row: PairedRow;

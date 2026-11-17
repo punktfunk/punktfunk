@@ -272,7 +272,8 @@ const GRANT_TOGGLES: {
 
 /**
  * The access picker: Access level (three presets + an Advanced expander with the grant toggles)
- * and Access expires (Forever / 1 h / 4 h / 8 h / custom). Three grant moments, one component —
+ * and Access expires (Forever / until disconnect / 1 h / 4 h / 8 h / custom, and Keep current
+ * in the edit sheet). Three grant moments, one component —
  * approve dialog, Pair sheet, edit sheet. The two stack; an `@container` with room puts them side
  * by side.
  */
@@ -285,7 +286,7 @@ export const AccessPicker: FC<{
 	allowKeepExpiry?: boolean;
 }> = ({ value, onChange, idPrefix, allowKeepExpiry }) => {
 	// The expander opens itself when the mask is already custom (a prefilled re-grant) — a
-	// "Custom" select over six hidden toggles would name a state it doesn't show.
+	// "Custom" select over hidden toggles would name a state it doesn't show.
 	const [advanced, setAdvanced] = useState(
 		() => levelOfMask(value.grants) === "custom",
 	);

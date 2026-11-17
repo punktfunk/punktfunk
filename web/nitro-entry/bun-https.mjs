@@ -42,9 +42,8 @@ const ws = import.meta._websocket
 //
 // Nitro's `localFetch` (below) hands the app a SYNTHETIC request whose socket has no
 // `remoteAddress`, so h3's `getRequestIP()` returns undefined *inside* the app and every
-// per-peer decision collapses onto one shared bucket. That silently defeated the login
-// throttle: five wrong passwords from anywhere locked out everyone, including the operator
-// (and, since the update-apply route shares that budget, locked out host updates too).
+// per-peer decision collapses onto one shared bucket: five wrong passwords from any peer would
+// lock everyone out of login and of every password-confirmed action, which share that budget.
 // `server.requestIP(req)` is the only place the real peer is knowable, so we stamp it here.
 // Any inbound copy is deleted first, so a client cannot forge it.
 // Read back by `peerAddress()` in server/util/auth.ts — keep the two names in sync.
@@ -52,16 +51,14 @@ const PEER_IP_HEADER = "x-pf-peer-ip";
 
 // PLUGIN ORIGIN — which listener a request arrived on, stamped the same unforgeable way.
 //
-// A plugin's UI used to be reverse-proxied onto the CONSOLE's own origin and framed with
-// `allow-same-origin`, which means plugin JS ran as first-party code on the console origin: it
-// could `fetch('/api/**', {credentials:'same-origin'})` and the BFF would attach the operator's
-// ADMIN mgmt bearer. That reached everything `plugin_may_access` withholds — arm pairing, read the
-// host PIN, approve a device, read `/hooks` — i.e. any plugin was one line of JS away from full
-// operator admin (2026-08-05 review H-3). The "open in new tab" link was the same escalation with
-// no iframe involved at all, so no sandbox attribute could have fixed it.
+// Plugin JS served from the CONSOLE's own origin would run as first-party code there: it could
+// `fetch('/api/**', {credentials:'same-origin'})` and the BFF would attach the operator's ADMIN
+// mgmt bearer, reaching everything `plugin_may_access` withholds (arm pairing, read the host
+// PIN, approve a device, read `/hooks`). An iframe `sandbox` attribute does not apply to a
+// page opened in its own tab.
 //
-// The fix is to make the browser's own same-origin policy the boundary, by serving plugin UIs from
-// a DIFFERENT ORIGIN: a second listener on its own port.
+// So the browser's own same-origin policy is the boundary: plugin UIs are served from a
+// DIFFERENT ORIGIN, a second listener on its own port.
 //
 //   different ORIGIN — scheme+host+PORT — so SOP applies: plugin JS cannot read the console's DOM,
 //                      and its cross-origin `fetch` of `/api/**` is unreadable (we emit no CORS) and
@@ -72,9 +69,9 @@ const PEER_IP_HEADER = "x-pf-peer-ip";
 //                      (server/util/pluginPage.ts).
 //
 // The console listener refuses `/plugin-ui/**` and the plugin listener refuses everything else
-// (server/middleware/auth.ts). Both halves matter: without the first the old path still works;
-// without the second, plugin JS could call `/api/**` on its OWN origin and get the admin bearer
-// attached right back.
+// (server/middleware/auth.ts). Both halves matter: without the first, plugin UIs would still
+// load from the console origin; without the second, plugin JS could call `/api/**` on its OWN
+// origin and get the admin bearer attached right back.
 const LISTENER_HEADER = "x-pf-listener";
 
 // TLS from the host's identity cert (file PATHS → Bun.file, not PEM-in-env). Absent ⇒ plain HTTP.
@@ -143,9 +140,9 @@ const listenerOptions = (lane) => ({
 	// Cap the request body an UNAUTHENTICATED peer can make us hold in memory.
 	//
 	// `fetch` below buffers the whole body with `await req.arrayBuffer()` before Nitro — and
-	// therefore before the auth gate — has seen the request, so Bun's 128 MB default was the only
-	// bound on what a LAN peer could push into console RSS by POSTing to /login (2026-08-05 review
-	// L-10). Nothing the console legitimately accepts is remotely this large: the biggest real body
+	// therefore before the auth gate — has seen the request, so without a cap Bun's 128 MB default
+	// would be the only bound on what a LAN peer could push into console RSS by POSTing to /login.
+	// Nothing the console legitimately accepts is remotely this large: the biggest real body
 	// is a hooks/library JSON edit, kilobytes. 4 MiB leaves several orders of headroom and still
 	// makes the memory cost of an unauthenticated request negligible.
 	maxRequestBodySize:

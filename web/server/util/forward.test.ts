@@ -1,5 +1,6 @@
-// Every call to the management API goes through `mgmtFetch`, so its error mapping is the one the
-// console sees: 503 with no host token, 502 for an unreachable host or a rejected token.
+// Calls to the management API go through `mgmtFetch`, the two relays aside, so its error mapping
+// is the one the console sees: 503 with no host token, 502 for an unreachable host or a rejected
+// token.
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mgmtFetch } from "./forward";
 import { fetchUiCredential } from "./pluginProxy";

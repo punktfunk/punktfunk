@@ -1,5 +1,5 @@
 // Install commands and port facts rendered from the platforms data file, so a docs page never
-// restates a repo URL or a port number (CONTRIBUTING.md "Where facts live"). The canonical file
+// restates a repo URL or a port number (Contributing page, "Docs"). The canonical file
 // is ../../data/platforms.json at the repo root; src/data/platforms.json is a byte-identical
 // snapshot (the Docker build context is docs-site/ alone) that scripts/ci/check-docs-drift.sh
 // keeps in sync — same arrangement as public/openapi.json.

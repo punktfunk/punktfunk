@@ -38,8 +38,9 @@ describe("resolveUiTlsPaths", () => {
 		}
 	});
 
-	// The Windows service supervisor hands us backslash paths (windows/service.rs); node:path on a
-	// POSIX CI runner would read the whole thing as one filename and silently never swap.
+	// The Windows service supervisor hands us backslash paths (windows/service/web.rs);
+	// node:path on a POSIX CI runner would read the whole thing as one filename and silently
+	// never swap.
 	it("resolves Windows paths without a win32 runtime", () => {
 		const win = ["C:\\ProgramData\\punktfunk", "D:\\pf"] as const;
 		for (const d of win) {

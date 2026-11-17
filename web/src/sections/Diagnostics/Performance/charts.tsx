@@ -118,8 +118,8 @@ function colorFor(name: string, i: number): string {
  * Shared X-axis config for every chart here.
  *
  * `type="number"` + an explicit domain, NOT recharts' default category axis: as a category axis
- * every sample is one evenly-spaced slot, so a capture that idled for two minutes drew that gap
- * as a single step. As a number axis the spacing is the actual elapsed time.
+ * every sample is one evenly-spaced slot, so a capture that idled for two minutes would draw that
+ * gap as a single step. As a number axis the spacing is the actual elapsed time.
  */
 const timeAxis = {
 	dataKey: "t",
@@ -308,7 +308,7 @@ export function ThroughputChart({
 					fps: s.fps,
 					repeat: s.repeat_fps,
 					mbps: s.mbps,
-					// The encoder target (kbps → Mb/s) so goodput reads against it.
+					// The encoder target (kbps → Mb/s) so the wire rate reads against it.
 					target: s.bitrate_kbps / 1000,
 				})),
 			),

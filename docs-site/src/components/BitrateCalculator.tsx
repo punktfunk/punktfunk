@@ -1,7 +1,7 @@
 // PyroWave bitrate for a mode at a chosen bits per pixel, and what each link leaves of it. The
-// formula mirrors the host's `pyrowave_pin_kbps` (crates/host/punktfunk-host/src/native.rs): 4:4:4
-// ×1.625, 10-bit ×1.15, clamped to [0.5 Mbps, 8 Gbps]. A link that cannot carry the pin gets
-// `min(pin, 0.7 × delivered)` (`abr::probe::wall_ceiling_kbps`).
+// formula mirrors the host's pin, `resolve_bitrate_kbps_for` (punktfunk-host `native/bitrate.rs`):
+// `pyrowave::kbps_for` (4:4:4 ×1.625, 10-bit ×1.15) clamped to [0.5 Mbps, 8 Gbps]. A link that
+// cannot carry the pin gets `min(pin, 0.7 × delivered)` (`abr::probe::wall_ceiling_kbps`).
 import { useId, useState, type ReactNode } from 'react'
 
 type Preset = { label: string; w: number; h: number }

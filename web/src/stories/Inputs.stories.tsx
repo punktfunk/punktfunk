@@ -42,8 +42,7 @@ export const Form: Story = {
  * The non-text controls, side by side with an Input — the comparison that matters, because the
  * failure mode these wrappers exist to prevent is a control that looks borrowed from another app.
  * A raw `<select>` / `<textarea>` / `<input type="checkbox">` renders in the browser's own chrome
- * and ignores the brand tokens entirely; each of the three had survived that way somewhere in the
- * console until this story existed to show them together.
+ * and ignores the brand tokens entirely.
  */
 export const Controls: Story = {
 	render: () => (

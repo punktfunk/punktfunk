@@ -34,7 +34,7 @@ import { m } from "@/paraglide/messages";
 
 const EMPTY: HookEntry = { on: "session.started", run: "" };
 
-/** The suggestion list shows this many rows, so the host is asked for no more. */
+/** As many matches as `Combobox` shows (its default `max`), so the host is asked for no more. */
 const SUGGESTIONS = 50;
 
 // Radix reserves the empty string, so "no device filter" needs a value of its own.
@@ -177,7 +177,7 @@ export const HookForm: FC<{
 					<Label htmlFor="hook-on">{m.automation_field_on()}</Label>
 					{/* Both, not one. The identifier is what gets written to the config file and what
 					    the SSE `?kinds=` filter takes, so it stays in the host's own spelling — but
-					    on its own it asked the operator to already know the vocabulary. The name
+					    on its own it would ask the operator to already know the vocabulary. The name
 					    comes from the same table the activity feed labels its rows with. */}
 					<Select value={draft.on} onValueChange={(on) => set({ on })}>
 						<SelectTrigger id="hook-on">
@@ -465,8 +465,8 @@ export const HookForm: FC<{
 							<Label htmlFor="hook-timeout">
 								{m.automation_field_timeout()}
 							</Label>
-							{/* 600 is the host's own ceiling — the old field let 900 through, and the
-							    hook then failed at run time rather than at the point of typing it. */}
+							{/* 600 is the host's own ceiling (`MAX_TIMEOUT_S` in hooks.rs), so the field cannot
+							    offer a timeout the host refuses on save. */}
 							<InputNumber
 								id="hook-timeout"
 								min={1}

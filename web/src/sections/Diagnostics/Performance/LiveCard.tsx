@@ -39,10 +39,10 @@ export const LiveSection: FC = () => {
 /**
  * How many samples the live charts plot.
  *
- * The live endpoint returns the capture SO FAR, which grows without bound — a capture left running
- * over an evening is tens of thousands of samples, re-serialised and re-plotted every 2 s. The tail
- * is also the only part anyone watches live (the full series is what the saved recording is for),
- * so plot a bounded window and leave the rest to the detail view.
+ * The live endpoint returns the capture SO FAR, which grows until the host's sample cap
+ * (`MAX_SAMPLES`, hours of capture) — thousands of samples, re-serialised and re-plotted every 2 s.
+ * The tail is also the only part anyone watches live (the full series is what the saved recording
+ * is for), so plot a bounded window and leave the rest to the detail view.
  */
 const LIVE_WINDOW = 600;
 

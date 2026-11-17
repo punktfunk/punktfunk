@@ -6,9 +6,9 @@
 //   CONTROL  — the `enforced` array of a settings plane — decides whether a control
 //              is rendered at all.
 //
-// A control gated on identity is a second source of truth that drifts from the host: the
-// old EDID toggle asked "is there an AMD GPU?" as a proxy for "does `atiadlxx.dll` load?",
-// which the host alone can answer. Gate on `enforced`; a leak is then one host-side fix.
+// A control gated on identity is a second source of truth that drifts from the host, which alone
+// knows what it acts on ("is there an AMD GPU?" is no proxy for "does `atiadlxx.dll` load?").
+// Gate on `enforced`; a leak is then one host-side fix.
 import { useGetDisplaySettings } from "@/api/gen/display/display";
 import { useGetHostInfo } from "@/api/gen/host/host";
 import { useGetSessionSettings } from "@/api/gen/session/session";
@@ -19,7 +19,7 @@ export type Plane = "display" | "session";
 export interface Platform {
 	/** OS chain, generic → specific (`linux/fedora/bazzite`); `""` until `/host` answers. */
 	os: string;
-	/** The chain's first token: `windows` · `macos` · `linux` · `steamos`. */
+	/** The chain's first token: `windows` · `macos` · `linux`. */
 	family: string;
 	isWindows: boolean;
 	isLinux: boolean;

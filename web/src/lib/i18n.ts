@@ -1,8 +1,8 @@
 // Thin reactive layer over Paraglide, made SSR-safe.
 //
 // The problem it solves: Paraglide's client strategies (localStorage / preferredLanguage) resolve
-// the locale synchronously at load, so a `de` user's FIRST client render used German while the
-// server render (which has no localStorage / no request-locale wiring) used the base locale `en` —
+// the locale synchronously at load, so a `de` user's FIRST client render would use German while the
+// server render (which has no localStorage / no request-locale wiring) uses the base locale `en` —
 // a hydration mismatch plus a flash of English on every full page load.
 //
 // The fix: take over the READ side via `overwriteGetLocale`, returning a single `rendered` locale

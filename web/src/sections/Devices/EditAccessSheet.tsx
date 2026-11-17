@@ -30,9 +30,9 @@ export interface EditAccessTarget {
 }
 
 /**
- * The per-device access editor (native rows only — the GameStream plane is not governed yet and
- * its rows say so instead of pretending). Preset + Advanced toggles, extend / expire now / make
- * permanent (= Expires: Forever), and remove.
+ * The per-device access editor (native rows only — a Moonlight row carries no access fields and
+ * reads "Full (ungoverned)"). Preset + Advanced toggles, extend / expire now / make permanent
+ * (= Expires: Forever), and remove.
  *
  * The PATCH is PARTIAL: only what changed is sent — an untouched mask stays omitted, and the
  * default "Keep current expiry" maps to omitting both expiry fields.

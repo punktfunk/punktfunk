@@ -2,7 +2,7 @@
 // `api/hooks.ts` — because they carry the console password, which the BFF verifies and strips
 // (server/routes/api/v1/native/pair/arm.post.ts, .../native/pending/[id]/approve.post.ts,
 // .../pair/pin.post.ts). Admitting a device gives it keyboard and mouse on the host desktop, so a
-// 7-day session cookie on its own must not be able to do it.
+// session cookie on its own must not be able to do it.
 import { useMutation } from "@tanstack/react-query";
 import { apiFetch } from "@/api/fetcher";
 import type { ApprovePending } from "@/api/gen/model/approvePending";
@@ -54,8 +54,7 @@ export function useApprovePendingDevice() {
  * Deliver the PIN a Moonlight client is showing, completing its handshake.
  *
  * `uniqueid`/`fingerprint` address the PIN to the parked ceremony the operator SAW in the
- * pairing status — never to whichever handshake happens to be parked at delivery time
- * (security-review 2026-08-31 H-4).
+ * pairing status — never to whichever handshake happens to be parked at delivery time.
  */
 export function useSubmitPairingPin() {
 	return useMutation({

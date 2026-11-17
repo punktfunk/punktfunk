@@ -3,8 +3,8 @@
 // This exists because getting it wrong is SILENT on the server: the header is well-formed, every
 // curl of the plugin origin returns 200, and the only symptom is that a browser quietly refuses to
 // paint the frame (`ERR_BLOCKED_BY_RESPONSE`) — so the console shows an empty panel and the reason
-// is only in devtools. That is exactly how `http://host:47992` shipped as the permitted ancestor of
-// an `https://host:47992` console.
+// is only in devtools. An `http://host:47992` source for an `https://host:47992` console is the
+// typical wrong answer.
 import { describe, expect, test } from "bun:test";
 import {
 	frameAncestorSource,
@@ -14,8 +14,8 @@ import {
 
 describe("frameAncestorSource", () => {
 	test("uses the listener's scheme, NOT the request's", () => {
-		// The regression. Nitro's localFetch synthesises a request with no TLS socket, so the request
-		// says `http:` on an HTTPS listener. The listener's own scheme has to win, or the browser
+		// Nitro's localFetch synthesises a request with no TLS socket, so the request says
+		// `http:` on an HTTPS listener. The listener's own scheme has to win, or the browser
 		// refuses to frame the plugin.
 		expect(
 			frameAncestorSource({

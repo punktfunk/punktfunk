@@ -93,8 +93,8 @@ function isSessionUnauthorized(body: unknown): boolean {
  * Deferred by a beat rather than navigating inline. This runs inside whichever call noticed the
  * 401 — very often a background poll the user never asked for — and a synchronous
  * `location.href =` there tears the page down mid-render, taking any unsaved editing state with it
- * (the Displays page models exactly such a draft). Letting the current task finish first means the
- * caller's own error handling still runs, and a `beforeunload` guard can still speak up.
+ * (the library entry editor holds exactly such a draft). Letting the current task finish first
+ * means the caller's own error handling still runs, and a `beforeunload` guard can still speak up.
  *
  * Guarded so a burst of parallel 401s (every card on a page polling at once) schedules one
  * navigation, not one per request.
