@@ -805,8 +805,13 @@ fn exec_path_check(_cmd: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run one hook command to completion or timeout, blocking the reaper thread.
-/// Returns exit-0 success; prep gates each step's `undo` on that. `elevated` never runs here.
+/// The longest gap between two looks at a running hook. The first look comes 1 ms after the
+/// spawn and each gap doubles, so a step that exits at once costs about its own runtime.
+const HOOK_POLL_MAX: Duration = Duration::from_millis(100);
+
+/// Run one hook command to completion or timeout, blocking the reaper thread, looking at it as
+/// [`HOOK_POLL_MAX`] says. Returns exit-0 success; prep gates each step's `undo` on that.
+/// `elevated` never runs here.
 #[cfg(unix)]
 fn run_hook_process(
     cmd: &str,
@@ -845,6 +850,7 @@ fn run_hook_process(
         // stdin drops here; a hook that never reads it is unaffected.
     }
     let deadline = Instant::now() + timeout;
+    let mut poll = Duration::from_millis(1);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -868,7 +874,8 @@ fn run_hook_process(
                     let _ = child.wait(); // reap — never leave a zombie
                     return false;
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(poll);
+                poll = (poll * 2).min(HOOK_POLL_MAX);
             }
             Err(e) => {
                 tracing::warn!(cmd = %label, error = %e, "hook command wait failed");
@@ -883,8 +890,8 @@ fn run_hook_process(
 ///
 /// That launch has no stdin, so the event JSON path is the last argument; the file sits in the
 /// user's own `TEMP`, which they can read. A non-SYSTEM host falls back to its own token with
-/// the JSON on stdin, except for `elevated`. Either way the call waits for the command to
-/// exit, ending it at `timeout`.
+/// the JSON on stdin, except for `elevated`, and looks at that child as [`HOOK_POLL_MAX`] says.
+/// Either way the call waits for the command to exit, ending it at `timeout`.
 #[cfg(windows)]
 fn run_hook_process(
     cmd: &str,
@@ -969,6 +976,7 @@ fn run_hook_process(
                         let _ = stdin.write_all(event_json.as_bytes());
                     }
                     let deadline = Instant::now() + timeout;
+                    let mut poll = Duration::from_millis(1);
                     loop {
                         match child.try_wait().ok().flatten() {
                             Some(status) => {
@@ -981,7 +989,10 @@ fn run_hook_process(
                                 let _ = child.wait();
                                 break;
                             }
-                            None => std::thread::sleep(Duration::from_millis(100)),
+                            None => {
+                                std::thread::sleep(poll);
+                                poll = (poll * 2).min(HOOK_POLL_MAX);
+                            }
                         }
                     }
                 }
@@ -1617,6 +1628,25 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "timeout must kill the hook, not wait it out"
         );
+    }
+
+    /// A step that exits at once returns with its exit: forty of them finish well inside the
+    /// 4 s that a look every [`HOOK_POLL_MAX`] would cost.
+    #[cfg(unix)]
+    #[test]
+    fn a_quick_step_returns_with_its_exit() {
+        let started = Instant::now();
+        for _ in 0..40 {
+            assert!(run_hook_process(
+                "true",
+                "{}",
+                &[],
+                Duration::from_secs(5),
+                false
+            ));
+        }
+        let took = started.elapsed();
+        assert!(took < 40 * HOOK_POLL_MAX, "took {took:?}");
     }
 
     /// On a person's own account only a step that person wrote runs: any other runs nothing
