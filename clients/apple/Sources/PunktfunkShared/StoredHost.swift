@@ -1,12 +1,12 @@
 // The saved-host model and its JSON, shared with the widget, so both live in the dependency-free
 // module; `HostStore` and the discovery-join helpers stay in the app. The JSON is a contract the
-// `PunktfunkSharedTests` round trip pins: rename a `CodingKeys` case only while still reading
+// `SharedFoundationTests` round trip pins: rename a `CodingKeys` case only while still reading
 // its old key; never make a stored `Optional` non-optional, or older saved JSON stops decoding.
 
 import Foundation
 
 /// The management-API port default (distinct from the data-plane `port`). Lives here (not in
-/// PunktfunkKit's LibraryClient, which re-exports it) so `StoredHost.effectiveMgmtPort` can resolve
+/// PunktfunkKit, which re-exports this module) so `StoredHost.effectiveMgmtPort` can resolve
 /// it without the shared module taking a dependency on the kit.
 public let punktfunkDefaultMgmtPort: UInt16 = 47990
 
@@ -29,14 +29,14 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     /// client can send a magic packet to wake the host later (when it's asleep and no longer
     /// advertising). Optional (same forward-compat reason as `mgmtPort`); nil until first learned.
     public var macAddresses: [String]?
-    /// Share the clipboard with this host (macOS and iOS sessions; tvOS has no pasteboard — see
-    /// design/clipboard-and-file-transfer.md §5.3). Opt-in per host: nil/false = off (nil also
-    /// keeps older saved JSON decoding — same forward-compat reason as `mgmtPort`). Honored only
-    /// when the host advertises `HOST_CAP_CLIPBOARD`.
+    /// Share the clipboard with this host (not on tvOS, where `UIPasteboard` is unavailable in the
+    /// tvOS 27.0 SDK — see design/clipboard-and-file-transfer.md §5.3). Opt-in per host: nil/false
+    /// = off (nil also keeps older saved JSON decoding — same forward-compat reason as
+    /// `mgmtPort`). Honored only when the host advertises `HOST_CAP_CLIPBOARD`.
     public var clipboardSync: Bool?
     /// This host's default settings preset (`StreamPreset.id`) — what a plain click/tap uses.
-    /// nil, or an id whose preset was deleted, resolves as "Default settings", i.e. exactly
-    /// today's behaviour: a dangling binding is never an error and never blocks a connect
+    /// nil, or an id whose preset was deleted, resolves as "Default settings": a dangling
+    /// binding is never an error and never blocks a connect
     /// (design/client-settings-profiles.md §4.4). Optional and appended last for the same
     /// widget-contract reason as `mgmtPort`.
     public var presetID: String?
@@ -44,7 +44,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     /// default — that is `presetID`; a pin is presentation only, and duplicates and dangling ids
     /// are dropped when the cards are built. Optional for the same forward-compat reason.
     public var pinnedPresetIDs: [String]?
-    /// When this host was saved — what the grid's "Date Added" sort orders by. Optional and
+    /// When this host was saved — what the grid's "Date added" sort orders by. Optional and
     /// appended last for the same widget-contract reason as the rest; hosts saved before it
     /// existed have none, and keep their stored order, which IS the order they were added in.
     public var addedAt: Date?
@@ -181,9 +181,8 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
 public extension StoredHost {
     /// Every saved host from the shared suite.
     ///
-    /// One decoder for the app, its intents and both widgets: the same four lines existed in four
-    /// places. `recentFirst` is explicit at every call site because two of those copies sorted and
-    /// two did not — the STORE must keep its own order, which is card order, while a widget picking
+    /// One decoder for the app, its intents and the widgets. `recentFirst` is explicit at every
+    /// call site: the STORE must keep its own order, which is card order, while a widget picking
     /// "the last host you used" wants recency.
     ///
     /// Decoded PER ELEMENT: one unreadable record would otherwise lose the whole array, and the

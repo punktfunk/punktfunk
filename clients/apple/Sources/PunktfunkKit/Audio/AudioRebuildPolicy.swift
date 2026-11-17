@@ -51,7 +51,7 @@ struct CombinedTopologyGate {
 /// trigger normally arrives minutes later and gets the base floor. A trigger that arrives hard on
 /// the heels of the last rebuild, again and again, is a rebuild answering itself — and since the
 /// recovery cannot always identify its own echo, the backstop is to keep answering but at a
-/// doubling floor, so an unforeseen feedback shape costs one audio blip per half-minute instead
+/// doubling floor, so an unforeseen feedback shape costs one audio blip per `floorCap` instead
 /// of a metronome. A quiet stretch resets the ladder to full responsiveness.
 struct RebuildBackoff {
     /// Let the burst of triggers from one switch land before rebuilding.

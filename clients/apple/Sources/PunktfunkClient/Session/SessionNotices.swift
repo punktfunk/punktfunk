@@ -36,8 +36,7 @@ struct Flash<Value> {
 }
 
 struct SessionNotices {
-    /// How long a hint stays up — the start-of-stream shortcut banner's 6 s, since they share
-    /// the bottom-centre stack and a player reads them the same way.
+    /// How long a hint stays up.
     static let hintSeconds: UInt64 = 6
     /// How long a launch line stays up: long enough to read a sentence with its cause.
     static let launchSeconds: UInt64 = 10

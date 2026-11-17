@@ -1,7 +1,7 @@
 // A title's details (design/apple-touch-ui-overhaul.md §2.5): cover, what it is, what the host
-// recorded about playing it, and its acts: Play / Resume, a favorite heart, Copy Link. Opened
-// from the title menu's Details…; a tap on the poster still just plays. A TV shows it full
-// screen, its facts in a labelled grid.
+// recorded about playing it, and its acts: Play / Resume, a favorite heart, Copy Link, End Game.
+// Opened from the title menu's Details…; a tap on the poster still just plays. A TV shows it
+// full screen, its facts in a labelled grid.
 
 import PunktfunkKit
 import SwiftUI
@@ -90,7 +90,7 @@ struct TitleDetailSheet: View {
             if let onPlay {
                 Button(action: onPlay) {
                     Label(playLabel, systemImage: "play.fill")
-                        // A TV button keeps its own size; stretched, it read as a banner.
+                        // A TV button keeps its own size; stretched, it reads as a banner.
                         #if !os(tvOS)
                         .frame(maxWidth: .infinity)
                         #endif

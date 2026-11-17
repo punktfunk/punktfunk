@@ -1,9 +1,9 @@
 // The console's settings document (`pf_client_core::trust::Settings`) as this client reads and
 // writes it.
 //
-// The console owns keys this app has no field for — `library_sort`, `reduce_motion`, the ring's
-// own bookkeeping — so its last saved document is the BASE and every key the app owns is written
-// over it. That way the touch UI's edits win and the console's own keys survive the round trip.
+// The console owns keys this app has no field for (`follow_os_theme`, `pads`, `last_window_w`),
+// so its last saved document is the BASE and every key the app owns is written over it. That
+// way the touch UI's edits win and the console's own keys survive the round trip.
 // `Settings` is `#[serde(default)]`, so a partial document is fine.
 //
 // The names on the left are the cross-client keys; most already have a `SettingsFields` entry,
@@ -107,7 +107,7 @@ public enum ConsoleSettings {
         }
     }
 
-    /// Defaults are `SettingDefault`'s, which the app's `@AppStorage` reads too: a key nobody has
+    /// Defaults are `SettingDefault`'s except where an entry names its own: a key nobody has
     /// written yet must read as what the touch UI shows, or the first console frame would offer
     /// to change a setting the player never set.
     private static let fields: [Field] = [

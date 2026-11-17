@@ -2,7 +2,7 @@
 // change, and the one piece of it that can be tested without a stream.
 //
 // Split out of SessionAudio deliberately. An end-to-end test of the recovery needs a live session,
-// which needs a host, and punktfunk-host does not build on macOS — so the wiring that matters most
+// which needs a host, and macOS has no host backend — so the wiring that matters most
 // (is the observer actually installed? does the identity check let the notification through?) would
 // otherwise ship unverified, and a silent failure in it costs the session ALL of its audio. On its
 // own this can be pointed at the real hardware from a unit test: see AudioDeviceWatcherTests.

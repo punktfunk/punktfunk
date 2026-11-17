@@ -48,7 +48,7 @@ final class ConsoleHostLookupTests: XCTestCase {
         XCTAssertEqual(found?.name, "windows")
     }
 
-    /// An empty key names nothing; before, it matched every unpaired record's empty fingerprint.
+    /// An empty key names nothing, rather than matching every unpaired record's empty fingerprint.
     func testAnEmptyKeyNamesNoHost() {
         let hosts = [host("fresh", "10.0.0.9", pin: nil)]
         XCTAssertNil(ConsoleJSON.host(in: hosts, key: ""))
@@ -63,7 +63,7 @@ final class ConsoleHostLookupTests: XCTestCase {
         XCTAssertEqual(ConsoleJSON.host(in: dualBoot, key: "bb\u{0}preset")?.name, "linux")
     }
 
-    /// R5-5: a pinned card's key names its preset, so a wake from that card connects with it.
+    /// A pinned card's key names its preset, so a wake from that card connects with it.
     func testAPinnedCardsKeyNamesItsPreset() {
         XCTAssertEqual(ConsoleJSON.preset(ofKey: "bb\u{0}p1"), "p1")
         XCTAssertEqual(ConsoleJSON.preset(ofKey: "fe80::1:9777\u{0}p1"), "p1")

@@ -1,7 +1,7 @@
 // The streaming overlay HUD: the core formats every stats line (`SessionModel.hudLines`, one
 // vocabulary for every client) and this view paints them by role on one glass card, beside the
 // Apple-only chrome (the tvOS access line, the capture hints, the buttons). `.off` never
-// reaches this view (StreamScene gates the overlay on the tier).
+// reaches this view (StreamScene and the curve's HUD attachment mount it only above `.off`).
 
 import PunktfunkKit
 import SwiftUI
@@ -20,8 +20,8 @@ struct StreamHUDView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        // .off is gated upstream (StreamScene only mounts the HUD when the tier is on) —
-        // render nothing if it ever slips through.
+        // .off is gated upstream (StreamScene and the curve's attachment mount the HUD only
+        // when the tier is on) — render nothing if it ever slips through.
         if verbosity != .off {
             // ONE shared glass card wraps the tier-dependent content, so a verbosity change MORPHS
             // this card — its frame (and, on iOS, its clamped corner) animate to the new size — rather
@@ -75,11 +75,9 @@ struct StreamHUDView: View {
                 }
             }
             #if os(tvOS)
-            // The session's access level (per-client access §7). tvOS carries it HERE, as a
-            // stats-overlay line, instead of the floating chip the pointer platforms wear — a
-            // couch surface where every extra overlay competes with the picture keeps the
-            // fact with the other session facts. Absent for full-and-permanent sessions
-            // (every old host): today's overlay must not change there.
+            // The session's access level (per-client access §7). tvOS shows it HERE, as a stats
+            // line, not as the floating chip the pointer platforms wear: an extra overlay
+            // competes with the picture on a couch. Absent for full-and-permanent sessions.
             if model.notices.accessLimited {
                 Text(accessLine)
                     .font(hudFont(.caption2))
@@ -91,14 +89,10 @@ struct StreamHUDView: View {
                     .font(hudFont(.caption2))
                     .foregroundStyle(style(line.role))
             }
-            // Capture hint, shown only until input is captured — how to grab it. The RELEASE
-            // shortcut is intentionally not surfaced in the overlay (it lives on the Stream menu
-            // and, on macOS, the start-of-stream banner), keeping the HUD uncluttered while playing.
-            // Both hints are additionally gated on the session's grants ALLOWING a capture
-            // (per-client access §7): inviting a Controller-only or View-only session to
-            // "capture input" the host would only drop is the lie the grants advert exists
-            // to prevent. Read live off the connection — a re-render lands with the model's
-            // access churn.
+            // Capture hint, shown only until input is captured. The RELEASE shortcut is not
+            // surfaced here (it lives on the Stream menu), keeping the HUD uncluttered. Both
+            // hints need the session's grants to ALLOW a capture (per-client access §7), read
+            // live off the connection: a View-only or Controller-only session is not invited.
             #if os(macOS)
             if !model.mouseCaptured, connection.canSendPointer || connection.canSendKeyboard {
                 Text(L10n.noticeCaptureClick)
@@ -126,11 +120,9 @@ struct StreamHUDView: View {
             }
             #endif
             // ⌃⌥⇧D lives on the app's Stream menu (so it still works when the HUD is hidden)
-            // and in InputCapture's monitor while captured; this button is the in-overlay,
-            // click-to-disconnect affordance. tvOS deliberately gets NEITHER a button (a
-            // focusable control would steal the controller's A press from the host) NOR a hint
-            // line: the exits are the hold gestures the start-of-stream banner teaches (hold
-            // the remote's Back; hold L1+R1+Start+Select on a pad).
+            // and in InputCapture's monitor while captured; this button is the in-overlay
+            // disconnect. tvOS gets NEITHER a button (a focusable control would steal the
+            // controller's A press) NOR a hint line: `exitHintText` teaches its hold gestures.
             #if os(macOS)
             Button(L10n.appleHudDisconnectKeys(keys: "⌃⌥⇧D")) { model.disconnect() }
                 .font(.geist(12, relativeTo: .caption))
@@ -402,8 +394,7 @@ struct ExitHintBadge: View {
 /// Not a control: the fix is the Controller type setting, which is not
 /// reachable mid-stream on every platform, and changing it applies from the next session anyway.
 /// So this states the fact and names the setting, in the HUD's glass language, and gets out of the
-/// way — the alternative is what shipped before, which was a gyro that silently did nothing with
-/// no way to tell that from a broken sensor.
+/// way. Without it the gyro silently does nothing, which reads as a broken sensor.
 ///
 /// Every platform: a DualSense on an Apple TV is an ordinary way to play, and it is exactly the
 /// pad this can happen to.
@@ -452,10 +443,10 @@ struct Sc2CapturedBadge: View {
 
 #if !os(tvOS)
 /// The session's access chip (per-client access §7) — "Controller only · ends in 1 h 58 m".
-/// Rides over the stream for the life of a LIMITED session, at every stats tier and with the
-/// overlay off entirely, in the badges' glass language: what this session may do (and for how
+/// Rides over the stream for the life of a LIMITED session, at every stats tier but Off (see
+/// `StreamBadgeStack`), in the badges' glass language: what this session may do (and for how
 /// long) is not a statistic, and a guest whose keyboard does nothing deserves the why on
-/// screen. Never mounted for full-and-permanent sessions — today's look does not change.
+/// screen. Never mounted for full-and-permanent sessions.
 /// (tvOS states the same fact as a stats-overlay line instead — a chip would fight the couch
 /// UI's single-focus rule.)
 struct AccessChipBadge: View {
@@ -520,7 +511,7 @@ struct AccessWarningBadge: View {
 /// The microphone notice: "Microphone muted" or "Microphone live", for a moment after the
 /// switch, whichever surface made it. It rides over the stream INDEPENDENT of the stats overlay
 /// (which the user may have cycled off), in the HUD's glass language, sized like the
-/// start-of-stream banner it shares the bottom edge with.
+/// `ExitHintBadge` it shares the bottom edge with.
 ///
 /// Not a standing badge and not a control. The state stays readable where it is flipped: the
 /// touch disc and the dial's slot both show it.

@@ -1,9 +1,10 @@
-// Touchpad contacts (design/touchpad-passthrough.md §4): the pure half of the sources that put
-// their fingers on the host's touchpad through `PunktfunkConnection.touchpadSurface`. A surface
-// in tenths of a millimetre, a touch as a fraction of it, a platform timestamp in µs, what the
-// touch mouse still sends while a touchscreen's fingers travel as contacts (frame mode), and what
-// a captured Mac trackpad sends beside its contacts. Both decide again when core's touchpad
-// changes (`.punktfunkTouchpadChanged`) and fall back to today's path when core refuses a call.
+// Touchpad contacts: the pure half of the sources that put their fingers on the host's touchpad
+// through `PunktfunkConnection.touchpadSurface`. A surface in tenths of a millimetre, a touch as a
+// fraction of it, a platform timestamp in µs, what the touch mouse still sends while a
+// touchscreen's fingers travel as contacts (frame mode), and what a captured Mac trackpad sends
+// beside its contacts. Both decide again when core's touchpad changes
+// (`.punktfunkTouchpadChanged`) and fall back to the ordinary pointer path when core refuses a
+// call.
 //
 // The capture halves: StreamViewIOS.swift (touchscreen frames, the iPad trackpad's pinch) and
 // StreamView.swift (the Mac trackpad). TouchpadContactsTests pins this file.
@@ -92,7 +93,7 @@ struct FrameMode {
         return touchpad.presents
     }
 
-    /// Core refused a touchpad call: today's path until the next `refresh`.
+    /// Core refused a touchpad call: the touch mouse sends everything until the next `refresh`.
     mutating func refused() {
         touchpad = (false, false)
         on = false
@@ -112,7 +113,8 @@ struct TrackpadContactGate {
     private(set) var forwarding = false
     /// The scroll gesture under way is the host's, through its momentum tail.
     private var hostScroll = false
-    /// Core refused the last update: the trackpad takes today's paths until capture decides again.
+    /// Core refused the last update: motion and scroll take their ordinary paths until capture
+    /// decides again.
     private(set) var refused = false
 
     /// The trackpad's fingers become contacts only in the capture model toward a host whose

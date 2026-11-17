@@ -38,7 +38,7 @@ final class RingNavModeTests: XCTestCase {
         XCTAssertEqual(RingNav.nextMode(mode: res(1700, 900), native: uhd, dir: -1), res(1280, 720))
     }
 
-    /// R2-2: a session whose mode reads 0×0 (its handle was gone) has no Native; the rows cycle
+    /// A session whose mode reads 0×0 (its handle was gone) has no Native; the rows cycle
     /// the presets and never ask the host for a zero mode.
     func testAZeroModeIsNeverNative() {
         let zero = M(width: 0, height: 0, hz: 0)
@@ -48,7 +48,7 @@ final class RingNavModeTests: XCTestCase {
         XCTAssertEqual(RingNav.nextRefresh(mode: res(1280, 720, 120), native: zero, dir: 1).hz, 60)
     }
 
-    /// R2-5: two presses before the host switches step twice. A press steps from the last ask
+    /// Two presses before the host switches step twice. A press steps from the last ask
     /// while the host still runs the mode it was asked from, and from the live mode once the
     /// host moved anywhere. A Refresh press keeps a size still on its way.
     func testAQuickSecondPressStepsFromTheFirstAsk() {

@@ -11,7 +11,7 @@
 //    suppresses pad 0's controller-motion forwarding while this runs;
 //  - no stale rotation: `stop` sends a single zero-gyro sample after the last real one, so the
 //    host's virtual pad never keeps integrating an angular velocity this device stopped
-//    producing (the gyro-sweep "stale angular velocity re-sent forever" failure mode).
+//    producing.
 //
 // Samples are CMDeviceMotion (bias-corrected rotation, gravity split from user acceleration)
 // at CoreMotion's ~100 Hz ceiling; the host's motion plane is event-driven, so fewer is fine.
@@ -91,8 +91,8 @@ public final class DeviceGyro {
     private let send: @Sendable (_ gyro: (Int16, Int16, Int16), _ accel: (Int16, Int16, Int16)) -> Void
 
     private let motion = CMMotionManager()
-    /// Dedicated serial delivery queue — deliberately NOT main (the controller path's
-    /// main-queue delivery is a known jitter source; the mirror starts clean).
+    /// Dedicated serial delivery queue, off the main thread; `stop`'s closing zero rides it
+    /// behind the last sample.
     private let queue: OperationQueue = {
         let q = OperationQueue()
         q.name = "punktfunk.device-gyro"

@@ -28,7 +28,7 @@ final class TTLCacheTests: XCTestCase {
         XCTAssertEqual(cache["a"], "")
     }
 
-    /// R3-5: a missed refresh keeps the last answer, and the next beat asks again.
+    /// A missed refresh keeps the last answer, and the next beat asks again.
     func testAMissKeepsTheAnswerAndAsksAgain() {
         var cache = TTLCache<[String]>(ttl: 300)
         cache.land(cache.ask("a", now: at(0))!, ["power.sleep"])
@@ -38,7 +38,7 @@ final class TTLCacheTests: XCTestCase {
         XCTAssertNotNil(cache.ask("a", now: at(310)))
     }
 
-    /// R3-5: an answer asked before an invalidate is about a host that has moved on.
+    /// An answer asked before an invalidate is about a host that has moved on.
     func testAnAnswerAskedBeforeAnInvalidateIsDropped() {
         var cache = TTLCache<[String]>(ttl: 300)
         let stale = cache.ask("a", now: at(0))!

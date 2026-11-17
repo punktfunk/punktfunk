@@ -14,15 +14,16 @@ import VideoToolbox
 
 /// A decoded frame's pixels — which present path they take. VideoToolbox codecs deliver a
 /// biplanar `CVPixelBuffer` (NV12/P010/444v/x444); the PyroWave Metal decoder delivers three
-/// separate R8 plane textures straight off its compute pass (there is no CVPixelBuffer — the
-/// planes never leave the GPU).
+/// separate plane textures (R8, or R16 for 10-bit) straight off its compute pass (there is no
+/// CVPixelBuffer — the planes never leave the GPU).
 public enum ReadyImage: @unchecked Sendable {
-    /// 8-bit NV12 / 4:4:4 biplanar (SDR) or 10-bit P010 / x444 (HDR), Metal-compatible.
-    /// `isHDR` = the stream is BT.2020 PQ and the presenter must configure EDR output.
+    /// 8-bit NV12 / 444v or 10-bit P010 / x444 (HDR or 10-bit SDR), biplanar, Metal-compatible.
+    /// `isHDR` = the frame carries a PQ or HLG transfer, or no transfer and 10 bits
+    /// (`VideoDecoder.handleDecoded`); the presenter must configure EDR output.
     case video(CVPixelBuffer, isHDR: Bool)
     #if canImport(Metal)
-    /// PyroWave planar output (Y full-res + Cb/Cr half-res, 8-bit SDR) with its precomputed
-    /// CSC rows — presented by `MetalVideoPresenter.renderPlanar`.
+    /// PyroWave planar output (Y full-res, Cb/Cr half-res or full-res for 4:4:4; 8- or 16-bit
+    /// planes) with its precomputed CSC rows — presented by `MetalVideoPresenter.renderPlanar`.
     case planar(WaveletPlanes)
     #endif
 }
@@ -85,10 +86,10 @@ private let decoderOutputCallback: VTDecompressionOutputCallback = {
             dropped: infoFlags.contains(.frameDropped))
 }
 
-/// Owns a `VTDecompressionSession` rebuilt whenever the format description changes (every IDR /
-/// mode change, the same trigger stage-1 uses). Thread-safe: `decode` runs on the pump thread,
-/// the output callback on a VT-managed thread; the only shared mutable state is the session +
-/// format, guarded by `lock`. `@unchecked Sendable` — the lock enforces the contract.
+/// Owns a `VTDecompressionSession`, rebuilt when a new format description differs and the live
+/// session cannot accept it, or its HDR-ness flips (`decode`). Thread-safe: `decode` runs on the
+/// pump thread, the output callback on a VT-managed thread; the session, its format and the
+/// decode settings are guarded by `lock`. `@unchecked Sendable` — the lock enforces the contract.
 public final class VideoDecoder: @unchecked Sendable {
     private let lock = NSLock()
     private var session: VTDecompressionSession?
@@ -96,8 +97,8 @@ public final class VideoDecoder: @unchecked Sendable {
 
     /// Called on the VT thread for each successfully decoded frame — stamp + enqueue, don't block.
     private let onDecoded: @Sendable (ReadyFrame) -> Void
-    /// Called on the VT thread when a frame fails to decode (bad data / decoder reset) so the
-    /// pump can re-gate on the next IDR.
+    /// Called when a frame fails to decode (bad data / decoder reset): on the VT thread for an
+    /// async failure, on the pump thread when `DecodeFrame` refuses the frame outright.
     private let onDecodeError: @Sendable (OSStatus) -> Void
 
     /// Whether the stream is full-chroma 4:4:4 (`connection.isChroma444`). Selects the 4:4:4
@@ -232,10 +233,11 @@ public final class VideoDecoder: @unchecked Sendable {
 
     /// True when `newFormat` carries a PQ (SMPTE ST 2084) or HLG transfer function — i.e. the host
     /// is sending HDR (BT.2020). VideoToolbox populates the transfer-function extension from the
-    /// HEVC VUI, so this picks the decode bit depth (10-bit P010/x444 vs 8-bit NV12/444v) from the
-    /// stream — and can flip mid-session (a game entering HDR re-inits the host encoder). The
-    /// presenter follows the decoded frame's resulting `isHDR`, not the Welcome's latched flag
-    /// (`render` reconciles the layer per frame via the idempotent `configure(hdr:)`).
+    /// HEVC VUI, so this (with `bitDepth`) picks the decode bit depth (10-bit P010/x444 vs 8-bit
+    /// NV12/444v) from the stream — and can flip mid-session (a game entering HDR re-inits the
+    /// host encoder). The presenter follows the decoded frame's resulting `isHDR`, not the
+    /// Welcome's latched flag (`render` reconciles the layer per frame via the idempotent
+    /// `configure(hdr:)`).
     static func isHDRFormat(_ format: CMVideoFormatDescription) -> Bool {
         guard
             let tf = CMFormatDescriptionGetExtension(
@@ -333,8 +335,8 @@ public final class VideoDecoder: @unchecked Sendable {
     ) {
         guard status == noErr, let imageBuffer else {
             // A frame VideoToolbox chose to DROP under load reports success with no image and the
-            // dropped flag. Reporting it as a decode error armed the display freeze and asked the
-            // host for keyframes, which is the opposite of what an overloaded decoder needs.
+            // dropped flag. Reporting it as a decode error would arm the display freeze and ask
+            // the host for keyframes, the opposite of what an overloaded decoder needs.
             if dropped, status == noErr { return }
             onDecodeError(status)
             return

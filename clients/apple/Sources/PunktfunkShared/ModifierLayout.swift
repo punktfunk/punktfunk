@@ -18,7 +18,8 @@ import Foundation
 /// How the physical ⌥ Option / ⌘ Command keys map to host modifiers. The raw values are stable on
 /// disk — rename the cases freely, never the strings.
 public enum ModifierLayout: String, CaseIterable, Sendable {
-    /// Apple positions (default): ⌥ Option → Alt, ⌘ Command → Super/Windows. The current behaviour.
+    /// Apple positions: ⌥ Option → Alt, ⌘ Command → Super/Windows, as the OS reports them (the
+    /// identity mapping in `InputCapture.applyModifierLayout`).
     case mac
     /// Windows positions: the key nearest the space bar (⌘ Command) → Alt, the next one (⌥ Option)
     /// → the Windows/Super key. Side (left/right) is preserved.

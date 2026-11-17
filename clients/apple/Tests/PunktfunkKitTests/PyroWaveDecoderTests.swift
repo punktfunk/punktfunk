@@ -1,15 +1,16 @@
 // PyroWave Metal decoder tests — two layers:
 //
 // 1. Bitstream/window-walk parser tests (pure CPU): hand-crafted packet streams assert the
-//    exact wire semantics of pyrowave_decoder.cpp's push_packet walk + the Phase-4
-//    chunk-aligned framing (4-byte window prefix, FRAG chains, zeroed missing shards).
+//    exact wire semantics of pyrowave_decoder.cpp's push_packet walk + the chunk-aligned
+//    framing (4-byte window prefix, FRAG chains, zeroed missing shards).
 //
-// 2. Golden-frame PSNR tests (Metal GPU): host-encoded fixtures (crates/host/punktfunk-host
-//    encode/linux/pyrowave.rs `pyrowave_dump_golden`, run on a Vulkan box) decoded by the
-//    Metal port and PSNR-matched against upstream's own decoder output. Float wavelet math is
-//    not bit-exact across implementations (upstream ships precision variants), so the gate is
-//    PSNR, not equality. This is the §4.7 validation oracle for the hand-ported kernels —
-//    the gather/mirror addressing in idwt is the spot most likely to drift.
+// 2. Golden-frame PSNR tests (Metal GPU): host-encoded fixtures (`pyrowave_dump_golden` in
+//    crates/host/pf-encode/src/enc/linux/pyrowave_tests.rs, run on a Vulkan box) decoded by
+//    the Metal port and PSNR-matched against upstream's own decoder output. Float wavelet math
+//    is not bit-exact across implementations (upstream ships precision variants), so the gate
+//    is PSNR, not equality. This is the validation oracle (design/pyrowave-codec-plan.md §4.7)
+//    for the hand-ported kernels — the gather/mirror addressing in idwt is the spot most
+//    likely to drift.
 
 #if canImport(Metal)
 import Metal
@@ -77,9 +78,8 @@ final class PyroWaveParserTests: XCTestCase {
         XCTAssertEqual(layout.levelHeight(0), 80)
         XCTAssertEqual(layout.levelWidth(4), 8)
         XCTAssertEqual(layout.levelHeight(4), 5)
-        // Hand-summed: L4 (8x5 → 1 block) × 3 comps × 4 bands = 12; L3 (16x10 → 1) × 9 = 9;
-        // L2 (32x20 → 1) × 9 = 9; L1 (64x40 → 2x2=4... ) — trust the invariant instead:
-        // every band's count is ceil(w8/4)*ceil(h8/4) and the total is their sum.
+        // Every band's count is ceil(w8/4)*ceil(h8/4); level 4 has four bands, the others
+        // three, level 0 codes luma only, and the total is their sum.
         var expected = 0
         for level in stride(from: 4, through: 0, by: -1) {
             let w8 = (layout.levelWidth(level) + 7) / 8
@@ -312,7 +312,7 @@ final class PyroWaveGoldenTests: XCTestCase {
     }
 
     /// 4:4:4: the chroma components run the full pyramid like luma (no level-0 skip, no
-    /// early half-res emit) — the layout + dispatch structure Phase 4 added
+    /// early half-res emit) — the 4:4:4 layout + dispatch structure
     /// (design/pyrowave-444-hdr.md). The fixture comes from the 4:4:4 host encoder; the
     /// reference is upstream's own 4:4:4 decode (full-res chroma planes).
     func testDense444GoldenFrame() throws {
@@ -322,7 +322,7 @@ final class PyroWaveGoldenTests: XCTestCase {
         try assertMatchesReference(decoded, prefix: "ref-dense444")
     }
 
-    /// Phase-4 partial delivery: zero a mid-AU window (a lost shard) — the frame must still
+    /// Partial delivery: zero a mid-AU window (a lost shard) — the frame must still
     /// decode (blocks > half) and stay recognizably the same picture (holes reconstruct as
     /// localized blur, not garbage).
     func testPartialFrameStillDecodes() throws {

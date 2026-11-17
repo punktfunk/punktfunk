@@ -323,7 +323,7 @@ public enum AV1 {
 
 extension VideoCodec {
     /// Codec-dispatching format-description refresh: the AV1 path keys on an in-band sequence
-    /// header, the NAL codecs on in-band parameter sets — one call site in each pump. PyroWave
+    /// header, the NAL codecs on in-band parameter sets — called from `AUIntake`. PyroWave
     /// has no CoreMedia representation at all (its pump feeds the Metal wavelet decoder raw).
     public func formatDescription(fromKeyframe au: Data) -> CMVideoFormatDescription? {
         switch self {

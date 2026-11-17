@@ -307,9 +307,9 @@ enum ShotMock {
 
     private static var presetsInstalled = false
 
-    /// A populated saved-host grid: the most-recent host bound to a preset (its chip), a second
-    /// paired machine, and one asleep box we hold a MAC for (so its card offers Wake-on-LAN). OS
-    /// chains give every tile its real vendor mark instead of a letter monogram.
+    /// A populated saved-host grid: the most-recent host bound to a preset (its chip), other paired
+    /// machines, and quiet boxes we hold a MAC for (so their cards offer Wake-on-LAN). OS chains
+    /// give every tile its real vendor mark instead of a letter monogram.
     ///
     /// No PINNED host+preset card: it renders a second tile for the SAME host, which is the
     /// feature working as designed but reads as a duplicate to anyone meeting the app in a store
@@ -354,7 +354,7 @@ enum ShotMock {
     /// reachable set above), "Workshop" stays quiet so the grid shows an asleep machine, and one
     /// genuinely new host populates the "On this network" section.
     ///
-    /// A live browse made the shot non-deterministic AND leaked whatever was on the capturing
+    /// A live browse would make the shot non-deterministic AND put whatever is on the capturing
     /// machine's LAN into the App Store listing.
     static func discovery() -> HostDiscovery {
         let discovery = HostDiscovery()
@@ -383,8 +383,7 @@ enum ShotMock {
         pinnedSHA256: fingerprint, osChain: "windows/11")
 
     /// What the pairing sheet calls THIS device. Taken from the platform, not from
-    /// `UIDevice.current.name` — on a capture simulator that is the harness's own throwaway name
-    /// (`pf-shot-iphone-6.9` went out on the store listing that way).
+    /// `UIDevice.current.name` — on a capture simulator that is the harness's own throwaway name.
     static var clientDeviceName: String {
         #if os(tvOS)
         "Apple TV"
@@ -409,7 +408,7 @@ enum ShotMock {
     static let fingerprint = hostFingerprint(0)
 
     /// Distinct per host — `StoredHost.matches` prefers a fingerprint comparison, so sharing one
-    /// across the mock grid made a single advert light up every card.
+    /// across the mock grid would make a single advert light up every card.
     static func hostFingerprint(_ seed: Int) -> Data {
         Data((0..<32).map { UInt8((($0 &* 37) &+ 0x1d &+ (seed &* 91)) & 0xff) })
     }
@@ -692,7 +691,7 @@ private struct ShotConsole: View {
     @StateObject private var model = SessionModel()
     @StateObject private var discovery = ShotMock.discovery()
     @StateObject private var waker = HostWaker()
-    /// Mounted once the scene has turned: a console built before the rotation kept its
+    /// Mounted once the scene has turned: a console built before the rotation keeps its
     /// portrait width.
     @State private var mounted = false
 
@@ -843,9 +842,8 @@ private struct ShotPair: View {
         #if os(iOS) || os(visionOS)
         // PRESENT it, don't rebuild it. `PairSheet` is a bottom sheet on iOS — it carries its own
         // `.presentationDetents([.medium, .large])` and the system's Liquid Glass background, both
-        // of which only exist inside a real `.sheet`. Composed into a ZStack instead (what this
-        // scene used to do), the detents were inert, the grouped Form stretched to the full height
-        // of the screen, and the capture was a thin strip of content over a huge black void.
+        // of which only exist inside a real `.sheet`. In a ZStack the detents are inert and the
+        // grouped Form stretches to the full height of the screen.
         ShotHome()
             .sheet(isPresented: .constant(true)) {
                 // Pinned to one detent. The sheet ships `[.medium, .large]` so it can grow over
@@ -857,8 +855,8 @@ private struct ShotPair: View {
         // tvOS pushes the ceremony as a full screen (HomeView's `navigationDestination`).
         NavigationStack { sheet }
         #else
-        // macOS: the window-modal sheet the app presents. It is a window of its own, which the
-        // driver's capture of the window's rect takes in.
+        // macOS: the window-modal sheet the app presents. It is a window of its own, which
+        // `MacSelfCapture` puts in the shot.
         ShotHome().sheet(isPresented: .constant(true)) { sheet }
         #endif
     }
@@ -958,7 +956,7 @@ private struct ShotHUD: View {
     let width: Int
     let height: Int
 
-    /// 812.4 Mb/s at 5120×1440@240: the bitrate scales with pixel rate at this density.
+    /// 812.2 Mb/s at 5120×1440@240: the bitrate scales with pixel rate at this density.
     private static let bitsPerPixelFrame = 0.459
 
     /// The display's max refresh rate. `PUNKTFUNK_SHOT_FPS` overrides it: a Simulator reports

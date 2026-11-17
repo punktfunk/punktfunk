@@ -13,7 +13,7 @@ final class StreamPumpTests: XCTestCase {
             launchID: "custom:aurora")
     }
 
-    /// `stop` returns only once the pump thread is gone, even mid-iteration.
+    /// `stop` waits out an iteration in progress, up to its 0.5 s bound (`StreamPump.stop`).
     func testStopWaitsForThePumpThread() throws {
         let host = try XCTUnwrap(DemoHost(titles: ["custom:aurora": "Aurora Drift"]))
         defer { host.stop() }

@@ -7,9 +7,9 @@
 // equivalents here name the default chords. On iPadOS and visionOS GCKeyboard is the key path and
 // a menu key equivalent is a second dispatch of the same press, so the items there carry none.
 //
-// tvOS has no menu bar / hardware-keyboard command surface (disconnect there is the Siri
-// Remote's Menu button, handled by ContentView's `.onExitCommand`), so this whole file is
-// non-tvOS only.
+// tvOS has no menu bar / hardware-keyboard command surface (SwiftUI's `Commands` is unavailable
+// there in the 27.0 SDK; disconnect is a hold of the Siri Remote's Menu button,
+// `SiriRemotePointer`), so this whole file is non-tvOS only.
 
 #if !os(tvOS)
 import PunktfunkKit

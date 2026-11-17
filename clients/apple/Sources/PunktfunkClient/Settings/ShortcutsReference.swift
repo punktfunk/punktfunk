@@ -75,9 +75,7 @@ enum ShortcutsCatalog {
     }
 }
 
-/// The standard-interface reference — a sheet from `AboutView` on iOS/macOS, a pushed page on
-/// tvOS — so the keys the start-of-stream banner used to carry are still one press away.
-/// (The controller-first surface renders the same catalog itself; see `GamepadAboutView`.)
+/// The standard-interface reference — a sheet from `AboutView`, a pushed page on tvOS.
 struct ShortcutsView: View {
     let micAvailable: Bool
 

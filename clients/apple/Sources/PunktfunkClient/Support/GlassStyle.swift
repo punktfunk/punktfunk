@@ -3,9 +3,8 @@
 // .glassProminent button style …) is HARD-gated to OS 26: referencing one with our
 // deployment targets (macOS 14 / iOS 17 / tvOS 17) is a COMPILE error, not a silent no-op,
 // unless it sits behind `if #available`. So all glass in the app routes through the two
-// helpers below, each of which falls back to the EXACT look the app shipped before
-// (.regularMaterial / .borderedProminent) — nothing regresses on older OSes, and the gating
-// lives in exactly one file.
+// helpers below, each of which falls back to `.regularMaterial` / `.borderedProminent` on
+// older OSes, and the gating lives in exactly one file.
 
 import SwiftUI
 
@@ -66,7 +65,7 @@ extension View {
 /// prominent button style on 26+, falling back to `.borderedProminent` (the app's current
 /// primary style) below. Apply directly to a `Button`; role / keyboardShortcut / disabled
 /// chain after it as usual. tvOS stays `.borderedProminent` always — glass chrome fights the
-/// focus engine, and keeping it preserves today's tvOS look exactly. visionOS has no glass style.
+/// focus engine. visionOS has no `.glassProminent` (unavailable in the XROS 27.0 SDK).
 private struct GlassProminentButton: ViewModifier {
     func body(content: Content) -> some View {
         #if os(tvOS) || os(visionOS)

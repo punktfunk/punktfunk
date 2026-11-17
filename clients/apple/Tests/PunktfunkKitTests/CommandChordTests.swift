@@ -9,13 +9,13 @@ import XCTest
 /// claim them. Two things are worth a test rather than a comment:
 ///
 ///  * ⌘Q reaching the host at all. That is the whole point — it is the compositor chord on
-///    Hyprland/KDE/GNOME, and it used to quit the client.
+///    Hyprland/KDE/GNOME, and left to AppKit it quits the client.
 ///  * ⌘⎋ NOT reaching it, under every combination. It is the way out of a captured stream;
 ///    forward it and the user is locked in.
 ///
 /// The mouse model is deliberately absent from the rule (and from its signature): the chords are
-/// forwarded under the desktop model too, as they are on the SDL clients. Gating it there read as
-/// a broken client — ⌘Q quit Punktfunk instead of reaching Hyprland.
+/// forwarded under the desktop model too, as they are on the SDL clients. Gating it there would
+/// read as a broken client — ⌘Q would quit Punktfunk instead of reaching Hyprland.
 final class CommandChordTests: XCTestCase {
     // kVK_ANSI_* — physical positions, layout-independent (the same constants the monitor uses).
     private let q: UInt16 = 12, w: UInt16 = 13, h: UInt16 = 4, m: UInt16 = 46
@@ -32,7 +32,7 @@ final class CommandChordTests: XCTestCase {
     }
 
     func testCommandChordsGoToTheHostWhileCaptured() {
-        XCTAssertTrue(forwards(q, .command)) // ⌘Q — the reported break
+        XCTAssertTrue(forwards(q, .command)) // ⌘Q — the compositor chord
         XCTAssertTrue(forwards(w, .command))
         XCTAssertTrue(forwards(h, .command))
         XCTAssertTrue(forwards(m, .command))
@@ -75,7 +75,7 @@ final class CommandChordTests: XCTestCase {
     }
 
     /// `deviceIndependentFlagsMask` also carries Caps Lock and the `.function`/`.numericPad` bits
-    /// every arrow key sets, so comparing it for equality made chords stop being recognized in
+    /// every arrow key sets, so comparing it for equality would stop chords being recognized in
     /// exactly the states a user does not connect to their keyboard: Caps Lock on, or the chord
     /// spelled with an arrow. `chordFlags` isolates the four real modifiers.
     func testCapsLockAndArrowBitsDoNotChangeAChord() throws {

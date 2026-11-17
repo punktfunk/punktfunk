@@ -2,9 +2,10 @@
 //! hands over each display-link tick. Swift keeps the device, the queue and the drawables, and
 //! presents after `punktfunk_console_frame` returns; Skia's work is already on that queue.
 //!
-//! The shell is bound to the thread that created it: `frame`, `menu`, `pointer`, `key`, `text`,
-//! `phase` and `free` run there (the main thread). `push`, `art`, `next_event` and `drain_cmds`
-//! are safe from any thread. The JSON is `pf_console_ui::bridge`'s, which Android speaks too.
+//! The shell is bound to the thread that created it: `frame`, `menu`, `at_root`, `holds_launch`,
+//! `pointer`, `key`, `text`, `phase` and `free` run there (the main thread). `push`, `art`,
+//! `avatar`, `take_unlock`, `next_event` and `drain_cmds` are safe from any thread. The JSON is
+//! `pf_console_ui::bridge`'s, which Android speaks too.
 
 use pf_client_core::console::OverlayAction;
 use pf_console_ui::bridge::{
@@ -73,8 +74,8 @@ pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_CACHED: u8 = 8;
 pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING: u8 = 9;
 /// `0` fresh, `1` waking, `2` offline.
 pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_STALE: u8 = 10;
-/// `[{"app_id", "state", "done_bytes", …}]` — the host's downloads, pushed before the same
-/// read's [`PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING`].
+/// `{"downloads": [{"app_id", "state", "done_bytes", …}], "grants": n}` — the host's
+/// downloads, pushed before the same read's [`PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING`].
 pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_DOWNLOADS: u8 = 19;
 /// `Settings` changed elsewhere; the shell reads it on its next mutation. Not a save.
 pub const PUNKTFUNK_CONSOLE_PUSH_SETTINGS: u8 = 11;
@@ -82,9 +83,11 @@ pub const PUNKTFUNK_CONSOLE_PUSH_SETTINGS: u8 = 11;
 pub const PUNKTFUNK_CONSOLE_PUSH_PRESETS: u8 = 12;
 /// `KnownHosts` — the records `punktfunk://` links are built from.
 pub const PUNKTFUNK_CONSOLE_PUSH_KNOWN_HOSTS: u8 = 13;
-/// `{"label", "pref", "pads": [PadInfo]}` — the connected controllers.
+/// `{"label", "pref", "pads": [..], "others": [..]}` — the connected controllers and the other
+/// input devices; `pf_console_ui::bridge::PadsJson` has the fields.
 pub const PUNKTFUNK_CONSOLE_PUSH_PADS: u8 = 14;
-/// `{}` for Home, `{"library": HostRow}` for a shelf — re-roots on the next frame.
+/// `{}` for Home, else one key holding a `HostRow`: `library` (its shelf), `stream` (the shelf
+/// plus a connect to its desktop) or `pair` (its Pair screen). Re-roots on the next frame.
 pub const PUNKTFUNK_CONSOLE_PUSH_NAVIGATE: u8 = 15;
 /// `{"id", "title", "message", "choices": [..]}` — a question over the top screen; the
 /// answer comes back as the `PromptAnswer` command.

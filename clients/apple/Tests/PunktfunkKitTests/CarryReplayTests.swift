@@ -160,10 +160,10 @@ private func replay(
 }
 
 final class CarryReplayTests: XCTestCase {
-    /// A true 120.000 Hz host under a 120 Hz panel, decode jitter σ 2 ms, 120 s. A 2 s rate
-    /// count read it 0.5 Hz slow in about 5 % of windows. Taken for a slow host, that lifted the
-    /// carry's bound to 240 picks and queues of 105 stood (longest run 107, 195 drops). One frame
-    /// over the 8 s window is 0.125 Hz, so the bound stays 24 (longest run 24, queue 38, 197 drops).
+    /// A true 120.000 Hz host under a 120 Hz panel, decode jitter σ 2 ms, 120 s. One frame of
+    /// count noise over `DeadlineSelector.rateWindow` is 0.125 Hz, under the 0.3 Hz slow
+    /// threshold, so the bound stays `Carry.maxRun`. A 2 s window would read the same frame as
+    /// 0.5 Hz slow and lift the bound to a beat, which lets a standing queue form.
     func testRateCountNoiseKeepsTheCarryBound() {
         let r = replay(hz: 120, hostHz: 120, phase: 0.0005, sigma: 0.002, duration: 120)
         XCTAssertEqual(r.maxBound, Carry.maxRun, "count noise is not a slow host")
@@ -173,8 +173,7 @@ final class CarryReplayTests: XCTestCase {
     }
 
     /// A host 0.6 Hz slower than a 120 Hz panel, σ 1 ms, 120 s: a real slow host, whose own gap
-    /// each beat ends the carry's holds. The bound lifts to a beat and no frame drops; a 0.8 Hz
-    /// tolerance kept it at 24 and dropped 11.
+    /// each beat ends the carry's holds. The bound lifts to a beat and no frame drops.
     func testASlowHostKeepsTheBeatBound() {
         let r = replay(hz: 120, hostHz: 119.4, phase: 0.0064, sigma: 0.001, duration: 120)
         XCTAssertGreaterThan(r.maxBound, Carry.maxRun, "measurably slow: one beat")

@@ -2,7 +2,7 @@
 # Loopback integration: real punktfunk/1 hosts (synthetic source — pure protocol, runs fine on
 # macOS) on 127.0.0.1, then the Swift integration tests against them through the xcframework.
 # Three hosts: an OPEN one (--allow-tofu; the anonymous stream round trip — bare punktfunk1-host
-# now defaults to require-pairing), one armed with --require-pairing (the PIN ceremony + pairing
+# defaults to require-pairing), one armed with --require-pairing (the PIN ceremony + pairing
 # gate — its random PIN is parsed out of its log), and a GUESS host whose one-shot arming window
 # the wrong-PIN test deliberately burns (a pairing attempt — right or wrong — consumes the armed
 # PIN, the SPAKE2 "one online guess", so the real ceremony needs a window of its own).
@@ -47,8 +47,7 @@ sleep 1
 pin_from_log() {
     local log="$1" pin=""
     for _ in $(seq 50); do
-        # The host prints "pairing PIN: 1234"; the older "pair: 1234" is still accepted so this
-        # harness works against a host either side of that change.
+        # The host prints "pairing PIN: 1234"; the pattern also matches a bare "pair: 1234".
         pin="$(grep -oE '(pairing PIN|pair): *[0-9]+' "$log" | head -1 | grep -oE '[0-9]+' || true)"
         [ -n "$pin" ] && break
         sleep 0.2

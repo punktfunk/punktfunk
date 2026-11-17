@@ -3,8 +3,8 @@
 // dependency-free shared module.
 //
 // Gated on `os(iOS)`, NOT `canImport(ActivityKit)`: ActivityKit *imports* on macOS but its types
-// are `@available(macOS, unavailable)`, so canImport would wrongly admit this on the macOS build.
-// Live Activities are iPhone/iPad only (iPadOS reports os(iOS)).
+// are `@available(macOS, unavailable)` (macOS 27.0 SDK), so canImport would wrongly admit this on
+// the macOS build. Live Activities are iPhone/iPad only (iPadOS reports os(iOS)).
 //
 // Naming/shape is a runtime contract: an Activity started by one build is decoded by the extension
 // of the same build, so keep `ContentState` Codable-stable across releases the way `StoredHost` is.

@@ -63,9 +63,8 @@ final class DualSenseHIDTests: XCTestCase {
 
     // MARK: - Device selection (B14)
 
-    /// With two DualSenses attached, each renderer must drive its OWN device. The old code took
-    /// `Set.first` from an unordered set, so the pad→device binding was a coin flip that could
-    /// point both renderers at the same pad.
+    /// With two DualSenses attached, each renderer must drive its OWN device: the wanted
+    /// location id decides, never the first of an unordered set.
     func testPreferredIndexHonoursAnExplicitLocation() {
         let ids: [UInt32?] = [0x1D18_0000, 0x1420_0000, 0x1411_0000]
         XCTAssertEqual(DualSenseHID.preferredIndex(among: ids, preferring: 0x1420_0000), 1)
@@ -73,7 +72,7 @@ final class DualSenseHIDTests: XCTestCase {
     }
 
     /// No preference (or one the pad no longer has): fall back to the LOWEST id — arbitrary, but
-    /// stable across calls, which `Set.first` was not.
+    /// stable across calls.
     func testPreferredIndexFallsBackToTheLowestIdDeterministically() {
         let ids: [UInt32?] = [0x1D18_0000, 0x1420_0000, 0x1411_0000]
         XCTAssertEqual(DualSenseHID.preferredIndex(among: ids, preferring: nil), 2)

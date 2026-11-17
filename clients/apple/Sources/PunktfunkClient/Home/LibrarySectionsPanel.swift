@@ -40,8 +40,8 @@ struct LibrarySectionsPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(L10n.playerLibrarySections)
                 .font(.headline)
-            // A Mac list paints its own fill and insets its rows. Without both gone the rows sat in
-            // a dark slab, indented past the popover's own padding.
+            // A Mac list paints its own fill and insets its rows; both go, or the rows sit in a
+            // dark slab, indented past the popover's own padding.
             List { rows }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)

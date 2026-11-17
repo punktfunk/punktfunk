@@ -23,11 +23,12 @@ import os
 /// constant and rule here must stay in lockstep with it** — `CadenceClockTests` and the Rust
 /// `phase::tests` assert the two against the same synthetic input, and `CadenceVectorTests`
 /// replays the runs `phase::vectors` wrote to `clients/shared/cadence-vectors.json`. That
-/// agreement IS the contract.
+/// agreement IS the contract. The Rust loop's `gap_adopts_later`, tail cushion and `vrr_latency`
+/// have no counterpart here; the vectors cover `snapping` and `free_running` only.
 struct CadenceTuning: Equatable {
-    /// Proportional gain on the offset estimate: `1 >> offsetShift` of the residual per frame.
+    /// Proportional gain on the offset estimate: `2^-offsetShift` of the residual per frame.
     var offsetShift: UInt8
-    /// Integral gain on the per-frame rate (skew) term: `1 >> skewShift`.
+    /// Integral gain on the per-frame rate (skew) term: `2^-skewShift` of the residual.
     var skewShift: UInt8
     /// EMA weight for the residual mean-absolute-deviation.
     var jitterShift: UInt8
@@ -63,12 +64,12 @@ struct CadenceTuning: Equatable {
 }
 
 /// Loop health for the pf-present line — the numbers that say whether the cushion is doing its
-/// job. Mirrors `punktfunk_core::phase::CadenceHealth`.
+/// job. Mirrors `punktfunk_core::phase::CadenceHealth`, less its `tail_ns`.
 ///
 /// Residual PERCENTILES are deliberately absent: this type holds no histogram, and the client
 /// stat paths (the latency meters) are where distributions belong.
 struct CadenceHealth: Equatable {
-    /// Frames folded since the last `reset`.
+    /// Frames folded since the clock was made; `reset` keeps counting.
     var frames: UInt64 = 0
     /// …of which the due time was already past when the frame became presentable. The direct
     /// signal that the cushion is too small.
@@ -120,8 +121,8 @@ final class CadenceClock: @unchecked Sendable {
         self.tuning = tuning
     }
 
-    /// Force a re-anchor on the next sample. Call on every discontinuity the client already knows
-    /// about: reanchor, codec rebuild, surface recreate, jump-to-live, resume.
+    /// Force a re-anchor on the next sample. `Stage2Pipeline` calls it once, at a session start;
+    /// a later gap in source timestamps re-anchors the loop by itself.
     func reset() {
         lock.lock()
         lastPtsNs = nil

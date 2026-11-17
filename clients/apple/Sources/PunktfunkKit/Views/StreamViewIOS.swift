@@ -166,7 +166,8 @@ public final class StreamViewController: StreamViewControllerBase {
     /// Capture→on-glass for the A/V sync loop while the stage-2 presenter runs. Read at start().
     var endToEndMeter: LatencyMeter?
     /// The shared presenter stack: stage-2 (CAMetalLayer sublayer + display link) with the
-    /// stage-1 StreamPump → displayLayer path as the Metal-unavailable / DEBUG fallback.
+    /// stage-1 StreamPump → displayLayer path as the Metal-unavailable fallback (or
+    /// `PUNKTFUNK_PRESENTER=stage1`).
     private let presenter = SessionPresenter()
     #if os(tvOS)
     /// The window's display manager the session's mode request was set on — held weakly so
@@ -582,7 +583,7 @@ public final class StreamViewController: StreamViewControllerBase {
             connection?.send(event)
         }
         // Apple Pencil → the stylus plane, only against a pen-capable host (elsewhere the
-        // Pencil stays a finger, exactly as before). Same trust gate as touch.
+        // Pencil stays a finger). Same trust gate as touch.
         streamView.penEnabled = connection.hostSupportsPen
         streamView.touchPassthroughEnabled = connection.hostSupportsTouch
         streamView.textInputEnabled = connection.hostSupportsText
@@ -936,8 +937,8 @@ public final class StreamViewController: StreamViewControllerBase {
         guard mode.width > 0, mode.height > 0, mode.refreshHz > 0 else { return }
         // A synthetic HEVC format description of what the stream decodes to: BT.2020 PQ at 10
         // bits WITH an HDR10 grade. tvOS reads the range off the static metadata; tagged PQ
-        // alone counts as SDR, and the box never switched. A 1000-nit BT.2020 grade stands in
-        // until the host's own arrives — the mode is the same.
+        // alone counts as SDR. A 1000-nit BT.2020 grade stands in until the host's own arrives
+        // — the mode is the same.
         let grade = PunktfunkConnection.HdrMeta(
             primariesX: [8500, 6550, 35400], primariesY: [39850, 2300, 14600],
             whitePointX: 15635, whitePointY: 16450,
@@ -1369,7 +1370,7 @@ final class StreamLayerUIView: UIView {
     /// touch-driven mouse events (`TouchMouse`) in the trackpad/pointer modes.
     var onTouchEvent: ((PunktfunkInputEvent) -> Void)?
     /// Apple Pencil → state-full pen sample batches (the stylus plane). Active only while
-    /// `penEnabled`; without it the Pencil stays on the finger path exactly as before.
+    /// `penEnabled`; without it the Pencil stays on the finger path.
     var onPenBatch: (([PunktfunkPenSample]) -> Void)?
     /// The host advertised `HOST_CAP_PEN`, so Pencil input splits out of the finger path onto
     /// the pen plane — independent of the touch-input mode (drawing must not depend on it).
@@ -1452,8 +1453,9 @@ final class StreamLayerUIView: UIView {
     /// The curved screen's pinch in progress, latched to the route it started in.
     var curve: CurvePinch?
     #endif
-    /// The finger route latched at gesture start — a Settings change mid-gesture applies to
-    /// the NEXT touch, so one gesture never splits across input models.
+    /// The finger route latched at gesture start — a mid-gesture switch (the ring's
+    /// `TouchInputMode.sessionOverride`) applies to the NEXT touch, so one gesture never splits
+    /// across input models.
     private var fingerRoute: TouchInputMode?
     /// The Apple Pencil pipeline (contacts + hover + squeeze/tap → pen samples).
     private lazy var pencil: PencilStream = {
@@ -1674,8 +1676,8 @@ final class StreamLayerUIView: UIView {
         surface(contacts, keep: keep, at: time)
     }
 
-    /// One surface update. A refused call hands the fingers and the trackpad back to today's
-    /// paths until `refreshTouchpad`, so no finger stays muted while core takes nothing.
+    /// One surface update. A refused call hands the fingers and the trackpad back to their
+    /// ordinary paths until `refreshTouchpad`, so no finger stays muted while core takes nothing.
     private func surface(_ touches: [PunktfunkSurfaceTouch], keep: Bool, at time: TimeInterval) {
         let answer = onTouchpadSurface?(
             touches, keep, !frames.touchpad.taps, touchpadSize, TouchpadContacts.micros(time))

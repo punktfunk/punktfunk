@@ -51,10 +51,9 @@ extension SettingsView {
     // MARK: - Described rows (the 2026-07 revamp's field idiom)
 
     /// A control with its explanation attached to the SAME cell: the field, then a tight caption
-    /// directly under it. This replaced the per-section footer paragraphs — a description the eye
-    /// can't match to its field is one nobody reads. Keep captions to one or two sentences; when
-    /// a picker's meaning depends on the selection, pass a DYNAMIC string describing the current
-    /// choice.
+    /// directly under it — a description the eye can't match to its field is one nobody reads.
+    /// Keep captions to one or two sentences; when a picker's meaning depends on the selection,
+    /// pass a DYNAMIC string describing the current choice.
     /// `field` is the overlay's name for this row (see `SettingsField`). Passing it puts the
     /// override marker + Reset in the caption line while a preset is being edited — with the row
     /// it belongs to, which is the only place the state is legible. On a TV the caption goes to
@@ -141,8 +140,9 @@ extension SettingsView {
         String(localized: L10n.appleBitrateKbpsGigabitWarning)
     }
 
-    /// `bitrateKbps == 0` is Automatic; switching to manual lands on the host default. Scoped, so
-    /// flipping it in a preset records the override there rather than moving the global.
+    /// `bitrateKbps == 0` is Automatic; switching to manual lands on the host default
+    /// (`DEFAULT_BITRATE_KBPS` in the host's `native/bitrate.rs`). Scoped, so flipping it in a
+    /// preset records the override there rather than moving the global.
     var automaticBitrate: Binding<Bool> {
         let bitrate = scoped(SettingsFields.bitrateKbps)
         return Binding(

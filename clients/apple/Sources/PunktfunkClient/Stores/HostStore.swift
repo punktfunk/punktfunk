@@ -5,8 +5,8 @@
 // trust-on-first-use prompt (user compares the observed fingerprint against the host's
 // log) or the SPAKE2 PIN pairing ceremony (PairSheet; mutually verified, and the host
 // stores our identity from ClientIdentityStore in return). Every later connect passes
-// the pin into punktfunk-core, which refuses a host whose identity changed. Hosts running
-// --require-pairing only admit paired clients, so for them pairing is the only way in.
+// the pin into punktfunk-core, which refuses a host whose identity changed. A host admits only
+// paired clients unless started with --open, so for it pairing is the only way in.
 
 import Foundation
 import PunktfunkKit
@@ -15,7 +15,7 @@ import SwiftUI
 import WidgetKit
 #endif
 
-// `StoredHost` (the model + its JSON codec) now lives in PunktfunkShared so the widget extension
+// `StoredHost` (the model + its JSON codec) lives in PunktfunkShared so the widget extension
 // can read the same store; PunktfunkKit re-exports it. The discovery-join helpers below stay here
 // because they reference PunktfunkKit's `DiscoveredHost`/`HostDiscovery`.
 
@@ -38,8 +38,9 @@ extension StoredHost {
     }
 }
 
-/// The join of live mDNS discovery against the saved-host store, shared by the touch grid
-/// (HomeView) and the console (ConsoleModel) so both classify hosts the same way. Presence is NOT part of it: whether a host is up is `HostStore.isReachable`, because an
+/// The join of live mDNS discovery against the saved-host store. The touch grid (HomeView) and
+/// the console (`ConsoleJSON.hostRows`) both classify hosts by `DiscoveredHost.matches`.
+/// Presence is NOT part of it: whether a host is up is `HostStore.isReachable`, because an
 /// advert outlives the machine it describes by up to 75 minutes.
 extension HostDiscovery {
     /// Discovered hosts not already saved — the saved list shows the rest, so this only surfaces
@@ -70,15 +71,14 @@ final class HostStore: ObservableObject {
     @Published var probedOnline: Set<StoredHost.ID> = []
 
     /// The App-Group suite — shared with the Widget/Live-Activity extension so a launcher widget
-    /// sees the same saved hosts. Falls back to `.standard` in an un-entitled process (see
-    /// `AppGroup.defaults`).
+    /// sees the same saved hosts. A process without the group entitlement gets a suite private
+    /// to it (see `AppGroup.defaults`).
     private let defaults = AppGroup.defaults
 
     init() {
         Self.migrateToAppGroupIfNeeded()
-        // Per-element (see `StoredHost.loadAll`): decoding the array as a whole meant one
-        // unreadable record lost every saved host, and the first `markConnected` after that
-        // persisted the empty array straight over the user's real store.
+        // Per-element (see `StoredHost.loadAll`): one unreadable record must not lose every
+        // saved host, or the next persist would write the empty array over the real store.
         hosts = StoredHost.loadAll(from: defaults, recentFirst: false)
     }
 
@@ -90,7 +90,7 @@ final class HostStore: ObservableObject {
     private static func migrateToAppGroupIfNeeded() {
         let suite = AppGroup.defaults
         let standard = UserDefaults.standard
-        guard suite !== standard else { return } // un-entitled fallback: nothing to migrate
+        guard suite !== standard else { return } // `AppGroup.defaults` fell back: nothing to move
         guard suite.data(forKey: key) == nil,
               let legacy = standard.data(forKey: key) else { return }
         suite.set(legacy, forKey: key)
@@ -145,7 +145,7 @@ final class HostStore: ObservableObject {
     ///
     /// A live advert is NOT that answer. An mDNS browse result is a cache entry with a 75-minute
     /// PTR TTL, and a host that suspends sends no goodbye, so a sleeping machine keeps advertising
-    /// to every client for up to an hour. So a bounded QUIC handshake says whether THIS host is
+    /// to every client for up to 75 minutes. So a bounded QUIC handshake says whether THIS host is
     /// there, and the advert only says where else to look.
     ///
     /// A host lives at more than one address — its LAN lease at home, a Tailscale address
@@ -204,10 +204,10 @@ final class HostStore: ObservableObject {
     /// reachable set. Call in a loop from a home view's `.task` (cancelled on disappear).
     ///
     /// All hosts at once, as the desktop clients' `probe_known` does. Asked in turn, every silent
-    /// host cost a full probe timeout (1.7 s, twice for a pinned one with somewhere else to look)
-    /// before the next was asked, and nothing was published until the last — so a list holding a
-    /// few sleeping machines took half a minute to light the one that was up. A host lights the
-    /// moment it answers; the end of the lap drops the ones that stopped.
+    /// host would cost a full probe timeout (`probeIdentity`'s `timeoutMs`, twice for a pinned
+    /// one with somewhere else to look) before the next was asked, and nothing would publish
+    /// until the last. A host lights the moment it answers; the end of the lap drops the ones
+    /// that stopped.
     ///
     /// One sweep at a time: a second caller waits for the one in flight and takes its answer,
     /// so an older lap never publishes over a newer one.
@@ -245,11 +245,11 @@ final class HostStore: ObservableObject {
         probedOnline = online
     }
 
-    /// Presence while a home is on screen, touch or console: a sweep every 10 s, each saved
-    /// host's name following its live advert, and each reachable paired host's actions, screens
-    /// and running title kept warm on the same beat, so a card's menu is built from a settled
-    /// answer. Every cache is TTL-gated inside. Run it from the home's `.task`; it returns
-    /// when that task is cancelled.
+    /// Presence while a home is on screen, touch or console: a sweep every `presencePeriod`, each
+    /// saved host's name following its live advert, and each reachable paired host's actions,
+    /// screens and running title kept warm on the same beat, so a card's menu is built from a
+    /// settled answer. Every cache is TTL-gated inside. Run it from the home's `.task`; it
+    /// returns when that task is cancelled.
     ///
     /// Each Mac window runs one. A lap that finds a sweep younger than the period skips its
     /// own, so the process probes once per period however many windows are open.
@@ -332,9 +332,7 @@ final class HostStore: ObservableObject {
     }
 
     /// Learn/refresh this host's management-API port from its live advert — same contract as
-    /// `updateMacs`. Until this existed, `StoredHost.mgmtPort` was declared and read but never
-    /// written, so `effectiveMgmtPort` always answered 47990 and a host that had moved its mgmt
-    /// port simply had no working library here.
+    /// `updateMacs`. `StoredHost.effectiveMgmtPort` reads the port stored here.
     func updateMgmtPort(_ hostID: UUID, port: UInt16?) {
         guard let port, port > 0,
               let i = hosts.firstIndex(where: { $0.id == hostID }),
@@ -402,8 +400,8 @@ final class HostStore: ObservableObject {
     }
 
     /// Ask WidgetKit to rebuild the launcher widgets' timelines after any store change (add/remove/
-    /// pin/last-connected). iOS-only and a no-op where WidgetKit is absent; both widgets use
-    /// `.never`-refresh entries and rely on this push.
+    /// pin/last-connected). iOS-only and a no-op where WidgetKit is absent. The library widget's
+    /// timeline is `.never` and the hosts widget's reloads hourly, so both rely on this push.
     private func reloadHostsWidget() {
         #if canImport(WidgetKit) && os(iOS)
         WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.hosts)

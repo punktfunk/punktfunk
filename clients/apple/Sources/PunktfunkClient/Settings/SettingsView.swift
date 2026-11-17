@@ -32,7 +32,7 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.streamWidth) var width = SettingDefault.streamWidth
     @AppStorage(DefaultsKey.streamHeight) var height = SettingDefault.streamHeight
     @AppStorage(DefaultsKey.streamHz) var hz = SettingDefault.streamHz
-    // Opt-in (default OFF): the explicit mode below is used and never auto-resized. When ON, a
+    // Opt-in: when off, the explicit mode below is used and never auto-resized. When ON, a
     // windowed session instead streams at the window's native pixels (1:1, no scaling) so it stays
     // pixel-exact rather than the presenter resampling a fixed-mode frame into the window.
     @AppStorage(DefaultsKey.matchWindow) var matchWindow = SettingDefault.matchWindow
@@ -80,7 +80,7 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.audioFormat) var audioFormat = SettingDefault.audioFormat
     @AppStorage(DefaultsKey.codec) var codec = SettingDefault.codec
     // The overlay tier's raw string (the pickers tag by rawValue); the absent-key default runs
-    // the legacy-hudEnabled migration (same pattern as ContentView/StreamCommands).
+    // the legacy-hudEnabled migration (same pattern as ContentView).
     @AppStorage(DefaultsKey.statsVerbosity) var statsVerbosityRaw = StatsVerbosity.current.rawValue
     @AppStorage(DefaultsKey.hudPlacement) var hudPlacement = SettingDefault.hudPlacement
     @AppStorage(DefaultsKey.spatialAudio) var spatialAudio = SettingDefault.spatialAudio
@@ -327,7 +327,7 @@ struct SettingsView: View {
                 // The scope control heads the category list: on iPhone this is the screen you
                 // start on, and on iPad it stays visible beside whichever category is open — so
                 // the layer being edited is never off screen while you edit it. The caption is
-                // the section's FOOTER; in the row it wrapped to four lines.
+                // the section's FOOTER, not part of the row.
                 Section {
                     scopeRow
                 } footer: {
@@ -441,7 +441,7 @@ struct SettingsView: View {
                 .navigationTitle(category.title)
                 .navigationBarTitleDisplayMode(.inline)
         case .about:
-            // The identity card; the license wall is one push further in. Inline title to match
+            // The identity card; the license wall opens as a sheet from it. Inline title to match
             // the five sibling detail pages (it would otherwise inherit the large title from the
             // "Settings" sidebar root).
             AboutView()

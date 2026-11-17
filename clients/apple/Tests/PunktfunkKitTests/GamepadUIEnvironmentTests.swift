@@ -8,8 +8,7 @@ final class GamepadUIEnvironmentTests: XCTestCase {
     private let connected = GamepadUIEnvironment.modeWhenConnected
     private let always = GamepadUIEnvironment.modeAlways
 
-    /// The default mode is the behaviour the switch had when it was a lone Bool, so an install
-    /// that never sees the new row is exactly where it was.
+    /// The default mode is a plain AND of the connected controller and the switch.
     func testWhenConnectedIsAPlainAnd() {
         XCTAssertTrue(
             GamepadUIEnvironment.isActive(

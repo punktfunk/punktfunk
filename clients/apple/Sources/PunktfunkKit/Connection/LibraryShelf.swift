@@ -235,7 +235,7 @@ public enum LibraryShelf {
 
 /// The catalog's provenance, as the shelf states it. Three states rather than a flag, so
 /// "waking the host…" never shows while nothing happens: the desktop console's
-/// `Stale::{No, Waking, Offline}`, with its wording.
+/// `Stale::{No, Waking, Offline}` (it also has `Checking`), with its wording.
 public enum LibraryStaleness: Equatable, Sendable {
     case none
     /// Served from disk; a fetch (and a wake) is in flight.

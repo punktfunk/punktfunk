@@ -53,8 +53,9 @@ struct WedgePolicy {
 ///
 /// Stage-2/3/4 share explicit decode and the Metal renderer, using arrival, on-glass-gated, or
 /// CAMetalDisplayLink pacing. `decoded` keeps explicit decode but sends its IOSurface directly to
-/// the system video renderer, an env-only A/B on iOS and tvOS. Stage-1 sends compressed samples to that renderer and remains a debug
-/// diagnostic because its internal decoder cannot participate in recovery or decode metering.
+/// the system video renderer, an env-only A/B on iOS and tvOS. Stage-1 sends compressed samples
+/// to that renderer and remains a debug diagnostic because its internal decoder reports no
+/// per-frame decode result for recovery or decode metering.
 ///
 /// Internal rather than private for resolution tests.
 enum PresenterChoice: Equatable {
@@ -102,7 +103,7 @@ enum PresenterChoice: Equatable {
     /// The deadline link presents each drawable as late as its deadline allows
     /// (`DeadlinePacer`). Filmed at 240 fps on a 60 Hz Apple TV, a late pick answered controller
     /// presses 9 ms sooner than the decoded video plane, whose displayed-surface metric reads
-    /// about a refresh early. `decoded` stays an explicit A/B on tvOS 17.4+.
+    /// about a refresh early. `decoded` stays an explicit A/B on iOS and tvOS 17.4+.
     static var platformDefault: PresenterChoice {
         #if os(macOS)
         return .stage2
@@ -129,9 +130,10 @@ enum PresentPriority: Equatable {
     case latency
     case smooth(buffer: Int)
 
-    /// Resolve from the persisted settings: `DefaultsKey.presentPriority` ("latency" default;
-    /// anything but "smooth" — unset, garbage, a synced unknown future value — falls back to
-    /// latency) and `DefaultsKey.smoothBuffer` (0/out-of-range = Automatic = 2).
+    /// Resolve from the persisted settings: `DefaultsKey.presentPriority` (default
+    /// `SettingDefault.presentPriority`; anything but "smooth" — unset, garbage, a synced unknown
+    /// future value — falls back to latency) and `DefaultsKey.smoothBuffer` (0/out-of-range =
+    /// Automatic = 2).
     static func resolve(setting: String?, bufferSetting: Int?) -> PresentPriority {
         guard setting == "smooth" else { return .latency }
         let raw = bufferSetting ?? 0
@@ -151,7 +153,7 @@ enum PresentPriority: Equatable {
 final class SessionPresenter {
     /// Map a presenter choice and codec to its execution path.
     ///
-    /// The decoded tvOS path requires a CVPixelBuffer, so PyroWave retains deadline-paced Metal.
+    /// The decoded path requires a CVPixelBuffer, so PyroWave retains deadline-paced Metal.
     /// Stage-3 and stage-4 map directly to glass and deadline pacing; stage-2 is arrival for every
     /// codec. Glass gating waits for the previous frame's on-glass callback, about a refresh per
     /// frame.
@@ -190,7 +192,7 @@ final class SessionPresenter {
     /// one extra refresh per slot. Low latency needs a path that cannot build that queue
     /// (deadline pacing, the decoded video plane), not a deeper gate.
     ///
-    /// `PUNKTFUNK_GATE_DEPTH` (1…3) still overrides on iOS/tvOS so the standing-queue ladder
+    /// `PUNKTFUNK_GATE_DEPTH` (1…3) overrides off macOS so the standing-queue ladder
     /// stays reproducible on-device; macOS is pinned to 1, env ignored. Internal (not private)
     /// for unit tests.
     nonisolated static func gateDepth(env: String?) -> Int {
@@ -233,7 +235,7 @@ final class SessionPresenter {
     private var stage2: Stage2Pipeline?
     private var stage2Link: CADisplayLink?
     /// iOS: runs `pushHeadroom` twice a second. Headroom follows brightness and posts no change
-    /// notification; the linear HDR shaders roll highlights onto it.
+    /// notification (iOS 27.1 SDK); the linear HDR shaders roll highlights onto it.
     private var headroomTimer: Timer?
     #if os(iOS)
     /// Stage the EDR headroom of the screen the app is on, current and potential.
@@ -246,7 +248,8 @@ final class SessionPresenter {
     private var panel = PanelInfo(minHz: 0, maxHz: 0)
 
     /// The hosting screen's refresh range and granularity, from the view on start and every
-    /// layout (a window can move screens). Main thread. Diagnostics only.
+    /// layout (a window can move screens). Main thread. Feeds the pf-present line and arrival
+    /// pacing's refresh interval (`ArrivalSlots.refresh`).
     func setPanel(_ info: PanelInfo) {
         panel = info
         stage2?.setPanel(info)
@@ -282,7 +285,7 @@ final class SessionPresenter {
 
     /// Start the resolved presenter for `connection`.
     ///
-    /// Stage-1 sends compressed samples to `baseLayer`; tvOS's decoded path sends it VideoToolbox
+    /// Stage-1 sends compressed samples to `baseLayer`; the decoded path sends it VideoToolbox
     /// output. Metal paths leave that layer idle and overlay their own CAMetalLayer. The supplied
     /// display-link factory tracks the hosting display for ordinary pacing and decoded-frame
     /// metering; deadline pacing owns a CAMetalDisplayLink instead.
@@ -416,11 +419,12 @@ final class SessionPresenter {
     /// so the system MAY tick faster than a sub-120 stream (each extra tick is a near-free empty
     /// `renderTick`, and presenting on a denser grid shortens the decode→glass wait).
     ///
-    /// The `allowVRR` setting (default on) widens that hint into a true variable-refresh request:
-    /// `preferred` = the stream rate with a low floor, so an adaptive-sync display can drop its
-    /// physical refresh to match the content. It reaches this link only; under deadline pacing
-    /// `FrameRateHint` pins the rate and the setting is not read (see `frameRateRange`).
-    /// Re-applied from `layout` so a mid-session `Reconfigure` picks up a new refresh.
+    /// The `allowVRR` setting (default `SettingDefault.allowVRR`) widens that hint into a true
+    /// variable-refresh request: `preferred` = the stream rate with a low floor, so an
+    /// adaptive-sync display can drop its physical refresh to match the content. It reaches this
+    /// link only; under deadline pacing `FrameRateHint` pins the rate and the setting is not read
+    /// (see `frameRateRange`). Re-applied from `layout` so a mid-session `Reconfigure` picks up a
+    /// new refresh.
     private func syncFrameRate(hz: UInt32) {
         guard hz > 0 else { return }
         // Deadline pacing: the hint goes to the pipeline's CAMetalDisplayLink instead (staged;
@@ -448,7 +452,7 @@ final class SessionPresenter {
     }
 
     /// The system scaler's closest match to `fit`, for the AVSampleBufferDisplayLayer paths
-    /// (stage 1, tvOS's decoded plane). It does not snap like the placement does.
+    /// (stage 1, the decoded plane). It does not snap like the placement does.
     nonisolated static func gravity(_ fit: VideoFit) -> AVLayerVideoGravity {
         switch fit {
         case .fit: return .resizeAspect
@@ -459,7 +463,7 @@ final class SessionPresenter {
 
     /// Refresh display timing and position a Metal presentation layer.
     ///
-    /// Every explicit-decode path updates its display link after reconfiguration, including tvOS's
+    /// Every explicit-decode path updates its display link after reconfiguration, including the
     /// decoded video plane. Metal paths then place their sublayer and size its drawable in backing
     /// pixels so the shader owns scaling. The video layer uses `videoGravity` (see
     /// `SessionPresenter.gravity(_:)`) and needs no geometry here.
@@ -522,8 +526,7 @@ final class SessionPresenter {
         // Hand the resulting pixel size to the render thread (it must not read layer geometry
         // cross-thread) — this is what the presenter sizes its drawable to. Uses the SNAPPED size so
         // the drawable's texel count equals the on-screen device-pixel count exactly (1 texel ↔ 1
-        // device pixel); with the frame snapped, this equals the pre-snap rounded value, so the
-        // decoded↔drawable 1:1 the log confirmed is preserved.
+        // device pixel).
         stage2?.setDrawableTarget(CGSize(
             width: (snapped.width * scale).rounded(),
             height: (snapped.height * scale).rounded()))

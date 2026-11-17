@@ -42,7 +42,7 @@ final class SpeedTestRunTests: XCTestCase {
         XCTAssertEqual(after([.start, .stop, .unreachable("gone")]).phase, .idle)
     }
 
-    /// R4-2: Stop can't abort the probe, so a Start before it returns starts nothing.
+    /// Stop can't abort the probe, so a Start before it returns starts nothing.
     func testStartWaitsForAStoppedProbeToReturn() {
         XCTAssertEqual(after([.start, .stop, .start]).phase, .idle)
         XCTAssertEqual(after([.start, .stop, .start, .connected]).phase, .idle)

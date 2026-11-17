@@ -1,8 +1,7 @@
-// The rate-dependent half of the mic chain (SessionAudio.micChain). The tap now installs with
-// `format: nil` — a non-nil format is validated against the bus and raises an Objective-C
-// exception on mismatch, which Swift cannot catch, so it aborted the whole app (SIGABRT in
-// AVAudioEngineGraph::InstallTapOnNode, reported against 0.31.0). With nil the tap follows
-// whatever the bus emits, which means the chain has to be rebuildable at the device's real rate.
+// The rate-dependent half of the mic chain (SessionAudio.micChain). The input connects to the
+// uplink's sink node with `format: nil`: a format read earlier can be stale, and a stale one
+// raises an Objective-C exception, which Swift cannot catch. The bus then sets the rate, so the
+// chain has to be rebuildable at the input's real rate.
 // This pins the sizing arithmetic that rebuild depends on, without an engine, device or mic grant.
 
 #if !os(tvOS)
@@ -41,15 +40,16 @@ final class AudioMicChainTests: XCTestCase {
     }
 
     /// A rate the device cannot report is refused rather than producing a chain that would
-    /// divide by zero in the staging arithmetic. The tap treats nil as "skip this buffer".
+    /// divide by zero in the staging arithmetic. A worker whose rebuild returns nil keeps the
+    /// chain it has.
     func testRejectsUnusableRateAndEmptyQuantum() {
         XCTAssertNil(SessionAudio.micChain(rate: 0, frames: 8192, to: target))
         XCTAssertNil(SessionAudio.micChain(rate: -48_000, frames: 8192, to: target))
         XCTAssertNil(SessionAudio.micChain(rate: 48_000, frames: 0, to: target))
     }
 
-    /// The rebuild path: a device that switches 48 kHz → 44.1 kHz under a live tap yields a chain
-    /// at the NEW rate. Resampling by the stale ratio is what pitch-shifts the mic.
+    /// The rebuild path: a device that switches 48 kHz → 44.1 kHz under a live capture yields
+    /// a chain at the NEW rate. Resampling by the stale ratio is what pitch-shifts the mic.
     func testRebuildFollowsNewRate() throws {
         let first = try XCTUnwrap(SessionAudio.micChain(rate: 48_000, frames: 512, to: target))
         let second = try XCTUnwrap(SessionAudio.micChain(rate: 44_100, frames: 512, to: target))

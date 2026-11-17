@@ -183,7 +183,8 @@ extension ConsoleModel {
     /// The console's link test: one probe burst over a second connect, each phase pushed back
     /// as `SpeedPhase`. The console raised the takeover itself and owns clearing it. 720p60, as
     /// `pf_client_core::speed` connects: nothing presents a frame, and a 4K encode for a burst
-    /// would be slower for nothing. The recommendation is that module's integer rule.
+    /// would be slower for nothing. The recommendation is the integer rule of
+    /// `punktfunk_core::client::health::recommended_kbps`.
     private func speedTest(key: String, addr: String, port: UInt16, fp: String) {
         guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
             pushSpeed(key, ["Failed": String(localized: L10n.appleTrustNoIdentity)])

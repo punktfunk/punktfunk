@@ -274,8 +274,8 @@ public final class GamepadFeedback {
     private var hasNoTarget: Bool { withRouting { rumbleByPad.isEmpty && hidRawSink == nil } }
 
     /// Register (or clear) the `.hidRaw` sink — the session owner wires `Sc2Capture.onHidRaw`
-    /// here beside starting the capture, and clears it BEFORE stopping either side (the
-    /// Android teardown order: unhook → feedback.stop → capture.stop).
+    /// here beside starting the capture, and clears it BEFORE stopping either side, as Android's
+    /// teardown does.
     public func setHidRawSink(
         _ sink: ((_ pad: UInt8, _ kind: UInt8, _ data: [UInt8]) -> Void)?
     ) {
@@ -356,11 +356,10 @@ public final class GamepadFeedback {
     private func reset(_ controller: GCController?) {
         guard let c = controller else { return }
         c.playerIndex = .indexUnset
-        // Put the lightbar out too. This class is what turned it on (see the `Led` and
-        // `PlayerLeds` arms), and every DS write is valid-flag-selective, so a colour the game
-        // set stays lit in firmware after the stream ends — back at the launcher, or for a pad
-        // that merely left the forwarded set. A DS4 is cleared incidentally because its player
-        // indicator IS the lightbar; a DualSense is not.
+        // Put the lightbar out too: this class turned it on (`.led`, `.playerLEDs`), and every
+        // DS write is valid-flag-selective, so a game's colour stays lit in firmware after the
+        // stream or once the pad leaves the forwarded set. A DS4's player indicator IS the
+        // lightbar, so unsetting it clears it; a DualSense's is separate.
         c.light?.color = GCColor(red: 0, green: 0, blue: 0)
         if let ds = c.extendedGamepad as? GCDualSenseGamepad {
             ds.leftTrigger.setModeOff()

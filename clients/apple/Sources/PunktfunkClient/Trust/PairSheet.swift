@@ -1,8 +1,8 @@
 // PIN pairing sheet. The host shows the pairing PIN in its web console (port 47992 →
-// Pairing; also printed in the host's log when armed via --allow-pairing); the user
+// Pairing; a headless host armed at startup also prints it to its terminal); the user
 // types it here. The ceremony is SPAKE2, so a wrong PIN buys an
 // attacker exactly one online guess — for the user a typo just means "try again" (the
-// host rate-limits ceremonies to one per 2 s). Success returns the host's now-VERIFIED
+// host rate-limits ceremonies: `PAIRING_COOLDOWN`). Success returns the host's now-VERIFIED
 // fingerprint: the caller pins it, no manual comparison needed, and the host stores this
 // client's identity in return.
 //
@@ -187,11 +187,10 @@ struct PairSheet: View {
 
 #if DEBUG
 extension PairSheet {
-    /// Screenshot-harness seed (`ShotScenes`). A capture of the untouched sheet shows an empty PIN
-    /// field, a DISABLED "Pair", and — because the client name defaults to the device's
-    /// own — whatever the capture simulator happens to be called (`pf-shot-iphone-6.9` reached App
-    /// Store Connect that way). Seeding both fields captures the ceremony as a user meets it,
-    /// mid-entry, with a live primary button.
+    /// Screenshot-harness seed (`ShotScenes`). The untouched sheet shows an empty PIN field, a
+    /// DISABLED "Pair", and — because the client name defaults to the device's own — whatever
+    /// the capture simulator is called. Seeding both fields captures the ceremony as a user
+    /// meets it, mid-entry, with a live primary button.
     ///
     /// An extension so `PairSheet` keeps its memberwise initialiser, and THIS file so it can reach
     /// the private state.

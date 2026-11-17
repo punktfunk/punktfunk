@@ -68,8 +68,9 @@ public enum NativeDisplay {
         let safe = screen.notchSafePixelSize
         return (safe.width, safe.height, screen.maximumFramesPerSecond)
         #elseif os(visionOS)
-        // No screen to read: a window can grow past 4K's detail, and every Vision Pro runs 90 Hz.
-        // Fixed until visionOS reports a refresh ceiling; M5 panels reach 120.
+        // No screen to read (UIScreen is unavailable, visionOS 27 SDK): a window can grow past
+        // 4K's detail, and every Vision Pro runs 90 Hz. Fixed until visionOS reports a refresh
+        // ceiling; M5 panels reach 120.
         return (3840, 2160, 90)
         #else
         return mode(on: screen)

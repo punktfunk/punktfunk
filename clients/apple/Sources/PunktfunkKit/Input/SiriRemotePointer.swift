@@ -275,8 +275,8 @@ public final class SiriRemotePointer {
     /// The right button is therefore DEFERRED until the press resolves, rather than going down on
     /// contact: once the host has seen a button-down there is no taking it back, and a right
     /// button held for half a second is a context menu on every desktop this streams. The shape
-    /// is the hold-Select gesture's (`GamepadCapture.gestureFiltered`) — suppress, then deliver a
-    /// tap on release or the gesture past the threshold — so the two behave alike.
+    /// is a held-back press's in `Shortcuts.Engine` — suppress, then deliver a tap on release or
+    /// the gesture past the threshold — so the two behave alike.
     private func playPauseChanged(pressed: Bool) {
         // With the ring up the spare button is the pad's Y: back to the centre.
         if ringOpen {
@@ -311,8 +311,8 @@ public final class SiriRemotePointer {
     /// release `tapPress` behind so the pair can't collapse into nothing downstream.
     private func deliverRightClick() {
         // A previous tap's owed release goes out FIRST — two taps inside `tapPress` would
-        // otherwise send the host two downs in a row (the rule GamepadCapture's held-back Select
-        // tap follows for the same reason).
+        // otherwise send the host two downs in a row (the rule `Shortcuts.Engine.press` follows
+        // for its own owed releases).
         finishRightClick()
         setButton(3, down: true)
         let timer = Timer(timeInterval: Self.tapPress, repeats: false) { [weak self] _ in
