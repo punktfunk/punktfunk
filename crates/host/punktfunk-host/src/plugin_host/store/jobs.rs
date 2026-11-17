@@ -648,11 +648,7 @@ fn registry_integrity(registry: &str, pkg: &str, version: &str) -> Result<String
             }
             other => anyhow::anyhow!("registry request failed: {other}"),
         })?;
-    let body = resp
-        .body_mut()
-        .with_config()
-        .limit(16 * 1024 * 1024)
-        .read_to_vec()
+    let body = pf_update_check::feed::read_capped(&mut resp, 16 * 1024 * 1024)
         .context("read the registry response")?;
     let doc: serde_json::Value =
         serde_json::from_slice(&body).context("registry returned invalid JSON")?;

@@ -58,16 +58,16 @@ pub(crate) fn fetch(source: &Source, etag: Option<&str>) -> Fetched {
         .get("etag")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let body = match read_capped(&mut resp, MAX_INDEX_BYTES) {
+    let body = match read_capped(&mut resp, MAX_INDEX_BYTES as u64) {
         Ok(b) => b,
-        Err(e) => return Fetched::Failed(e),
+        Err(e) => return Fetched::Failed(format!("read the index: {e}")),
     };
 
     // Verify before parse. Nothing below may look at a field until this passes.
     let keys = source.keys();
     if !keys.is_empty() {
         let sig = match agent.get(&source.sig_url()).call() {
-            Ok(mut r) => match read_capped(&mut r, MAX_INDEX_BYTES) {
+            Ok(mut r) => match read_capped(&mut r, MAX_INDEX_BYTES as u64) {
                 Ok(b) => b,
                 Err(e) => return Fetched::Failed(format!("signature: {e}")),
             },

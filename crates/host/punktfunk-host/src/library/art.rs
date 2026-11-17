@@ -46,7 +46,7 @@ enum Fetch {
     Refused,
 }
 
-/// Fetch one cover. `data:` decodes inline; `http(s)` streams at most [`MAX_ART_BYTES`] and
+/// Fetch one cover. `data:` decodes inline; `http(s)` reads at most [`MAX_ART_BYTES`] decoded and
 /// accepts a declared image on 200 only. Sniffing decides the stored type; `etag` makes it
 /// conditional. Redirects are refused so an artwork URL cannot aim the host at an internal
 /// endpoint. Logs carry only the origin: userinfo, paths and queries can hold CDN credentials.
@@ -134,12 +134,7 @@ fn fetch_art(url: &str, etag: Option<&str>) -> Fetch {
         tracing::debug!(url = %log_url, ctype = %declared, "art store: refusing a cover that is not an image");
         return Fetch::Refused;
     }
-    match resp
-        .body_mut()
-        .with_config()
-        .limit(MAX_ART_BYTES)
-        .read_to_vec()
-    {
+    match pf_update_check::feed::read_capped(&mut resp, MAX_ART_BYTES) {
         Ok(bytes) => match sniff_image_type(&bytes) {
             Some(ctype) => Fetch::Fresh {
                 bytes,

@@ -613,7 +613,10 @@ pub fn call(provider: &str, app: &str, external_id: &str, action: Action) -> Res
             .send(body.to_string())
             .map_err(|e| Refusal::Unreachable(e.to_string()))?;
         let status = res.status().as_u16();
-        (status, res.body_mut().read_to_string().unwrap_or_default())
+        let text = pf_update_check::feed::read_capped(&mut res, 10 * 1024 * 1024)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        (status, text)
     };
     match status {
         200..=299 => Ok(()),
