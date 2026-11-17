@@ -644,9 +644,9 @@ the installed unit.
   root's alone while parked; its keyboard and mouse nodes are root's alone always, so a Steam
   Controller's desktop mode reaches nobody, and so is the device's own node under
   `/dev/bus/usb`, through which raw USB could take a keyboard interface from the kernel. On
-  every change of hands the daemon writes `0` then `1` to the USB device's sysfs `authorized`:
-  its drivers unbind and every open handle ends. Between the two it sends the device a `change`
-  event: the device itself stays, so only that runs the rules on its own node, and each new
+  every change of hands the daemon unbinds the USB device from its driver and binds it back:
+  its interfaces go and every open handle ends, a raw USB one too. Between the two it sends the
+  device a `change` event: the device itself stays, so only that runs the rules on its own node, and each new
   node takes its seat from the device. A controller lent to the owner's row also opens for the
   owner's session at the desk, the same uid. The seat host never serves it as a pad, so it is in no session's pad list and its input
   is no presence.
