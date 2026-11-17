@@ -118,14 +118,16 @@ public final class DeviceGyro {
         guard !isRunning, motion.isDeviceMotionAvailable else { return }
         isRunning = true
         updateRemap()
-        // Interface orientation only changes alongside a device-orientation notification, so
-        // this is the one signal needed; re-reading the scene keeps a rotation lock stable.
+        // Re-read on each device-orientation notification; reading the scene keeps a rotation
+        // lock stable. A `LandscapeLock` turn changes the interface without one, so the remap
+        // holds until the device next turns.
         orientationObserver = NotificationCenter.default.addObserver(
             forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateRemap() }
         }
-        // CoreMotion's practical ceiling; requesting faster just clamps.
+        // CoreMotion caps the interval at what the hardware supports (CMMotionManager.h,
+        // iOS 27.1 SDK).
         motion.deviceMotionUpdateInterval = 1.0 / 100.0
         motion.startDeviceMotionUpdates(to: queue) { [state, send] m, _ in
             guard let m else { return }

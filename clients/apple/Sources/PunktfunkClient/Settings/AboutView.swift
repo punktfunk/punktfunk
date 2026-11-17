@@ -207,7 +207,7 @@ struct AboutView: View {
                 // Both push here: this page really is inside a navigation stack on tvOS, which is
                 // the case the sheets above exist to work around elsewhere.
                 NavigationLink(L10n.aboutStreamControls) {
-                    ShortcutsView(micAvailable: false) // tvOS has no app-accessible mic
+                    ShortcutsView(micAvailable: false) // the tvOS app opens no mic
                 }
                 NavigationLink(L10n.aboutLicenses) { AcknowledgementsView() }
                 Text(L10n.appleAboutSourceLicense)
@@ -319,7 +319,8 @@ struct AppIconView: View {
         #if os(macOS)
         return (Image(nsImage: NSApplication.shared.applicationIconImage), false)
         #elseif os(iOS)
-        // The last entry is the largest — `CFBundleIconFiles` is ordered small to large.
+        // The last entry is the largest: actool (Xcode 27.1) writes `CFBundleIconFiles` small
+        // to large.
         guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
               let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
               let files = primary["CFBundleIconFiles"] as? [String],

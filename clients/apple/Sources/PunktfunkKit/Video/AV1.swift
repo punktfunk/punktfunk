@@ -26,10 +26,9 @@ import PunktfunkCore
 import VideoToolbox
 
 public enum AV1 {
-    /// True when this device can hardware-decode AV1 (M3-class Macs, A17 Pro-class iPhones,
-    /// current iPads; false on every Apple TV to date). VideoToolbox has no software AV1
-    /// decoder, so this is the advertisement gate: a client must never invite a stream it
-    /// can't decode in real time.
+    /// True when this device can hardware-decode AV1. VideoToolbox has no software AV1 decoder
+    /// (checked on macOS 27), so this is the advertisement gate: a client must never invite a
+    /// stream it can't decode in real time.
     public static let hardwareDecodeSupported: Bool =
         VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
 

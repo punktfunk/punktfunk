@@ -130,7 +130,7 @@ final class Sc2FramingTests: XCTestCase {
             zip(Sc2Device.enableLizard, Sc2Device.disableLizard).filter { $0 != $1 }.count, 1)
     }
 
-    // MARK: - Wire-constant pins against the regenerated C header (ABI v27)
+    // MARK: - Wire-constant pins against the C header
 
     func testWireConstantsMatchTheCABIVerbatim() {
         // The up-path datagram: [0xCC][0x04][pad][len][data…].

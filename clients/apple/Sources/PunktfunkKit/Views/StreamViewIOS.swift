@@ -923,9 +923,8 @@ public final class StreamViewController: StreamViewControllerBase {
     /// can apply it more than once; the stop() teardown clears it.
     ///
     /// ⚠️ Keyed on the decoded frames being HDR (`frameHDR`), not the Welcome or the setting alone.
-    /// The criteria hardcode BT.2020 PQ, and in its HDR modes the Apple TV sends limited-range
-    /// HDMI, so SDR frames on a full-range set show code 16 as grey. Frames that turn SDR hand the
-    /// TV back its own mode.
+    /// The criteria hardcode BT.2020 PQ, so SDR frames would drive the TV into an HDR10 mode they
+    /// do not match. Frames that turn SDR hand the TV back its own mode.
     private func applyDisplayCriteriaIfNeeded() {
         guard let manager = view.window?.avDisplayManager, let connection else { return }
         guard frameHDR, connection.settings.hdrEnabled else {

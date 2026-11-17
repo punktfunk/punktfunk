@@ -4,10 +4,10 @@
 import SwiftUI
 
 public extension Color {
-    /// The punktfunk brand purple (the app-icon lens / website `--brand`). Defined explicitly,
-    /// independent of the asset-catalog accent — `Color.accentColor` resolution is environment- and
-    /// timing-sensitive (it can fall back to system blue), and the brand mark must never drift.
-    /// Light: #6656F2, Dark: #8678F5 (the lighter violet reads better on dark surfaces).
+    /// The Punktfunk brand purple, the app family's accent. Light: #6656F2, Dark: #8678F5 (the
+    /// lighter violet reads better on dark surfaces; pf-console-ui's dark accent). Defined
+    /// explicitly, not as `Color.accentColor`, which on macOS follows the system accent unless the
+    /// user picks Multicolor, and the brand mark must never drift.
     static let brand: Color = {
         #if canImport(UIKit)
         return Color(UIColor { traits in

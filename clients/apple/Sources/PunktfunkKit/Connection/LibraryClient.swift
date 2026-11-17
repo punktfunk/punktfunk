@@ -70,10 +70,9 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     /// `nil` on every older host and on every ordinary title. See `launcherIconImage`.
     public var icon: String?
     /// The platform the host filed this title under ("PC", "PS3", "SNES" — free-form, the host's
-    /// `GameMeta.platform`, populated by the rom-manager plugin and left `nil` by the store
-    /// scanners). What the library's collections group by; a `nil` buckets under the STORE, never
-    /// under "Unknown" (see `LibraryCollation.bucket`). Also on the detail band as
-    /// `STORE · PLATFORM`.
+    /// `GameMeta.platform`; store scanners stamp "PC"). What the library's collections group by;
+    /// a `nil` buckets under the STORE, never under "Unknown" (see `LibraryCollation.bucket`).
+    /// Also on the detail band as `STORE · PLATFORM`.
     public var platform: String?
     /// The rest of the host's `GameMeta`, as far as anything here shows it.
     ///

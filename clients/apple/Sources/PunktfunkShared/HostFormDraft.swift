@@ -1,8 +1,8 @@
 // What a user typed into an add-or-edit-host form, and the one set of rules for turning it into a
 // stored record.
 //
-// The pointer sheet, the gamepad screen and the tvOS commit path all take their answers from here,
-// so the same typed text saves the same record on each, and the rules test without a view.
+// The add-host sheet and the host page's fields take their answers from here, on every Apple
+// platform: the same typed text saves the same record on each, and the rules test without a view.
 
 import Foundation
 

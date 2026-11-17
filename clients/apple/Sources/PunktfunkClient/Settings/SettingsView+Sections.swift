@@ -41,9 +41,6 @@ extension SettingsView {
 
     // MARK: - Display: Resolution
 
-    // NOTE: the Section content is split into the small named builders below — as one inline
-    // expression the iOS branch (wheel + 3-way refresh + bitrate rows) exceeds Swift's
-    // type-checker budget ("unable to type-check this expression in reasonable time").
     @ViewBuilder var resolutionSection: some View {
         Section(L10n.prefsGroupResolution) {
             #if os(iOS) || os(visionOS) || os(macOS)
@@ -1291,7 +1288,7 @@ extension SettingsView {
                 }
             }
             #endif
-            // An Apple TV has no microphone an app can open.
+            // The tvOS app opens no mic; tvOS offers one only through a Continuity iPhone or iPad.
             #if !os(tvOS)
             described(L10n.playerMicEnabledHint, field: "mic_enabled") {
                 Toggle(L10n.playerMicEnabled, isOn: scoped(SettingsFields.micEnabled))

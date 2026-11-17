@@ -1,8 +1,8 @@
 // Real-bitstream tests for the AV1 OBU → CoreMedia plumbing (AV1.swift): the OBU walk, the
 // sequence-header parse, the `av1C` format description, the sample repack, the VideoCodec
 // dispatch — and, on AV1-hardware devices, a real VTDecompressionSession decode of the blob
-// (the AV1 counterpart of VideoToolboxRoundTripTests; there is no VT AV1 *encoder*, so the
-// bitstream is generated offline).
+// (the AV1 counterpart of VideoToolboxRoundTripTests; there is no VT AV1 *encoder* on macOS 27,
+// so the bitstream is generated offline).
 //
 // Blobs: the first two temporal units of an SVT-AV1 clip — a keyframe TU (temporal delimiter +
 // sequence header + frame) and a delta TU (temporal delimiter + frame), exactly the wire shape

@@ -10,9 +10,10 @@ enum VTOneShot {
     /// Decode `annexB` (a keyframe with in-band parameter sets) to a `pixelFormat` buffer, or nil
     /// on any failure. `requireHardware` refuses a software decoder.
     ///
-    /// Synchronous: without `._EnableAsynchronousDecompression` the output callback runs on this
-    /// thread before DecodeFrame returns. An async decode plus a semaphore wait blocks a
-    /// userInteractive caller on VideoToolbox's QoS-less callback thread (a priority inversion).
+    /// Synchronous: without `._EnableAsynchronousDecompression` the output callback finishes
+    /// before DecodeFrame returns, on a VideoToolbox thread. An async decode plus a semaphore wait
+    /// blocks a userInteractive caller on VideoToolbox's QoS-less callback thread (a priority
+    /// inversion).
     static func decode(
         annexB: Data, codec: VideoCodec, pixelFormat: OSType, requireHardware: Bool
     ) -> CVPixelBuffer? {

@@ -213,7 +213,8 @@ public enum DefaultsKey {
     /// monitor implements it by taking every ⌘ chord off AppKit before a menu key equivalent can
     /// fire and forwarding it instead — which is what makes ⌘Q reach the host's compositor rather
     /// than quitting the client. Off keeps the chords local (the second-screen/work preset).
-    /// ⌘⎋ and the ⌃⌥⇧ chords are never forwarded either way; ⌃⌘F is forwarded only with it on.
+    /// ⌘⎋ and any chord bound to a shortcut (by default the ⌃⌥⇧ letters) stay with the client
+    /// either way; ⌃⌘F is forwarded only with it on.
     /// It applies under both mouse models, as on the SDL clients. macOS-only today; nothing reads
     /// it on iOS/tvOS.
     public static let inhibitShortcuts = "punktfunk.inhibitShortcuts"

@@ -4,8 +4,8 @@
 // into a jitter ring, and an AVAudioSourceNode plays the ring. An underrun plays silence; a
 // sustained one, or one on a hollow ring, re-primes (`JitterPolicy`). The ring, the A/V sync
 // loop and the render format are built from the NEGOTIATED rate and channel count
-// (`connection.audioFormat`), never from 48 kHz stereo: the lossless plane carries other rates
-// and surround (design/hi-res-audio.md §9).
+// (`connection.audioFormat`, design/hi-res-audio.md §9), never from 48 kHz stereo: the lossless
+// plane carries other rates and surround.
 //
 // Mic → host: `MicUplink` folds each IO quantum to mono, and a worker resamples to 48 kHz,
 // slices `framesPerPacket` chunks, Opus-encodes and sends them. The uplink is always 48 kHz Opus.
@@ -264,7 +264,7 @@ public final class SessionAudio: @unchecked Sendable {
             } else {
                 try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             }
-            #else // tvOS — no app-accessible mic
+            #else // tvOS: the app opens no mic
             // No `.mixWithOthers` here: a mixable playback session is offered a stereo mix, so
             // HDMI would carry PCM 2.0 whatever the wire negotiated — and there is nothing to
             // mix with on the box anyway.
@@ -417,7 +417,7 @@ public final class SessionAudio: @unchecked Sendable {
         enginesAttempted = true // even if every path below fails — see `reviveStoppedEngines`
         stateLock.unlock()
         #if os(tvOS)
-        // No app-accessible microphone input on tvOS — playback only.
+        // The tvOS app opens no microphone: playback only.
         startPlayback(speakerUID: speakerUID)
         #else
         guard micEnabled else {

@@ -68,10 +68,8 @@ struct LaunchHoldView: View {
         GeometryReader { geo in
             let layout = Layout(size: geo.size)
             let from = startRect(layout.cover, geo)
-            // The pair is laid out, not positioned: a geometry effect re-anchors what it
-            // transforms to its parent's origin, so a card carrying one and placed by offset or
-            // `position` lands in the corner. The flight rides on the stack as a delta that is
-            // zero once the card is home.
+            // The pair is laid out by the stack; the flight rides on it as a delta that is zero
+            // once the card is home.
             ZStack {
                 backdrop(geo.size)
                     .opacity(landed ? 1 : 0)

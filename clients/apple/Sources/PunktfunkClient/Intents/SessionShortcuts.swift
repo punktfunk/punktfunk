@@ -109,7 +109,8 @@ enum IntentError: Error, CustomLocalizedStringResourceConvertible {
 #if os(iOS)
 /// Zero-setup Siri / Spotlight phrases. Parameterized phrases resolve a `HostEntity` by name; stays
 /// well under the 10-shortcut cap. Phrases stay host-parameterized — App Shortcut phrases can't
-/// embed a second arbitrary `AppEntity`, so the preset is picked in the Shortcuts editor.
+/// embed a second arbitrary `AppEntity`, so the preset is picked in the Shortcuts editor. Both
+/// limits checked on Xcode 27.1.
 ///
 /// A phrase must be a string literal. `AppShortcuts.xcstrings`, which `pf-l10n` writes from the
 /// `apple_shortcut_*_phrase` messages, is keyed by these exact English phrases.

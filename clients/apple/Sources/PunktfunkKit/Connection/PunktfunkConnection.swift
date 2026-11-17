@@ -256,7 +256,8 @@ public enum HostRejection: Sendable {
     case seatOccupied
     case seatUnavailable
     /// The profile is on a person's own account and needs its password, or refused the unlock
-    /// this connect sent. The host's sentence says which; none asks for the password.
+    /// this connect sent. A close with no sentence means the password is needed; one with a
+    /// sentence is the refusal.
     case profileLocked
 
     init?(status: Int32) {
@@ -1433,7 +1434,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         resolvedBitrateKbps = br
         openedFormat = Self.readFormat(opened)
         // The format the host RESOLVED, which may be below what `audioRateHz`/`audioBits` asked
-        // for — the five-condition gate declines to Opus 48 kHz rather than failing the connect.
+        // for — the host's gate declines to Opus 48 kHz rather than failing the connect.
         let audio = Self.readAudioFormat(opened, or: AudioFormat(
             channels: 2, rateHz: 48_000, frameUs: UInt16(PUNKTFUNK_AUDIO_FRAME_MS * 1000)))
         resolvedAudioChannels = audio.channels
@@ -2009,11 +2010,10 @@ public final class PunktfunkConnection: @unchecked Sendable {
         public let seq: UInt32
     }
 
-    /// Pull the next audio frame, **decoded in-core** to interleaved f32 PCM — Apple's AudioToolbox
-    /// Opus path is stereo-only, so surround (and, for uniformity, stereo too) is decoded by the
-    /// Rust core (libopus multistream) and handed back as PCM. nil on timeout, throws `.closed` once
-    /// the session ended. Drain from a dedicated audio thread. The returned `samples` are copied
-    /// out, so the buffer is owned.
+    /// Pull the next audio frame, **decoded in-core** to interleaved f32 PCM by the Rust core,
+    /// stereo and surround alike (Opus through libopus multistream). nil on timeout, throws
+    /// `.closed` once the session ended. Drain from a dedicated audio thread. The returned
+    /// `samples` are copied out, so the buffer is owned.
     public func nextAudioPcm(timeoutMs: UInt32 = 100) throws -> AudioPCM? {
         var out = PunktfunkAudioPcm()
         return try poll(audioLock) { h in

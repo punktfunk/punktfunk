@@ -387,7 +387,8 @@ private struct Anchor: UIViewRepresentable {
 /// the window at the picture's shape. It takes no input; the stream view under it keeps every
 /// touch, so a touch reaches the host where it lands.
 struct FlatScreen: View {
-    /// How far the window's 2D overlays lift, points: past the plane's millimetre (~1.4 pt).
+    /// How far the window's 2D overlays lift, points: past the plane's millimetre (about 1.4 pt in
+    /// an unscaled scene; `physicalMetrics` gives the real figure).
     static let overlayLift: CGFloat = 4
     let target: CurveTarget
     @Environment(\.physicalMetrics) private var metrics

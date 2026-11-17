@@ -48,9 +48,9 @@ final class PresentPacingTests: XCTestCase {
         XCTAssertFalse(gate.tryAcquire(now: 10 + PresentGate.staleAfter + 0.02))
     }
 
-    /// The lost-handler insurance: a present whose handler never fires (the macOS "presents
-    /// aren't damage" hazard class) must not freeze the stream — past `staleAfter` the gate
-    /// force-opens and counts the event for the PUNKTFUNK_PRESENT_DEBUG `forced` stat.
+    /// The lost-handler insurance: a present whose handler never fires must not freeze the
+    /// stream — past `staleAfter` the gate force-opens and counts the event for the
+    /// PUNKTFUNK_PRESENT_DEBUG `forced` stat.
     func testGateForceOpensAfterStaleTimeout() {
         let gate = PresentGate()
         XCTAssertTrue(gate.tryAcquire(now: 10))

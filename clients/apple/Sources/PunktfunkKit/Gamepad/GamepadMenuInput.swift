@@ -1,9 +1,10 @@
 // Left-stick/dpad menu navigation outside a stream: the console, and the trust card.
 //
 // Polls the active controller at 60 Hz instead of installing `valueChangedHandler`/
-// `pressedChangedHandler` callbacks: outside a stream those handlers do not fire on-device, while
-// a poll reads the same controller reliably (as `ControllerTestView`'s "Input" card does). Being
-// read-only, it cannot conflict with the handlers `GamepadCapture` installs once a stream starts.
+// `pressedChangedHandler` callbacks: handlers installed here outside a stream have not fired
+// on-device, while a poll reads the same controller (as `ControllerTestView`'s "Input" card
+// does). Being read-only, it cannot conflict with the handlers `GamepadCapture` installs once a
+// stream starts.
 //
 // The button set mirrors a console launcher: A confirms, B backs out, Y is a screen's secondary
 // action, X a tertiary one, and the shoulders (L1/R1) are optional fast "jump" steps. Directional
