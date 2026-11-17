@@ -1057,8 +1057,10 @@ class MainActivity : FragmentActivity() {
      * touchpad's two-finger scroll. While streaming they belong to the mouse forwarder, never to
      * the Compose touch-gesture layer — a physical mouse click must be a real click at the cursor,
      * not a synthesized trackpad tap. A mouse tool counts whatever source the platform stamps.
+     * Below API 30 a stream's gesture leaves the vsync batch here ([unbufferGesture]).
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (streamHandle != 0L) window.decorView.unbufferGesture(ev)
         if (streamHandle != 0L &&
             (ev.isFromSource(InputDevice.SOURCE_MOUSE) || ev.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE)
         ) {
