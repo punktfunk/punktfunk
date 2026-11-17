@@ -78,6 +78,75 @@ pub(crate) fn next_vsync(last_vsync_ns: i64, period_ns: i64, after_ns: i64) -> O
     Some(last_vsync_ns + k * period_ns)
 }
 
+/// What a display states about its refresh, read where a vsync callback carries no frame
+/// timeline (below API 33): `Display.getAppVsyncOffsetNanos` and
+/// `Display.getPresentationDeadlineNanos`. Zero is unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GridFacts {
+    /// How far a callback's frame time trails the refresh it reports.
+    pub(crate) app_offset_ns: i64,
+    /// How long before a refresh SurfaceFlinger must hold the buffer it shows there.
+    pub(crate) lead_ns: i64,
+}
+
+impl GridFacts {
+    /// The callback's offset where it is inside one `step_ns`, else 0.
+    pub(crate) fn offset_on(self, step_ns: i64) -> i64 {
+        if (0..step_ns).contains(&self.app_offset_ns) {
+            self.app_offset_ns
+        } else {
+            0
+        }
+    }
+
+    /// The latch lead where it is within two of `period_ns`, else one period: a compositor
+    /// that wakes once a refresh makes a present a whole period ahead.
+    pub(crate) fn lead_on(self, period_ns: i64) -> i64 {
+        if self.lead_ns > 0 && self.lead_ns <= 2 * period_ns {
+            self.lead_ns
+        } else {
+            period_ns.max(0)
+        }
+    }
+}
+
+/// Where a release is aimed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Aim {
+    /// The refresh the frame is for.
+    pub(crate) present_ns: i64,
+    /// The desired present time the buffer carries. SurfaceFlinger shows it at the first
+    /// refresh at or after this, and of two due for one refresh it shows the later.
+    pub(crate) stamp_ns: i64,
+}
+
+impl Aim {
+    /// A platform timeline names its refresh exactly.
+    pub(crate) fn at(t: FrameTimeline) -> Aim {
+        Aim {
+            present_ns: t.expected_present_ns,
+            stamp_ns: t.expected_present_ns,
+        }
+    }
+}
+
+/// The aim on the callback grid for a frame that must not be presented before `not_before_ns`:
+/// the first refresh past it, counted from `last_vsync_ns − app_offset_ns` in whole `step_ns`.
+/// The stamp sits half a step before that refresh, so an offset or a period that is off by less
+/// still names the same one. `None` before the first callback (0) or a measured step.
+pub(crate) fn grid_aim(
+    last_vsync_ns: i64,
+    step_ns: i64,
+    app_offset_ns: i64,
+    not_before_ns: i64,
+) -> Option<Aim> {
+    let present_ns = next_vsync(last_vsync_ns - app_offset_ns, step_ns, not_before_ns)?;
+    Some(Aim {
+        present_ns,
+        stamp_ns: present_ns - step_ns / 2,
+    })
+}
+
 /// The vsync period after one callback, or `None` to keep `old_ns`. The observed period is the
 /// spacing of the first two timelines (exact, straight from the platform), else the delta of
 /// successive callbacks (jittery), and counts only within 24..500 Hz. An observation moves the
@@ -251,6 +320,82 @@ mod tests {
         for (name, last, period, after, want) in rows {
             assert_eq!(next_vsync(last, period, after), want, "{name}");
         }
+    }
+
+    #[test]
+    fn a_grid_aim_is_the_first_refresh_past_the_floor_stamped_half_a_step_early() {
+        // Callbacks at 100, 116, …; the display refreshes 3 before each: 97, 113, 129, …
+        // (name, last vsync, step, app offset, floor, (present, stamp))
+        let rows = [
+            ("the next refresh", 100, 16, 3, 100, Some((113, 105))),
+            (
+                "a refresh on the floor does not count",
+                100,
+                16,
+                3,
+                113,
+                Some((129, 121)),
+            ),
+            ("one before a refresh", 100, 16, 3, 112, Some((113, 105))),
+            (
+                "a floor before the last refresh",
+                100,
+                16,
+                3,
+                90,
+                Some((97, 89)),
+            ),
+            ("no stated offset", 100, 16, 0, 100, Some((116, 108))),
+            ("callbacks skipped", 100, 16, 3, 150, Some((161, 153))),
+            ("no callback yet", 0, 16, 3, 100, None),
+            ("no step measured", 100, 0, 3, 100, None),
+        ];
+        for (name, last, step, offset, floor, want) in rows {
+            let want = want.map(|(present_ns, stamp_ns)| Aim {
+                present_ns,
+                stamp_ns,
+            });
+            assert_eq!(grid_aim(last, step, offset, floor), want, "{name}");
+        }
+        // A platform timeline is its own stamp.
+        assert_eq!(
+            Aim::at(tl(116, 106)),
+            Aim {
+                present_ns: 116,
+                stamp_ns: 116
+            }
+        );
+    }
+
+    #[test]
+    fn stated_display_facts_count_only_where_they_are_plausible() {
+        let facts = |app_offset_ns, lead_ns| GridFacts {
+            app_offset_ns,
+            lead_ns,
+        };
+        const P: i64 = 16_700_000;
+        // (name, facts, (offset, lead))
+        let rows = [
+            (
+                "as stated",
+                facts(1_000_000, 11_700_000),
+                (1_000_000, 11_700_000),
+            ),
+            ("a lead of two periods", facts(0, 2 * P), (0, 2 * P)),
+            (
+                "a lead past two periods is one",
+                facts(0, 2 * P + 1),
+                (0, P),
+            ),
+            ("no lead stated is one period", facts(0, 0), (0, P)),
+            ("a negative lead is one period", facts(0, -1), (0, P)),
+            ("an offset of a whole period is none", facts(P, P), (0, P)),
+            ("a negative offset is none", facts(-1, P), (0, P)),
+        ];
+        for (name, f, (offset, lead)) in rows {
+            assert_eq!((f.offset_on(P), f.lead_on(P)), (offset, lead), "{name}");
+        }
+        assert_eq!(facts(5, 5).lead_on(0), 0, "no period, no lead");
     }
 
     #[test]

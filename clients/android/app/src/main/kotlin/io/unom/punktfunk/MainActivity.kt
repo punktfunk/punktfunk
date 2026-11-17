@@ -482,6 +482,8 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // The panel's own rate, for the stream to ask for: read before a connect needs it.
+        ownDisplay()?.let { PanelRate.measure(this, it) }
         recaptureUsbPads?.invoke()
         startSc2MenuNav()
         maybeAskDsPermission()

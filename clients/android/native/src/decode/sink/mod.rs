@@ -136,12 +136,20 @@ pub(super) fn select(
             PresentPriority::Smooth { buffer } => format!("smoothness, buffer {buffer}"),
         }
     );
+    // Where a release is aimed on the callback grid, the display's stated latch lead is the
+    // submit margin: the first refresh SurfaceFlinger can still make is that far off.
+    let seed_ns = match opts.panel_hz {
+        hz if hz > 0 => 1_000_000_000 / i64::from(hz),
+        _ => crate::present::FALLBACK_PERIOD_NS,
+    };
+    let grid_lead_ns = super::vsync::aims_on_grid().then(|| opts.grid.lead_on(seed_ns));
     Box::new(SurfaceViewSink::timeline(
         window,
         color,
         priority,
         source_mhz,
         opts.panel_hz,
+        grid_lead_ns,
     ))
 }
 

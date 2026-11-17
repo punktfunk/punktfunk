@@ -11,9 +11,9 @@ use super::{jni_guard, SESSIONS};
 /// Start the retained session's decoder on a `SurfaceView` window.
 ///
 /// Kotlin supplies its ranked codec (`""` selects the platform default), latency/presenter policy,
-/// panel rate, and live surface size. A missing key or an existing worker changes nothing. An
-/// invalid window or a failed thread spawn starts the keep-alive drain, so the frame queue never
-/// stands; the session stays retryable.
+/// panel rate, the display's vsync offset and presentation deadline, and live surface size. A
+/// missing key or an existing worker changes nothing. An invalid window or a failed thread spawn
+/// starts the keep-alive drain, so the frame queue never stands; the session stays retryable.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
@@ -30,6 +30,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
     present_priority: jni::sys::jint,
     smooth_buffer: jni::sys::jint,
     panel_fps: jni::sys::jint,
+    app_vsync_offset_ns: jlong,
+    presentation_deadline_ns: jlong,
     surface_w: jni::sys::jint,
     surface_h: jni::sys::jint,
 ) {
@@ -79,6 +81,10 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
                 present_priority,
                 smooth_buffer,
                 panel_hz: panel_fps,
+                grid: crate::vsync_grid::GridFacts {
+                    app_offset_ns: app_vsync_offset_ns,
+                    lead_ns: presentation_deadline_ns,
+                },
                 surface_size: h.surface_size.clone(),
                 src_crop: h.src_crop.clone(),
                 decoded_size: h.decoded_size.clone(),

@@ -479,7 +479,7 @@ fun nativeDisplayMode(
     // ROUNDED, not truncated: 59.94 must not become 59, a rate no display mode has, which the
     // host serves by clamping DOWN. The fraction it rounds off rides beside it
     // ([nativeRefreshMilliHz]).
-    val hz = wholeHz(nativeRefreshMilliHz(display, isTvDevice(context)))
+    val hz = wholeHz(nativeRefreshMilliHz(context, display))
     // A picture spanning two screens is two equal halves at this screen's size
     // (design/android-dual-screen.md §3.2); the codec ceiling clamps the ask later.
     return Triple(maxOf(w, h), minOf(w, h) * (if (spanned && secondScreen) 2 else 1), hz)
@@ -495,14 +495,18 @@ internal fun hzLabel(milliHz: Int): String = if (milliHz % 1000 == 0) {
     String.format(java.util.Locale.getDefault(), "%.2f", milliHz / 1000.0)
 }
 
-/** [display]'s rate under Native, in millihertz ([nativeDisplayMode] says which rate that is). */
-private fun nativeRefreshMilliHz(display: Display, tv: Boolean): Int {
-    val rate = if (tv) {
-        display.mode.refreshRate
+/**
+ * [display]'s rate under Native, in millihertz ([nativeDisplayMode] says which rate that is):
+ * the panel's own where it was read in that very mode ([PanelRate]), else the mode's stated one.
+ */
+private fun nativeRefreshMilliHz(context: Context, display: Display): Int {
+    val mode = if (isTvDevice(context)) {
+        display.mode
     } else {
-        display.sameResolutionModes().maxOfOrNull { it.refreshRate } ?: display.mode.refreshRate
+        display.sameResolutionModes().maxByOrNull { it.refreshRate } ?: display.mode
     }
-    return kotlin.math.round(rate * 1000f).toInt().coerceAtLeast(1000)
+    val stated = kotlin.math.round(mode.refreshRate * 1000f).toInt().coerceAtLeast(1000)
+    return PanelRate.of(context, display)?.takeIf { mode.modeId == display.mode.modeId } ?: stated
 }
 
 /**
@@ -511,7 +515,7 @@ private fun nativeRefreshMilliHz(display: Display, tv: Boolean): Int {
  */
 fun nativeRefreshMilliHz(context: Context, secondScreen: Boolean = true): Int {
     val display = probeDisplay(context, secondScreen) ?: return 60_000
-    return nativeRefreshMilliHz(display, isTvDevice(context))
+    return nativeRefreshMilliHz(context, display)
 }
 
 /**
