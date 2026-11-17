@@ -97,22 +97,8 @@ fn run(
 }
 
 // ---------------------------------------------------------------------------
-// PW6: partial delivery under loss — streamed AU vs whole AU
+// PW6: partial delivery under loss — streamed AU vs whole AU (`partial_section`)
 // ---------------------------------------------------------------------------
-//
-// The question this answers (wave-2 plan PW6, security-review finding 10): a PyroWave client
-// enables `set_deliver_partial_frames` unconditionally, so a chunk-aligned AU that loses shards
-// is still handed up as blocks-with-holes — one frame of localized blur instead of a freeze. But
-// a STREAMED frame is excluded from that when it is UNPINNED: its size lives only on the FINAL
-// block's headers (`frame_bytes` is the 0 sentinel until then), and `advance_window` refuses to
-// deliver a partial it cannot truncate. So where the whole-AU path delivers blur, a streamed
-// frame whose final block is entirely lost delivers NOTHING.
-//
-// Three legs, because a bare 2 % sweep cannot see the effect (see `partial_sweep`'s note):
-//  1. `final_block_probe`  — DETERMINISTIC: drop exactly the frame's last block in both shapes.
-//                            Proves the mechanism exists (or does not) without any statistics.
-//  2. `partial_sweep`      — RANDOM Bernoulli loss, both shapes, same seed: the delivery rates.
-//  3. the stress rows      — the same sweep at higher loss, where the gap becomes measurable.
 
 /// The realistic PyroWave wire geometry: 1500-MTU IPv4 shards, 200 data shards per FEC block,
 /// and **FEC pinned OFF** (parity would mask exactly the loss under study).
@@ -311,6 +297,19 @@ fn varied_sizes(count: usize, seed: u64) -> Vec<usize> {
         .collect()
 }
 
+/// The question this answers (wave-2 plan PW6, security-review finding 10): a PyroWave client
+/// enables `set_deliver_partial_frames` unconditionally, so a chunk-aligned AU that loses shards
+/// is still handed up as blocks-with-holes — one frame of localized blur instead of a freeze. But
+/// a STREAMED frame is excluded from that when it is UNPINNED: its size lives only on the FINAL
+/// block's headers (`frame_bytes` is the 0 sentinel until then), and `advance_window` refuses to
+/// deliver a partial it cannot truncate. So where the whole-AU path delivers blur, a streamed
+/// frame whose final block is entirely lost delivers NOTHING.
+///
+/// Two tables, because a bare 2 % sweep cannot see the effect (the closing note says why):
+/// - Leg 1, DETERMINISTIC: drop exactly the frame's last block in both shapes. Proves the
+///   mechanism exists (or does not) without any statistics.
+/// - Leg 2/3, RANDOM Bernoulli loss at 2 % to 50 %, both shapes, same seed: the delivery rates.
+///   The higher-loss rows make the gap measurable.
 fn partial_section() {
     let frames: usize = std::env::var("PW6_FRAMES")
         .ok()

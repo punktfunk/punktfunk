@@ -9,8 +9,7 @@
 #
 #     cargo run --manifest-path tools/hid-descriptor-dump/Cargo.toml -- --list
 #
-# Stands alone. Without this, cargo walks up, finds the repo's `[workspace]` and refuses to build a
-# package that root does not list as a member.
+# Its own workspace root, so it builds standalone even without the root `exclude` entry.
 [workspace]
 
 [package]

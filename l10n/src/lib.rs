@@ -67,7 +67,7 @@ struct Message {
 static LANGUAGE: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
-    // Already `const`; clippy flags it anyway on an Android target.
+    // Already `const`; clippy 1.96 flags it anyway on an Android target.
     #[allow(clippy::missing_const_for_thread_local)]
     static OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
 }
