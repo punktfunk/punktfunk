@@ -8,8 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# The binary is `punktfunk` — the command users and plugins type. The crate name carries the
-# `-cli` suffix only because `punktfunk` is taken by the workspace's own naming.
+# The binary is `punktfunk` — the command users and plugins type. The package follows the
+# workspace's `punktfunk-<role>` naming.
 [[bin]]
 name = "punktfunk"
 path = "src/main.rs"

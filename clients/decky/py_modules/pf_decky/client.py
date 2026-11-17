@@ -69,9 +69,10 @@ def _flatpak_ref() -> dict | None:
     """The installed client flatpak as ``{scope, branch, arch, app_id, ref}``, or None.
 
     ``ref`` names the branch in full (``io.unom.punktfunk//canary``): the remote publishes
-    ``stable`` and ``canary``, so flatpak refuses an unqualified ref even with one branch
-    installed. With both installed, ``stable`` wins, because that is what a plain ``flatpak run``
-    starts. ``app_id`` is :data:`LEGACY_APP_ID` only when that is all the box has.
+    ``stable`` and ``canary`` with no default branch, so ``flatpak remote-info`` refuses an
+    unqualified ref even with one branch installed. With both installed this picks ``stable``;
+    a plain ``flatpak run`` starts the last-installed branch, so :func:`_client_argv` pins
+    ``--branch=``. ``app_id`` is :data:`LEGACY_APP_ID` only when that is all the box has.
 
     Read off the installed tree, not ``flatpak list``: every headless call passes through here.
     ``active`` marks a deployed branch. The arch comes from the tree too, because Decky's Python
@@ -162,8 +163,8 @@ def _flatpak_env() -> dict:
     """The user-session environment for a client run from the backend, which may not inherit it.
     Right for a native client too: it needs the same HOME and library-path repair."""
     env = dict(os.environ)
-    # Decky is a PyInstaller binary: its bundled libs (an older libssl) lead LD_LIBRARY_PATH, and
-    # the flatpak's libcurl needs the system libssl's OPENSSL_3.3.0. Restore the value PyInstaller
+    # Decky is a PyInstaller binary: its bundled libssl leads LD_LIBRARY_PATH and can be older
+    # than the system libssl the flatpak binary's libcurl needs. Restore the value PyInstaller
     # saved as <VAR>_ORIG, or drop the var so the loader uses system libraries.
     for var in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
         orig = env.pop(f"{var}_ORIG", None)

@@ -117,10 +117,10 @@ foreach ($f in $required) {
 }
 
 # The VC++ runtime, app-local. Everything here links the DYNAMIC CRT (/MD): the Rust exes,
-# SDL3.dll, and Skia — whose bundled HarfBuzz locks a std::mutex on every text shape. A
-# msvcp140.dll older than 14.40 (VS 17.10's constexpr std::mutex) reads a null vtable on that
-# lock, and the session dies with 0xC0000005 in MSVCP140.dll one second in. Shipping the
-# toolset's own DLLs beside the exe wins the loader search over System32 on every machine.
+# SDL3.dll, and Skia, whose bundled HarfBuzz locks a std::mutex. A msvcp140.dll older than
+# 14.40 (VS 17.10's constexpr std::mutex) dereferences null on that lock, and the session dies
+# with 0xC0000005 in MSVCP140.dll. Shipping the toolset's own DLLs beside the exe wins the
+# loader search over System32 on every machine.
 $crt = Find-VcRedistCrt $Arch
 $crtDlls = Get-ChildItem -Path $crt -File | Where-Object { $_.Name -match '^(msvcp140|vcruntime140)[^\\]*\.dll$' }
 if ($crtDlls.Count -lt 3) { throw "expected msvcp140*.dll + vcruntime140*.dll in $crt, found $($crtDlls.Count)" }

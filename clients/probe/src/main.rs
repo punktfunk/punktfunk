@@ -866,11 +866,10 @@ async fn handshake(
             name: Some(args.name.clone()),
             // `--launch ID` — host resolves it against its own library and runs it this session.
             launch: args.launch.clone(),
-            // This headless tool just dumps the bitstream (no decode), so it can always claim
-            // 10-bit / 4:4:4 support. Gated by env so latency runs stay on the 8-bit 4:2:0 baseline:
-            // PUNKTFUNK_CLIENT_10BIT=1 advertises VIDEO_CAP_10BIT (host Main10 path);
-            // PUNKTFUNK_CLIENT_444=1 advertises VIDEO_CAP_444 (host HEVC 4:4:4 path) — verify the
-            // resulting chroma with `ffprobe` on the `--out` .h265.
+            // This headless tool dumps the bitstream (no decode), so it can claim 10-bit / 4:4:4.
+            // Each PUNKTFUNK_CLIENT_* switch in this block counts when set, any value (even 0);
+            // unset keeps latency runs on 8-bit 4:2:0. _10BIT advertises VIDEO_CAP_10BIT (Main10),
+            // _444 VIDEO_CAP_444 (HEVC 4:4:4): check its chroma with `ffprobe` on the `--out` file.
             video_caps: {
                 // Always ask for per-AU host timings (0xCF) — this is a measurement tool, and the
                 // host/network split is exactly what it exists to report. Old hosts ignore the bit.
@@ -887,14 +886,14 @@ async fn handshake(
                 if std::env::var_os("PUNKTFUNK_CLIENT_444").is_some() {
                     caps |= punktfunk_core::quic::VIDEO_CAP_444;
                 }
-                // PUNKTFUNK_CLIENT_HDR=1 advertises VIDEO_CAP_HDR (BT.2020 PQ), and 10-bit
+                // PUNKTFUNK_CLIENT_HDR advertises VIDEO_CAP_HDR (BT.2020 PQ), and 10-bit
                 // with it — the host needs both for an HDR session. Pairs with
                 // PUNKTFUNK_CLIENT_PEAK_NITS, which carries the panel's ST.2086 volume.
                 if std::env::var_os("PUNKTFUNK_CLIENT_HDR").is_some() {
                     caps |=
                         punktfunk_core::quic::VIDEO_CAP_HDR | punktfunk_core::quic::VIDEO_CAP_10BIT;
                 }
-                // PUNKTFUNK_CLIENT_CHACHA20=1 advertises VIDEO_CAP_CHACHA20 — drives the
+                // PUNKTFUNK_CLIENT_CHACHA20 advertises VIDEO_CAP_CHACHA20 — drives the
                 // host's ChaCha20-Poly1305 session-cipher resolution (the soft-AES armv7
                 // negotiation, design/chacha20-session-cipher.md §7) without a webOS build;
                 // the negotiated cipher is reported in the welcome log line below.

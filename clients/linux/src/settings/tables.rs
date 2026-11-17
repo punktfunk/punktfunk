@@ -245,8 +245,8 @@ pub fn touch_mode_labels() -> Vec<&'static str> {
 }
 /// The SELECTED touch mode explained — the caption swaps with the choice instead of
 /// narrating every mode at once.
-/// Combo-row captions must stay ONE line (~66 chars at the default dialog width): a
-/// wrapped subtitle's natural width crushes the selected-value label into an ellipsis.
+/// `cap_subtitle` wraps each caption at `CAPTION_CHARS`, so the selected-value label keeps
+/// its width.
 pub const TOUCH_MODE_CAPTIONS: &[Text] = &[
     client::player_touch_mode_trackpad_hint,
     client::player_touch_mode_pointer_hint,

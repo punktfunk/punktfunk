@@ -101,7 +101,7 @@ pub fn push(
 
     enum Probe {
         Sample(u32),
-        // Boxed: the report is 300 bytes against a sample's four.
+        // Boxed: the report is ~290 bytes on 64-bit against a sample's four.
         Done(Result<Box<HealthReport>, String>),
     }
     let (tx, rx) = async_channel::unbounded::<Probe>();

@@ -87,7 +87,8 @@ fn write_desktop_entry(label: &str, url: &str) -> Result<PathBuf, String> {
          StartupNotify=true\n"
     );
     std::fs::write(&path, entry).map_err(|e| format!("{}: {e}", path.display()))?;
-    // Some desktops only offer a `.desktop` as a launchable icon when it is executable.
+    // Some desktops (GNOME Files, KDE Frameworks 6.18) only offer a `.desktop` outside the
+    // applications dirs as a launchable icon when it is executable.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

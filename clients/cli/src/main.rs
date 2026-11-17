@@ -2255,7 +2255,7 @@ from the config directory for a true factory reset."
             assert_eq!(split_host_port("desk:nope"), ("desk:nope".into(), 9777));
         }
 
-        /// Every advertised verb documents itself — a USAGE line without a help entry is a
+        /// Each verb listed here documents itself — a USAGE line without a help entry is a
         /// promise `help <verb>` breaks. The overview and each entry must also name the verb.
         #[test]
         fn every_usage_verb_has_help() {
