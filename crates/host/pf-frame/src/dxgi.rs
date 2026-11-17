@@ -56,10 +56,6 @@ pub struct PyroFrameShare {
     /// Fence value signalled after this frame's convert. Encoder Vulkan acquire waits
     /// on it so the wavelet read follows the D3D11 CSC.
     pub fence_value: u64,
-    /// Capturer texture-ring generation. Encoder caches plane imports by COM address,
-    /// which the allocator can recycle after a ring recreate; flush the cache when this
-    /// changes.
-    pub ring_gen: u32,
 }
 
 /// GPU-resident captured texture. NVENC/AMF/QSV encode in place; PyroWave imports
