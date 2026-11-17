@@ -93,8 +93,8 @@ fn our_h264_submissions() -> Vec<OurSubmission> {
         // `StatusReportFeedbackNumber` is 1-based; libavcodec uses `1 + report_id++`.
         let dxva = pf_dxvadec::plan_to_dxva(&plan, map, out.len() as u32 + 1)
             .unwrap_or_else(|e| panic!("AU {i} must convert: {e}"));
-        // Apply `release_after_decode` even though this vector never fills it: skip it
-        // and a convert-only loop holds a surface per AU and dries the ledger.
+        // Apply `release_after_decode` (225 of 250 AUs fill it): skip it and the
+        // eight-slot ledger is full by AU 8.
         for &id in &dxva.release_after_decode {
             assert!(
                 map.release(id),

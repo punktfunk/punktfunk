@@ -2,9 +2,9 @@
 //! equal slots, honouring the profile's `minBitstreamBufferOffsetAlignment`/`SizeAlignment`.
 //!
 //! Each slot is its own `VIDEO_DECODE_SRC` buffer, so every decode reads at
-//! `srcBufferOffset` 0. Mesa ANV's H.265 slice parse maps `srcBufferOffset + range`
-//! bytes and unmaps `range`: a nonzero offset leaks one mapping per picture until
-//! `vm.max_map_count` runs out.
+//! `srcBufferOffset` 0. Mesa ANV 24.1–26.2's H.265 slice parse maps
+//! `srcBufferOffset + range` bytes and unmaps `range`: a nonzero offset leaks one
+//! mapping per picture until `vm.max_map_count` runs out.
 //!
 //! [`RingLayout`] and [`SlotStates`] are the unit-tested halves (offset math
 //! including growth, and recycle bookkeeping). [`BitstreamRing`] allocates the
@@ -103,15 +103,14 @@ pub(crate) struct PackedSlices {
 /// Pack the slice NAL ranges `nals` into one slot, each with the three bytes
 /// before it, offsets rebased out of AU coordinates.
 ///
-/// Vulkan slice offsets are consumed by drivers written against libavcodec's
-/// `ff_vk_decode_add_slice`, which writes `{ 0x00, 0x00, 0x01 }` before each
-/// slice. NVIDIA then reads the slice header at `offset + 3 + 2`, so a four-byte
-/// Annex-B prefix would shift it. The three bytes before a NAL header are
-/// always `00 00 01`, so the upload stays zero-copy.
+/// Drivers expect libavcodec's layout: `ff_vk_decode_add_slice` writes
+/// `{ 0x00, 0x00, 0x01 }` before each slice, and NVIDIA misparses an HEVC slice behind a
+/// four-byte prefix. The three bytes before a NAL header are always `00 00 01`, so the
+/// upload stays zero-copy.
 ///
-/// The bitstream buffer carries slice NALUs only (non-VCL NALUs in the submitted
-/// range hang VCN firmware). Both planners hand out AU-relative offsets, so
-/// submitting them unchanged would point at bytes that were never uploaded.
+/// The bitstream buffer carries slice NALUs only (the spec's decode range holds VCL NAL
+/// units). Both planners hand out AU-relative offsets, so submitting them unchanged would
+/// point at bytes that were never uploaded.
 /// [`crate::DecodePlanVkH265::slice_offsets`] is therefore not submission-final.
 ///
 /// Offsets are `u32` because Vulkan's are. The sum is taken in `u64` so overflow

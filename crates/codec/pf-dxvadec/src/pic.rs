@@ -322,9 +322,8 @@ pub fn plan_to_dxva_on(
     pp.num_ref_frames = sps.max_num_ref_frames;
     pp.bit_depth_luma_minus8 = pic.bit_depth_luma_minus8;
     pp.bit_depth_chroma_minus8 = pic.bit_depth_chroma_minus8;
-    // Reserved, not free: libavcodec and the Microsoft reference decoder write
-    // 3 for every standard profile. 0 is the Intel ClearVideo / ATI zigzag
-    // workaround, which this backend does not use.
+    // Reserved, not free: libavcodec writes 3 unless a driver workaround applies
+    // (0 for ATI's zigzag lists, 0x34c for Intel ClearVideo). This backend uses neither.
     pp.Reserved16Bits = 3;
     pp.StatusReportFeedbackNumber = status_id;
     pp.CurrFieldOrderCnt = [pic.top_field_order_cnt, pic.bottom_field_order_cnt];

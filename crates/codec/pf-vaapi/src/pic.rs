@@ -370,8 +370,8 @@ pub fn plan_to_va(
         frame_mbs_only_flag: sps.frame_mbs_only_flag,
         mb_adaptive_frame_field_flag: sps.mb_adaptive_frame_field_flag,
         direct_8x8_inference_flag: sps.direct_8x8_inference_flag,
-        // A.3.3.2 is a level constraint, not a picture flag. Drivers are
-        // validated against libavcodec's VAAPI path, which leaves this 0.
+        // A.3.3.2 is a level constraint, not a picture flag. libavcodec's VAAPI
+        // path sends `level_idc >= 31`; this sends 0.
         min_luma_bi_pred_size8x8: false,
         log2_max_frame_num_minus4: sps.log2_max_frame_num_minus4,
         pic_order_cnt_type: sps.pic_order_cnt_type,

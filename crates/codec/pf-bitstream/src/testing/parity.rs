@@ -150,7 +150,7 @@ pub const AV1: Fixture = Fixture {
     display: (320, 240),
 };
 
-/// Host AV1 at 4K, the only resolution our encoder splits into two tile rows, both in one
+/// Host AV1 at 4K from NVENC: two tile rows (720p to 1440p are one tile), both in one
 /// Tile Group OBU. A file covers decode, not fragmentation or reassembly.
 pub const AV1_LOWDELAY: Fixture = Fixture {
     label: "AV1 (low-delay host stream, 4K two-tile)",

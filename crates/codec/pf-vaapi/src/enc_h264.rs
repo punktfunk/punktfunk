@@ -66,8 +66,9 @@ pub const VA_ENTRYPOINT_ENC_SLICE: i32 = 6;
 /// the 60 fps budget, and this one is the way under it.
 pub const VA_ENTRYPOINT_ENC_SLICE_LP: i32 = 8;
 
-/// Rate-control modes, as `VAConfigAttribRateControl` values. CBR is the only one
-/// both radeonsi and iHD advertise for every profile we open, so the session requires it.
+/// Rate-control modes, as `VAConfigAttribRateControl` values. The session requires CBR.
+/// radeonsi always advertises it; iHD's Gen12 table offers it on VDEnc only with
+/// media kernels.
 pub const VA_RC_CBR: u32 = 0x00000002;
 pub const VA_RC_VBR: u32 = 0x00000004;
 
@@ -105,8 +106,8 @@ pub struct VaEncSequenceParameterBufferH264 {
     /// fixed_frame_rate:1 | low_delay_hrd:1 | mvs_over_pic_boundaries:1`.
     ///
     /// Bit 2 (`bitstream_restriction`) lets the host state its reorder bound, so the
-    /// client stops holding pictures for a depth the stream never uses. Neither AMF
-    /// nor Media Foundation can set it.
+    /// client stops holding pictures for a depth the stream never uses. Neither AMF (SDK 1.5.3)
+    /// nor Media Foundation (SDK 10.0.26100) can set it.
     pub vui_fields: u32,
     pub aspect_ratio_idc: u8,
     pub sar_width: u32,

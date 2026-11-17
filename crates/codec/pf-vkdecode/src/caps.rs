@@ -35,8 +35,9 @@ pub const OUTPUT_FORMATS: [vk::Format; 4] = [NV12, P010, YUV444_8, YUV444_10];
 
 /// Per-plane `R*`/`R*G*` view formats the presenter samples, or `None` if this
 /// crate has no mapping. Views exist only under `MUTABLE_FORMAT` and must match
-/// spec table 49.1: 8-bit two-plane → `R8`/`R8G8`, 10-bit `3PACK16` → `R10X6`/
-/// `R10X6G10X6`. An `R8` view on a 10-bit plane silently reads half of each sample.
+/// the spec's Plane Format Compatibility table: 8-bit two-plane → `R8`/`R8G8`,
+/// 10-bit `3PACK16` → `R10X6`/`R10X6G10X6`. An `R8` view on a 10-bit plane
+/// silently reads half of each sample.
 ///
 /// Comparisons, not `match`: `vk::Format` is an ash newtype over `i32` whose
 /// field is private, so the constants are not structural patterns.

@@ -1006,8 +1006,8 @@ impl Encoder {
             bail!("reference slot {:?} is not held", slice.reference_slot);
         }
         self.render(owned, vah::VA_ENC_SLICE_PARAMETER_BUFFER_TYPE, &va_slice)?;
-        // After the slice: iHD parses buffers in order and its slice parser drops a rolling
-        // refresh it has not yet seen a P slice for; Mesa stores it whenever it arrives.
+        // After the slice: iHD parses buffers in order and its picture parser zeroes the picture
+        // parameters a rolling refresh writes into; Mesa stores it whenever it arrives.
         self.render_stripe(owned, stripe)?;
 
         // Neither driver writes a slice header of its own: radeonsi templates its
@@ -1123,8 +1123,8 @@ impl Encoder {
             bail!("reference slot {:?} is not held", slice.reference_slot);
         }
         self.render(owned, vah::VA_ENC_SLICE_PARAMETER_BUFFER_TYPE, &va_slice)?;
-        // After the slice: iHD parses buffers in order and its slice parser drops a rolling
-        // refresh it has not yet seen a P slice for; Mesa stores it whenever it arrives.
+        // After the slice: iHD parses buffers in order and its picture parser zeroes the picture
+        // parameters a rolling refresh writes into; Mesa stores it whenever it arrives.
         self.render_stripe(owned, stripe)?;
 
         let header = hevc.slice_header(HevcSlice {

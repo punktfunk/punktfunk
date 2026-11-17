@@ -289,9 +289,9 @@ impl From<&Sps> for NegotiationInfo {
     }
 }
 
-/// Mainstream hardware DPB slots: DXVA's H.264 picparams array is 16 entries;
-/// Vulkan Video reports the same. Backends need one extra slot for the picture
-/// in flight, so a 16-frame DPB demands 17.
+/// Mainstream hardware DPB slots: DXVA's H.264 picparams array is 16 entries.
+/// Backends need one extra slot for the picture in flight, so a 16-frame DPB
+/// demands 17.
 const MAINSTREAM_MAX_DPB_SLOTS: usize = 16;
 
 /// DPB size in frames. Same question as [`crate::h265::dpb_limit`], different
@@ -2929,8 +2929,8 @@ mod tests {
         assert_eq!(output_lags(sps), vec![0; 40]);
     }
 
-    /// NVENC's shape: no VUI restriction, `pic_order_cnt_type` 2. 8.2.1.3 makes
-    /// output order the decoding order, so nothing waits.
+    /// `pic_order_cnt_type` 2 with no VUI restriction: 8.2.1.3 makes output order the
+    /// decoding order, so nothing waits.
     #[test]
     fn poc_type_2_shows_each_picture_in_its_own_au_with_no_stated_bound() {
         let sps = base_sps().resolution(64, 64).pic_order_cnt_type(2).build();

@@ -234,9 +234,9 @@ pub fn plan_to_dxva_av1_on(
 
     let color = &seq.color_config;
     let mut pic_params = PicParamsAv1::zeroed();
-    // Upscaled width. libavcodec sends coded `FrameWidth` (`avctx->width`).
-    // Equal when superres is off (7.20), which is every stream here; revisit
-    // with a superres vector, not by reading.
+    // Upscaled width, as libavcodec sends it (`avctx->width`). Chromium sends the coded
+    // `FrameWidth`; the two differ only under superres, which no stream here uses.
+    // Revisit with a superres vector.
     pic_params.width = h.upscaled_width;
     pic_params.height = h.frame_height;
     pic_params.max_width = u32::from(seq.max_frame_width_minus_1) + 1;

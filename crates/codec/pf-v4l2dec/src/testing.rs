@@ -230,8 +230,8 @@ impl FakeStateless {
     fn geometry(&self) -> CaptureFormat {
         let (width, height) = self.size;
         if self.capture_fourcc == crate::uapi_stateless::V4L2_PIX_FMT_NV12_COL128 {
-            // The Raspberry Pi driver: whole columns, rows padded to 8, and
-            // `bytesperline` as the column height in rows.
+            // The Raspberry Pi driver (rpi-6.12.y): whole columns, rows padded to 8,
+            // and `bytesperline` as the column height in rows.
             let height = height.next_multiple_of(8);
             return CaptureFormat {
                 fourcc: self.capture_fourcc,
