@@ -874,18 +874,19 @@ fn string_field(v: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
-/// `fullscreen` is a bool on older Hyprland and a mode int on newer (0 = none).
-/// Anything unreadable is "not full-screen" — the honest answer for a field
-/// this host cannot parse.
+/// `fullscreen` is a bool on older Hyprland and a mode int on newer: 0 none,
+/// 1 maximized, 2 and up full-screen. Anything unreadable is "not full-screen" —
+/// the honest answer for a field this host cannot parse.
 fn is_fullscreen(v: Option<&serde_json::Value>) -> bool {
     match v {
         Some(v) if v.is_boolean() => v.as_bool().unwrap_or(false),
-        Some(v) => v.as_i64().is_some_and(|m| m != 0),
+        Some(v) => v.as_i64().is_some_and(|m| m >= 2),
         None => false,
     }
 }
 
-/// Run one window verb on `address`.
+/// Run one window verb on `address`. A full-screen window is left alone for
+/// `Fullscreen`, which Hyprland toggles.
 ///
 /// Classic dispatchers only. The Lua config era spells these `hl.dsp.*` and
 /// this host has no instance to pin the spelling against, so that era gets a
@@ -895,13 +896,24 @@ pub(crate) fn window_action(verb: crate::toplevels::WindowVerb, address: &str) -
     let target = format!("address:{address}");
     match verb {
         WindowVerb::Focus => hyprctl_dispatch(&["dispatch", "focuswindow", &target]),
-        // No per-window fullscreen dispatcher: focus it, then act on the focused
-        // window. `1` toggles maximize (gaps and bars stay); full-screen is `0`.
+        // No per-window fullscreen dispatcher: focus it, then act on the focused window.
         WindowVerb::Fullscreen => {
+            if toplevels(None)
+                .iter()
+                .any(|w| w.id == address && w.fullscreen)
+            {
+                return Ok(());
+            }
             hyprctl_dispatch(&["dispatch", "focuswindow", &target])?;
-            hyprctl_dispatch(&["dispatch", "fullscreen", "1"])
+            hyprctl_dispatch(&fullscreen_argv())
         }
     }
+}
+
+/// `hyprctl` argv that toggles full-screen on the focused window, split so a test
+/// pins the mode: `0` is full-screen, `1` is maximize (gaps and bars stay).
+fn fullscreen_argv() -> [&'static str; 3] {
+    ["dispatch", "fullscreen", "0"]
 }
 
 /// Carry window `address` onto head `dest`, then follow it there.
@@ -1907,6 +1919,12 @@ mod tests {
         );
     }
 
+    /// Mode `1` is maximize, which keeps gaps and bars around the game.
+    #[test]
+    fn the_fullscreen_verb_asks_for_full_screen_not_maximize() {
+        assert_eq!(fullscreen_argv(), ["dispatch", "fullscreen", "0"]);
+    }
+
     /// Lua spellings of the resize workspace hand-off. Both dispatchers answer
     /// `ok` on the wrong era, so a drifted string fails silently. Workspace id
     /// is a quoted string in both; `hl.dsp.workspace.move` requires `monitor`,
@@ -2273,15 +2291,17 @@ mod tests {
         assert!(parse_clients(&clients, &spaces, Some("PF-1234-1")).is_empty());
     }
 
-    /// Both spellings of `fullscreen`, and the field missing entirely.
+    /// Both spellings of `fullscreen`, and the field missing entirely. Mode 1 is
+    /// maximize: the full-screen verb must still act on such a window.
     #[test]
     fn fullscreen_reads_the_bool_era_and_the_mode_era() {
         assert!(!is_fullscreen(None));
         assert!(!is_fullscreen(Some(&serde_json::json!(false))));
         assert!(is_fullscreen(Some(&serde_json::json!(true))));
         assert!(!is_fullscreen(Some(&serde_json::json!(0))));
-        assert!(is_fullscreen(Some(&serde_json::json!(1))));
+        assert!(!is_fullscreen(Some(&serde_json::json!(1))));
         assert!(is_fullscreen(Some(&serde_json::json!(2))));
+        assert!(is_fullscreen(Some(&serde_json::json!(3))));
     }
 
     /// The window token must see window events and ignore the reload the same
