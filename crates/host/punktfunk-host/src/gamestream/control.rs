@@ -413,6 +413,19 @@ impl rusty_enet::Socket for OwnerFilteredSocket {
 /// flood from another host never leaves the 2 ms read timeout to expire.
 const MAX_DROPS_PER_RECEIVE: usize = 64;
 
+/// ENet events one pass handles before the stop check, [`AppState::end_if_preempted`] and
+/// [`tick_access`] run again. A client that never lets the socket go quiet still meets them.
+const EVENTS_PER_PASS: usize = 64;
+
+/// Runs `step` until it reports nothing left or [`EVENTS_PER_PASS`] times, whichever is first.
+fn drain_pass(mut step: impl FnMut() -> bool) {
+    for _ in 0..EVENTS_PER_PASS {
+        if !step() {
+            return;
+        }
+    }
+}
+
 /// Admit a fresh ENet connect only behind a live `/launch` (Moonlight connects after
 /// RTSP, so there is no legitimate connect without one). When both sides captured the
 /// launching IP it must match, same bind as `rtsp::authorized_launch`. Free function so
@@ -478,77 +491,79 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                 // below then tells the client.
                 state.end_if_preempted();
                 tick_access(&mut access, &state, &mut peer, &inj_tx);
-                loop {
-                    match host.service() {
-                        Ok(Some(event)) => match event {
-                            Event::Connect { peer: p, .. } => {
-                                // Admit only the launch owner. The tracked peer's disconnect
-                                // ends the session, so a refused peer is `disconnect_now` (no
-                                // `Disconnect` event, slot freed this tick) — leaving it
-                                // untracked would pin 32 MiB and one of four slots forever.
-                                let launch = *state.launch.lock().unwrap_or_else(|e| e.into_inner());
-                                let from = p.address().map(|a| a.ip());
-                                if accept_connect(launch, from) {
-                                    tracing::info!("control: client connected");
-                                    // A reconnect that replaces a tracked peer: that peer's
-                                    // late Disconnect is ignored below, so release what it held.
-                                    if peer.id.is_some_and(|id| id != p.id()) {
-                                        peer.reset(&inj_tx);
-                                    }
-                                    peer.id = Some(p.id());
-                                } else {
-                                    tracing::warn!(
-                                        ?from,
-                                        "control: peer connected without a matching /launch — refusing"
-                                    );
-                                    p.disconnect_now(0);
-                                }
-                            }
-                            Event::Disconnect { peer: p, .. } => {
-                                // Only the tracked session peer. A probe, or the old peer's
-                                // late timeout after a reconnect replaced it, must not end
-                                // the live session or clobber its input state.
-                                if peer.id != Some(p.id()) {
-                                    tracing::debug!("control: non-session peer disconnected");
-                                    continue;
-                                }
-                                tracing::info!("control: client disconnected");
-                                peer.reset(&inj_tx);
-                                // This stream is the session's liveness. Moonlight holds it
-                                // for the whole stream; a quit or drop often sends no RTSP
-                                // TEARDOWN / `/cancel`. UDP send only errors on ICMP, so
-                                // without `end_session` media would stream at a dead peer.
-                                state.end_session("control stream disconnected");
-                            }
-                            Event::Receive {
-                                peer: p, packet, ..
-                            } => {
-                                // Honor only the tracked peer. The socket filter drops
-                                // non-owners once a launch is recorded; this covers the
-                                // window before the owner IP is captured.
-                                if peer.id != Some(p.id()) {
-                                    continue;
-                                }
-
-                                // Missing SessionAccess → GRANT_ALL. Input decrypts only
-                                // under the `/launch` key, so this is the ≤2 ms sliver
-                                // before the next tick's resolve (or an ungoverned session).
-                                on_receive(
-                                    &state,
-                                    packet.data(),
-                                    &mut peer,
-                                    &inj_tx,
-                                    access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL),
-                                );
-                            }
-                        },
-                        Ok(None) => break,
+                drain_pass(|| {
+                    let event = match host.service() {
+                        Ok(Some(event)) => event,
+                        Ok(None) => return false,
                         Err(e) => {
                             tracing::warn!(error = ?e, "control: service error");
-                            break;
+                            return false;
+                        }
+                    };
+                    match event {
+                        Event::Connect { peer: p, .. } => {
+                            // Admit only the launch owner. The tracked peer's disconnect
+                            // ends the session, so a refused peer is `disconnect_now` (no
+                            // `Disconnect` event, slot freed this tick) — leaving it
+                            // untracked would pin 32 MiB and one of four slots forever.
+                            let launch = *state.launch.lock().unwrap_or_else(|e| e.into_inner());
+                            let from = p.address().map(|a| a.ip());
+                            if accept_connect(launch, from) {
+                                tracing::info!("control: client connected");
+                                // A reconnect that replaces a tracked peer: that peer's
+                                // late Disconnect is ignored below, so release what it held.
+                                if peer.id.is_some_and(|id| id != p.id()) {
+                                    peer.reset(&inj_tx);
+                                }
+                                peer.id = Some(p.id());
+                            } else {
+                                tracing::warn!(
+                                    ?from,
+                                    "control: peer connected without a matching /launch — refusing"
+                                );
+                                p.disconnect_now(0);
+                            }
+                        }
+                        Event::Disconnect { peer: p, .. } => {
+                            // Only the tracked session peer. A probe, or the old peer's
+                            // late timeout after a reconnect replaced it, must not end
+                            // the live session or clobber its input state.
+                            if peer.id != Some(p.id()) {
+                                tracing::debug!("control: non-session peer disconnected");
+                                return true;
+                            }
+                            tracing::info!("control: client disconnected");
+                            peer.reset(&inj_tx);
+                            // This stream is the session's liveness. Moonlight holds it
+                            // for the whole stream; a quit or drop often sends no RTSP
+                            // TEARDOWN / `/cancel`. UDP send only errors on ICMP, so
+                            // without `end_session` media would stream at a dead peer.
+                            state.end_session("control stream disconnected");
+                        }
+                        Event::Receive {
+                            peer: p, packet, ..
+                        } => {
+                            // Honor only the tracked peer. The socket filter drops
+                            // non-owners once a launch is recorded; this covers the
+                            // window before the owner IP is captured.
+                            if peer.id != Some(p.id()) {
+                                return true;
+                            }
+
+                            // Missing SessionAccess → GRANT_ALL. Input decrypts only
+                            // under the `/launch` key, so this is the ≤2 ms sliver
+                            // before the next tick's resolve (or an ungoverned session).
+                            on_receive(
+                                &state,
+                                packet.data(),
+                                &mut peer,
+                                &inj_tx,
+                                access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL),
+                            );
                         }
                     }
-                }
+                    true
+                });
                 // Host-side end (`end_session` cleared `launch`): media going silent is not
                 // a signal. Clearing the peer makes this fire once; the real `Disconnect`
                 // then takes the non-session-peer branch.
@@ -562,7 +577,10 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                     peer.reset(&inj_tx);
                 }
                 peer.pump_outbound(&mut host, &state);
-                peer.pump_repeat(&inj_tx, access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL));
+                peer.pump_repeat(
+                    &inj_tx,
+                    access.as_ref().map(|a| a.mask).unwrap_or(GRANT_ALL),
+                );
                 // ENet handshake/keepalive/retransmit pacing is the socket's 2 ms read
                 // timeout in the drain above. Do not sleep on top of it.
             }
@@ -1073,6 +1091,24 @@ mod tests {
             peer_ip,
             owner_fp: None,
         })
+    }
+
+    /// A pass stops at its bound while events keep coming, and at once when they stop, so the
+    /// lock check between passes never waits on a busy client.
+    #[test]
+    fn a_drain_pass_yields_after_its_bound() {
+        let mut calls = 0;
+        super::drain_pass(|| {
+            calls += 1;
+            true
+        });
+        assert_eq!(calls, super::EVENTS_PER_PASS);
+        calls = 0;
+        super::drain_pass(|| {
+            calls += 1;
+            calls < 3
+        });
+        assert_eq!(calls, 3);
     }
 
     /// 47999 is open the idle life of a paired host: refuse connects with no `/launch`
