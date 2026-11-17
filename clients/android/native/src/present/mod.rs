@@ -101,6 +101,9 @@ pub(crate) struct Counters {
     pub(crate) unlatched: u64,
     /// ASC: frames aimed one slot or more past the first reachable one.
     pub(crate) held: u64,
+    /// ASC: frames aimed past the first slot their own apply reaches: a refresh the slot
+    /// chain spent, not the frame's lateness.
+    pub(crate) chained: u64,
     /// ASC: frames SurfaceFlinger latched for a later vsync than they were aimed at.
     pub(crate) slot_miss: u64,
     /// ASC: completions that shared the previous one's latch — SurfaceFlinger showed one of two.

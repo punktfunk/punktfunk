@@ -222,6 +222,9 @@ impl Slots {
         if slot > reachable {
             c.held += 1;
         }
+        if slot > self.clock.slot_after(now_ns + ahead) {
+            c.chained += 1;
+        }
         self.last_slot = Some(slot);
         let p = self.clock.period_ns();
         (
@@ -511,12 +514,12 @@ mod tests {
         assert_eq!(aim(&mut s, &mut c, T0 + P / 10), 1);
         assert_eq!(aim(&mut s, &mut c, T0 + P / 4), 2, "the first hold");
         assert_eq!(aim(&mut s, &mut c, T0 + P + P / 4), 3, "and it chains");
-        assert_eq!(c.held, 2);
+        assert_eq!((c.held, c.chained), (2, 2));
         let (mut s, mut c) = phased(PresentPriority::Latency, false);
         assert_eq!(aim(&mut s, &mut c, T0 + P / 10), 1);
         assert_eq!(aim(&mut s, &mut c, T0 + P / 4), 1);
         assert_eq!(aim(&mut s, &mut c, T0 + P + P / 4), 2);
-        assert_eq!(c.held, 0);
+        assert_eq!((c.held, c.chained), (0, 0));
     }
 
     #[test]

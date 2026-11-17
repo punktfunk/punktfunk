@@ -1734,6 +1734,9 @@ impl State {
                     r.gap_us as f64 / 1000.0,
                     r.next.label(),
                 );
+                // The reading fed its blocks two ways: the delay the cadence loop measured
+                // across them is neither's.
+                self.sink.reset_cadence();
             }
             let feed_us = match (queued, received_ns) {
                 (Some(q), Some(r)) => Some(((q - r).max(0) / 1000) as u64),

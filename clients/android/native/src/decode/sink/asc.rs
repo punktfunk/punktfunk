@@ -844,7 +844,7 @@ impl Sink for AscSink {
             "asc released={} displays={} skipped={} inflight={} qDepth={} feedMs p50={:.2} \
              p95={:.2} max={:.2} codecMs p50={:.2} p95={:.2} max={:.2} paceMs p50={:.2} \
              max={:.2} latchMs p50={:.2} max={:.2} e2eMs p50={:.2} max={:.2} panelMs={:.2} \
-             glassMs={:.3} leadMs={:.2} sfLeadMs={:.2} sfAim={} marginUs={} held={} slotMiss={} \
+             glassMs={:.3} leadMs={:.2} sfLeadMs={:.2} sfAim={} marginUs={} held={} chained={} slotMiss={} \
              coalesced={} n0={} n1={} n2={} n3+={} \
              judder={}‰ mode={} phaseErrMs p50={:.2} max={:.2} sfJitMs p50={:.2} max={:.2} \
              forced={} unlatched={} fence={} fenced={} fenceErr={} fenceTailMs p50={:.2} \
@@ -873,6 +873,7 @@ impl Sink for AscSink {
             sf_aim,
             self.slots.margin_ns() / 1000,
             c.held,
+            c.chained,
             c.slot_miss,
             c.coalesced,
             intervals.n0,
@@ -899,6 +900,7 @@ impl Sink for AscSink {
         c.forced = 0;
         c.unlatched = 0;
         c.held = 0;
+        c.chained = 0;
         c.slot_miss = 0;
         c.coalesced = 0;
         verdict
