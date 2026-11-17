@@ -30,7 +30,7 @@ use super::vsync::{VsyncClock, VsyncShared};
 use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
 use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
-use crate::codec_format::{codec_mime, is_realtek, take_by_pts, take_flags};
+use crate::codec_format::{codec_mime, has_spare_capacity, is_realtek, take_by_pts, take_flags};
 use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
 use crate::hold::{Tail, Trial};
@@ -478,6 +478,7 @@ fn run_codec(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
     );
+    state.pixel_rate = opts.pixel_rate;
     if await_keyframe {
         client.recovery_lost();
     }
@@ -935,6 +936,13 @@ fn bring_up(
             mode.height,
             keys_label(keys)
         );
+        // A configured format lists the vendor keys the decoder declares, with their values.
+        log::info!("decode: input format: {}", codec.input_format());
+        if is_realtek(&codec_name) {
+            for line in realtek::census() {
+                log::info!("decode: Realtek census — {line}");
+            }
+        }
         let backends: Vec<Option<bool>> = rungs.iter().map(|r| r.0).collect();
         let lower_rung = rung_after_failure(&backends, rung, asc.is_some());
         return Some(Started {
@@ -1053,6 +1061,8 @@ struct State {
     conceal: Option<Concealer>,
     /// The tail each whole AU is fed with, and the trial that picks it ([`hold_trial`]).
     trial: Trial,
+    /// The most pixels a second the decoder declares ([`DecodeOptions::pixel_rate`]).
+    pixel_rate: u64,
     /// When the last output's AU entered the codec: the gap between AUs, for the trial.
     last_queued: Option<i128>,
     /// The codec's input side: the slots it offered, the parked deliveries, the open AU.
@@ -1185,17 +1195,17 @@ fn admission(codec: u8, decoder: &str) -> Option<DecoderClass> {
 /// Tails a decoder hung or failed under in this process ([`Tail::bit`]).
 static TAILS_BLOCKED: AtomicU8 = AtomicU8::new(0);
 
-/// The tail trial for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names the
-/// tail; `trial` runs the trial on any decoder. Unset, a Realtek decoder runs it on H.264 and
-/// HEVC: it returns each picture when the next AU is fed, and the trial reads whether a tail
-/// ends that. The `pf.decode` line's `held` counts the outputs that waited either way.
+/// The tail for this run. `debug.punktfunk.au_tail` = `off` / `fill` / `aud` names it; `trial`
+/// reads the delimiter on any decoder. Unset, a Realtek decoder gets the delimiter on H.264 and
+/// HEVC, read once against none: it returns each picture when the next AU is fed. The
+/// `pf.decode` line's `held` counts the outputs that waited either way.
 fn hold_trial(codec: u8, decoder: &str) -> Trial {
     let prop = sysprop(c"debug.punktfunk.au_tail");
     if let Some(tail) = prop.as_deref().and_then(Tail::named) {
         log::info!("decode: each AU is fed with tail {}", tail.label());
         return Trial::fixed(tail);
     }
-    let tails = !Tail::Fill.bytes(codec).is_empty();
+    let tails = !Tail::Aud.bytes(codec).is_empty();
     if tails && (prop.as_deref() == Some("trial") || is_realtek(decoder)) {
         log::info!("decode: hold trial on {decoder}");
         return Trial::new(TAILS_BLOCKED.load(Ordering::Relaxed));
@@ -1302,6 +1312,7 @@ impl State {
             widen: None,
             conceal: None,
             trial: Trial::fixed(Tail::None),
+            pixel_rate: 0,
             last_queued: None,
             inputs: Feed::default(),
             ready: Vec::new(),
@@ -1436,6 +1447,7 @@ impl State {
             self.sink.on_vsync(ctx);
         }
         if pass.fmt_dirty {
+            log::info!("decode: output format: {}", ctx.codec.output_format());
             // Only the ASurfaceControl sink crops; the SurfaceView shows what the codec hands it.
             let picture =
                 super::display::picture_size(&ctx.codec).map(|(w, h)| match self.av1_render {
@@ -1445,6 +1457,18 @@ impl State {
             if let Some((w, h)) = picture {
                 ctx.decoded_size
                     .store(crate::session::pack_surface_size(w, h), Ordering::Relaxed);
+                // The picture is the size the host encodes, which a mirror's asked mode is not.
+                let spare = has_spare_capacity(
+                    &ctx.codec.name().unwrap_or_default(),
+                    self.pixel_rate,
+                    (w.max(0) as u32, h.max(0) as u32),
+                    ctx.client.mode().refresh_hz,
+                );
+                log::info!(
+                    "decode: {w}x{h} against {} declared pixels a second — spare capacity: {spare}",
+                    self.pixel_rate
+                );
+                ctx.client.report_decoder_spare(spare);
             }
             self.sink
                 .on_format_changed(ctx, picture, self.stream_colour);
@@ -1703,14 +1727,16 @@ impl State {
             {
                 log::info!(
                     "decode: hold trial — tail {}: codec {:.1} ms with, {:.1} ms without, AUs \
-                     {:.1} ms apart; tail {} {}",
+                     {:.1} ms apart; tail {} from here",
                     r.tail.label(),
                     r.with_us as f64 / 1000.0,
                     r.without_us as f64 / 1000.0,
                     r.gap_us as f64 / 1000.0,
                     r.next.label(),
-                    if r.done { "from here" } else { "next" }
                 );
+                // The reading fed its blocks two ways: the delay the cadence loop measured
+                // across them is neither's.
+                self.sink.reset_cadence();
             }
             let feed_us = match (queued, received_ns) {
                 (Some(q), Some(r)) => Some(((q - r).max(0) / 1000) as u64),

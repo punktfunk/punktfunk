@@ -115,6 +115,7 @@ impl DataPump {
             mode: events.mode,
             acks: events.acks,
             decode_lat: (dec.sum_us, dec.count),
+            decoder_spare: self.shared.decoder_spare.load(Ordering::Relaxed),
             encode_lat: (enc.sum_us, enc.count),
             host_timings: enc.timings,
             keyframe_asks: self.shared.recovery_kf.swap(0, Ordering::Relaxed),

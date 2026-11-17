@@ -139,6 +139,8 @@ pub(crate) struct DecodeOptions {
     /// Whether Kotlin found the chosen decoder advertises `FEATURE_LowLatency` (queryable only via
     /// the Java `CodecCapabilities` API) — surfaced on the HUD next to the decoder name.
     pub ll_feature: bool,
+    /// The most pixels a second Kotlin read from the chosen decoder's capabilities; 0 = none.
+    pub pixel_rate: u64,
     /// The user's "Low-latency mode" master toggle. On ⇒ the aggressive vendor keys,
     /// pipeline thread boosts, ADPF max-performance and the forced TV mode switch. Off ⇒ the same
     /// loop and presenter with plain keys and no boosts — the per-device escape hatch.

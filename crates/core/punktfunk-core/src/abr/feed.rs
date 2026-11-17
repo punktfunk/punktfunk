@@ -74,6 +74,9 @@ pub struct Inputs {
     pub acks: Vec<(u32, Option<AckReason>)>,
     /// Client decode and host encode stage totals: `(sum µs, samples)`.
     pub decode_lat: (u64, u32),
+    /// The decoder declares room for half again the stream's pixel rate
+    /// ([`Driver::on_decoder_spare`]).
+    pub decoder_spare: bool,
     pub encode_lat: (u64, u32),
     /// The host's per-AU timings, in arrival order.
     pub host_timings: Vec<HostTiming>,
@@ -185,6 +188,7 @@ impl Feed {
             d.on_ack(acked, why);
         }
         d.on_decode_latency(inputs.decode_lat.0, inputs.decode_lat.1);
+        d.on_decoder_spare(inputs.decoder_spare);
         d.on_encode_latency(inputs.encode_lat.0, inputs.encode_lat.1);
         for t in &inputs.host_timings {
             d.on_host_timing(t);

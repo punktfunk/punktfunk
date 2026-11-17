@@ -1080,6 +1080,21 @@ pub(super) fn decoder_pipeline() -> Scenario {
     sc
 }
 
+/// The same decoder with its hold gone: 14 ms of a 16.7 ms budget at the opening rate, from
+/// a decoder measured to work several pictures at once that declares room for half again
+/// the stream.
+pub(super) fn decoder_declared_spare() -> Scenario {
+    let mut sc = decoder_pipeline();
+    sc.name = "decoder_declared_spare";
+    let c = &mut sc.sessions[0].client;
+    // 14.0 to 14.8 ms at 20 Mbit/s: inside the hold band, under the retreat band.
+    c.decode.base_us = 12_300;
+    c.decode_holds = false;
+    c.decode_stages = true;
+    c.decoder_spare = true;
+    sc
+}
+
 /// The same decoder under a source at 15 fps for its first 20 s, then full rate: the wait for
 /// the next picture is four refreshes, 80 ms of latency that is the source's gap.
 pub(super) fn decoder_pipeline_slow_source() -> Scenario {
@@ -1934,6 +1949,7 @@ pub(super) fn all() -> Vec<Scenario> {
         decoder_slope(),
         decoder_pipeline(),
         decoder_pipeline_slow_source(),
+        decoder_declared_spare(),
         encoder_stalled(),
         unknown_refresh_knee(),
         host_rebuild_stall(),
@@ -2247,6 +2263,19 @@ mod tests {
             "past the retreat band: {:?}",
             after(30_000).map(|w| w.rate_kbps).max()
         );
+    }
+
+    /// Its hold gone, the decoder reads 14 ms of a 16.7 ms budget at the rate the session
+    /// opens at. On its spare capacity it is held where the rate adds most of a period, as
+    /// the one that holds is.
+    #[test]
+    fn a_decoder_with_spare_capacity_is_held_on_what_the_rate_adds() {
+        let r = run(&decoder_declared_spare());
+        let late = r.windows[0].iter().filter(|w| w.t_ms >= 60_000);
+        let (lo, hi) = late.fold((u32::MAX, 0), |(lo, hi), w| {
+            (lo.min(w.rate_kbps), hi.max(w.rate_kbps))
+        });
+        assert!(lo >= 110_000 && hi <= 210_000, "{lo}..{hi}");
     }
 
     /// A slow source's gaps cut nothing, and a pipeline first read at the top of the link
@@ -3160,6 +3189,7 @@ mod tests {
             "slope" => decoder_slope(),
             "pipeline" => decoder_pipeline(),
             "slowsource" => decoder_pipeline_slow_source(),
+            "spare" => decoder_declared_spare(),
             "starved" => starved_client(),
             "unknown" => unknown_refresh(),
             "idle" => idle_then_motion(),

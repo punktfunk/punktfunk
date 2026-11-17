@@ -203,7 +203,10 @@ object NativeBridge {
     /** One `pf.display` line in the log ring above, as written: the displays and fold features. */
     external fun nativeLogDisplay(line: String)
 
-    /** One `pf.caps` line in the log ring above, as written: the decoders this device lists. */
+    /**
+     * One `pf.caps` line in the log ring above, as written: what this device brings, its
+     * decoders and each controller it forwards.
+     */
     external fun nativeLogCaps(line: String)
 
     /**
@@ -408,7 +411,9 @@ object NativeBridge {
      * the MIME); [lowLatencyMode] is the user's "Low-latency mode" master toggle
      * (`Settings.lowLatencyMode`: per-SoC tuning + thread boosts; off runs the same loop with
      * plain keys, the per-device escape hatch); [lowLatencyFeature] is whether
-     * [decoderName] advertised `FEATURE_LowLatency` (HUD label only). [isTv] drives an active HDMI
+     * [decoderName] advertised `FEATURE_LowLatency` (HUD label only); [decoderPixelRate] is the
+     * most pixels a second it declares (0 = none), which automatic bitrate weighs the stream
+     * against. [isTv] drives an active HDMI
      * mode switch to the stream refresh on TV boxes when the toggle is on (vs. the softer seamless
      * hint otherwise). [presentPriority]/[smoothBuffer] are the timeline presenter's intent
      * (0 = lowest latency / 1 = smoothness; buffer 0 = automatic, else 1..3 frames) — the Apple
@@ -420,6 +425,7 @@ object NativeBridge {
         decoderName: String,
         lowLatencyMode: Boolean,
         lowLatencyFeature: Boolean,
+        decoderPixelRate: Long,
         isTv: Boolean,
         /** ChromeOS (`org.chromium.arc`): present through [surface] itself, never an
          *  ASurfaceControl child layer, which ARC accepts but Chrome can leave undrawn. */

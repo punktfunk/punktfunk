@@ -784,6 +784,13 @@ class GamepadRouter(
         val index = lowestFreeIndex() ?: return null // 16 pads already forwarded — drop this one
         val pref = declaredFor(dev)
         if (forwarding) NativeBridge.nativeSendGamepadArrival(handle, pref, index)
+        // The bundle names the device behind each wire pad. No native library in a JVM test.
+        runCatching {
+            NativeBridge.nativeLogCaps(
+                "pad $index: \"${dev.name}\" ${"%04x:%04x".format(dev.vendorId, dev.productId)} " +
+                    "sources=0x${dev.sources.toString(16)} kind=$pref forwarding=$forwarding",
+            )
+        }
         // Asked here, off the kind this pad just DECLARED — not off the session's resolved backend,
         // which under Automatic answers for whichever pad happened to be active at dial time. Held
         // for the slot's life; the sensor path reads it on every sample.

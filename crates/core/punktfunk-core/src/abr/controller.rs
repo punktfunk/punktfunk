@@ -3878,6 +3878,46 @@ mod tests {
         assert_eq!(until_request(&mut c, start, &mut t, 18_000, 20), None);
     }
 
+    /// 7 ms of an 8.3 ms period parks a decoder that says nothing. From one that declares
+    /// spare capacity it is a pipeline's floor: the notch reads that the rate moves
+    /// nothing, the rate comes back and nothing is parked.
+    #[test]
+    fn a_declared_spare_capacity_reads_a_near_period_latency_as_floor() {
+        let (mut c, start, mut t) = warmed_120(7_000);
+        assert_eq!(until_request(&mut c, start, &mut t, 7_000, 2), None);
+        assert_eq!(c.decode.cap.kbps(), Some(100_000), "undeclared: parked");
+
+        let (mut c, start, mut t) = warmed_120(7_000);
+        c.decode.declare_spare(true);
+        assert_eq!(until_request(&mut c, start, &mut t, 7_000, 2), Some(87_500));
+        assert_eq!(
+            until_request(&mut c, start, &mut t, 7_000, 6),
+            Some(100_000)
+        );
+        assert_eq!(c.decode.cap.kbps(), None);
+        assert_eq!(until_request(&mut c, start, &mut t, 7_000, 20), None);
+    }
+
+    /// The same decoder sheds its queue: its word is refuted, said again or not, and the
+    /// reading parks it like any other's.
+    #[test]
+    fn a_shed_queue_refutes_a_declared_spare_capacity() {
+        let (mut c, start, mut t) = warmed_120(7_000);
+        c.decode.declare_spare(true);
+        c.on_window(&WindowSample {
+            owd_mean_us: Some(10_000),
+            decode_mean_us: Some(7_000),
+            actual_kbps: c.current_kbps,
+            activity: WindowActivity::Active(90),
+            backlog: true,
+            ..WindowSample::at(ticks(start, t))
+        });
+        t += 1;
+        c.decode.declare_spare(true);
+        assert_eq!(until_request(&mut c, start, &mut t, 7_000, 6), None);
+        assert_eq!(c.decode.cap.kbps(), Some(100_000));
+    }
+
     /// Twenty pictures a window are 37.5 ms apart. A decode mean over that
     /// gap with nothing queued is a decoder waiting on its next picture: no
     /// verdict. Under the gap it is the decoder's own time, and a shed queue

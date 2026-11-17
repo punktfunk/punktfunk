@@ -7,8 +7,15 @@ import android.media.MediaCodecInfo.VideoCapabilities.PerformancePoint
 import android.media.MediaCodecList
 import android.os.Build
 
-/** The decoder Kotlin ranked for a MIME, handed to [NativeBridge.nativeStartVideo]. */
-data class DecoderChoice(val name: String, val lowLatencyFeature: Boolean)
+/**
+ * The decoder Kotlin ranked for a MIME, handed to [NativeBridge.nativeStartVideo]. [pixelRate]
+ * is the most pixels a second it declares, 0 when it declares none.
+ */
+data class DecoderChoice(
+    val name: String,
+    val lowLatencyFeature: Boolean,
+    val pixelRate: Long = 0,
+)
 
 /** What a session asks of its decoder: the requested size and rate, and 10-bit (HDR or SDR). */
 data class DecodeNeed(val width: Int, val height: Int, val fps: Int, val tenBit: Boolean)
@@ -229,9 +236,19 @@ object VideoDecoders {
     fun pickDecoder(mime: String): DecoderChoice? {
         if (mime.isEmpty()) return null
         val infos = codecInfos() ?: return null
-        return bestDecoder(facts(infos, mime, null, false), Build.VERSION.SDK_INT)
-            ?.let { DecoderChoice(it.name, it.lowLatency) }
+        val best = bestDecoder(facts(infos, mime, null, false), Build.VERSION.SDK_INT)
+            ?: return null
+        val video = infos.firstOrNull { it.name == best.name }
+            ?.let { runCatching { it.getCapabilitiesForType(mime).videoCapabilities }.getOrNull() }
+        return DecoderChoice(best.name, best.lowLatency, video?.let(::pixelRate) ?: 0)
     }
+
+    /** The most pixels a second [video] declares: its largest size at the rate it takes there. */
+    private fun pixelRate(video: MediaCodecInfo.VideoCapabilities): Long = runCatching {
+        val w = video.supportedWidths.upper
+        val h = video.getSupportedHeightsFor(w).upper
+        (w.toLong() * h * video.getSupportedFrameRatesFor(w, h).upper).toLong()
+    }.getOrDefault(0L)
 
     private fun codecInfos(): Array<MediaCodecInfo>? =
         runCatching { MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos }.getOrNull()
