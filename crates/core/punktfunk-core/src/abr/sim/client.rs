@@ -39,7 +39,7 @@ const ACK_REACH_FRAMES: u64 = 8;
 /// What the client does with a frame its parity could not close.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Repair {
-    /// Today: the frame is lost and the client asks until a recovery frame lands.
+    /// The default: the frame is lost and the client asks until a recovery frame lands.
     #[default]
     Rfi,
     /// A frame at most [`NACK_SHORT`] short, on a round trip inside one
@@ -238,8 +238,8 @@ pub(super) struct Client {
     rng: Rng,
     /// The scenario's zero, so a millisecond can become an `Instant`. Not the
     /// instant this session joined: a session that joins at 60 s still reads
-    /// the run's clock, and dating its probe results from its own start put
-    /// every report window a minute into the future.
+    /// the run's clock, and dating its probe results from its own start would
+    /// put every report window a minute into the future.
     base: Instant,
     pub(super) abr: Driver,
     flight: VecDeque<InFlight>,
@@ -918,7 +918,7 @@ impl Client {
                 // As the pump does: a burst nobody answered is let go, or the
                 // report tick stays suppressed for the rest of the session.
                 crate::abr::Action::AbandonProbe => self.probing = false,
-                // The simulated host has no pacer: the run only records what it was told.
+                // The simulated host's pacer reads neither: the run only records them.
                 crate::abr::Action::LinkRate(kbps) => self.links.push((now_ms, kbps)),
                 crate::abr::Action::Shape(s) => self.shapes.push((now_ms, s)),
             }

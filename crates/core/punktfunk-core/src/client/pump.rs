@@ -49,8 +49,8 @@ pub(super) type CtlSend = quinn::SendStream;
 pub(super) type CtlRecv = crate::quic::v2::io::FrameReader<quinn::RecvStream>;
 
 /// The client's connection. A datagram carries its kind; this adds and strips it, so every
-/// task keeps sending and reading the datagrams it always did. Everything else is the quinn
-/// connection underneath.
+/// task sends and reads the tag-led payload alone. Everything else is the quinn connection
+/// underneath.
 #[derive(Clone)]
 pub(super) struct ClientConn {
     conn: quinn::Connection,
@@ -207,7 +207,7 @@ pub(super) async fn run_pump(mut args: WorkerArgs) {
         )
         .min(stream_cap_kbps)
     });
-    // ABR encode-threshold unit ([`BitrateController::encode_thresholds`]). Negotiated
+    // ABR encode-threshold unit (`abr::verdict::encode_thresholds`). Negotiated
     // refresh, not the request still sitting in `shared.mode` (60-for-120 must score at 60).
     let refresh_hz = welcome.mode.refresh_hz;
     // Feedback datagrams leave on this connection from any thread that asks.

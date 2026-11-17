@@ -103,7 +103,7 @@ impl<S: Copy + Default> QuadMixer<S> {
     }
 
     /// Append the frames every live kind has written to `out`, or every ready frame once none is
-    /// live; returns the frame count. Popping past a live kind's cursor zeros its pair for that
+    /// live; returns the frame count. Popping past a quiet kind's cursor zeros its pair for that
     /// span. Both cursors move back; a lagging kind resumes at the new front.
     pub fn pop(&mut self, out: &mut Vec<S>, now: Instant) -> usize {
         let frames = (0..2)
@@ -135,9 +135,9 @@ impl<S: Copy + Default> QuadMixer<S> {
     }
 }
 
-/// Concealment frames to synthesise before decoding `seq`, capped at 50 ms of `frame_samples`
-/// (per channel at 48 kHz; speaker frames are 10 ms, haptics 5 ms). 0 until a first decode, but
-/// the tracker is always fed so a gap before it cannot replay later.
+/// Concealment frames to synthesise before decoding `seq`, capped at `MAX_CONCEAL_MS` of
+/// `frame_samples` (per channel at 48 kHz; speaker frames are 10 ms, haptics 5 ms). 0 until a
+/// first decode, but the tracker is always fed so a gap before it cannot replay later.
 pub fn plc_frames(gaps: &mut AudioGapTracker, seq: u32, frame_samples: usize) -> u32 {
     if frame_samples == 0 {
         gaps.missing_before(seq);
@@ -400,7 +400,7 @@ mod tests {
     }
 
     /// The loop pops after every datagram. With both lanes live that must play wall time once:
-    /// popping the further-ahead kind played 20 ms per 10 ms and zeroed each pair in turn.
+    /// popping the further-ahead kind would play 20 ms per 10 ms and zero each pair in turn.
     #[test]
     fn both_live_lanes_play_in_real_time() {
         let t0 = Instant::now();

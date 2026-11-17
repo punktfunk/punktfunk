@@ -5,7 +5,7 @@
 //! The latency signals arrive as sums and counts because that is what the
 //! embedders gather. A window whose numbers describe something other than the
 //! link — the tail of a capacity burst, a host pipeline rebuild — is
-//! discarded whole: one bogus congestion verdict ends slow start for good.
+//! discarded whole: one bogus congestion verdict ends slow start.
 //! A burst's freeze outlives that window, so its keyframe asks are disowned
 //! for as long as it lasts.
 
@@ -21,7 +21,7 @@ use std::time::Instant;
 pub(super) const PROBE_AFTERMATH_WINDOWS: u32 = 8;
 
 /// Host timings kept for a reading that lands after its own timing: a NACK-repaired AU, or a
-/// pump behind its queue. 128 ≈ 530 ms at 240 Hz, past the 400 ms behind at which
+/// pump behind its queue. 128 ≈ 530 ms at 240 Hz, past `FLUSH_LATENCY`, the lag at which
 /// jump-to-live sheds the queue.
 const TIMINGS_KEPT: usize = 128;
 

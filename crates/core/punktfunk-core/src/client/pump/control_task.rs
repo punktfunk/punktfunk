@@ -1,7 +1,7 @@
 //! Control task: the handshake stream stays open for mid-stream
 //! renegotiation and speed tests. Outbound requests and inbound replies
-//! multiplex on `select!`; one `ctrl_rx` writer so the two `&mut ctrl_send`
-//! borrows never collide across branches.
+//! multiplex on one `select!`, so the branches that write `ctrl_send` never
+//! hold it at once.
 
 use super::super::*;
 use super::*;
@@ -14,8 +14,9 @@ pub(super) struct ControlTask {
     pub(super) ctrl_recv: CtlRecv,
     /// `None` = no connect-time skew handshake (old host); clock re-sync stays off.
     pub(super) clock_rtt_ns: Option<u64>,
-    /// The cells this task writes as the host reports them: mode, probe, live bitrate, clock
-    /// offset, access, mute, pad slots, launch verdict. Access lands before `access_tx` fires.
+    /// The cells this task writes as the host reports them, among them mode, probe, live
+    /// bitrate, clock offset, access, mute, pad slots, launch verdict. Access lands before
+    /// `access_tx` fires.
     pub(super) shared: Arc<ClientShared>,
     /// To the data pump: re-syncs, bitrate acks, pipeline gaps and mode switches.
     pub(super) events: PumpTx,
@@ -24,7 +25,7 @@ pub(super) struct ControlTask {
     /// Host [`CursorShape`] → [`NativeClient::next_cursor_shape`].
     pub(super) cursor_shape_tx: crate::client::planes::ShapeSender,
     /// Access updates → [`NativeClient::next_access_update`]. try_send: a
-    /// lagging embedder drops the oldest; the two live slots already hold truth.
+    /// lagging embedder misses the newest; the two live slots already hold truth.
     pub(super) access_tx: std::sync::mpsc::SyncSender<crate::quic::AccessUpdate>,
     /// Feature reports for a pad ([`crate::quic::PadFeature`]) → the datagram plane's queue.
     pub(super) hidout_tx: std::sync::mpsc::SyncSender<crate::quic::HidOutput>,

@@ -3,10 +3,9 @@
 //! Loss and a flush are absolute; one-way delay, client decode and host
 //! encode are relative, each scored against the rolling minimum of the last
 //! [`BASELINE_WINDOWS`] windows that carried the signal. An unrecoverable
-//! frame is absolute too unless it is the only damage behind a long clean run
-//! at this rate, which makes it a blip and moves nothing. Severe decides on
-//! one window, ordinary on two. Quiet windows teach no baseline, and a starved
-//! window withholds the host-encode signal.
+//! frame is absolute too unless `Baselines::score` reads it as a blip, which
+//! moves nothing. Severe decides on one window, ordinary on two. Quiet windows
+//! teach no baseline, and a starved window withholds the host-encode signal.
 
 use super::sample::WindowSample;
 use std::collections::VecDeque;

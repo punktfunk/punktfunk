@@ -235,8 +235,8 @@ pub enum GamepadPref {
     /// mirrors client [`RichInput::HidReport`](crate::quic::RichInput); Steam on
     /// the host consumes hidraw (`hid-steam` stops at the Deck). Linux UHID.
     SteamController2,
-    /// Puck dongle (`28DE:1304`) carrying a captured SC2. Host presents the
-    /// native seven-interface Puck topology, not a relabelled wired `1302`.
+    /// Puck dongle (`28DE:1304`) carrying a captured SC2. A Linux host presents the
+    /// native seven-interface Puck topology; a Windows host folds it onto the wired `1302`.
     SteamController2Puck,
     /// Xbox Elite Series 2. Linux: uinput `045E:0B00`, paddles on
     /// `BTN_TRIGGER_HAPPY5-8`. Windows: HID `045E:0B22` (Bluetooth, UMDF), whose
@@ -449,10 +449,10 @@ impl GamepadPref {
 ///
 /// The host builds each virtual device from that pad's arrival and uses the
 /// session default only when the pad never declared. It also folds backends it
-/// cannot build (Switch Pro on Windows, any UHID host without `/dev/uhid`) to
-/// Xbox 360, dropping the motion plane — nothing local can predict that. The
-/// echo is one sample of that fold for the Hello kind, so it is authoritative
-/// when `declared == asked`.
+/// cannot build (a Windows host whose driver package predates the pad, any UHID host
+/// without `/dev/uhid`) to Xbox 360, dropping the motion plane — nothing local can
+/// predict that. The echo is one sample of that fold for the Hello kind, so it is
+/// authoritative when `declared == asked`.
 ///
 /// Otherwise trust the declaration. Wrong the other way would silently kill a
 /// working gyro; wasted datagrams are the cheaper miss.
@@ -1067,7 +1067,8 @@ mod tests {
         // Generic pad under Auto: detection lands on Xbox 360, no motion plane.
         assert!(!pad_motion_reaches(Xbox360, Xbox360, Xbox360));
 
-        // Switch Pro on Windows folds to Xbox 360. declared == asked, so the echo catches it.
+        // Switch Pro on a Windows host whose driver predates it folds to Xbox 360. declared ==
+        // asked, so the echo catches it.
         assert!(!pad_motion_reaches(SwitchPro, SwitchPro, Xbox360));
         assert!(pad_motion_reaches(SwitchPro, SwitchPro, SwitchPro));
 

@@ -1,10 +1,10 @@
 //! Which A record to dial when an mDNS advert resolves to several.
 //!
 //! The resolved set is a union of answers from every responder on every
-//! interface. The host advert registers one address (its routed primary;
-//! host crate `discovery.rs`), but the OS mDNS responder also answers
-//! `<host>.local.` per interface. Overlay networks add their addresses
-//! to the same set.
+//! interface. The host advert registers its routed primary address and any address it
+//! holds on a Steam Frame adapter network (host crate `hostsys/discovery.rs`,
+//! `current_addrs`), but the OS mDNS responder also answers `<host>.local.` per
+//! interface. Overlay networks add their addresses to the same set.
 //!
 //! [`rank_host_addr`] is the pure policy; [`pick_host_addr`] applies it
 //! with this machine's live context. [`advert_from_txt`] turns one resolved

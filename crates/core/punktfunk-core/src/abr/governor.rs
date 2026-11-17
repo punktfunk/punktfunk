@@ -336,7 +336,7 @@ mod tests {
     use crate::abr::{Action, Driver, DriverConfig};
     use crate::stats::Stats;
 
-    /// One wire packet: shard payload plus its header and seal.
+    /// One wire packet as the reassembler counts it: shard payload plus header, unsealed.
     const WIRE: u64 = 1_448;
 
     /// Every delivery count a real [`Driver`] asks the host for over `windows`

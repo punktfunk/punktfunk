@@ -62,7 +62,7 @@ impl EncodeHold {
     /// The rate is only the lever if the encoder answers it, so the notch is
     /// held against the encode time at the new rate
     /// ([`judge_step`](Self::judge_step)), referenced to this rate's level,
-    /// or to this window at a rate whose every window has been bad. `Some` is
+    /// or to this window at a rate with no level yet. `Some` is
     /// the rate to request; `None` while a notch is still being judged: the
     /// step in flight owns the question.
     pub(super) fn retreat(&mut self, w: &WindowSample, rate: Rate, budget_us: i64) -> Option<u32> {
@@ -154,7 +154,7 @@ impl EncodeHold {
     /// One window on both stand-down clocks. Stillness proves nothing about
     /// a GPU that had nothing to encode.
     pub(super) fn tick(&mut self, bad: bool, quiet: bool, baselines: &mut Baselines) {
-        // GPU contention ends; a too-eager re-arm costs one ×0.7, a permanent
+        // GPU contention ends; a too-eager re-arm costs one notch, a permanent
         // silence costs the knee protection.
         if self.down.disarmed() {
             if bad {

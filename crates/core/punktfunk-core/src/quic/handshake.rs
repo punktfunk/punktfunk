@@ -57,8 +57,7 @@ pub struct Hello {
     pub audio_rate_hz: u32,
     /// Requested depth: [`BITS_16`](crate::audio::pcm::BITS_16) or
     /// [`BITS_24`](crate::audio::pcm::BITS_24). Host answers in [`Welcome::audio_bits`].
-    /// `0`/absence → 16-bit; only `audio_layout` can force this byte — a 96 kHz/16-bit
-    /// request emits the rate and stops.
+    /// `0`/absence → 16-bit.
     pub audio_bits: u8,
     /// Requested surround coupling, an [`AudioLayout`](crate::audio::AudioLayout) wire id.
     /// Host answers in [`Welcome::audio_layout`] with what it encodes. `0`/absence is the legacy
@@ -133,9 +132,9 @@ fn bounded_label(s: &str, max: usize) -> String {
 }
 
 /// [`ClientHello::abr_features`] bit 0: the client reads the reason byte on
-/// [`BitrateChanged`](super::control::BitrateChanged). The host sends that tenth byte only
-/// toward this bit, because every client without it rejects an ack of any other length.
-/// Core sets it for every embedder that links the controller reading it, not the embedder.
+/// [`BitrateChanged`](super::control::BitrateChanged). The host sends the reason only
+/// toward this bit. Core sets it for every embedder that links the controller reading it,
+/// not the embedder.
 pub const EXT_ABR_ACK_REASON: u8 = 0x01;
 
 /// The connect-options bit that dials a diagnostic session ([`ClientHello::probe_only`]): the
@@ -255,7 +254,7 @@ pub struct Welcome {
     /// events. Omit → `0`.
     pub host_caps: u8,
     /// Management-API port (game library). Distinct from the QUIC port.
-    /// `0` = not advertised; the client uses 47990.
+    /// `0` = not advertised; the client keeps its own default.
     pub mgmt_port: u16,
     /// [`GRANT_GAMEPAD`](super::GRANT_GAMEPAD)-family mask. The client uses this to skip
     /// capture that cannot land. Omit → [`GRANT_ALL`](super::GRANT_ALL).

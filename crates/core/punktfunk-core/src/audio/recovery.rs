@@ -59,7 +59,8 @@ impl AudioGapTracker {
         Self::default()
     }
 
-    /// Cap seq-gap PLC at 50 ms of `frame_us`. [`new`](Self::new) is the Opus 5 ms default.
+    /// Cap seq-gap PLC at [`MAX_CONCEAL_MS`] of `frame_us`. [`new`](Self::new) is the Opus 5 ms
+    /// default.
     pub fn new_at_frame_us(frame_us: u32) -> Self {
         let mut t = Self::new();
         t.set_frame_us(frame_us);

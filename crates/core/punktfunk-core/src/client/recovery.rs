@@ -274,7 +274,7 @@ pub(crate) struct RecoveryStep {
     pub(crate) ask: RecoveryAsk,
 }
 
-/// One place for the rules every client used to rebuild: the freeze gate, the RFI asks,
+/// One place for the rules every client would otherwise rebuild: the freeze gate, the RFI asks,
 /// the one ask window, the straggler and late-partial drops and the arm watermark.
 /// Pure: `now` is passed in. [`NativeClient`](super::NativeClient) holds it behind one
 /// lock, feeds the decoder's reports and the pump's ticks, and sends what it asks for.
@@ -1178,8 +1178,6 @@ mod feedback_out_tests {
         );
     }
 
-    /// A NACK repeats like any ask until its own frame arrives; frames after it answer
-    /// nothing. The RFI after it replaces it whole.
     /// The decoder's clean frames are acknowledged with the sixteen before them; a gap
     /// stops them until an anchor or an IDR, and a straggler never counts.
     #[test]
@@ -1217,6 +1215,8 @@ mod feedback_out_tests {
         assert_eq!(acked(24, POINT | CLOSE), None, "the sweep had a gap");
     }
 
+    /// A NACK repeats like any ask until its own frame arrives; frames after it answer
+    /// nothing. The RFI after it replaces it whole.
     #[test]
     fn a_nack_repeats_until_its_frame_arrives() {
         let t0 = Instant::now();

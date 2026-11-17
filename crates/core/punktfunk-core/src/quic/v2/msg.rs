@@ -870,12 +870,12 @@ impl FieldValue for [u8; 4] {
     }
 }
 
-/// One input edge for the input stream: the event's own encoding is the body.
+/// One input edge as a control-stream frame: the event's own encoding is the body.
 pub fn encode_input_event(ev: &crate::input::InputEvent) -> Vec<u8> {
     super::field::frame(reg::MSG_INPUT_EVENT, &ev.encode())
 }
 
-/// The event an input-stream frame carries; `None` for another type or a bad event.
+/// The event an input-edge frame carries; `None` for another type or a bad event.
 pub fn decode_input_event(ty: u64, body: &[u8]) -> Option<crate::input::InputEvent> {
     (ty == reg::MSG_INPUT_EVENT)
         .then(|| crate::input::InputEvent::decode(body))

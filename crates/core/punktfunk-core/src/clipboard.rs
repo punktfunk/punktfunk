@@ -298,7 +298,7 @@ async fn run_outbound_fetch(
         let data = clipstream::read_data(&mut recv, CLIP_FETCH_CAP)
             .await
             .map_err(|_| PunktfunkStatus::Io as i32)?;
-        drop(send); // done — dropping the send half is a clean FIN-less close on our side
+        drop(send); // done — dropping the send half finishes it
         Ok(data)
     };
 
@@ -312,11 +312,11 @@ async fn run_outbound_fetch(
             }
         },
         _ = cancel_rx => {
-            // The `transfer` future is dropped here; its streams reset on drop.
+            // Dropping `transfer` here finishes its send half and stops its receive half.
             let _ = events.try_send(ClipEventCore::Cancelled { id: xfer_id });
         }
         // Stall bound: a holder that never answers must not hang the transfer.
-        // Dropping `transfer` resets the streams.
+        // Dropping `transfer` finishes its send half and stops its receive half.
         _ = tokio::time::sleep(std::time::Duration::from_secs(FETCH_STALL_SECS)) => {
             let _ = events.try_send(ClipEventCore::Error {
                 id: xfer_id,
@@ -326,8 +326,8 @@ async fn run_outbound_fetch(
     }
 }
 
-// Every test here drives a real connection pair, so it needs `quic` like the module it
-// borrows `connect_pair` from. The crate's own code above is feature-free.
+// Every test here drives a real connection pair from `connect_pair`, which needs `quic`, as
+// this module does (`lib.rs`).
 #[cfg(all(test, feature = "quic"))]
 mod tests {
     use super::*;
