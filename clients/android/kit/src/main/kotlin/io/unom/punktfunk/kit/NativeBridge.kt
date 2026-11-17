@@ -202,7 +202,10 @@ object NativeBridge {
     /** One `pf.display` line in the log ring above, as written: the displays and fold features. */
     external fun nativeLogDisplay(line: String)
 
-    /** One `pf.caps` line in the log ring above, as written: the decoders this device lists. */
+    /**
+     * One `pf.caps` line in the log ring above, as written: what this device brings, its
+     * decoders and each controller it forwards.
+     */
     external fun nativeLogCaps(line: String)
 
     /**

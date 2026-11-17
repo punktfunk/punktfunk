@@ -256,7 +256,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeLogDisplay<
 }
 
 /// `NativeBridge.nativeLogCaps(line)` — one `pf.caps` line in the ring: the decoders Kotlin's
-/// `MediaCodecList` shows, so a bundle says which one a codec resolved to and why one is missing.
+/// `MediaCodecList` shows, so a bundle says which one a codec resolved to and why one is missing,
+/// and the device behind each forwarded controller.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeLogCaps<'local>(
     mut env: EnvUnowned<'local>,
