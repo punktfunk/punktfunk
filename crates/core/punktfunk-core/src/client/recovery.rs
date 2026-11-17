@@ -581,8 +581,8 @@ impl RecentRfis {
     }
 }
 
-/// Gaps remembered for the RFI line. More than the frame queue holds before
-/// jump-to-live, so a gap is still here when the decoder reaches it.
+/// Short frames remembered for the RFI log line. One stays until 16 newer short frames push
+/// it out; a gap gone by then logs without its shard counts.
 const SHORT_FRAMES: usize = 16;
 
 /// Frames the pump saw short, each with `(missing, recovery)` from

@@ -50,10 +50,10 @@ reed-solomon-simd = "3.1"      # GF(2^16) Leopard-RS, SIMD, O(n log n) — the w
 fec-rs = { path = "vendor/fec-rs" }
 aes-gcm = "0.11"               # AES-128-GCM session crypto, matches GameStream
 crc32fast = "1"                # DualSense Bluetooth output-report CRC (`audio::pad_bt`)
-# ChaCha20-Poly1305 session crypto, negotiated by clients without hardware AES (the soft-AES
-# armv7 targets — webOS TVs — where GCM caps decrypt at ~100 Mbps; ARX runs 4-7x faster there).
-# Same RustCrypto `aead 0.6` generation as aes-gcm: identical trait/nonce/tag shapes, pure Rust,
-# cross-compiles like aes-gcm (no cmake). See design/chacha20-session-cipher.md.
+# ChaCha20-Poly1305 session crypto, negotiated by clients without hardware AES (soft-AES armv7
+# webOS TVs, where GCM decrypt tops out near 100 Mbps; ARX needs an estimated 4-7x fewer cycles
+# per byte there). Same RustCrypto `aead 0.6` generation as aes-gcm: identical trait/nonce/tag
+# shapes, pure Rust, cross-compiles like aes-gcm (no cmake). See design/chacha20-session-cipher.md.
 chacha20poly1305 = "0.11"
 # Optional, for chacha-aws-lc-rs and aes-aws-lc-rs.
 aws-lc-rs = { workspace = true, optional = true }
@@ -106,7 +106,7 @@ opus = { version = "0.4", optional = true }
 libc = "0.2"
 
 # quinn's own quinn-udp, with batched `recvmsg_x`/`sendmsg_x`. Without it an Apple client reads
-# the shared socket one datagram per syscall, which caps video near 1.4 Gbit/s.
+# the shared socket one datagram per syscall, which tops out near 1.4 Gbit/s on a 5GbE Mac.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 quinn-udp = { version = "0.5", optional = true, default-features = false, features = ["fast-apple-datapath"] }
 

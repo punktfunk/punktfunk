@@ -876,11 +876,12 @@ impl Driver {
         }
     }
 
-    /// A fixed rate has no controller to mark a wall and no ramp to retreat to, so frames
-    /// dying [`DEAD_RUN`] windows running bring `L` to the stream's own rate, once and for
-    /// the session. A queue that overflows early in a frame loses its middle more than its
-    /// tail, which the tail signature does not read; only head loss is excused, for the
-    /// wake shape. The host then paces at 1.5 × the rate, its cap included.
+    /// A fixed rate has no controller to mark a wall, and a ramp that met none proved a rate
+    /// over the stream's, so frames dying [`DEAD_RUN`] windows running bring `L` to the
+    /// stream's own rate, once and for the session. A queue that overflows early in a frame
+    /// loses its middle more than its tail, which the tail signature does not read; only head
+    /// loss is excused, for the wake shape. The host then paces at 1.5 × the rate, its cap
+    /// included.
     fn watch_fixed_rate(&mut self, w: &WindowSample) {
         let Some(kbps) = self.fixed_kbps else {
             return;

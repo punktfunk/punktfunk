@@ -45,9 +45,9 @@ const TRITON: Layout = Layout {
     buttons: u32::MAX,
 };
 
-/// `ID_CONTROLLER_STATE`: 24 bits at 8..11. Bits 19, 20 and 23 are the pad touches and the flag
-/// that says whether 16..20 is the left pad or the stick: held back, a resting thumb would
-/// read as a pushed stick.
+/// `ID_CONTROLLER_STATE`: 24 bits at 8..11. Bit 19 (left touch) says 16..20 is the left pad, not
+/// the stick; bit 20 is the right touch; bit 23 says the two interleave. Held back, a resting
+/// thumb would read as a pushed stick.
 const CLASSIC: Layout = Layout {
     at: 8,
     len: 3,

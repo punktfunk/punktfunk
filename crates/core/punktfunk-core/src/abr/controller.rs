@@ -1111,10 +1111,10 @@ impl BitrateController {
     /// wire showed against its own norm, applied to the rate the cut leaves
     /// from.
     ///
-    /// A content-bound source delivers 78 % of every clean window, the parity
-    /// floor puts 210 % on the wire at the bottom of the range and PyroWave
-    /// about 120 % anywhere; dividing by the norm cancels all three. With no norm
-    /// yet the wire rate stands in. The cut and the wall mark both read this,
+    /// The rig's content-bound Wi-Fi source delivers 78 % of every clean window,
+    /// the parity floor puts 210 % of a 2 000 kbps target on the wire, and a
+    /// PS5's PyroWave about 120 %; dividing by the norm cancels all three. With
+    /// no norm yet the wire rate stands in. The cut and the wall mark both read this,
     /// so a cap learned from a cut is in the units the climb asks in.
     fn delivered_target_kbps(&self, delivered_kbps: u32) -> u32 {
         match self.norms.delivery_reference() {

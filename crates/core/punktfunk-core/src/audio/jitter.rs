@@ -43,7 +43,7 @@ impl JitterTuning {
         hard_cap_ms: 180,
         deprime_ms: 50,
     };
-    /// CoreAudio via AVAudioEngine. Same engine as WASAPI; longer `deprime_ms` because wireless
+    /// CoreAudio via AVAudioEngine. WASAPI's tuning with a longer `deprime_ms`, because wireless
     /// clients stall more. See [`AAUDIO`].
     ///
     /// [`AAUDIO`]: JitterTuning::AAUDIO

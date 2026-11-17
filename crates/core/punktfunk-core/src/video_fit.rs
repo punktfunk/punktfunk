@@ -8,8 +8,8 @@
 //! few pixels of difference become a bar or a crop, and the frame shows 1:1 or
 //! pixel-replicated instead of resampled by 1.0005×.
 //!
-//! Twins: `PunktfunkShared/VideoFit.swift`, Android `VideoFit.kt`, client-web
-//! `video-fit.ts`. All run `clients/shared/video-fit-vectors.json`.
+//! Twins: `PunktfunkShared/VideoFit.swift`, Android `VideoFit.kt`. All run
+//! `clients/shared/video-fit-vectors.json`.
 
 /// How a frame whose aspect differs from the view fills it. Settings key `video_fit`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(VideoFit::from_wire(9), VideoFit::Fit);
     }
 
-    /// The cross-language contract; Swift, Kotlin and TypeScript run the same file.
+    /// The cross-language contract; Swift and Kotlin run the same file.
     #[test]
     fn shared_vectors() {
         let raw = include_str!("../../../../clients/shared/video-fit-vectors.json");

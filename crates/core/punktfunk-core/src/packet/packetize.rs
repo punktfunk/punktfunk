@@ -474,8 +474,8 @@ impl Packetizer {
     }
 }
 
-/// Parity floor on a PyroWave head block ([`Packetizer::geometry_for`]): a link's burst after
-/// idle takes the first packets of a frame, and a clean link still drops ~4 in a row.
+/// Parity floor on a PyroWave head block ([`Packetizer::geometry_for`]): a burst after idle
+/// loses a frame's first packets, 3–4 in a row on one wired client's NIC.
 /// cbindgen:ignore
 pub const HEAD_MIN_RECOVERY_SHARDS: usize = 4;
 

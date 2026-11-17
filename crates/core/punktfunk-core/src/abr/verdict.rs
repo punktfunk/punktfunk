@@ -20,8 +20,9 @@ pub(super) const HEAVY_LOSS_PPM: u32 = 20_000;
 /// means the decoder is overdriven, whatever `loss_ppm` says. RFI asks are
 /// not counted — `loss_ppm` already prices them.
 pub(super) const RECOVERY_KF_BAD: u32 = 2;
-/// Keyframe asks that make one window severe. Emitters throttle at 100 ms, so
-/// 4+ in 750 ms means most of the window produced no pictures.
+/// Keyframe asks that make one window severe. Recovery's asks share one 100 ms
+/// window (`RFI_THROTTLE`), so 4+ in 750 ms means most of the window produced
+/// no pictures.
 pub(super) const RECOVERY_KF_SEVERE: u32 = 4;
 /// Clean windows at the current rate behind a lone lost frame before it reads
 /// as a blip. 8 × 750 ms = 6 s: long enough that the rate it held is proven,
