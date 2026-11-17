@@ -1299,7 +1299,7 @@ pub(crate) mod handover {
         use std::ffi::{CString, OsStr};
         use std::fs::File;
         use std::io;
-        use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+        use std::os::fd::{AsRawFd as _, OwnedFd};
         use std::os::unix::ffi::OsStrExt as _;
         use std::path::Path;
 
@@ -1314,15 +1314,15 @@ pub(crate) mod handover {
             flags: libc::c_int,
             mode: libc::c_uint,
         ) -> io::Result<OwnedFd> {
-            let name = c(name)?;
+            use rustix::fs::{Mode, OFlags};
             let flags = flags | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-            // SAFETY: `dir` is open for the call and `name` is NUL-terminated and outlives it.
-            let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags, mode) };
-            if fd < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: a non-negative `openat` result is a new descriptor nothing else owns.
-            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+            let flags = OFlags::from_bits_retain(flags as _);
+            Ok(rustix::fs::openat(
+                dir,
+                name,
+                flags,
+                Mode::from_raw_mode(mode as _),
+            )?)
         }
 
         pub(super) fn open(root: &Path, names: &[&OsStr], make: bool) -> io::Result<Dir> {
