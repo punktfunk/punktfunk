@@ -10,6 +10,8 @@
 //! machine. [`note_input`] releases it synchronously: the same inhibitor would
 //! refuse an intentional Sleep. Silence re-arms it. A local Sleep during a
 //! passive stream is indistinguishable from idle there and stays blocked.
+//! While seat0's active session is another user's, a greeter's too, neither input nor the
+//! portal reaches its idle timer, so the block stands for the whole stream.
 //!
 //! A seat is the door's to hold: its input and portal stop at its own desktop, and its seatless
 //! session may not take a logind block. The seat host asks for nothing. The door takes a share
@@ -32,6 +34,10 @@ const QUIET_BEFORE_VETO: Duration = Duration::from_secs(30);
 /// [`watch`] poll interval. Only re-arm waits for a tick; [`note_input`] releases synchronously.
 #[cfg(target_os = "linux")]
 const WATCH_TICK: Duration = Duration::from_secs(5);
+
+/// [`watch`] ticks between seat0 reads: a minute, well inside any desk's idle timer.
+#[cfg(target_os = "linux")]
+const DESK_TICKS: u64 = 12;
 
 /// Inhibit portal answer budget. A silent portal still leaves the logind veto
 /// armed inside [`QUIET_BEFORE_VETO`].
@@ -72,7 +78,8 @@ fn now_ms() -> u64 {
 }
 
 static LAST_INPUT_MS: AtomicU64 = AtomicU64::new(0);
-/// One relaxed load per input event keeps [`note_input`] off the mutex.
+/// Set while a veto that input lifts stands. One relaxed load per input event keeps
+/// [`note_input`] off the mutex.
 static VETOING: AtomicBool = AtomicBool::new(false);
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
@@ -80,7 +87,17 @@ fn quiet_for(last_input_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(last_input_ms) >= QUIET_BEFORE_VETO.as_millis() as u64
 }
 
-/// Stamp last client input. Releases a standing veto so an intentional Sleep is
+/// Whether client input lifts the logind veto. `desk_uid` owns seat0's active session, `None`
+/// while nobody is active there or logind doesn't answer. Input reaches only `own_uid`'s
+/// compositors, so another user's desk, a greeter's included, never sees it and its idle timer
+/// runs out under the stream. A Sleep chosen inside the stream is then refused too; the host's
+/// own Sleep releases first ([`release_now`]).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
+fn input_lifts_veto(desk_uid: Option<u32>, own_uid: u32) -> bool {
+    desk_uid.is_none_or(|uid| uid == own_uid)
+}
+
+/// Stamp last client input. Releases a veto that input lifts, so an intentional Sleep is
 /// not refused by our own block.
 pub fn note_input() {
     LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
@@ -89,9 +106,8 @@ pub fn note_input() {
     }
 }
 
-/// Take a share. Nothing is acquired here: [`watch`] takes the desktop's inhibit at
-/// once, or the logind block after [`QUIET_BEFORE_VETO`] of quiet. A seat's session has
-/// neither to give, so its host only counts.
+/// Take a share. Nothing is acquired here: [`watch`] takes the desktop's inhibit or the
+/// logind block. A seat's session has neither to give, so its host only counts.
 pub fn hold() -> StreamHold {
     // Seed the quiet clock so a connect never vetoes and costs no D-Bus round trip.
     LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
@@ -162,8 +178,9 @@ fn release_locked(st: &mut State, why: &str) {
 }
 
 /// Hold the desktop's inhibit while any session lives. Without one, own the
-/// logind veto's arm/disarm edges. The door has no desktop and sees no input, so its
-/// `sleep` veto stands from the first tick.
+/// logind veto's arm/disarm edges. A veto input cannot lift stands from the first tick: the
+/// door's `sleep` veto, as it has no desktop and sees no input, and the one against another
+/// user's desk, which is read again every [`DESK_TICKS`].
 ///
 /// Acquire is the expensive edge (thread spawn + D-Bus). It happens here,
 /// outside the lock, so a hot `note_input` never queues behind a logind call.
@@ -171,14 +188,22 @@ fn release_locked(st: &mut State, why: &str) {
 #[cfg(target_os = "linux")]
 fn watch() {
     let door = pf_paths::seat::role().is_door();
-    if !door && hold_desktop_inhibit() {
+    // SAFETY: a parameterless POSIX call that always succeeds and touches no memory.
+    let own = unsafe { libc::getuid() };
+    let lifts = || !door && input_lifts_veto(desk_uid(), own);
+    let mut input_lifts = lifts();
+    // The portal's inhibit lands in our own session, so another user's desk ignores it too.
+    if input_lifts && hold_desktop_inhibit() {
         return;
     }
-    let quiet = || door || quiet_for(LAST_INPUT_MS.load(Ordering::Relaxed), now_ms());
     let what = if door { "sleep" } else { "sleep:idle" };
     let mut refused = false;
-    loop {
+    for tick in 1u64.. {
         std::thread::sleep(WATCH_TICK);
+        if tick % DESK_TICKS == 0 {
+            input_lifts = lifts();
+        }
+        let quiet = || !input_lifts || quiet_for(LAST_INPUT_MS.load(Ordering::Relaxed), now_ms());
         {
             let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
             if st.count == 0 {
@@ -186,6 +211,7 @@ fn watch() {
                 return;
             }
             if st.fd.is_some() {
+                VETOING.store(input_lifts, Ordering::Relaxed);
                 // Input can land after the quiet re-check below and before `VETOING`
                 // is stored; that press would not call `release`, so catch it here.
                 if !quiet() {
@@ -210,8 +236,58 @@ fn watch() {
             continue;
         }
         st.fd = Some(fd);
-        VETOING.store(true, Ordering::Relaxed);
+        VETOING.store(input_lifts, Ordering::Relaxed);
     }
+}
+
+/// The uid that owns seat0's active session. `None` while nobody is active there or logind
+/// doesn't answer. Blocks on its own runtime, so only [`watch`]'s plain thread calls it.
+#[cfg(target_os = "linux")]
+fn desk_uid() -> Option<u32> {
+    use ashpd::zbus::{
+        self,
+        zvariant::{OwnedObjectPath, OwnedValue},
+    };
+    async fn get(
+        conn: &zbus::Connection,
+        path: &str,
+        iface: &str,
+        name: &str,
+    ) -> Option<OwnedValue> {
+        let reply = conn
+            .call_method(
+                Some("org.freedesktop.login1"),
+                path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(iface, name),
+            )
+            .await
+            .ok()?;
+        reply.body().deserialize().ok()
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    rt.block_on(async {
+        let conn = zbus::Connection::system().await.ok()?;
+        let seat = "/org/freedesktop/login1/seat/seat0";
+        let active = get(&conn, seat, "org.freedesktop.login1.Seat", "ActiveSession").await?;
+        let (id, session): (String, OwnedObjectPath) = active.try_into().ok()?;
+        if id.is_empty() {
+            return None;
+        }
+        let user = get(
+            &conn,
+            session.as_str(),
+            "org.freedesktop.login1.Session",
+            "User",
+        )
+        .await?;
+        let (uid, _): (u32, OwnedObjectPath) = user.try_into().ok()?;
+        Some(uid)
+    })
 }
 
 /// Veto the desktop's idle suspend and blanking through the Inhibit portal until the
@@ -334,6 +410,20 @@ mod tests {
         // The clock starts at zero, so an unstamped stream looks infinitely quiet.
         // `hold` seeds it so a connect never vetoes before anyone could have pressed.
         assert!(quiet_for(0, quiet_ms), "an unseeded clock reads as quiet");
+    }
+
+    #[test]
+    fn input_lifts_the_veto_only_under_our_own_desk() {
+        let own = 1000;
+        for (desk, lifts, why) in [
+            (None, true, "nobody at seat0, or no answer"),
+            (Some(own), true, "our desktop sees the input"),
+            (Some(42), false, "a greeter never sees it"),
+            (Some(1001), false, "nor another user's desktop"),
+            (Some(0), false, "nor root's"),
+        ] {
+            assert_eq!(input_lifts_veto(desk, own), lifts, "{why}");
+        }
     }
 
     #[test]

@@ -1063,7 +1063,7 @@ mod gnome_windows;
 // DPMS of the box's own panels: gamescope honors `Topology::Exclusive` with
 // no desktop output. GNOME cannot (Mutter has no client DPMS). Outputs cannot
 // be disabled (KWin refuses zero enabled); DPMS-off is the translation.
-// Refcounted; `gamescope` consumes it, best-effort.
+// Refcounted; `gamescope` consumes it, best-effort. `mirror` wakes its head here.
 #[cfg(target_os = "linux")]
 #[path = "vdisplay/linux/panel_dpms.rs"]
 mod panel_dpms;

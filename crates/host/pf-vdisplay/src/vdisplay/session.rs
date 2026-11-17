@@ -692,8 +692,8 @@ pub fn detect_active_session() -> ActiveSession {
     ActiveSession::none()
 }
 
-/// Live `wayland-*` socket in `runtime` for this uid. Inherited `WAYLAND_DISPLAY` if it still exists;
-/// else newest-mtime owned socket (skip `.lock`).
+/// Live `wayland-N` socket in `runtime` for this uid. Inherited `WAYLAND_DISPLAY` if it still
+/// exists; else the newest-mtime owned one ([`is_wayland_socket_name`]).
 #[cfg(target_os = "linux")]
 fn find_wayland_socket(env: &EnvProbe, runtime: &str, uid: u32) -> Option<String> {
     if let Some(w) = env.wayland_display.clone() {
@@ -709,8 +709,16 @@ fn find_wayland_socket(env: &EnvProbe, runtime: &str, uid: u32) -> Option<String
         }
     }
     newest_owned(std::path::Path::new(runtime), uid, |name, _, _| {
-        (name.starts_with("wayland-") && !name.ends_with(".lock")).then(|| name.to_string())
+        is_wayland_socket_name(name).then(|| name.to_string())
     })
+}
+
+/// `wayland-` and digits, as `wl_display_add_socket_auto` names a compositor's socket. Other
+/// clients put sockets beside it under the same prefix (awww's `wayland-1-awww-daemon.sock`).
+#[cfg(target_os = "linux")]
+fn is_wayland_socket_name(name: &str) -> bool {
+    name.strip_prefix("wayland-")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Point the host at the live session: store it ([`pf_host_config::session::set`]). Every
@@ -975,6 +983,20 @@ mod instance_change_tests {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_numbered_wayland_socket_is_a_compositors() {
+        for (name, want) in [
+            ("wayland-0", true),
+            ("wayland-12", true),
+            ("wayland-1.lock", false),
+            ("wayland-1-awww-daemon.sock", false),
+            ("wayland-", false),
+            ("wayland-x", false),
+        ] {
+            assert_eq!(is_wayland_socket_name(name), want, "{name}");
+        }
+    }
 
     struct FakeRuntime {
         dir: std::path::PathBuf,

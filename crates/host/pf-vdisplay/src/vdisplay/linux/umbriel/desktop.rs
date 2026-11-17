@@ -303,11 +303,16 @@ pub(crate) fn undo(undo: &Undo) -> Result<()> {
 
 /// DPMS for one head; `Ok(false)` when it already was in that state, so the darken never
 /// records a head the operator had off.
-fn set_dpms(name: &str, on: bool) -> Result<bool> {
+pub(crate) fn set_dpms(name: &str, on: bool) -> Result<bool> {
     if head(&ipc::outputs()?, name).is_some_and(|h| h.powered == on) {
         return Ok(false);
     }
     ipc::msg(&dpms_action(on, name)).map(|()| true)
+}
+
+/// Whether Umbriel reports `name` powered. `None` when unlisted or the IPC does not answer.
+pub(crate) fn head_powered(name: &str) -> Option<bool> {
+    head(&ipc::outputs().ok()?, name).map(|h| h.powered)
 }
 
 /// DPMS off every head but a sibling's for a **gamescope** `exclusive` stream
