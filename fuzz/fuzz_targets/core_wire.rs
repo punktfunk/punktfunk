@@ -12,7 +12,8 @@ use punktfunk_core::quic::v2::dgram::{self, Dgram, Feedback, RetiredFeedback};
 use punktfunk_core::quic::v2::features::FeatureSet;
 use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
 use punktfunk_core::quic::v2::msg::{
-    self, AudioConfig, Pending, Redirect, StreamConfig, V2Message,
+    self, AudioConfig, Pending, ProfileUnlock, Redirect, ScreenLayout, Screens, StreamConfig,
+    V2Message,
 };
 use punktfunk_core::quic::v2::{field, registry as reg};
 use punktfunk_core::quic::*;
@@ -46,6 +47,7 @@ frames!(
     Pending,
     Redirect,
     Refused,
+    ProfileUnlock,
     PairRequest,
     PairChallenge,
     PairProof,
@@ -59,6 +61,8 @@ frames!(
     SetBitrate,
     BitrateChanged,
     PipelineGap,
+    ScreenLayout,
+    Screens,
     ProbeShaped,
     ProbeResult,
     CursorShape,
@@ -103,6 +107,8 @@ const _: () = {
 /// The payload of an audio, input or host-event datagram. Each decoder checks its own tag.
 fn payload(b: &[u8]) {
     let owned = |(seq, pts, opus): (u32, u64, &[u8])| (seq, pts, opus.to_vec());
+    let part =
+        |(seq, pts, i, n, bytes): (u32, u64, u8, u8, &[u8])| (seq, pts, i, n, bytes.to_vec());
     settle(
         b,
         |b| decode_audio_datagram(b).map(owned),
@@ -112,6 +118,16 @@ fn payload(b: &[u8]) {
         b,
         |b| decode_audio_pcm_datagram(b).map(owned),
         |(s, p, o)| encode_audio_pcm_datagram(*s, *p, o),
+    );
+    settle(
+        b,
+        |b| decode_audio_bitstream_datagram(b).map(part),
+        |(s, p, i, n, x)| encode_audio_bitstream_datagram(*s, *p, *i, *n, x),
+    );
+    settle(
+        b,
+        |b| decode_audio_pcm_part_datagram(b).map(part),
+        |(s, p, i, n, x)| encode_audio_pcm_part_datagram(*s, *p, *i, *n, x),
     );
     settle(
         b,
@@ -134,6 +150,7 @@ fn payload(b: &[u8]) {
     });
     let _ = decode_rumble_envelope(b);
     settle(b, RichInput::decode, RichInput::encode);
+    settle(b, TouchpadFrame::decode, TouchpadFrame::encode);
     settle(b, HidOutput::decode, HidOutput::encode);
     settle(b, decode_hdr_meta_datagram, encode_hdr_meta_datagram);
     settle(b, decode_host_timing_datagram, encode_host_timing_datagram);
@@ -182,12 +199,6 @@ fuzz_target!(|data: &[u8]| {
             match dgram::decode(b) {
                 Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) => payload(p),
                 Some(Dgram::Media(p)) => media(p),
-                Some(Dgram::ClockProbe(p)) => {
-                    assert!(dgram::decode(&dgram::encode_clock_probe(&p)).is_some())
-                }
-                Some(Dgram::ClockEcho(e)) => {
-                    assert!(dgram::decode(&dgram::encode_clock_echo(&e)).is_some())
-                }
                 _ => {}
             }
         }
