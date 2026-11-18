@@ -175,6 +175,9 @@ pub struct SystemRunner {
     /// Injected into every spawn. Plan commands carry a literal `"$USER"`, so it must
     /// be set even when the installer was invoked without one.
     pub exports: Vec<(String, String)>,
+    /// Every spawn's working directory. `ujust` starts us in read-only `/usr`, where a
+    /// step's `curl -O` cannot write.
+    pub cwd: Option<PathBuf>,
 }
 
 impl SystemRunner {
@@ -182,6 +185,7 @@ impl SystemRunner {
         Self {
             path_prefix: None,
             exports: Vec::new(),
+            cwd: None,
         }
     }
 
@@ -225,6 +229,9 @@ impl SystemRunner {
         std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
         for (key, value) in &self.exports {
             c.env(key, value);
+        }
+        if let Some(dir) = &self.cwd {
+            c.current_dir(dir);
         }
         if let Some(prefix) = &self.path_prefix {
             let existing = std::env::var_os("PATH").unwrap_or_default();
@@ -376,6 +383,16 @@ mod tests {
             p.etc("apt/sources.list.d/punktfunk.list"),
             Path::new("/tmp/box/etc/apt/sources.list.d/punktfunk.list")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_step_writes_relative_files_into_the_runner_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = SystemRunner::new();
+        r.cwd = Some(dir.path().to_path_buf());
+        r.run_shell("echo ok > fetched.sh", Stdin::Null).unwrap();
+        assert!(dir.path().join("fetched.sh").exists());
     }
 
     #[test]

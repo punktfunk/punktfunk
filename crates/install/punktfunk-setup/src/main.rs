@@ -461,22 +461,23 @@ fn preflight(env: &Env, paths: &BasePaths, runner: &mut SystemRunner) -> Result<
     if !runner.which("curl") {
         return Err(t::setup_preflight_curl().to_string());
     }
-    // Root without sudo (a minimal Debian container): a shim so the verbatim `sudo …`
-    // lines from platforms.json still work. The dir leads root's PATH, so it is created
-    // fresh at 0700: a dir another user planted under that name fails the create.
-    if root && !runner.which("sudo") {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir =
-            std::env::temp_dir().join(format!("punktfunk-setup-{}-{nanos}", std::process::id()));
-        if create_private_dir(&dir).is_ok()
+    // Steps run in a fresh 0700 dir: Bazzite's step downloads a script there that sudo then
+    // runs, and a dir another user planted under that name fails the create. Root without
+    // sudo (a minimal Debian container) also gets a `sudo` shim there, ahead on PATH.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("punktfunk-setup-{}-{nanos}", std::process::id()));
+    if create_private_dir(&dir).is_ok() {
+        if root
+            && !runner.which("sudo")
             && std::fs::write(dir.join("sudo"), "#!/bin/sh\nexec \"$@\"\n").is_ok()
         {
             set_executable(&dir.join("sudo"));
-            runner.path_prefix = Some(dir);
+            runner.path_prefix = Some(dir.clone());
         }
+        runner.cwd = Some(dir);
     }
     if !paths.os_release.exists() {
         return Err(Punt::NoOsRelease.message());
