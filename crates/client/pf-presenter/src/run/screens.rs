@@ -299,6 +299,29 @@ pub(super) struct ScreenWindows {
     /// The host layout the windows follow, or the one current at the last ask: windows open
     /// only from a newer one. `0` before any.
     layout_gen: u32,
+    /// The screen a held-button drag is over, 0 for the main window, while SDL keeps the
+    /// pointer on the window the button went down in.
+    drag_over: Option<u8>,
+}
+
+/// A window of the stream: its id, then its position and size in SDL's window coordinates.
+type WindowRect = (u32, (i32, i32), (u32, u32));
+
+/// The window of `rects` the point `at` of window `from`, in `from`'s coordinates, lies
+/// over, and the point in that window's. `None` while it is inside `from` or over none.
+fn window_under(rects: &[WindowRect], from: u32, at: (f32, f32)) -> Option<(u32, f32, f32)> {
+    let inside = |&(_, _, (w, h)): &WindowRect, (x, y): (f32, f32)| {
+        x >= 0.0 && y >= 0.0 && x < w as f32 && y < h as f32
+    };
+    let src = rects.iter().find(|r| r.0 == from)?;
+    if inside(src, at) {
+        return None;
+    }
+    let global = (src.1 .0 as f32 + at.0, src.1 .1 as f32 + at.1);
+    rects.iter().find_map(|r| {
+        let local = (global.0 - r.1 .0 as f32, global.1 - r.1 .1 as f32);
+        (r.0 != from && inside(r, local)).then_some((r.0, local.0, local.1))
+    })
 }
 
 /// `planned` past the monitors in `closed`, each screen keeping its index. Screen 0 is the
@@ -346,6 +369,24 @@ impl ScreenWindows {
         self.displays.retain(|(s, _)| s.index != screen);
         self.windows.retain(|w| w.index != screen);
         self.displays.iter().map(|(s, _)| *s).collect()
+    }
+
+    /// Every further window as a [`WindowRect`].
+    fn rects(&self) -> impl Iterator<Item = WindowRect> + '_ {
+        self.windows
+            .iter()
+            .map(|w| (w.window.id(), w.window.position(), w.window.size()))
+    }
+
+    /// Set every further window's keyboard grab to `grab`. SDL grabs only the focused window
+    /// and takes the grab from another as one gains focus, so a further window that holds
+    /// focus (Wayland and X11 give it) keeps system chords off the local shell.
+    fn hold_keyboard(&mut self, grab: bool) {
+        for w in &mut self.windows {
+            if w.window.keyboard_grab() != grab {
+                w.window.set_keyboard_grab(grab);
+            }
+        }
     }
 
     /// The screen whose window `window_id` is.
@@ -418,8 +459,9 @@ impl ScreenWindows {
 }
 
 impl Shell {
-    /// Per pass: the further screens' windows, and the local cursor hidden over them while the
-    /// host's pointer is drawn into their pictures.
+    /// Per pass: the further screens' windows, the capture's keyboard grab on each window of
+    /// the stream, and the local cursor hidden over them while the host's pointer is drawn
+    /// into their pictures.
     pub(super) fn screens_tick(&mut self, st: &mut StreamState) {
         let Some(connector) = st.connector.clone() else {
             return;
@@ -432,6 +474,18 @@ impl Shell {
             &self.knobs,
             self.backend,
         );
+        // A further window that took focus also took the grab from the main window.
+        let grab = st.capture.as_ref().is_some_and(|cap| {
+            crate::route::keyboard_grab(
+                cap.captured(),
+                self.opts.inhibit_shortcuts,
+                cap.grants() & punktfunk_core::quic::GRANT_KEYBOARD != 0,
+            )
+        });
+        st.screens.hold_keyboard(grab);
+        if !st.screens.windows.is_empty() && self.window.keyboard_grab() != grab {
+            self.window.set_keyboard_grab(grab);
+        }
         let desktop = st
             .capture
             .as_ref()
@@ -463,10 +517,53 @@ impl Shell {
 
     /// The pointer is over one of the further screens' windows.
     pub(super) fn over_screen(&self, st: &StreamState) -> bool {
-        self.mouse
-            .focused_window_id()
-            .and_then(|id| st.screens.screen_of(id))
-            .is_some()
+        match st.screens.drag_over {
+            Some(screen) => screen > 0,
+            None => self
+                .mouse
+                .focused_window_id()
+                .and_then(|id| st.screens.screen_of(id))
+                .is_some(),
+        }
+    }
+
+    /// A held-button drag past its window's edge, as motion on the stream window under the
+    /// pointer. SDL keeps the motion on the window the button went down in, in its
+    /// coordinates, so a drag would stop at that monitor's edge instead of crossing it.
+    pub(super) fn across_windows(&self, stream: &mut Option<StreamState>, event: Event) -> Event {
+        let Some(st) = stream.as_mut().filter(|st| !st.screens.windows.is_empty()) else {
+            return event;
+        };
+        let Event::MouseMotion {
+            timestamp,
+            window_id,
+            which,
+            mousestate,
+            x,
+            y,
+            xrel,
+            yrel,
+        } = event
+        else {
+            return event;
+        };
+        let main = (self.window.id(), self.window.position(), self.window.size());
+        let rects: Vec<WindowRect> = std::iter::once(main).chain(st.screens.rects()).collect();
+        let Some((to, x, y)) = window_under(&rects, window_id, (x, y)) else {
+            st.screens.drag_over = None;
+            return event;
+        };
+        st.screens.drag_over = Some(st.screens.screen_of(to).unwrap_or(0));
+        Event::MouseMotion {
+            timestamp,
+            window_id: to,
+            which,
+            mousestate,
+            x,
+            y,
+            xrel,
+            yrel,
+        }
     }
 
     /// The client's monitors changed, or the stream window moved to another: ask the host for
@@ -556,6 +653,25 @@ mod tests {
             ),
             (-1920, 0)
         );
+    }
+
+    /// A drag that left the main window's right edge is over the window right of it, at
+    /// that window's own coordinates; inside its window, or past every window, it stays put.
+    #[test]
+    fn a_drag_past_the_edge_lands_on_the_window_under_it() {
+        let rects = [(1, (0, 0), (2560, 1440)), (2, (2560, 0), (2560, 1440))];
+        assert_eq!(
+            window_under(&rects, 1, (2600.0, 10.0)),
+            Some((2, 40.0, 10.0))
+        );
+        assert_eq!(
+            window_under(&rects, 2, (-1.0, 700.0)),
+            Some((1, 2559.0, 700.0))
+        );
+        assert_eq!(window_under(&rects, 1, (100.0, 100.0)), None);
+        assert_eq!(window_under(&rects, 1, (6000.0, 10.0)), None);
+        assert_eq!(window_under(&rects, 1, (100.0, -5.0)), None);
+        assert_eq!(window_under(&rects, 9, (6000.0, 10.0)), None);
     }
 
     /// Above 1x a further monitor asks for its pixels × the scale, shown at its own; at 1x and

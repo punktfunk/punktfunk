@@ -25,10 +25,22 @@ pub struct Member {
     /// Width in the same coordinate space as the resulting [`Placement`].
     /// Clamped at 0 so a negative never shifts a sibling left.
     ///
-    /// Fill sites pass mode pixels. That matches Windows CCD; KWin
-    /// `config.position()` is logical, so a scaled output is too wide unless
-    /// the fill site divides by applied scale. This type stays unit-agnostic.
+    /// Fill sites pass desktop units ([`desktop_extent`]): a Linux compositor positions in
+    /// logical units, Windows CCD in pixels (scale 1).
     pub width: i32,
+}
+
+/// `px` pixels at the compositor's `scale`, in the desktop units outputs are positioned
+/// in. Rounded down, so two outputs placed edge to edge overlap by under a unit rather than
+/// leave a gap the pointer cannot cross. A scale that is not a positive number counts as 1.
+pub fn desktop_extent(px: i64, scale: f64) -> i32 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    // 1e-6 keeps an exact quotient (2560 / 1.6) from flooring one unit short.
+    (px as f64 / scale + 1e-6).floor() as i32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +190,16 @@ mod tests {
             origin_for(&[r(0, 2560), r(2560, 1920)], Some(r(0, 1920))),
             Some(Placement { x: 4480, y: 0 })
         );
+    }
+
+    #[test]
+    fn desktop_extent_is_pixels_over_scale_rounded_down() {
+        assert_eq!(desktop_extent(2560, 1.5), 1706);
+        assert_eq!(desktop_extent(2560, 1.6), 1600);
+        assert_eq!(desktop_extent(1920, 1.0), 1920);
+        assert_eq!(desktop_extent(-2560, 1.5), -1707);
+        assert_eq!(desktop_extent(1920, 0.0), 1920);
+        assert_eq!(desktop_extent(1920, f64::NAN), 1920);
     }
 
     #[test]

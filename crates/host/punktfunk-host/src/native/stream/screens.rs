@@ -74,7 +74,8 @@ fn place(
         .unwrap_or((0, 0))
 }
 
-/// [`place`] by the backend's own move; one that cannot move an output keeps the compositor's.
+/// [`place`] by the backend's own move, in the compositor's desktop units; one that cannot
+/// move an output keeps the compositor's.
 #[cfg(not(target_os = "windows"))]
 fn place(
     vd: &mut dyn crate::vdisplay::VirtualDisplay,
@@ -84,13 +85,51 @@ fn place(
     display_gen: Option<u64>,
 ) -> (i32, i32) {
     let first = *base.first.lock().unwrap_or_else(|e| e.into_inner());
+    let own = desk_of(display_gen);
     let at = offset_of(&first, ask)
-        .zip(position_of(first.display_gen))
-        .map(|((dx, dy), (x, y))| (x + dx, y + dy));
+        .zip(desk_of(first.display_gen))
+        .map(|((dx, dy), f)| {
+            let reach = |px: u32, host: u32, client: u32| {
+                i64::from(px) * i64::from(host.max(1)) / i64::from(client.max(1))
+            };
+            let (own_size, own_scale) = own.map_or(((ask.mode.width, ask.mode.height), 1.0), |o| {
+                (o.size, o.scale)
+            });
+            (
+                f.at.0
+                    + desktop_axis(
+                        dx,
+                        reach(ask.mode.width, first.mode.width, first.asked.mode.width),
+                        f.scale,
+                        (own_size.0, own_scale),
+                    ),
+                f.at.1
+                    + desktop_axis(
+                        dy,
+                        reach(ask.mode.height, first.mode.height, first.asked.mode.height),
+                        f.scale,
+                        (own_size.1, own_scale),
+                    ),
+            )
+        });
     if let Some((x, y)) = at {
         vd.apply_position(x, y);
     }
-    at.or_else(|| position_of(display_gen)).unwrap_or((0, 0))
+    at.or_else(|| own.map(|o| o.at)).unwrap_or((0, 0))
+}
+
+/// One axis of `d`, a screen's offset from the first in the first's pixels, in desktop units.
+/// Right of or below the first, `d` counts the first's pixels at its `scale`. Left of or
+/// above, the client sent its far edge less `reach`, its own size in the first's pixels: the
+/// edge converts at the first's scale, and the screen reaches back its own extent.
+#[cfg(not(target_os = "windows"))]
+fn desktop_axis(d: i32, reach: i64, scale: f64, (own_px, own_scale): (u32, f64)) -> i32 {
+    use crate::vdisplay::desktop_extent;
+    if d >= 0 {
+        desktop_extent(d.into(), scale)
+    } else {
+        desktop_extent(i64::from(d) + reach, scale) - desktop_extent(own_px.into(), own_scale)
+    }
 }
 
 /// What every screen loop of a session starts from.
@@ -741,15 +780,30 @@ fn over_budget() -> Option<String> {
         .then(|| format!("host display budget exhausted: {held} live, max_displays = {max}"))
 }
 
-/// A display's desktop origin, from the registry the console reads.
+/// A display on the desktop, as the registry the console reads has it.
 #[cfg(not(target_os = "windows"))]
-fn position_of(display_gen: Option<u64>) -> Option<(i32, i32)> {
+#[derive(Clone, Copy)]
+struct Desk {
+    at: (i32, i32),
+    /// The compositor's scale for it: desktop units are its pixels over this.
+    scale: f64,
+    /// What it delivers, in pixels.
+    size: (u32, u32),
+}
+
+/// Display `display_gen` as the registry has it.
+#[cfg(not(target_os = "windows"))]
+fn desk_of(display_gen: Option<u64>) -> Option<Desk> {
     let generation = display_gen?;
     crate::vdisplay::registry::snapshot()
         .displays
         .iter()
         .find(|d| d.slot == generation)
-        .map(|d| d.position)
+        .map(|d| Desk {
+            at: d.position,
+            scale: d.scale,
+            size: (d.mode.0, d.mode.1),
+        })
 }
 
 /// The rate derivation at this screen's share and the FEC in force.
@@ -1133,6 +1187,19 @@ mod tests {
         assert_eq!(offset_of(&first, &left), Some((-1440, 180)));
         let unplaced = Screen { x: 0, y: 0, ..left };
         assert_eq!(offset_of(&first, &unplaced), None);
+    }
+
+    /// A compositor positions in desktop units: at 150% the screen right of a 2560-pixel
+    /// first starts 1706 on, not 2560. One left of the first reaches back its own extent,
+    /// whatever the first's scale.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_screen_is_placed_in_desktop_units() {
+        assert_eq!(desktop_axis(2560, 2560, 1.5, (2560, 1.5)), 1706);
+        assert_eq!(desktop_axis(0, 1440, 1.5, (1440, 1.5)), 0);
+        assert_eq!(desktop_axis(-2560, 2560, 1.0, (2560, 1.5)), -1706);
+        assert_eq!(desktop_axis(-1920, 1920, 1.5, (1920, 1.0)), -1920);
+        assert_eq!(desktop_axis(1920, 1920, 1.0, (2560, 2.0)), 1920);
     }
 
     /// Each screen of a client has one identity, apart from its other screens' and from

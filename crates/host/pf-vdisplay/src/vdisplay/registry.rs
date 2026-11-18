@@ -37,6 +37,8 @@ pub struct DisplayInfo {
     pub display_index: u32,
     /// Desktop-space top-left. Auto-row, or the console's manual arrangement.
     pub position: (i32, i32),
+    /// The compositor's scale for it: its desktop extent is `mode` over this.
+    pub scale: f64,
     /// Persistent-config / manual-layout key. `None` = shared/anonymous.
     pub identity_slot: Option<u32>,
     /// `"extend"` | `"primary"` | `"exclusive"`.
@@ -160,6 +162,7 @@ pub fn snapshot() -> Snapshot {
                 group: 1,
                 display_index: idx as u32,
                 position: i.position,
+                scale: 1.0,
                 identity_slot: (i.slot_id != 0).then_some(i.slot_id),
                 topology: topology_str(),
             })
@@ -341,6 +344,8 @@ mod pool {
         /// (`VirtualDisplay::join_cast`). Unset until the backend knows it.
         pub(super) join_name: Option<crate::backend::JoinName>,
         pub(super) mode: Mode,
+        /// The compositor's scale for the output at create ([`DisplayInfo::scale`]).
+        pub(super) scale: f64,
         pub(super) backend: &'static str,
         /// Identity slot at create (`None` = anonymous). Kept across reuse; keys
         /// group arrangement and `/display/state`.
@@ -781,6 +786,7 @@ mod pool {
         pub(super) backend: &'static str,
         pub(super) ownership: DisplayOwnership,
         pub(super) mode: Mode,
+        pub(super) scale: f64,
         pub(super) identity_slot: Option<u32>,
         pub(super) state: &'static str,
         pub(super) expires_in_ms: Option<u64>,
@@ -852,7 +858,7 @@ mod pool {
                 .iter()
                 .map(|&i| Member {
                     identity_slot: rows[i].identity_slot,
-                    width: rows[i].mode.width as i32,
+                    width: layout::desktop_extent(rows[i].mode.width.into(), rows[i].scale),
                 })
                 .collect();
             let places = layout::arrange(&members, layout_policy);
@@ -872,6 +878,7 @@ mod pool {
                     group: ids.get(key).copied().unwrap_or(0),
                     display_index: ord as u32,
                     position: (p.x, p.y),
+                    scale: row.scale,
                     identity_slot: row.identity_slot,
                     topology: topology.to_string(),
                 });
@@ -905,6 +912,7 @@ mod pool {
                     refresh_hz: 60,
                     refresh_mhz: 0,
                 },
+                scale: 1.0,
                 backend,
                 identity_slot: None,
                 topology: None,
@@ -1425,6 +1433,7 @@ mod pool {
                     refresh_hz: 60,
                     refresh_mhz: 0,
                 },
+                scale: 1.0,
                 identity_slot: slot,
                 state: "active",
                 expires_in_ms: None,
@@ -1464,6 +1473,26 @@ mod pool {
             assert_ne!(mutter.group, kwin[0].group);
             assert_eq!(mutter.display_index, 0);
             assert_eq!(mutter.position, (0, 0));
+        }
+
+        /// The compositor positions in desktop units: two 2560-pixel outputs at 150% sit
+        /// 1706 apart, not 2560, which left a third of a screen between them.
+        #[test]
+        fn a_scaled_output_rows_out_at_its_desktop_width() {
+            let rows = vec![
+                Row {
+                    scale: 1.5,
+                    ..row(1, "kwin", 2560, Some(1))
+                },
+                Row {
+                    scale: 1.5,
+                    ..row(2, "kwin", 2560, Some(2))
+                },
+            ];
+            let ids = ids_for(&rows);
+            let out = assemble_displays(rows, &Layout::default(), "extend", &ids);
+            assert_eq!(out[1].position, (1706, 0));
+            assert_eq!(out[1].scale, 1.5);
         }
 
         /// A reuse re-stamps `generation`; the row keeps the order the outputs were created
@@ -2229,6 +2258,18 @@ mod linux {
         )
     }
 
+    /// The scale the compositor shows output `name` at, from its head list. 1 where the backend
+    /// lists no heads (Mutter, gamescope: they position nothing) or not this one.
+    fn desktop_scale(vd: &dyn VirtualDisplay, name: Option<&String>) -> f64 {
+        let Some(name) = name else {
+            return 1.0;
+        };
+        vd.heads()
+            .ok()
+            .and_then(|heads| heads.into_iter().find(|h| &h.connector == name))
+            .map_or(1.0, |h| h.scale)
+    }
+
     /// File a fresh poolable display in the pool, place it in its group, and attach the
     /// session cast. A failed attach marks the entry failed so the next acquire recreates.
     #[allow(clippy::too_many_arguments)]
@@ -2255,6 +2296,7 @@ mod linux {
         let join_name = vd
             .last_join_name()
             .or_else(|| output_name.clone().map(|n| Arc::new(OnceLock::from(n))));
+        let scale = desktop_scale(&**vd, join_name.as_ref().and_then(|n| n.get()));
         // Fresh create may start at a sacrificial mode (KWin >60 Hz) that must
         // renegotiate before frames count. Reuse already did; leave the flag off.
         let expect_exact_dims = real.expect_exact_dims;
@@ -2274,6 +2316,7 @@ mod linux {
             input_output: real.input_output.clone(),
             join_name,
             mode,
+            scale,
             backend,
             identity_slot,
             topology: vd.topology(),
@@ -2311,14 +2354,14 @@ mod linux {
                         e.ordinal,
                         Member {
                             identity_slot: e.identity_slot,
-                            width: e.mode.width as i32,
+                            width: crate::layout::desktop_extent(e.mode.width.into(), e.scale),
                         },
                     )
                 })
                 .collect();
             let new_member = Member {
                 identity_slot,
-                width: mode.width as i32,
+                width: crate::layout::desktop_extent(mode.width.into(), scale),
             };
             let first = existing.is_empty();
             let pos = position_for_new(existing, new_member, &layout_policy);
@@ -2556,6 +2599,7 @@ mod linux {
                         backend: e.backend,
                         ownership: e.ownership,
                         mode: e.mode,
+                        scale: e.scale,
                         identity_slot: e.identity_slot,
                         state: e.life.label(),
                         expires_in_ms,
