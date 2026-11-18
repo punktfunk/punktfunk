@@ -33,9 +33,15 @@ final class PencilStream: NSObject {
     /// Squeeze held (mapped to wire BARREL1).
     private var squeezeHeld = false
     /// Whether this device/Pencil pair has demonstrated hover — decides what a lift means:
-    /// hover-capable hardware keeps proximity (the hover recognizer owns the exit), anything
-    /// else leaves range on lift so the host never parks a phantom hovering pen.
+    /// hover-capable hardware stays in range for `liftGrace`, anything else leaves range on
+    /// lift so the host never parks a phantom hovering pen.
     private var sawHover = false
+    /// When a lift kept the pen in range. A hover sample clears it and the recognizer owns the
+    /// exit; otherwise the heartbeat leaves range `liftGrace` later. A Pencil pulled straight
+    /// off the glass starts no hover, so no recognizer `.ended` would ever come.
+    private var liftedAt: TimeInterval?
+    /// Room for the first hover sample after a lift; a Pencil that sends none has gone.
+    private static let liftGrace: TimeInterval = 0.15
     private var last = PencilStream.idleSample()
     private var heartbeat: Timer?
     /// When the last batch (event or keepalive) went out — the heartbeat tick's idle test.
@@ -51,6 +57,7 @@ final class PencilStream: NSObject {
         case .down, .move:
             touching = true
             inRange = true
+            liftedAt = nil
             // Coalesced samples restore the Pencil's full capture rate (UIKit delivers at
             // display cadence); oldest first, `dt_us` preserving their spacing. The whole run
             // is kept — emit() splits anything over the wire's batch cap.
@@ -65,9 +72,10 @@ final class PencilStream: NSObject {
             emit(batch)
         case .up:
             touching = false
-            // Hover-capable hardware: lift back to hover, the recognizer exits range later.
+            // Hover-capable hardware: lift back to hover until `liftGrace` runs out unclaimed.
             // Otherwise a lift IS the range exit (mirror of the host's GameStream heuristic).
             inRange = sawHover
+            liftedAt = sawHover ? CACurrentMediaTime() : nil
             var s = last
             s.pressure = 0
             s.state = stateBits()
@@ -91,6 +99,7 @@ final class PencilStream: NSObject {
             sawHover = true
             inRange = true
             touching = false
+            liftedAt = nil
             guard let (x, y) = videoNorm?(r.location(in: view)) else { return }
             var s = PencilStream.idleSample()
             s.state = stateBits()
@@ -121,6 +130,7 @@ final class PencilStream: NSObject {
     private func release() {
         touching = false
         inRange = false
+        liftedAt = nil
         var s = last
         s.pressure = 0
         s.state = 0
@@ -185,7 +195,7 @@ final class PencilStream: NSObject {
     /// scheduling pauses during run-loop tracking, where a stationary pen would silently cross
     /// the host's `PUNKTFUNK_PEN_TOUCH_TIMEOUT_MS` force-release mid-stroke. The tick resends
     /// only after ≥50 ms of send silence, so an active stroke costs nothing and the worst-case
-    /// gap stays ≈100 ms — the wire bound.
+    /// gap stays ≈100 ms — the wire bound. The tick also ends a lift no hover claimed.
     private func syncHeartbeat() {
         guard inRange || touching else {
             heartbeat?.invalidate()
@@ -197,6 +207,10 @@ final class PencilStream: NSObject {
             guard let self, self.inRange || self.touching else {
                 t.invalidate()
                 self?.heartbeat = nil
+                return
+            }
+            if let lifted = self.liftedAt, CACurrentMediaTime() - lifted >= Self.liftGrace {
+                self.release()
                 return
             }
             if CACurrentMediaTime() - self.lastSendTs >= 0.05 {

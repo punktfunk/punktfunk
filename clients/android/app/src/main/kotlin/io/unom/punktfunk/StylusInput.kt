@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import android.os.SystemClock
 import android.view.MotionEvent
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerEvent
@@ -18,6 +19,8 @@ private const val STRIDE = 10
 // which is exactly when dropping its head would notch the stroke). 64 samples ≈ >250 ms of
 // 240 Hz history; anything past that clamp is a pathological stall, not stroke geometry.
 private const val MAX_SAMPLES = 64
+// Room for the first hover event after a lift; a stylus that sends none has gone.
+private const val LIFT_GRACE_MS = 150L
 
 /**
  * Android stylus → the state-full pen plane (design/pen-tablet-input.md §7): pressure, tilt
@@ -37,6 +40,10 @@ internal class StylusStream(private val handle: Long) {
     private var inRange = false
     private var touching = false
     private var sawHover = false
+    /** Uptime of a lift that kept the stylus in range, until a hover event claims it. A stylus
+     *  that leaves range in the lift's own scan gets no HOVER_EXIT, so [heartbeatLoop] leaves
+     *  range [LIFT_GRACE_MS] later instead. */
+    private var liftedAt: Long? = null
     private val last = FloatArray(STRIDE)
     private val batch = FloatArray(MAX_SAMPLES * STRIDE)
 
@@ -76,19 +83,22 @@ internal class StylusStream(private val handle: Long) {
             -> {
                 touching = true
                 inRange = true
+                liftedAt = null
                 emitSamples(me, idx, rect)
             }
             MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
                 sawHover = true
                 inRange = true
                 touching = false
+                liftedAt = null
                 emitSamples(me, idx, rect)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 touching = false
-                // Hover-capable hardware keeps proximity (HOVER_EXIT owns the leave);
-                // anything else leaves range on lift — the host never parks a phantom pen.
+                // Hover-capable hardware keeps proximity until a hover claims it or
+                // LIFT_GRACE_MS ends it; anything else leaves range on lift.
                 inRange = sawHover
+                liftedAt = if (sawHover) SystemClock.uptimeMillis() else null
                 emitSamples(me, idx, rect)
             }
             MotionEvent.ACTION_HOVER_EXIT, MotionEvent.ACTION_CANCEL -> release()
@@ -104,12 +114,16 @@ internal class StylusStream(private val handle: Long) {
     }
 
     /** The ≤100 ms keepalive (80 ms leaves headroom for one lost datagram). Runs until
-     *  cancelled; resends the last state-full sample while the pen is in range. */
+     *  cancelled; resends the last state-full sample while the pen is in range, and leaves
+     *  range once a lift goes [LIFT_GRACE_MS] without a hover event. */
     suspend fun heartbeatLoop() {
         try {
             while (true) {
                 delay(80)
-                if (inRange || touching) {
+                val lifted = liftedAt
+                if (lifted != null && SystemClock.uptimeMillis() - lifted >= LIFT_GRACE_MS) {
+                    release()
+                } else if (inRange || touching) {
                     last[9] = 0f // dt
                     NativeBridge.nativeSendPen(handle, last, 1)
                 }
@@ -122,6 +136,7 @@ internal class StylusStream(private val handle: Long) {
     private fun release() {
         touching = false
         inRange = false
+        liftedAt = null
         last[0] = 0f // state: out of range
         last[4] = 0f // pressure
         NativeBridge.nativeSendPen(handle, last, 1)
