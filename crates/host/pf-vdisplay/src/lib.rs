@@ -743,6 +743,7 @@ pub mod registry;
 // Arrangement engine (auto-row / manual → positions). Registry readout and KWin apply consume it.
 #[path = "vdisplay/layout.rs"]
 pub(crate) mod layout;
+pub use layout::desktop_extent;
 
 /// Concrete topology (never [`policy::Topology::Auto`]). `Auto` is **extend**
 /// under a `PUNKTFUNK_COMPOSITOR` pin (host is not the sole desktop), else
