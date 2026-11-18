@@ -188,9 +188,11 @@ jobs:
         working-directory: /
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # picomatch (GHSA-fc5q-39xc-vjpf) is ignored as in web: no fixed release exists, and the
+      # built `.output` holds no glob matcher. Drop it when upstream ships a fix.
       - name: bun audit (non-blocking)
         run: |
-          bun audit \
+          bun audit --ignore=GHSA-fc5q-39xc-vjpf \
             || echo "::warning::docs-site has a new advisory — lift it with an override, as web does"
 
   pnpm-audit:
