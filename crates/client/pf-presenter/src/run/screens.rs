@@ -139,6 +139,7 @@ impl ScreenWindow {
     #[allow(clippy::too_many_arguments)]
     fn open(
         video: &sdl3::VideoSubsystem,
+        owner: &Window,
         display: Display,
         index: u8,
         connector: &Arc<NativeClient>,
@@ -167,6 +168,13 @@ impl ScreenWindow {
         let flags = builder.flags() | sdl3::video::WindowFlags::NOT_FOCUSABLE;
         builder.set_flags(flags);
         let window = builder.build().context("SDL window")?;
+        // Owned by the stream window on Windows, so it hides while that one is minimized and
+        // stays on its virtual desktop. On Wayland a parent makes it the stream window's dialog.
+        if cfg!(target_os = "windows") {
+            // SAFETY: both are live SDL windows. SDL destroys an owned window with its owner;
+            // `run_inner` drops the stream, and so this window, before the shell's window.
+            unsafe { sdl3::sys::video::SDL_SetWindowParent(window.raw(), owner.raw()) };
+        }
         let mut presenter = Presenter::new(
             backend,
             &window,
@@ -418,11 +426,13 @@ impl ScreenWindows {
         ))
     }
 
-    /// Open a window for each screen the host's newest layout adds, close the ones it dropped,
-    /// and show each one's newest picture.
+    /// Open a window for each screen the host's newest layout adds, owned by the stream window
+    /// `owner`, close the ones it dropped, and show each one's newest picture.
+    #[allow(clippy::too_many_arguments)]
     fn tick(
         &mut self,
         video: &sdl3::VideoSubsystem,
+        owner: &Window,
         connector: &Arc<NativeClient>,
         decoder: &str,
         opts: &SessionOpts,
@@ -440,7 +450,7 @@ impl ScreenWindows {
                     continue;
                 };
                 match ScreenWindow::open(
-                    video, display, s.index, connector, decoder, opts, knobs, backend,
+                    video, owner, display, s.index, connector, decoder, opts, knobs, backend,
                 ) {
                     Ok(w) => self.windows.push(w),
                     Err(e) => tracing::warn!(
@@ -468,6 +478,7 @@ impl Shell {
         };
         st.screens.tick(
             &self.sdl_video,
+            &self.window,
             &connector,
             &st.params.decoder,
             &self.opts,
