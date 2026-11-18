@@ -7,13 +7,14 @@ use pf_client_core::shortcuts::Out;
 use sdl3::keyboard::{Scancode, TextInputOptions, TextInputType};
 
 impl Shell {
-    /// One SDL event: the console's verdict, then [`route`] picks who takes it, and this
-    /// performs. `Break` ends the session.
+    /// One SDL event: a drag past its window's edge onto the window under it, the console's
+    /// verdict, then [`route`] picks who takes it, and this performs. `Break` ends the session.
     pub(super) fn on_event(
         &mut self,
         stream: &mut Option<StreamState>,
         event: Event,
     ) -> Result<ControlFlow<Outcome>> {
+        let event = self.across_windows(stream, event);
         let screen = event
             .get_window_id()
             .and_then(|id| stream.as_ref()?.screens.screen_of(id));
