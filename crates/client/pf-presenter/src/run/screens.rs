@@ -378,6 +378,17 @@ impl ScreenWindows {
             .map(|w| (w.window.id(), w.window.position(), w.window.size()))
     }
 
+    /// Set every further window's keyboard grab to `grab`. SDL grabs only the focused window
+    /// and takes the grab from another as one gains focus, so a further window that holds
+    /// focus (Wayland and X11 give it) keeps system chords off the local shell.
+    fn hold_keyboard(&mut self, grab: bool) {
+        for w in &mut self.windows {
+            if w.window.keyboard_grab() != grab {
+                w.window.set_keyboard_grab(grab);
+            }
+        }
+    }
+
     /// The screen whose window `window_id` is.
     pub(super) fn screen_of(&self, window_id: u32) -> Option<u8> {
         self.windows
@@ -448,8 +459,9 @@ impl ScreenWindows {
 }
 
 impl Shell {
-    /// Per pass: the further screens' windows, and the local cursor hidden over them while the
-    /// host's pointer is drawn into their pictures.
+    /// Per pass: the further screens' windows, the capture's keyboard grab on each window of
+    /// the stream, and the local cursor hidden over them while the host's pointer is drawn
+    /// into their pictures.
     pub(super) fn screens_tick(&mut self, st: &mut StreamState) {
         let Some(connector) = st.connector.clone() else {
             return;
@@ -462,6 +474,18 @@ impl Shell {
             &self.knobs,
             self.backend,
         );
+        // A further window that took focus also took the grab from the main window.
+        let grab = st.capture.as_ref().is_some_and(|cap| {
+            crate::route::keyboard_grab(
+                cap.captured(),
+                self.opts.inhibit_shortcuts,
+                cap.grants() & punktfunk_core::quic::GRANT_KEYBOARD != 0,
+            )
+        });
+        st.screens.hold_keyboard(grab);
+        if !st.screens.windows.is_empty() && self.window.keyboard_grab() != grab {
+            self.window.set_keyboard_grab(grab);
+        }
         let desktop = st
             .capture
             .as_ref()
