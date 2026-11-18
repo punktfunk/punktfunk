@@ -27,6 +27,21 @@ and the host's layout picks the character.
   Game Mode on an older `punktfunk-gamescope` still types US, and the host log warns
   `this build ignores XKB_DEFAULT_*`. [Update](/docs/updating) it.
 
+### The pointer is too fast or too slow
+
+In **Capture (games)** the host treats your mouse as one plugged into it, so the speed is the
+host's mouse setting; [Pointer speed](/docs/input#pointer-speed) lists where each host keeps it.
+In a game, change the game's sensitivity or your mouse's DPI: the game reads the mouse's counts
+and skips the pointer setting, on the host as well.
+
+On a Linux host the log line `asked the compositor whether it reads uinput devices` says
+whether the stream's mouse is in use. Two switches in [`host.env`](/docs/configuration), read
+when the host starts:
+
+- `PUNKTFUNK_MOUSE=0` moves the pointer one pixel a count again, with no acceleration.
+- `PUNKTFUNK_MOUSE=1` uses the mouse on a desktop that reads input devices and answered
+  `reads_uinput=false`. On a headless session it leaves the pointer dead.
+
 ## Controllers
 
 ### A controller is detected but games don't see it (Linux)

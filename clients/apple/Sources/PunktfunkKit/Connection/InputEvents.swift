@@ -16,6 +16,13 @@ public extension PunktfunkInputEvent {
     static func mouseMove(dx: Int32, dy: Int32) -> PunktfunkInputEvent {
         make(PUNKTFUNK_INPUT_KIND_MOUSE_MOVE.rawValue, code: 0, x: dx, y: dy)
     }
+    /// A mouse's own counts: a host with a mouse of its own reports them there, under its
+    /// pointer speed and acceleration. The core stamps the capture time as it sends.
+    static func mouseCounts(dx: Int32, dy: Int32) -> PunktfunkInputEvent {
+        make(
+            PUNKTFUNK_INPUT_KIND_MOUSE_MOVE.rawValue, code: 0, x: dx, y: dy,
+            flags: UInt32(PUNKTFUNK_MOUSE_MOVE_COUNTS))
+    }
     /// Absolute cursor position in client-surface pixels of screen `screen`'s picture — the host
     /// places its cursor there (same letterbox mapping and `flags` surface-dims packing as the
     /// touch events). The desktop mouse model and the iPad pointer fallback send it; the surface

@@ -1883,8 +1883,10 @@ impl NativeClient {
 
     /// Queue one event. The input task drops a class the live grants refuse; the host
     /// enforces the same mask. A pad's arrival or removal restarts its SC2 filter. Player
-    /// input stamps [`Self::input_idle`]'s clock.
+    /// input stamps [`Self::input_idle`]'s clock. A move of a mouse's own counts
+    /// ([`crate::input::MOUSE_MOVE_COUNTS`]) gets its capture time here unless it brought one.
     pub fn send_input(&self, ev: &InputEvent) -> Result<()> {
+        let ev = &ev.with_counts_time(self.born.elapsed().as_micros() as u64);
         if ev.is_activity() {
             self.stamp_input();
         }

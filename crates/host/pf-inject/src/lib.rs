@@ -106,19 +106,18 @@ pub enum Backend {
 /// target has.
 #[cfg(target_os = "linux")]
 pub fn open(backend: Backend) -> Result<Box<dyn InputInjector>> {
-    match backend {
-        Backend::WlrVirtual => Ok(Box::new(wlr::WlrootsInjector::open(false)?)),
-        Backend::WlrLayout => Ok(Box::new(wlr::WlrootsInjector::open(true)?)),
-        Backend::KwinFakeInput => Ok(Box::new(kwin_fake_input::KwinFakeInjector::open()?)),
-        Backend::Libei => Ok(Box::new(
-            libei::LibeiInjector::open_with(libei_ei_source())?,
-        )),
-        Backend::GamescopeEi => Ok(Box::new(libei::LibeiInjector::open_with(
+    let injector: Box<dyn InputInjector> = match backend {
+        Backend::WlrVirtual => Box::new(wlr::WlrootsInjector::open(false)?),
+        Backend::WlrLayout => Box::new(wlr::WlrootsInjector::open(true)?),
+        Backend::KwinFakeInput => Box::new(kwin_fake_input::KwinFakeInjector::open()?),
+        Backend::Libei => Box::new(libei::LibeiInjector::open_with(libei_ei_source())?),
+        Backend::GamescopeEi => Box::new(libei::LibeiInjector::open_with(
             libei::EiSource::SocketPathFile(pf_paths::gamescope_ei_socket_file(
                 pf_host_config::session::runtime_dir().as_deref(),
             )),
-        )?)),
-    }
+        )?),
+    };
+    Ok(mouse::layered(injector, backend))
 }
 
 /// libei injector pinned to this session's gamescope EIS relay file.
@@ -542,6 +541,32 @@ pub fn touchpad_supported() -> bool {
 /// Whether the host OS turns a tap on that touchpad into a click (`FEATURE_TOUCHPAD_TAPS`).
 pub fn touchpad_taps() -> bool {
     touchpad::taps()
+}
+
+/// Whether the session's compositor reads the uinput devices this crate makes: the pen, the
+/// touchpad and the mouse. A headless compositor reads none. The first call for a compositor
+/// process asks it and blocks up to two seconds; call it off the async path.
+#[cfg(target_os = "linux")]
+pub fn uinput_reaches() -> bool {
+    uinput_reach::reaches()
+}
+
+/// What [`uinput_reaches`] last heard, without asking: `false` before the first answer.
+#[cfg(target_os = "linux")]
+pub fn uinput_reach_known() -> bool {
+    uinput_reach::known()
+}
+
+/// No uinput off Linux: each device's own probe decides.
+#[cfg(not(target_os = "linux"))]
+pub fn uinput_reaches() -> bool {
+    true
+}
+
+/// As [`uinput_reaches`].
+#[cfg(not(target_os = "linux"))]
+pub fn uinput_reach_known() -> bool {
+    true
 }
 
 /// Result of [`uinput_probe`].
@@ -1217,9 +1242,17 @@ mod kwin_text;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/libei.rs"]
 mod libei;
+/// Injector-lifetime uinput mouse a client's own mouse lands on.
+#[cfg(target_os = "linux")]
+#[path = "inject/linux/mouse.rs"]
+mod mouse;
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/sendinput.rs"]
 mod sendinput;
+/// Whether the session's compositor reads this crate's uinput devices.
+#[cfg(target_os = "linux")]
+#[path = "inject/linux/uinput_reach.rs"]
+mod uinput_reach;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/wlr.rs"]
 mod wlr;

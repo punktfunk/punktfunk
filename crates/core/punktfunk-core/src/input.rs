@@ -117,6 +117,24 @@ pub const SCROLL_FLAG_PRECISE: u32 = 1;
 /// factor.
 pub const PRECISE_PX_PER_DETENT: f64 = 10.0;
 
+/// [`InputKind::MouseMove`] `flags` bit: `x`/`y` are a mouse's own counts, and the low 16
+/// bits their capture time in 100 µs units, wrapping
+/// ([`ScanClock`](crate::quic::ScanClock)). A host with a mouse device of its own reports them
+/// there, under the host's pointer speed and acceleration. Without the bit a move is a
+/// finished pointer distance, as a touch or a controller makes one. A host that predates the
+/// bit ignores `flags`, so nothing needs negotiating.
+pub const MOUSE_MOVE_COUNTS: u32 = 0x8000_0000;
+
+/// With [`MOUSE_MOVE_COUNTS`], embedder to client only: the low 16 bits already hold the
+/// capture time. Without it the client stamps the move as it is sent.
+pub const MOUSE_MOVE_TIMED: u32 = 0x4000_0000;
+
+/// `flags` of a [`InputKind::MouseMove`] that carries a mouse's own counts, captured at
+/// `time_us` on any monotonic clock the embedder keeps to.
+pub fn mouse_counts_flags(time_us: u64) -> u32 {
+    MOUSE_MOVE_COUNTS | MOUSE_MOVE_TIMED | u32::from(crate::quic::touchpad_scan_time(time_us))
+}
+
 /// [`InputKind::GamepadArrival`] `flags` bit 8: this pad renders haptics
 /// ([`PAD_AUDIO_KIND_HAPTICS`](crate::quic::PAD_AUDIO_KIND_HAPTICS)). Sent only toward
 /// a [`HOST_CAP_PAD_AUDIO`](crate::quic::HOST_CAP_PAD_AUDIO) host — an older host
@@ -619,6 +637,25 @@ impl InputEvent {
         }
     }
 
+    /// The capture time of a move that carries a mouse's own counts ([`MOUSE_MOVE_COUNTS`]).
+    pub fn mouse_counts_time(&self) -> Option<u16> {
+        (self.kind == InputKind::MouseMove && self.flags & MOUSE_MOVE_COUNTS != 0)
+            .then_some(self.flags as u16)
+    }
+
+    /// A move of a mouse's own counts as it goes on the wire: the bit and a capture time, the
+    /// embedder's ([`MOUSE_MOVE_TIMED`]) or `now_us`. Any other event is unchanged.
+    pub fn with_counts_time(mut self, now_us: u64) -> InputEvent {
+        if self.mouse_counts_time().is_some() {
+            self.flags = if self.flags & MOUSE_MOVE_TIMED != 0 {
+                MOUSE_MOVE_COUNTS | (self.flags & 0xffff)
+            } else {
+                mouse_counts_flags(now_us) & !MOUSE_MOVE_TIMED
+            };
+        }
+        self
+    }
+
     /// The screen an absolute pointer, touch or pen event lands on, `0` the first. It rides
     /// `_pad[0]`, which an embedder showing one screen leaves zero.
     pub fn screen(&self) -> u8 {
@@ -734,6 +771,31 @@ mod tests {
         assert_eq!(on_second.wire().len(), INPUT_WIRE_LEN + 1);
         assert_eq!(InputEvent::decode(&on_second.wire()), Some(on_second));
         assert_eq!(InputEvent::decode(&on_second.encode()).unwrap().screen(), 0);
+    }
+
+    /// A mouse's counts leave with the bit and one capture time: the embedder's when it
+    /// gave one, the send's when not. A finished distance leaves as it came.
+    #[test]
+    fn a_mouse_counts_move_is_stamped_once() {
+        let mv = |flags| InputEvent {
+            kind: InputKind::MouseMove,
+            _pad: [0; 3],
+            code: 0,
+            x: 3,
+            y: -1,
+            flags,
+        };
+        let sent = mv(MOUSE_MOVE_COUNTS).with_counts_time(1_234_500);
+        assert_eq!(sent.flags, MOUSE_MOVE_COUNTS | 12_345);
+        assert_eq!(sent.mouse_counts_time(), Some(12_345));
+        let own = mv(mouse_counts_flags(700)).with_counts_time(1_234_500);
+        assert_eq!(own.flags, MOUSE_MOVE_COUNTS | 7);
+        assert_eq!(mv(0).with_counts_time(5).flags, 0);
+        assert_eq!(mv(0).mouse_counts_time(), None);
+        // The time wraps; the bit stays clear of it.
+        let wrapped = mv(MOUSE_MOVE_COUNTS).with_counts_time(6_553_600 + 300);
+        assert_eq!(wrapped.mouse_counts_time(), Some(3));
+        assert_eq!(InputEvent::decode(&sent.encode()), Some(sent));
     }
 
     #[test]

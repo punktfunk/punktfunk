@@ -93,6 +93,48 @@ pub(crate) enum Op {
     Text(u32),
 }
 
+/// What a mouse device reports for one wire event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MouseOp {
+    /// A mouse's own counts, captured at `scan` (100 µs units, wrapping).
+    Motion { dx: i32, dy: i32, scan: u16 },
+    /// A `BTN_*` code.
+    Button { evdev: u16, down: bool },
+    /// A wheel's turn, Q24.8 in 120ths of a detent.
+    Wheel { horizontal: bool, q8: i32 },
+}
+
+/// The part of the wire a host mouse device takes, once it is `live`: moves that carry a
+/// mouse's own counts, buttons, and a wheel's turns. `None` stays with the compositor's
+/// protocol: a finished pointer distance, a finger's scroll, everything else. `held` is the
+/// wire buttons the device holds, by bit. It releases those live or not, and no others: a
+/// press the compositor's device took is that device's to release.
+pub(crate) fn mouse_op(ev: &InputEvent, live: bool, held: &mut u8) -> Option<MouseOp> {
+    let bit = 1u8.checked_shl(ev.code).unwrap_or(0);
+    match ev.kind {
+        InputKind::MouseMove if live => ev.mouse_counts_time().map(|scan| MouseOp::Motion {
+            dx: ev.x,
+            dy: ev.y,
+            scan,
+        }),
+        InputKind::MouseButtonDown if live => {
+            let evdev = gs_button_to_evdev(ev.code)? as u16;
+            *held |= bit;
+            Some(MouseOp::Button { evdev, down: true })
+        }
+        InputKind::MouseButtonUp if *held & bit != 0 => {
+            *held &= !bit;
+            let evdev = gs_button_to_evdev(ev.code)? as u16;
+            Some(MouseOp::Button { evdev, down: false })
+        }
+        InputKind::MouseScroll | InputKind::Scroll if live => {
+            let (horizontal, q8) = crate::scroll::wheel_turn(ev)?;
+            Some(MouseOp::Wheel { horizontal, q8 })
+        }
+        _ => None,
+    }
+}
+
 /// One device's keys and pointer: what it holds and what it must emit next.
 #[derive(Default)]
 pub(crate) struct Plan {
@@ -211,6 +253,62 @@ mod tests {
             y: 0,
             flags: 0,
         }
+    }
+
+    /// A mouse device takes a mouse's own counts, buttons and a wheel, and only once live. A
+    /// button goes up on the device that took it down, whichever is live by then.
+    #[test]
+    fn a_mouse_device_takes_what_a_mouse_says() {
+        use punktfunk_core::input::mouse_counts_flags;
+        let counts = InputEvent {
+            x: 3,
+            y: -2,
+            flags: mouse_counts_flags(1_500),
+            ..ev(InputKind::MouseMove, 0)
+        };
+        let finished = InputEvent { flags: 0, ..counts };
+        let wheel = InputEvent {
+            x: -120,
+            ..ev(InputKind::MouseScroll, 0)
+        };
+        let (down, up) = (
+            ev(InputKind::MouseButtonDown, 1),
+            ev(InputKind::MouseButtonUp, 1),
+        );
+        let mut held = 0;
+        for e in [&counts, &wheel, &down, &up] {
+            assert_eq!(mouse_op(e, false, &mut held), None, "not live");
+        }
+        let motion = MouseOp::Motion {
+            dx: 3,
+            dy: -2,
+            scan: 15,
+        };
+        assert_eq!(mouse_op(&counts, true, &mut held), Some(motion));
+        assert_eq!(mouse_op(&finished, true, &mut held), None);
+        let turn = MouseOp::Wheel {
+            horizontal: false,
+            q8: -120 * 256,
+        };
+        assert_eq!(mouse_op(&wheel, true, &mut held), Some(turn));
+        assert_eq!(
+            mouse_op(&ev(InputKind::KeyDown, VK_A), true, &mut held),
+            None
+        );
+
+        // Pressed before the device went live: the release is not the device's either.
+        assert_eq!(mouse_op(&up, true, &mut held), None);
+        let press = |down| MouseOp::Button {
+            evdev: BTN_LEFT as u16,
+            down,
+        };
+        assert_eq!(mouse_op(&down, true, &mut held), Some(press(true)));
+        assert_eq!(mouse_op(&up, false, &mut held), Some(press(false)));
+        assert_eq!(held, 0);
+        assert_eq!(
+            mouse_op(&ev(InputKind::MouseButtonDown, 9), true, &mut held),
+            None
+        );
     }
 
     fn down(vk: u32) -> InputEvent {

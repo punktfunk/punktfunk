@@ -31,6 +31,33 @@ the stream fullscreen and in front.
   motion while a host app grabs or hides the pointer, and back when it lets go. The mouse-mode
   shortcut overrides this until the host app changes its mind.
 
+## Pointer speed
+
+In **Capture (games)** your mouse reaches the host as its own counts, as if it were plugged into
+the host. The host's mouse settings decide how far and how fast the pointer travels. Set the
+speed there; no client has a sensitivity setting.
+
+| Host | Where the stream's mouse takes its speed |
+|---|---|
+| Windows | **Settings → Bluetooth & devices → Mouse**: pointer speed and **Enhance pointer precision** |
+| KDE Plasma | **System Settings → Mouse & Touchpad**, device **Punktfunk Mouse**: a speed and acceleration of its own |
+| GNOME | **Settings → Mouse & Touchpad**: the speed and acceleration every mouse shares |
+| Sway, Hyprland | The compositor's input settings for the device named `Punktfunk Mouse` (Sway: `4617:20557:Punktfunk_Mouse`) |
+| gamescope, a headless Linux session | One pixel a count, as gamescope moves a plugged-in mouse. No setting |
+
+- On Linux the **Punktfunk Mouse** appears with the first input a client sends and stays until
+  the host stops. Its buttons and wheel follow the host's mouse settings too: left-handed
+  buttons, natural scrolling.
+- Out of the box KDE Plasma moves it one pixel a count, with no acceleration. GNOME, Sway and
+  Hyprland accelerate it like any mouse: a fast stroke travels up to twice as far.
+- A game that reads the mouse directly gets the counts untouched on every host, so its own
+  sensitivity applies, as it does to a mouse on the host.
+- The Linux, Windows, Mac, iPhone, iPad and Android clients send counts. A browser's, a TV's or
+  a console's mouse moves the host pointer one pixel a count on Linux.
+- **Desktop (absolute)** follows your own pointer, at your device's speed.
+
+Too fast or too slow? See [Input & controllers](/docs/troubleshooting-input#the-pointer-is-too-fast-or-too-slow).
+
 ## Scrolling
 
 Wheels, touchpads, touchscreens and controllers all scroll the host, with no setting to tune.
@@ -45,8 +72,9 @@ direction**; your saved settings stay as they are.
 
 ## The host's touchpad
 
-A Windows host, and a Linux host outside gamescope, show these fingers to their OS as a touchpad
-of their own:
+A Windows host, and a Linux desktop host, show these fingers to their OS as a touchpad of their
+own. gamescope and a headless Linux session read no input devices, so there your device moves
+the pointer itself:
 
 | Your device | What reaches the host's touchpad |
 |---|---|

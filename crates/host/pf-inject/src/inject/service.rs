@@ -245,20 +245,24 @@ fn warp_onto_stream_head(
 }
 
 /// Sum same-axis, same-precision scroll, and each run of adjacent relative motion into at most
-/// `motion_reports` moves of equal share. Buttons, keys, moves, and type changes pass through
-/// in order: a key between two moves flushes the motion before it first.
+/// `motion_reports` moves of equal share. A sum is its last move with the travel of all: it
+/// keeps that move's capture time, so the speed over the run reads true. A mouse's own counts
+/// never sum with finished distances. Buttons, keys, moves, and type changes pass through in
+/// order: a key between two moves flushes the motion before it first.
 fn coalesce(events: Vec<InputEvent>, motion_reports: usize) -> Vec<InputEvent> {
     let mut out: Vec<InputEvent> = Vec::with_capacity(events.len());
     let mut rest = events.as_slice();
     while let Some(&ev) = rest.first() {
         if ev.kind == InputKind::MouseMove {
-            let run = rest
-                .iter()
-                .take_while(|e| e.kind == InputKind::MouseMove)
-                .count();
+            let counts = ev.mouse_counts_time().is_some();
+            let alike = |e: &&InputEvent| {
+                e.kind == InputKind::MouseMove && e.mouse_counts_time().is_some() == counts
+            };
+            let run = rest.iter().take_while(alike).count();
             for group in rest[..run].chunks(run.div_ceil(motion_reports.max(1))) {
-                let mut sum = group[0];
-                for e in &group[1..] {
+                let (last, before) = group.split_last().expect("chunks are never empty");
+                let mut sum = *last;
+                for e in before {
                     sum.x = sum.x.saturating_add(e.x);
                     sum.y = sum.y.saturating_add(e.y);
                 }
@@ -512,6 +516,28 @@ mod tests {
         let mut slot = InjectorSlot::default();
         assert_eq!(slot.next_batch(&rx).map(|b| b.len()), Some(3));
         assert!(slot.next_batch(&rx).is_none());
+    }
+
+    /// A summed backlog of a mouse's counts is stamped where its last move was captured, and
+    /// stays apart from a finished distance beside it.
+    #[test]
+    fn coalesce_keeps_the_last_capture_time_and_counts_apart() {
+        use punktfunk_core::input::mouse_counts_flags;
+        let counts = |x, us| InputEvent {
+            flags: mouse_counts_flags(us),
+            ..mk(InputKind::MouseMove, 0, x, 0)
+        };
+        let out = coalesce(
+            vec![
+                counts(1, 1_000),
+                counts(2, 2_000),
+                mk(InputKind::MouseMove, 0, 5, 0),
+                counts(4, 3_000),
+            ],
+            1,
+        );
+        let got: Vec<_> = out.iter().map(|e| (e.x, e.mouse_counts_time())).collect();
+        assert_eq!(got, [(3, Some(20)), (5, None), (4, Some(30))]);
     }
 
     #[test]

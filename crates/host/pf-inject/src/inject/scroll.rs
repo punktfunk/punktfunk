@@ -234,6 +234,41 @@ pub fn mutter_axis_calls(ops: &[ScrollOp]) -> Vec<(f64, f64, u32)> {
     calls
 }
 
+/// A wheel's turn, for a device that reports the wheel itself: `(horizontal, Q24.8
+/// v120)`, positive up and right as the wire and evdev both count. `None` for a
+/// finger, a touch and any other source a wheel cannot say.
+pub fn wheel_turn(ev: &InputEvent) -> Option<(bool, i32)> {
+    let ev = from_legacy(ev).unwrap_or(*ev);
+    let se = ScrollEvent::from_event(&ev)?;
+    se.is_wheel().then_some((se.axis == 1, se.delta))
+}
+
+/// One wheel axis as the kernel reports a high-resolution wheel: each turn in
+/// 120ths of a detent, and a whole detent whenever those add up to one.
+#[derive(Default)]
+pub struct WheelAxis {
+    /// Q24.8 v120 not yet a whole 120th.
+    frac: i32,
+    /// 120ths not yet a whole detent.
+    part: i32,
+}
+
+impl WheelAxis {
+    /// `(120ths, detents)` for a turn of `q8`, Q24.8 v120. `None` while the turns
+    /// so far are less than one 120th.
+    pub fn turn(&mut self, q8: i32) -> Option<(i32, i32)> {
+        let total = i64::from(self.frac) + i64::from(q8);
+        let hi = (total / 256) as i32;
+        self.frac = (total % 256) as i32;
+        if hi == 0 {
+            return None;
+        }
+        let part = self.part.saturating_add(hi);
+        self.part = part % 120;
+        Some((hi, part / 120))
+    }
+}
+
 /// A legacy [`InputKind::MouseScroll`] as the normalized event it means: a
 /// counted `x` is a wheel in v120, a precise one a distance of
 /// `x / 120 × PRECISE_PX_PER_DETENT` DIP. No phase: the old wire has none.
@@ -1703,5 +1738,39 @@ mod tests {
             &[ev(ScrollSource::Wheel, ScrollPhase::None, 0, 30.0)],
         );
         assert_eq!(ops, clicks(30));
+    }
+
+    /// Only a wheel turns a device's wheel; a finger keeps the compositor's own scroll.
+    #[test]
+    fn a_wheel_turn_is_a_counted_source_only() {
+        let wheel = ev(ScrollSource::Wheel, ScrollPhase::None, 1, -30.0);
+        assert_eq!(wheel_turn(&wheel), Some((H, -30 * 256)));
+        let mut legacy = InputEvent {
+            kind: InputKind::MouseScroll,
+            _pad: [0; 3],
+            code: 0,
+            x: 120,
+            y: 0,
+            flags: 0,
+        };
+        assert_eq!(wheel_turn(&legacy), Some((V, 120 * 256)));
+        legacy.flags = SCROLL_FLAG_PRECISE;
+        assert_eq!(wheel_turn(&legacy), None);
+        let finger = ev(ScrollSource::Finger, ScrollPhase::Update, 0, 8.0);
+        assert_eq!(wheel_turn(&finger), None);
+    }
+
+    /// A detent is reported once its 120ths are whole, in either direction, and a turn
+    /// under one 120th waits.
+    #[test]
+    fn a_wheel_axis_counts_120ths_and_whole_detents() {
+        let mut w = WheelAxis::default();
+        assert_eq!(w.turn(120 * 256), Some((120, 1)));
+        assert_eq!(w.turn(30 * 256), Some((30, 0)));
+        assert_eq!(w.turn(100 * 256), Some((100, 1)), "130 of 120");
+        assert_eq!(w.turn(-20 * 256), Some((-20, 0)), "back to -10: 10 - 20");
+        assert_eq!(w.turn(-110 * 256), Some((-110, -1)));
+        assert_eq!(w.turn(128), None);
+        assert_eq!(w.turn(128), Some((1, 0)));
     }
 }

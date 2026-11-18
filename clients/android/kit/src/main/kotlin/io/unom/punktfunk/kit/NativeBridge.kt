@@ -710,6 +710,10 @@ object NativeBridge {
     /** Relative mouse move; dx/dy are device-pixel deltas (screen +y down). */
     external fun nativeSendPointerMove(handle: Long, dx: Int, dy: Int)
 
+    /** A mouse's own counts, captured at [timeUs] on the event clock: the host's pointer
+     *  speed and acceleration apply where it has a mouse of its own. */
+    external fun nativeSendMouseCounts(handle: Long, dx: Int, dy: Int, timeUs: Long)
+
     /**
      * Absolute mouse position — the host moves the cursor to (x, y) in a [surfaceWidth]×[surfaceHeight]
      * pixel space (it normalizes against that size and maps into the output region). Touch

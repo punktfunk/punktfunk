@@ -837,7 +837,7 @@ public final class InputCapture {
         residualX = fx - ix
         residualY = fy - iy
         guard ix != 0 || iy != 0 else { return }
-        connection.send(.mouseMove(dx: Int32(ix), dy: Int32(iy)))
+        connection.send(.mouseCounts(dx: Int32(ix), dy: Int32(iy)))
         if inputDebug {
             // High-rate — log a rolling count + the last delta once per second, not per event.
             motionDebugCount += 1

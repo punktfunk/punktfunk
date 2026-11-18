@@ -62,6 +62,24 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPointer
     })
 }
 
+/// `NativeBridge.nativeSendMouseCounts(handle, dx, dy, timeUs)`: a mouse's own counts (screen +y
+/// down), captured at `timeUs` on the event clock. A host with a mouse of its own reports them
+/// there, under its pointer settings.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendMouseCounts(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    dx: jint,
+    dy: jint,
+    time_us: jlong,
+) {
+    jni_guard((), || {
+        let flags = punktfunk_core::input::mouse_counts_flags(time_us as u64);
+        send_event(handle, InputKind::MouseMove, 0, dx, dy, flags);
+    })
+}
+
 /// `NativeBridge.nativeSendPointerAbs(handle, x, y, surfaceWidth, surfaceHeight)` — absolute cursor
 /// position: the host moves the pointer to `x`/`y` in a `surfaceWidth`×`surfaceHeight` pixel space,
 /// normalizing against the size packed into `flags` as `(w << 16) | h` and mapping into the output
