@@ -12,8 +12,7 @@
 #                   plugin-kit (@punktfunk/plugin-kit).
 #   * pnpm audit  → clients/decky (the Steam Deck plugin).
 #   * docs-site   → scanned NON-blocking. Its `overrides` lift the chains fumadocs and @unom/ui
-#                   pull in (@ai-sdk/provider-utils, dompurify, undici), as web's do; it carries
-#                   web's ignore for the same reason.
+#                   pull in (@ai-sdk/provider-utils, dompurify, undici), as web's do.
 #   * vendored-inventory → every `vendor/` tree has a CVE-watch row in
 #                   compliance/vendored-components.md.
 #   * cargo-about → license-allowlist gate over the host, driver and seat-keeper workspaces (about.toml `accepted`);
@@ -155,19 +154,19 @@ jobs:
       # bumping the dep (or, if genuinely unfixable + inapplicable, pinning a resolution and
       # noting why here).
       #
-      # web carries one ignore, the ONLY one in a blocking tree: deepmerge (GHSA-gcqx-w48m-w2h4,
-      # prototype poisoning in mergeObject). It is unfixable AND unreachable:
-      #   * unfixable — the vulnerable range ends at 4.3.1, the latest release. Upstream has
+      # web carries one ignore, the ONLY one in a blocking tree: picomatch (GHSA-fc5q-39xc-vjpf,
+      # ReDoS on a glob pattern the attacker chooses). It is unfixable AND unreachable:
+      #   * unfixable — the vulnerable range ends at 4.0.7, the latest release. Upstream has
       #     published no patched version, so no override can clear it.
-      #   * unreachable — `nitropack › @rollup/plugin-node-resolve` calls it once at load, on
-      #     that plugin's own constants. payload is a peer of @unom/ui that only its `./richtext`
-      #     export needs, which the console never imports. The built `.output` holds neither.
+      #   * unreachable — every path to it is build or dev tooling (vite, storybook, the
+      #     TanStack Start and Paraglide plugins, nitropack's dev watcher, orval, tsdown, sass),
+      #     matching this repo's own patterns. The built `.output` holds no glob matcher.
       # Drop it the moment upstream ships a fix — the bare `bun audit` is then green. Scoped
       # per-tree so sdk/plugin-kit stay strictly fail-on-any.
       - name: bun audit
         run: |
           if [ "${{ matrix.tree }}" = "web" ]; then
-            bun audit --ignore=GHSA-gcqx-w48m-w2h4
+            bun audit --ignore=GHSA-fc5q-39xc-vjpf
           else
             bun audit
           fi
@@ -191,7 +190,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: bun audit (non-blocking)
         run: |
-          bun audit --ignore=GHSA-gcqx-w48m-w2h4 \
+          bun audit \
             || echo "::warning::docs-site has a new advisory — lift it with an override, as web does"
 
   pnpm-audit:
