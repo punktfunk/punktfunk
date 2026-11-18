@@ -1514,16 +1514,28 @@ impl Pump {
         });
     }
 
-    /// One AU off the wire: order it, decode it, then demote or ask for a keyframe as
-    /// the decoder says.
+    /// One AU off the wire: move the decoder to a new format, order the AU, decode it, then
+    /// demote or ask for a keyframe as the decoder says.
     fn on_frame(&mut self, frame: Frame) -> Pass {
         if let Some(format) = frame.new_format {
             self.codec_ask = None;
             self.av1 = av1_intake(format.codec);
-            if let Err(e) = self
-                .decoder
-                .reformat(format.codec, stream_format_of(&format))
-            {
+            // The ladder has no PyroWave rung, and a PyroWave decoder keeps the colour it
+            // opened with: an HDR switch opens a new one.
+            let moved = if format.codec == punktfunk_core::quic::CODEC_PYROWAVE {
+                let (mode, vulkan) = (self.connector.mode(), self.params.vulkan.as_ref());
+                open_decoder_for(&format, mode, &self.params.decoder, vulkan, &self.connector).map(
+                    |mut decoder| {
+                        let wake = self.connector.clone();
+                        decoder.set_decode_wake(Arc::new(move || wake.kick_frame_wait()));
+                        self.decoder = decoder;
+                    },
+                )
+            } else {
+                self.decoder
+                    .reformat(format.codec, stream_format_of(&format))
+            };
+            if let Err(e) = moved {
                 return self.fall_back(decode_end(&e, format.codec, self.advertised_codecs));
             }
         } else if self.codec_ask.is_some() {
