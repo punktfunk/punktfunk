@@ -843,8 +843,8 @@ pub fn install_content(
     })
 }
 
-/// Whether `id` keeps the path of a `kind` add-on of `platform`: Ryujinx registers the file
-/// where it lies; every other way copies it in or runs an installer on it.
+/// Whether `id` reads a `kind` add-on of `platform` where it lies, as hermir says
+/// (`ContentMethod::keeps_path`); every other way copies it in or runs an installer on it.
 pub fn content_keeps_path(id: &str, platform: &str, kind: &str) -> bool {
     let Ok(h) = open_in(None) else { return false };
     let Ok(emulator) = h.emulator(id) else {
@@ -856,7 +856,7 @@ pub fn content_keeps_path(id: &str, platform: &str, kind: &str) -> bool {
         (Some(c), "dlc") => &c.dlc,
         _ => return false,
     };
-    matches!(method, hermir::ContentMethod::Adapter { adapter, .. } if adapter == "ryujinx")
+    method.keeps_path()
 }
 
 /// Whether the best copy has `platform`'s firmware; `None` when the platform needs none.

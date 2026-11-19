@@ -2083,7 +2083,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hermir"
 version = "0.1.0"
-source = "git+https://github.com/unom-io/hermir?rev=2d10a4c274c0285c27ea9fadeb9b35c47e047148#2d10a4c274c0285c27ea9fadeb9b35c47e047148"
+source = "git+https://github.com/unom-io/hermir?rev=43e312b496af560d6f485e3a06c3c8753be8372e#43e312b496af560d6f485e3a06c3c8753be8372e"
 dependencies = [
  "flate2",
  "md-5",
