@@ -157,11 +157,17 @@ impl DetectHint {
             .filter(|m| m.value.as_ref().is_none_or(|v| v.len() <= MAX_ENV_VALUE))
     }
 
-    /// Drop blank fields (`""` means unset). An empty install dir would match every
-    /// process on the box.
+    /// Trim each field and drop one pair of surrounding quotes, as Explorer's "Copy as
+    /// path" and a terminal's drag-and-drop add them. Then drop blank fields (`""` means
+    /// unset): an empty install dir would match every process on the box.
     fn trimmed(&self) -> Option<(Option<&str>, Option<&str>, Option<&str>)> {
         fn f(s: &Option<String>) -> Option<&str> {
-            s.as_deref().map(str::trim).filter(|v| !v.is_empty())
+            let s = s.as_deref()?.trim();
+            let s = ['"', '\'']
+                .into_iter()
+                .find_map(|q| s.strip_prefix(q)?.strip_suffix(q))
+                .map_or(s, str::trim);
+            (!s.is_empty()).then_some(s)
         }
         let (dir, exe, name) = (f(&self.install_dir), f(&self.exe), f(&self.process_name));
         (dir.is_some() || exe.is_some() || name.is_some()).then_some((dir, exe, name))
@@ -279,6 +285,35 @@ mod tests {
         assert_eq!(spec.install_dir.as_deref(), Some(Path::new("/games/quail")));
         assert_eq!(spec.process_name.as_deref(), Some("quail"));
         assert_eq!(spec.exe, None);
+    }
+
+    #[test]
+    fn a_pasted_quoted_path_loses_its_quotes() {
+        let hint = DetectHint {
+            exe: Some(r#" "D:\ROMs\The Legend of Zelda (France)\soh.exe" "#.into()),
+            install_dir: Some("'/home/me/My Games/quail'".into()),
+            process_name: Some(r#""""#.into()),
+            ..Default::default()
+        };
+        let spec = DetectSpec::from(&hint);
+        assert_eq!(
+            spec.exe.as_deref(),
+            Some(Path::new(r"D:\ROMs\The Legend of Zelda (France)\soh.exe"))
+        );
+        assert_eq!(
+            spec.install_dir.as_deref(),
+            Some(Path::new("/home/me/My Games/quail"))
+        );
+        assert_eq!(spec.process_name, None, "a lone pair of quotes is blank");
+        let odd = DetectHint {
+            exe: Some(r#""/opt/game"#.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            DetectSpec::from(&odd).exe.as_deref(),
+            Some(Path::new(r#""/opt/game"#)),
+            "an unpaired quote is left as typed"
+        );
     }
 
     #[test]
