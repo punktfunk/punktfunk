@@ -52,8 +52,11 @@ speed there; no client has a sensitivity setting.
   Hyprland accelerate it like any mouse: a fast stroke travels up to twice as far.
 - A game that reads the mouse directly gets the counts untouched on every host, so its own
   sensitivity applies, as it does to a mouse on the host.
-- The Linux, Windows, Mac, iPhone, iPad and Android clients send counts. A browser's, a TV's or
-  a console's mouse moves the host pointer one pixel a count on Linux.
+- The Linux, Windows, Mac, iPhone, iPad and Android clients send counts. A TV's or a console's
+  mouse moves the host pointer one pixel a count on Linux.
+- A browser sends your device's own pointer travel, with its speed and acceleration. **Raw mouse
+  input** in the browser's settings sends the mouse's counts instead. A Linux host moves the
+  pointer one pixel for each unit of either.
 - **Desktop (absolute)** follows your own pointer, at your device's speed.
 
 Too fast or too slow? See [Input & controllers](/docs/troubleshooting-input#the-pointer-is-too-fast-or-too-slow).

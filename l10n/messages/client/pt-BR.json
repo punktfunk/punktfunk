@@ -1027,6 +1027,8 @@
 	"player_mouse_mode_desktop": "Área de trabalho (absoluto)",
 	"player_invert_scroll": "Inverter a direção da rolagem",
 	"player_invert_scroll_hint": "Inverte a direção de rolagem da roda e do trackpad enviada ao host.",
+	"player_raw_mouse": "Entrada bruta do mouse",
+	"player_raw_mouse_hint": "Envia o movimento do próprio mouse, sem a velocidade e a aceleração do ponteiro deste dispositivo.",
 	"player_inhibit_shortcuts": "Capturar atalhos do sistema",
 	"player_inhibit_shortcuts_hint": "Encaminha {keys} ao host enquanto a entrada estiver capturada.",
 	"player_overlay_actions": "Ações rápidas",

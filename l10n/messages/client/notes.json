@@ -746,6 +746,7 @@
 	"player_inhibit_shortcuts_hint": "keys lists the system shortcuts this client captures, from its shortcut table, e.g. Alt+Tab, Super, … or ⌘Space, ⌘Tab.",
 	"player_cursor_gestures_hint": "TV remote setting. button is the remote's confirm key the client names, e.g. OK.",
 	"player_game_picture": "TV setting. Game is the TV's own picture mode; use the name its picture menu shows.",
+	"player_raw_mouse": "Browser client. Raw input is the gaming term: the mouse's movement before the operating system's pointer speed and acceleration.",
 	"player_guide_gesture_hint": "button is the controller's Select/View/Share button as the client names it.",
 	"about_stream_controls": "Row in About that opens the keys, controller chords and gestures that work in a stream.",
 	"about_licenses": "Row in About that opens the licenses screen.",
