@@ -881,9 +881,14 @@ fn path_under(dir: &str, path: &str) -> bool {
 }
 
 /// `cmd.exe /c` running an operator's command as typed. The outer quotes are `/c`'s to strip:
-/// bare, cmd strips the first and last quote of `"C:\a b\x.exe" "arg"` and runs `C:\a`.
+/// bare, cmd strips the first and last quote of `"C:\a b\x.exe" "arg"` and runs `C:\a`. A
+/// command opening with `""` already carries that pair, and a second one breaks it.
 fn cmd_c(command: &str) -> String {
-    format!("cmd.exe /c \"{command}\"")
+    if command.starts_with("\"\"") {
+        format!("cmd.exe /c {command}")
+    } else {
+        format!("cmd.exe /c \"{command}\"")
+    }
 }
 
 /// Launches an operator `apps.json` command as the host's WTS session user.
@@ -1181,6 +1186,11 @@ mod tests {
         assert_eq!(
             cmd_c(r#""D:\ROMs\Zelda (France)\soh.exe" "x y""#),
             r#"cmd.exe /c ""D:\ROMs\Zelda (France)\soh.exe" "x y"""#
+        );
+        assert_eq!(
+            cmd_c(r#"""C:\My Games\exec.exe" -f "C:\My Isos\game.iso"""#),
+            r#"cmd.exe /c ""C:\My Games\exec.exe" -f "C:\My Isos\game.iso"""#,
+            "a command already wrapped for `/c` passes through"
         );
         assert!(
             cmd_r.owns_game,
