@@ -101,6 +101,8 @@ pub struct AccessState {
     pub revoked: bool,
 }
 
+/// A name the operator types, cleaned like a device's own.
+pub(crate) use sanitize::clean_name;
 /// Shared by the stream marker's quoting and the plugin-text sanitizers.
 pub(crate) use sanitize::is_spoofy_char;
 /// Stable path for the native accept loop.

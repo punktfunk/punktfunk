@@ -7,6 +7,12 @@
 
 /// Strip controls and bidi marks; empty input becomes `device {fp[:8]}`.
 pub(crate) fn sanitize_device_name(name: &str, fp_hex: &str) -> String {
+    clean_name(name).unwrap_or_else(|| format!("device {}", &fp_hex[..8.min(fp_hex.len())]))
+}
+
+/// `name` without controls or bidi marks, whitespace collapsed, at most 64 bytes; `None` when
+/// nothing is left.
+pub(crate) fn clean_name(name: &str) -> Option<String> {
     let cleaned: String = name
         .chars()
         .map(|c| if c == '\t' || c == '\n' { ' ' } else { c })
@@ -22,11 +28,7 @@ pub(crate) fn sanitize_device_name(name: &str, fp_hex: &str) -> String {
         trimmed = &trimmed[..cut];
     }
     let trimmed = trimmed.trim();
-    if trimmed.is_empty() {
-        format!("device {}", &fp_hex[..8.min(fp_hex.len())])
-    } else {
-        trimmed.to_string()
-    }
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Bidi/format marks that can reorder a displayed name. Shared with the stream

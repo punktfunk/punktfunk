@@ -1,4 +1,5 @@
-// Controllers on this PC: who a row offers, what it says under the name, and its picture.
+// Controllers on this PC: who a row offers, the name it shows, what it says under it, and its
+// picture.
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeskPad } from "@/api/gen/model/deskPad";
@@ -12,6 +13,7 @@ import {
 	holderOptions,
 	holderValue,
 	padArtKey,
+	padName,
 	padNote,
 	tellApart,
 } from "./deskPads";
@@ -114,6 +116,18 @@ test("twins get the last six characters of their key, others nothing", () => {
 	expect(tellApart(AT_DESK, [AT_DESK])).toBeNull();
 });
 
+test("a given name replaces the hardware's, and tells twins apart", () => {
+	const named = pad("usb-045e-0b13-s-ZZ9999", { label: "Couch" });
+	expect(padName(named)).toBe("Couch");
+	expect(padName(AT_DESK)).toBe("Xbox Wireless Controller");
+	expect(tellApart(named, [AT_DESK, named])).toBeNull();
+	expect(tellApart(AT_DESK, [AT_DESK, named])).toBeNull();
+	const text = card([AT_DESK, named]).replace(/<[^>]*>/g, "|");
+	expect(text).toContain("|Couch|");
+	expect(text.match(/\|Xbox Wireless Controller\|/g)).toHaveLength(2);
+	expect(text).not.toContain("ZZ9999");
+});
+
 test("makers map to a drawing the console has; others to the plain icon", () => {
 	for (const key of [
 		...Object.values(ART_BY_PRODUCT),
@@ -142,6 +156,7 @@ const card = (pads: DeskPad[]) =>
 			profiles={PROFILES}
 			busyKey={null}
 			onGive={() => {}}
+			onRename={() => {}}
 		/>,
 	);
 

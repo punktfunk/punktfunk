@@ -3,6 +3,7 @@ import { toast } from "@unom/ui/toast";
 import { type FC, useEffect, useState } from "react";
 import { ApiError, apiFetch } from "@/api/fetcher";
 import { useGetHostInfo } from "@/api/gen/host/host";
+import type { DeskPad } from "@/api/gen/model/deskPad";
 import type { DoorChange } from "@/api/gen/model/doorChange";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
@@ -26,11 +27,13 @@ import {
 	useListDeskPads,
 	useListProfiles,
 	useSetDeskPadHolder,
+	useSetDeskPadLabel,
 	useSetSeating,
 	useUpdateProfile,
 	useWindowsAccounts,
 } from "@/api/gen/profiles/profiles";
 import { isFullSeat } from "@/api/seat";
+import { useDialogs } from "@/components/dialogs";
 import { apiErrorMessage } from "@/lib/errors";
 import { doorUnavailable, seatCheckText } from "@/lib/host-messages";
 import { useLocale } from "@/lib/i18n";
@@ -63,6 +66,7 @@ const SEAT_ACT = {
 export const SectionProfiles: FC = () => {
 	useLocale();
 	const qc = useQueryClient();
+	const { promptText } = useDialogs();
 	// A seat that is starting changes within seconds; the rest of the time the list is a glance.
 	const profiles = useListProfiles({
 		query: {
@@ -194,6 +198,26 @@ export const SectionProfiles: FC = () => {
 			onError: failed(m.profiles_pads_failed()),
 		},
 	});
+	const name = useSetDeskPadLabel({
+		mutation: {
+			onMutate: () => qc.cancelQueries({ queryKey: getListDeskPadsQueryKey() }),
+			onSuccess: (next) => qc.setQueryData(getListDeskPadsQueryKey(), next),
+			onError: failed(m.profiles_pads_rename_failed()),
+		},
+	});
+	// An empty name gives the controller its own back; cancel (`null`) changes nothing.
+	const onRenamePad = async (pad: DeskPad) => {
+		const next = await promptText({
+			title: m.profiles_pads_rename_title(),
+			description: m.profiles_pads_rename_body(),
+			label: m.profiles_pads_rename_label(),
+			defaultValue: pad.label ?? "",
+			placeholder: pad.name,
+			confirmLabel: m.action_rename(),
+		});
+		if (next === null) return;
+		name.mutate({ key: pad.key, data: { label: next.trim() || null } });
+	};
 	const act = (p: ProfileAdmin, a: SeatAct) =>
 		seatAct.mutate({ id: p.id, act: a });
 	const firstError = doctor.data?.diagnostics.find((d) => d.level === "error");
@@ -324,9 +348,13 @@ export const SectionProfiles: FC = () => {
 					deskPads.data.pads.length > 0
 						? {
 								pads: deskPads.data.pads,
-								busyKey: lend.isPending ? (lend.variables?.key ?? null) : null,
+								busyKey:
+									(lend.isPending ? lend.variables?.key : undefined) ??
+									(name.isPending ? name.variables?.key : undefined) ??
+									null,
 								onGive: (pad, id) =>
 									lend.mutate({ key: pad.key, data: { profile: id } }),
+								onRename: onRenamePad,
 							}
 						: undefined
 				}

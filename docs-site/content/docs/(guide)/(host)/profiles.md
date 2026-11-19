@@ -130,6 +130,9 @@ controller: rumble, haptics, gyro, trackpads and its own sound card work as the 
 2. On the card **Controllers on this PC**, open **Used by** on the controller's row.
 3. Pick the profile. **This PC** gives it back.
 
+Two controllers of one model show the same name. **Rename** on a row gives that controller a name
+of your own, and an empty name brings back its own.
+
 - **One holder.** Only that profile's seat sees the controller. The PC's desktop and every other
   seat don't, not even for an instant after it is plugged in.
 - **Your change only.** The controller changes hands only when you change it here, and it

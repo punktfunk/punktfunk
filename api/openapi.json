@@ -7749,6 +7749,100 @@
         "x-scope": "box"
       }
     },
+    "/api/v1/profiles/pads/{key}/label": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Name a controller plugged into this PC",
+        "description": "The console shows the name in place of what the hardware calls itself. `null` or a blank\nname goes back to the hardware's. Who uses the controller doesn't change. The controller must\nbe in the list. Answers the list as it is after. Admin lane only.",
+        "operationId": "setDeskPadLabel",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "The controller's key, from the list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeskPadLabel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The controllers, after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeskPads"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not the key of a listed controller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This host can't give controllers away",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The name wasn't saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "box"
+      }
+    },
     "/api/v1/profiles/seating": {
       "get": {
         "tags": [
@@ -13084,6 +13178,14 @@
             "description": "Names the controller in `PUT /profiles/pads/{key}`. Stable across a replug and a restart.",
             "example": "usb-28de-1304-s-FXA99614007BD"
           },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the operator gave it, shown in place of `name`.",
+            "example": "Couch puck"
+          },
           "name": {
             "type": "string",
             "description": "What the hardware calls itself.",
@@ -13129,6 +13231,20 @@
               "null"
             ],
             "description": "The profile to give it to. `null` gives it back to this PC."
+          }
+        }
+      },
+      "DeskPadLabel": {
+        "type": "object",
+        "description": "A controller's name.",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name to show. `null` or blank shows what the hardware calls itself again.",
+            "example": "Couch puck"
           }
         }
       },

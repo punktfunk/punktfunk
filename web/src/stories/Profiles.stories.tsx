@@ -115,7 +115,22 @@ export const ControllersOnThisPC: Story = {
 	args: {
 		profiles: { data: profilesWindows, isLoading: false, error: null },
 		seats,
-		pads: { pads: deskPads, busyKey: null, onGive: noop },
+		pads: { pads: deskPads, busyKey: null, onGive: noop, onRename: noop },
+	},
+};
+
+/** Leon's twin has a name given here: it shows first, the hardware's own name beside it. */
+export const ControllerNamed: Story = {
+	args: {
+		...ControllersOnThisPC.args,
+		pads: {
+			pads: deskPads.map((p) =>
+				p.key === "usb-045e-0b13-s-B20E41" ? { ...p, label: "Leon's pad" } : p,
+			),
+			busyKey: null,
+			onGive: noop,
+			onRename: noop,
+		},
 	},
 };
 
@@ -127,6 +142,7 @@ export const ControllerChanging: Story = {
 			pads: deskPads,
 			busyKey: "usb-054c-0ce6-s-94C2D1",
 			onGive: noop,
+			onRename: noop,
 		},
 	},
 };

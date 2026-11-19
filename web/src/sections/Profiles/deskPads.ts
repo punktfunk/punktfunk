@@ -58,12 +58,15 @@ export function padNote(
 		: null;
 }
 
-/** The end of the key, when another controller has the same name; else `null`. */
+/** What the row calls the controller: the name given here, else the hardware's own. */
+export const padName = (pad: DeskPad): string => pad.label ?? pad.name;
+
+/** The end of the key, when another controller's row reads the same name; else `null`. */
 export const tellApart = (
 	pad: DeskPad,
 	all: readonly DeskPad[],
 ): string | null =>
-	all.some((o) => o.key !== pad.key && o.name === pad.name)
+	all.some((o) => o.key !== pad.key && padName(o) === padName(pad))
 		? pad.key.slice(-6)
 		: null;
 
