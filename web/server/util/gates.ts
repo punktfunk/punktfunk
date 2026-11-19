@@ -192,6 +192,7 @@ export const GATES: readonly Route[] = [
 	open("PUT", "profiles/default", SETTING),
 	gated("PUT", "profiles/door"),
 	open("PUT", "profiles/pads/{key}", HANDS_PAD),
+	open("PUT", "profiles/pads/{key}/label", SETTING),
 	gated("PUT", "profiles/seating"),
 	open("PUT", "profiles/{id}", RESEALS),
 	gated("DELETE", "profiles/{id}"),

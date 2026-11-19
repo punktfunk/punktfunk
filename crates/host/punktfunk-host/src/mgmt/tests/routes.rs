@@ -78,6 +78,7 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // The physical desk is the box's: only the operator gives a controller away.
         ("GET", "/api/v1/profiles/pads", false, false),
         ("PUT", "/api/v1/profiles/pads/{key}", false, false),
+        ("PUT", "/api/v1/profiles/pads/{key}/label", false, false),
         ("POST", "/api/v1/profiles", false, false),
         ("PUT", "/api/v1/profiles/default", false, false),
         ("PUT", "/api/v1/profiles/{id}", false, false),
@@ -768,6 +769,7 @@ fn every_route_has_a_side_on_the_door() {
         ("PUT", "/api/v1/profiles/door", true),
         ("GET", "/api/v1/profiles/pads", true),
         ("PUT", "/api/v1/profiles/pads/{key}", true),
+        ("PUT", "/api/v1/profiles/pads/{key}/label", true),
         ("GET", "/api/v1/profiles/enumerate", true),
         ("GET", "/api/v1/profiles/seating", true),
         ("PUT", "/api/v1/profiles/seating", true),

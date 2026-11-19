@@ -652,6 +652,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(seating::put_door))
         .routes(routes!(pads::list_desk_pads))
         .routes(routes!(pads::set_desk_pad_holder))
+        .routes(routes!(pads::set_desk_pad_label))
         .routes(routes!(profiles::list_profiles, profiles::create_profile))
         .routes(routes!(profiles::list_windows_accounts))
         .routes(routes!(profiles::set_default_profile))

@@ -1,9 +1,11 @@
-// **Controllers on this PC**: each controller plugged into the host, and who plays with it.
-import { Gamepad2 } from "lucide-react";
+// **Controllers on this PC**: each controller plugged into the host, its name, and who plays
+// with it.
+import { Gamepad2, Pencil } from "lucide-react";
 import type { FC } from "react";
 import type { DeskPad } from "@/api/gen/model/deskPad";
 import type { PadFrame } from "@/api/gen/model/padFrame";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
+import { Button } from "@/components/ui/button";
 import {
 	Card,
 	CardContent,
@@ -27,17 +29,20 @@ import {
 	holderOptions,
 	holderValue,
 	padArtKey,
+	padName,
 	padNote,
 	tellApart,
 } from "./deskPads";
 
-/** What the card needs beyond the profiles: the controllers and the one change. */
+/** What the card needs beyond the profiles: the controllers and the two changes. */
 export type PadLending = {
 	pads: DeskPad[];
-	/** The controller a change is in flight for; its select waits. */
+	/** The controller a change is in flight for; its row waits. */
 	busyKey: string | null;
 	/** Gives `pad` to the profile `id`, or back to this PC for `null`. */
 	onGive: (pad: DeskPad, id: string | null) => void;
+	/** Asks for `pad`'s name. */
+	onRename: (pad: DeskPad) => void;
 };
 
 /** A controller at rest, for the drawing. */
@@ -57,7 +62,7 @@ const idle = (device: string): PadFrame => ({
 
 export const DeskPadsCard: FC<
 	PadLending & { profiles: readonly ProfileAdmin[] }
-> = ({ pads, profiles, busyKey, onGive }) => (
+> = ({ pads, profiles, busyKey, onGive, onRename }) => (
 	<Card>
 		<CardHeader>
 			<CardTitle className="flex items-center gap-2">
@@ -76,6 +81,7 @@ export const DeskPadsCard: FC<
 						profiles={profiles}
 						busy={busyKey === pad.key}
 						onGive={onGive}
+						onRename={onRename}
 					/>
 				))}
 			</ul>
@@ -89,7 +95,8 @@ const PadRow: FC<{
 	profiles: readonly ProfileAdmin[];
 	busy: boolean;
 	onGive: PadLending["onGive"];
-}> = ({ pad, all, profiles, busy, onGive }) => {
+	onRename: PadLending["onRename"];
+}> = ({ pad, all, profiles, busy, onGive, onRename }) => {
 	const art = padArtKey(pad);
 	const note = padNote(pad, profiles);
 	const tell = tellApart(pad, all);
@@ -113,7 +120,12 @@ const PadRow: FC<{
 				</span>
 				<div className="min-w-0">
 					<p className="flex items-baseline gap-2 text-sm font-medium">
-						<span className="min-w-0 break-words">{pad.name}</span>
+						<span className="min-w-0 break-words">{padName(pad)}</span>
+						{pad.label && (
+							<span className="min-w-0 break-words text-xs font-normal text-muted-foreground">
+								{pad.name}
+							</span>
+						)}
 						{tell && (
 							<span className="shrink-0 text-xs font-normal text-muted-foreground">
 								{tell}
@@ -122,6 +134,16 @@ const PadRow: FC<{
 					</p>
 					{note && <p className="text-xs text-muted-foreground">{note}</p>}
 				</div>
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label={m.action_rename()}
+					title={m.action_rename()}
+					disabled={busy}
+					onClick={() => onRename(pad)}
+				>
+					<Pencil className="size-4" />
+				</Button>
 			</div>
 			<div className="space-y-1 sm:w-52">
 				<Label htmlFor={id} className="text-xs text-muted-foreground">

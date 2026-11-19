@@ -1623,8 +1623,8 @@ mod seat_profiles {
     }
 }
 
-/// A host with no seat supervisor lists no controllers and says it can't give one away. A key
-/// that isn't one is refused first.
+/// A host with no seat supervisor lists no controllers, and says it can't give one away or name
+/// one. A key that isn't one is refused first.
 #[cfg(not(windows))]
 #[tokio::test]
 async fn a_host_without_a_supervisor_gives_no_controller_away() {
@@ -1641,5 +1641,12 @@ async fn a_host_without_a_supervisor_gives_no_controller_away() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(answer["code"], "pads_unsupported");
     let (status, _) = send(&app, put("a%20b", back)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let name = serde_json::json!({ "label": "Couch" });
+    let (status, answer) = send(&app, put("usb-28de-1304-s-A1/label", name.clone())).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(answer["code"], "pads_unsupported");
+    let (status, _) = send(&app, put("a%20b/label", name)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
