@@ -39,9 +39,9 @@ pub fn link_facts(ip: IpAddr) -> LinkFacts {
 }
 
 /// Facts of the interface this device reaches `toward` through, or its default route's when
-/// `None`.
+/// `None`. The default-route lookup targets 192.0.2.1 (RFC 5737), which no LAN holds.
 pub fn local_link_facts(toward: Option<IpAddr>) -> LinkFacts {
-    let to = toward.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8)));
+    let to = toward.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)));
     local_ip_toward(to).map_or(LinkFacts::default(), link_facts)
 }
 

@@ -549,8 +549,10 @@ fn load_or_create_uniqueid() -> Result<String> {
     Ok(id)
 }
 
-/// Best-effort primary LAN IP: a UDP `connect` toward a public address, then read the
-/// local address the OS would route through. No packets are sent.
+/// Best-effort primary LAN IP: the local address of the default route.
+///
+/// A UDP `connect` is a route lookup and sends nothing. Its target, 192.0.2.1 (RFC 5737), is on
+/// no LAN and belongs to no server, so the lookup lands on the default route.
 ///
 /// Returns `None` — never loopback — when the machine has no LAN address yet. The
 /// route probe fails on a cold boot before DHCP; then the first non-loopback
@@ -558,7 +560,7 @@ fn load_or_create_uniqueid() -> Result<String> {
 pub(crate) fn primary_local_ip() -> Option<IpAddr> {
     let routed = UdpSocket::bind("0.0.0.0:0")
         .and_then(|sock| {
-            sock.connect("8.8.8.8:80")?;
+            sock.connect("192.0.2.1:80")?;
             sock.local_addr()
         })
         .ok()
