@@ -273,7 +273,7 @@ fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
         // Operator command. `cmd.exe /c` blocks until it returns, so the pid is that command's life.
         "command" => {
             let v = spec.value.trim();
-            (!v.is_empty()).then(|| WinRecipe::game(format!("cmd.exe /c {v}"), None))
+            (!v.is_empty()).then(|| WinRecipe::game(cmd_c(v), None))
         }
         _ => None,
     }
@@ -880,6 +880,12 @@ fn path_under(dir: &str, path: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('\\'))
 }
 
+/// `cmd.exe /c` running an operator's command as typed. The outer quotes are `/c`'s to strip:
+/// bare, cmd strips the first and last quote of `"C:\a b\x.exe" "arg"` and runs `C:\a`.
+fn cmd_c(command: &str) -> String {
+    format!("cmd.exe /c \"{command}\"")
+}
+
 /// Launches an operator `apps.json` command as the host's WTS session user.
 ///
 /// Capture is already live and the host remains SYSTEM. Linux instead uses
@@ -887,7 +893,7 @@ fn path_under(dir: &str, path: &str) -> bool {
 pub fn launch_gamestream_command(cmd: &str) -> Result<WindowsLaunch> {
     let cmd = cmd.trim();
     anyhow::ensure!(!cmd.is_empty(), "empty command");
-    let pid = crate::interactive::spawn_as_current_session_user(&format!("cmd.exe /c {cmd}"), None)
+    let pid = crate::interactive::spawn_as_current_session_user(&cmd_c(cmd), None)
         .context("spawn gamestream command as the current WTS session user")?;
     tracing::info!(command = %cmd, pid, "gamestream: launched app as the current WTS session user");
     // `cmd.exe /c` waits, so its PID tracks the command; forwarders remain the lease shim's concern.
@@ -1171,7 +1177,11 @@ mod tests {
             ..Default::default()
         };
         let cmd_r = windows_launch_for(&cmd).unwrap();
-        assert_eq!(cmd_r.cmdline, "cmd.exe /c notepad.exe");
+        assert_eq!(cmd_r.cmdline, r#"cmd.exe /c "notepad.exe""#);
+        assert_eq!(
+            cmd_c(r#""D:\ROMs\Zelda (France)\soh.exe" "x y""#),
+            r#"cmd.exe /c ""D:\ROMs\Zelda (France)\soh.exe" "x y"""#
+        );
         assert!(
             cmd_r.owns_game,
             "`cmd /c` blocks on the operator's command, so its pid is that command's"
