@@ -75,6 +75,23 @@ class PresenceTest {
         assertEquals(listOf(HostAddr("192.168.1.9", 9777)), Presence.candidates(typed, advert("192.168.1.20")))
     }
 
+    /** A kept address is the only one asked: no advert, no address the host left. */
+    @Test
+    fun a_kept_address_is_asked_alone() {
+        val kept = desk.copy(keepAddress = true, prevAddresses = listOf("100.64.0.7"))
+        assertEquals(listOf(HostAddr("192.168.1.9", 9777)), Presence.candidates(kept, advert("192.168.1.20")))
+        val asked = mutableListOf<String>()
+        val up = Presence.sweep(listOf(kept), liveFor = { advert("192.168.1.20") }) { addr, _ ->
+            asked += addr
+            fp.takeIf { addr != "192.168.1.9" }
+        }
+        assertNull(up["desk"])
+        assertEquals(listOf("192.168.1.9"), asked)
+        asked.clear()
+        assertFalse(Presence.probeSelf(kept, advert("192.168.1.20")) { addr, _ -> asked += addr; null })
+        assertEquals(listOf("192.168.1.9"), asked)
+    }
+
     /**
      * A stranger holding the saved address completes the handshake, so the sweep must ask WHO
      * answered: counting it lights the pip and, since wake reads `!online`, keeps the wake

@@ -86,6 +86,7 @@ public final class ConsoleBridge {
         case fetchAvatar = "FetchAvatar"
         case wakeProfile = "WakeProfile", setProfile = "SetProfile", bindPreset = "BindPreset"
         case setClipboard = "SetClipboard", unpairHost = "UnpairHost", savePreset = "SavePreset"
+        case setKeepAddress = "SetKeepAddress"
         case deletePreset = "DeletePreset", padTest = "PadTest", loadLicenses = "LoadLicenses"
         case promptAnswer = "PromptAnswer", padAction = "PadAction", hostAction = "HostAction"
         case setScreen = "SetScreen", endGame = "EndGame", install = "Install"

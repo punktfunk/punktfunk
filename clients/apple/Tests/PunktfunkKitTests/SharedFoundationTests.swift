@@ -27,11 +27,12 @@ final class SharedFoundationTests: XCTestCase {
             presetID: "a1b2c3d4e5f6", pinnedPresetIDs: ["0f0f0f0f0f0f"],
             addedAt: Date(timeIntervalSince1970: 1_600_000_000),
             osChain: "linux/fedora/bazzite", previousAddresses: ["100.64.0.7"],
-            gamePresets: ["steam:374320": "0f0f0f0f0f0f"])
+            gamePresets: ["steam:374320": "0f0f0f0f0f0f"], keepAddress: true)
 
         let data = try JSONEncoder().encode(host)
         let decoded = try JSONDecoder().decode(StoredHost.self, from: data)
         XCTAssertEqual(decoded, host)
+        XCTAssertEqual(decoded.keepAddress, true)
         XCTAssertEqual(decoded.gamePresets, ["steam:374320": "0f0f0f0f0f0f"])
         XCTAssertEqual(decoded.osChain, "linux/fedora/bazzite")
     }
@@ -58,10 +59,25 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertNil(decoded.osChain)
         XCTAssertNil(decoded.previousAddresses)
         XCTAssertNil(decoded.gamePresets)
+        XCTAssertNil(decoded.keepAddress)
         // Resolvers fall back cleanly.
         XCTAssertEqual(decoded.effectiveMgmtPort, punktfunkDefaultMgmtPort)
         XCTAssertEqual(decoded.wakeMacs, [])
         XCTAssertEqual(decoded.displayName, "Old")
+    }
+
+    /// Off is nil, and nil leaves the key out of the JSON, so a host that never turned it on
+    /// writes the bytes an older build wrote.
+    func testKeepAddressIsAbsentFromTheJSONWhenOff() throws {
+        let off = StoredHost(name: "Tower", address: "10.0.0.5")
+        XCTAssertNil(off.keepAddress)
+        let bare = try XCTUnwrap(String(data: JSONEncoder().encode(off), encoding: .utf8))
+        XCTAssertFalse(bare.contains("keepAddress"))
+
+        var on = off
+        on.keepAddress = true
+        let kept = try XCTUnwrap(String(data: JSONEncoder().encode(on), encoding: .utf8))
+        XCTAssertTrue(kept.contains(#""keepAddress":true"#))
     }
 
     /// The addresses a host left are kept, newest first, without repeats, three at most.

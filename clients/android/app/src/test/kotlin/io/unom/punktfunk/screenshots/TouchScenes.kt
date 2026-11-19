@@ -102,8 +102,9 @@ internal fun HostPageScene() {
             busy = false,
             acts = HostPageActs(
                 back = {}, connect = {}, browse = {}, switchProfile = null, bind = {}, togglePin = {},
-                pickScreen = {}, edit = {}, setClipboard = {}, speedTest = {}, copyLink = {}, pair = {},
-                unpair = {}, setDefault = {}, wake = null, power = {}, sendLogs = {}, remove = {},
+                pickScreen = {}, edit = {}, setClipboard = {}, setKeepAddress = {}, speedTest = {},
+                copyLink = {}, pair = {}, unpair = {}, setDefault = {}, wake = null, power = {},
+                sendLogs = {}, remove = {},
             ),
         )
     }

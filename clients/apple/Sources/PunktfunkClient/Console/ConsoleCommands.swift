@@ -112,6 +112,11 @@ extension ConsoleModel {
                 host.clipboardSync = a["on"] as? Bool ?? false
                 store.update(host)
             }
+        case .setKeepAddress:
+            if var host = host(key: a["key"] as? String ?? "") {
+                host.keepAddress = a["on"] as? Bool == true ? true : nil
+                store.update(host)
+            }
         case .endGame:
             endGame(
                 addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),

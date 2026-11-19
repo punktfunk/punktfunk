@@ -138,7 +138,8 @@ public enum ConsoleJSON {
                 "key": rowKey(fp, d.host, d.port), "name": d.name.isEmpty ? d.host : d.name,
                 "addr": d.host, "port": Int(d.port), "fp_hex": fp, "paired": false,
                 "saved": false, "online": true, "mgmt_port": Int(d.mgmtPort ?? punktfunkDefaultMgmtPort),
-                "can_wake": false, "clipboard_sync": false, "last_used": NSNull(),
+                "can_wake": false, "clipboard_sync": false, "keep_addr": false,
+                "last_used": NSNull(),
                 "os": d.osChain, "pin": NSNull(), "bound_preset": NSNull(),
                 // Unsaved: no identity to ask what it is running.
                 "running": "",
@@ -168,6 +169,7 @@ public enum ConsoleJSON {
             "mgmt_port": Int(advert?.mgmtPort ?? host.effectiveMgmtPort),
             "can_wake": !online && WakePolicy.canWake(host.wakeMacs),
             "clipboard_sync": host.clipboardSync ?? false,
+            "keep_addr": host.keepAddress ?? false,
             "last_used": host.lastConnected.map { Int($0.timeIntervalSince1970) } ?? NSNull(),
             "os": advert.map { $0.osChain.isEmpty ? (host.osChain ?? "") : $0.osChain }
                 ?? (host.osChain ?? ""),

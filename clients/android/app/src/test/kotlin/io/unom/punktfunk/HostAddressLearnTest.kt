@@ -39,6 +39,28 @@ class HostAddressLearnTest {
         assertFalse(store.learnAddress("", "192.168.1.31", 9777))
     }
 
+    /** A kept address is the player's: neither a probe elsewhere nor a pairing there moves it. */
+    @Test
+    fun a_kept_address_never_follows_the_host() {
+        val store = KnownHostStore(context)
+        val saved = store.trust("10.10.0.2", 9777, "Desk", fp, paired = true)
+        store.save(saved.copy(keepAddress = true))
+        assertFalse(store.learnAddress(fp, "192.168.1.9", 9777))
+        assertEquals("10.10.0.2", store.byId(saved.id)!!.address)
+        assertTrue(store.byId(saved.id)!!.prevAddresses.isEmpty())
+        val repaired = store.trust("192.168.1.9", 9777, "Desk", fp, paired = true)
+        assertEquals(saved.id, repaired.id)
+        assertEquals("10.10.0.2", repaired.address)
+        assertTrue(repaired.keepAddress)
+        assertEquals(1, store.all().size)
+        // A placeholder that keeps its address keeps it through the pairing that pins it.
+        val typed = store.trust("10.10.0.3", 9777, "10.10.0.3", "", paired = false)
+        store.save(typed.copy(keepAddress = true))
+        val pinned = store.trust("10.10.0.3", 9777, "Sofa", "cd".repeat(32), paired = true)
+        assertEquals(typed.id, pinned.id)
+        assertTrue(pinned.keepAddress)
+    }
+
     /** The addresses a host left: newest first, no repeats, up to `PREV_ADDRESSES_MAX`. */
     @Test
     fun a_moved_host_remembers_the_addresses_it_left() {

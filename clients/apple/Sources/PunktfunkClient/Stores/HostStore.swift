@@ -151,7 +151,8 @@ final class HostStore: ObservableObject {
     /// anywhere. The saved one is asked first and kept while it answers. Only when it is silent
     /// are the live advert's and the addresses it left asked, together, and the first that
     /// answers (in that order) becomes the saved address: the LAN takes over with the VPN off,
-    /// and Tailscale takes back over on mobile data.
+    /// and Tailscale takes back over on mobile data. A host that keeps its address
+    /// (`StoredHost.keepAddress`) is asked there only.
     ///
     /// The pin decides, not the answer alone: whoever inherits a sleeping host's lease completes
     /// a handshake at its address too. A host saved by address carries no pin to compare, so it
@@ -160,7 +161,7 @@ final class HostStore: ObservableObject {
         let target = hosts.first { $0.id == host.id } ?? host
         let pin = target.pinnedSHA256
         if await Self.answers(target.address, target.port, pin: pin) { return true }
-        guard pin != nil else { return false }
+        guard pin != nil, target.keepAddress != true else { return false }
         var others: [(address: String, port: UInt16)] = []
         if let live = discovery.hosts.first(where: { host.matches($0) }) {
             others.append((address: live.host, port: live.port))
@@ -303,9 +304,10 @@ final class HostStore: ObservableObject {
 
     /// Re-point this host at the address it just answered at, keeping the one it leaves in
     /// `previousAddresses` so the sweep can find it there again. Same no-op-when-unchanged
-    /// contract as `updateMacs`.
+    /// contract as `updateMacs`. A host that keeps its address is never re-pointed.
     func updateAddress(_ hostID: UUID, address: String, port: UInt16) {
         guard let i = hosts.firstIndex(where: { $0.id == hostID }),
+              hosts[i].keepAddress != true,
               hosts[i].address != address || hosts[i].port != port else { return }
         var host = hosts[i]
         host.move(to: address, port: port)

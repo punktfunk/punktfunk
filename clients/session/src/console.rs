@@ -445,6 +445,7 @@ fn seed_row(k: Option<&trust::KnownHost>, addr: &str, port: u16) -> HostRow {
             .unwrap_or(library::DEFAULT_MGMT_PORT),
         can_wake: false,
         clipboard_sync: k.is_some_and(|h| h.clipboard_sync),
+        keep_addr: k.is_some_and(|h| h.keep_addr),
         last_used: k.and_then(|h| h.last_used),
         os: k.map(|h| h.os.clone()).unwrap_or_default(),
         actions: Vec::new(),
@@ -855,6 +856,7 @@ impl ServiceState {
                 preset_id,
             } => self.bind_preset(key, game, preset_id),
             ConsoleCmd::SetClipboard { key, on } => self.set_clipboard(key, on),
+            ConsoleCmd::SetKeepAddress { key, on } => self.set_keep_address(key, on),
         }
     }
 
@@ -1481,6 +1483,15 @@ impl ServiceState {
         });
     }
 
+    /// The host menu's Keep this address (`KnownHost::keep_addr`).
+    fn set_keep_address(&self, key: String, on: bool) {
+        self.edit_host(&key, "keep-address toggle", |h| {
+            let changed = h.keep_addr != on;
+            h.keep_addr = on;
+            changed
+        });
+    }
+
     /// One parallel reachability pass over every row. Advertising ones are NOT online by
     /// definition — an advert is a cache entry with a 75-minute TTL that a suspending host sends
     /// no goodbye for, so skipping them would leave a sleeping machine reading Online (and, since
@@ -1661,6 +1672,7 @@ fn build_rows(
                     .unwrap_or(library::DEFAULT_MGMT_PORT),
                 can_wake: !online && !h.mac.is_empty(),
                 clipboard_sync: h.clipboard_sync,
+                keep_addr: h.keep_addr,
                 last_used: h.last_used,
                 os: advert
                     .filter(|d| !d.os.is_empty())
@@ -1738,6 +1750,7 @@ fn build_rows(
                 mgmt_port: d.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
                 can_wake: false,
                 clipboard_sync: false,
+                keep_addr: false,
                 last_used: None,
                 os: d.os.clone(),
                 // Discovered but unsaved: not paired, so there is nothing it would let us

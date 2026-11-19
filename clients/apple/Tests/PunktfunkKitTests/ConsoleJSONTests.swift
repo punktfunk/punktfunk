@@ -21,6 +21,19 @@ final class ConsoleJSONTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
     }
 
+    /// The console reads `keep_addr` on every row, so a host that never set it still carries it.
+    func testHostRowsCarryKeepAddr() throws {
+        var kept = host(name: "Kept")
+        kept.keepAddress = true
+        let plain = host(name: "Plain", paired: false)
+        let stranger = DiscoveredHost(
+            id: "Den", name: "Den", host: "192.168.1.77", port: 9777, fingerprintHex: "ef01",
+            requiresPairing: false, allowsTofu: false, macAddresses: [], osChain: "", mgmtPort: nil)
+        let rows = try rows(ConsoleJSON.hostRows(
+            saved: [kept, plain], discovered: [stranger], online: [], presets: []))
+        XCTAssertEqual(rows.map { $0["keep_addr"] as? Bool }, [true, false, false])
+    }
+
     /// A paired host, its pinned preset card and a discovered stranger, in carousel order.
     func testHostRowsCarryTheModelsKeys() throws {
         var saved = host(name: "Desk")

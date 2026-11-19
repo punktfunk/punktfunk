@@ -70,6 +70,8 @@ enum Action {
     SpeedTest,
     /// Per-host clipboard share. On the host, not in Settings: the other end is this machine.
     Clipboard,
+    /// Per-host: dial and probe the saved address alone. Shown where the shell runs the command.
+    KeepAddress,
     Edit,
     /// Point `Settings::default_host` at this record, or clear it when it already does.
     MakeDefault,
@@ -255,6 +257,10 @@ impl CardMenu {
             Action::Hide => device.hides,
             Action::CopyLink => !device.tv,
             Action::Clipboard => !device.tv || device.platform == Platform::Android,
+            Action::KeepAddress => matches!(
+                device.platform,
+                Platform::Desktop | Platform::Android | Platform::Apple
+            ),
             Action::HomeScreen | Action::LauncherFile => handheld,
             _ => true,
         });
@@ -355,7 +361,12 @@ impl CardMenu {
         if host.paired && host.online {
             a.push(Action::SpeedTest);
         }
-        a.extend([Action::Clipboard, Action::Edit]);
+        a.push(Action::Clipboard);
+        // A record to keep the address on: a discovered row has none.
+        if host.saved {
+            a.push(Action::KeepAddress);
+        }
+        a.push(Action::Edit);
         // A record to point at: a discovered row has no id.
         if host.paired && host.id.is_some() {
             a.push(Action::MakeDefault);
@@ -377,9 +388,11 @@ impl CardMenu {
         match a {
             Action::BindPreset | Action::Pin(_) => Section::Presets,
             Action::Screen(_) | Action::ScreenNote => Section::Screen,
-            Action::SpeedTest | Action::Clipboard | Action::Edit | Action::MakeDefault => {
-                Section::Connection
-            }
+            Action::SpeedTest
+            | Action::Clipboard
+            | Action::KeepAddress
+            | Action::Edit
+            | Action::MakeDefault => Section::Connection,
             Action::Pair | Action::Unpair => Section::Pairing,
             Action::Wake | Action::Host(_) => Section::Power,
             Action::SendLogs => Section::Logs,
@@ -400,6 +413,7 @@ impl CardMenu {
             Action::HomeScreen => "house",
             Action::LauncherFile => "save",
             Action::Clipboard => "copy",
+            Action::KeepAddress => "pin",
             Action::Details => "info",
             Action::Unpin | Action::Pin(_) => "pin",
             Action::Pair => "lock",
@@ -536,6 +550,10 @@ impl CardMenu {
                 pf_l10n::console::console_card_clipboard_on().into()
             }
             Action::Clipboard => pf_l10n::console::console_card_clipboard_off().into(),
+            Action::KeepAddress if self.host().keep_addr => {
+                pf_l10n::console::console_card_keep_address_on().into()
+            }
+            Action::KeepAddress => pf_l10n::console::console_card_keep_address_off().into(),
             Action::Edit => pf_l10n::client::hostcard_edit().into(),
             // Geist carries no U+2713, so a check mark here draws as a missing glyph.
             Action::MakeDefault if self.is_default(ctx.settings.default_host.as_deref()) => {
@@ -825,6 +843,17 @@ impl CardMenu {
                     pf_l10n::console::console_card_clipboard_unshared_body(&host.name)
                 });
                 fx.cmds.push(ConsoleCmd::SetClipboard { key, on });
+                fx.pop();
+            }
+            Action::KeepAddress => {
+                let host = self.host();
+                let on = !host.keep_addr;
+                fx.toast = Some(if on {
+                    pf_l10n::console::console_card_address_kept_body(&host.name)
+                } else {
+                    pf_l10n::console::console_card_address_released_body(&host.name)
+                });
+                fx.cmds.push(ConsoleCmd::SetKeepAddress { key, on });
                 fx.pop();
             }
             Action::Unpair if self.armed != Some(Action::Unpair) => {
@@ -1573,6 +1602,7 @@ mod tests {
             Action::BindPreset,
             Action::SpeedTest,
             Action::Clipboard,
+            Action::KeepAddress,
             Action::Edit,
             Action::MakeDefault,
             Action::Pair,
@@ -1745,6 +1775,35 @@ mod tests {
         assert_eq!(
             fx.cmds,
             vec![ConsoleCmd::SetClipboard {
+                key: "aa".into(),
+                on: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_keep_address_toggle_flips_the_stored_state() {
+        let mut s = details(&host());
+        assert!(label(&s, Action::KeepAddress).ends_with("Off"));
+        let mut fx = Outbox::default();
+        run_action(&mut s, Action::KeepAddress, &mut fx);
+        assert_eq!(
+            fx.cmds,
+            vec![ConsoleCmd::SetKeepAddress {
+                key: "aa".into(),
+                on: true,
+            }]
+        );
+        let mut s = details(&HostRow {
+            keep_addr: true,
+            ..host()
+        });
+        assert!(label(&s, Action::KeepAddress).ends_with("On"));
+        let mut fx = Outbox::default();
+        run_action(&mut s, Action::KeepAddress, &mut fx);
+        assert_eq!(
+            fx.cmds,
+            vec![ConsoleCmd::SetKeepAddress {
                 key: "aa".into(),
                 on: false,
             }]

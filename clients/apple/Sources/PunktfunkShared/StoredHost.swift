@@ -66,6 +66,9 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     public var gamePresets: [String: String]?
     /// The name the host last advertised; nil until learned. See `followAdvertName`.
     public var advertName: String?
+    /// Reach this host at `address` only: presence asks no other address, and nothing re-points
+    /// the record. nil = off, which keeps the key out of the JSON.
+    public var keepAddress: Bool?
 
     /// How many left-behind addresses a host keeps.
     public static let maxPreviousAddresses = 3
@@ -76,7 +79,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         macAddresses: [String]? = nil, clipboardSync: Bool? = nil,
         presetID: String? = nil, pinnedPresetIDs: [String]? = nil, addedAt: Date? = nil,
         osChain: String? = nil, previousAddresses: [String]? = nil,
-        gamePresets: [String: String]? = nil
+        gamePresets: [String: String]? = nil, keepAddress: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -93,6 +96,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         self.osChain = osChain
         self.previousAddresses = previousAddresses
         self.gamePresets = gamePresets
+        self.keepAddress = keepAddress
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -101,6 +105,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         case pickedProfile
         case gamePresets
         case advertName
+        case keepAddress
         /// Pre-rename keys (design/preset-rename.md): read when the new key is absent, and
         /// written beside it so an older build keeps the bindings.
         case profileID, pinnedProfileIDs
@@ -127,6 +132,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         pickedProfile = try c.decodeIfPresent(ProfilePick.self, forKey: .pickedProfile)
         gamePresets = try c.decodeIfPresent([String: String].self, forKey: .gamePresets)
         advertName = try c.decodeIfPresent(String.self, forKey: .advertName)
+        keepAddress = try c.decodeIfPresent(Bool.self, forKey: .keepAddress)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -150,6 +156,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(pickedProfile, forKey: .pickedProfile)
         try c.encodeIfPresent(gamePresets, forKey: .gamePresets)
         try c.encodeIfPresent(advertName, forKey: .advertName)
+        try c.encodeIfPresent(keepAddress, forKey: .keepAddress)
     }
 
     public var displayName: String { name.isEmpty ? address : name }

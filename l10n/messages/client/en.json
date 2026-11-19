@@ -63,6 +63,8 @@
 	"hosts_field_name": "Name",
 	"hosts_field_name_placeholder": "Optional — e.g. Living Room",
 	"hosts_field_port": "Port",
+	"hosts_keep_address": "Keep this address",
+	"hosts_keep_address_hint": "Never switch to another of the host's addresses, even when this one doesn't answer.",
 	"link_ambiguous_host": "More than one saved host is called “{name}” — open Punktfunk and pick one.",
 	"link_ambiguous_preset": "More than one preset is called “{preset}” — rename one, or use its id in the link.",
 	"link_confirm_asks": "A link asks to connect to {host} ({address}).",

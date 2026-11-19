@@ -274,6 +274,13 @@ struct HostDetailView: View {
                     store.update(shared)
                 }))
             #endif
+            Toggle(L10n.hostsKeepAddress, isOn: Binding(
+                get: { host.keepAddress == true },
+                set: { on in
+                    var kept = host
+                    kept.keepAddress = on ? true : nil // nil keeps the key out of the JSON
+                    store.update(kept)
+                }))
             if only == nil, let speedTest = a.speedTest {
                 Button(L10n.hostcardSpeedTest, systemImage: "speedometer", action: speedTest)
             }

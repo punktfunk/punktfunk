@@ -55,8 +55,8 @@ fn answered_as_self(want: &str, answered: Option<[u8; 32]>) -> bool {
 /// that is silent — the addresses it left (`prev_addrs`), all at once. A pinned host that
 /// answers at one of those moves back there, so Tailscale takes over again once the LAN is
 /// gone. On a Steam Frame a pinned host's adapter address is asked beside its address and
-/// wins when it answers. A host saved by address alone is asked there only. Result index
-/// matches `hosts`: `true` = online.
+/// wins when it answers. A host saved by address alone, or one that keeps its address
+/// (`keep_addr`), is asked there only. Result index matches `hosts`: `true` = online.
 pub fn probe_known(hosts: &[KnownHost], timeout: std::time::Duration) -> Vec<bool> {
     let on_frame = punktfunk_core::discovery::hosts_frame_adapter();
     let found: Vec<Option<String>> = std::thread::scope(|s| {
@@ -78,7 +78,8 @@ pub fn probe_known(hosts: &[KnownHost], timeout: std::time::Duration) -> Vec<boo
 }
 
 /// Where `h` answers as itself: its adapter address on a Frame ([`frame_link_addr`]), else its
-/// address, else the first of the addresses it left. The first two are asked at once.
+/// address, else the first of the addresses it left. The first two are asked at once. A host
+/// that keeps its address is asked there alone.
 fn where_answers(h: &KnownHost, on_frame: bool, timeout: std::time::Duration) -> Option<String> {
     let asks = |addr: &str| {
         answered_as_self(
@@ -86,6 +87,9 @@ fn where_answers(h: &KnownHost, on_frame: bool, timeout: std::time::Duration) ->
             NativeClient::probe_identity(addr, h.port, timeout),
         )
     };
+    if h.keep_addr {
+        return asks(&h.addr).then(|| h.addr.clone());
+    }
     let asks = &asks;
     let adapter = frame_link_addr(h, on_frame);
     let (on_adapter, at_addr) = std::thread::scope(|s| {

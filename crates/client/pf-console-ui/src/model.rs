@@ -79,6 +79,9 @@ pub struct HostRow {
     /// Per-host clipboard share while streaming (`KnownHost::clipboard_sync`).
     #[serde(default)]
     pub clipboard_sync: bool,
+    /// Dial and probe the saved address alone (`KnownHost::keep_addr`).
+    #[serde(default)]
+    pub keep_addr: bool,
     /// Last successful connect, UNIX seconds.
     pub last_used: Option<u64>,
     /// OS-identity chain: live advert preferred, else stored. Empty = unknown.
@@ -744,6 +747,11 @@ pub enum ConsoleCmd {
     /// Per-host clipboard share while streaming (`KnownHost::clipboard_sync`).
     /// Never global.
     SetClipboard {
+        key: String,
+        on: bool,
+    },
+    /// Per-host: dial and probe the saved address alone (`KnownHost::keep_addr`).
+    SetKeepAddress {
         key: String,
         on: bool,
     },

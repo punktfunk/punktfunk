@@ -627,6 +627,18 @@ fn connection_group(
             svc.bump_hosts.call(());
         }
     });
+    let keep = switch(pal, client::hosts_keep_address(), k.keep_addr, {
+        let (svc, who) = (svc.clone(), props.who.clone());
+        move |on: bool| {
+            let r = KnownHosts::update(|known| {
+                if let Some(h) = who.index(known).and_then(|i| known.hosts.get_mut(i)) {
+                    h.keep_addr = on;
+                }
+            });
+            saved(r, &svc.set_status, None);
+            svc.bump_hosts.call(());
+        }
+    });
     let has_pin = !k.fp_hex.is_empty();
     let link = pf_client_core::deeplink::DeepLink::for_host(k, None, None).to_url();
     let rows = vec![
@@ -651,6 +663,12 @@ fn connection_group(
             Field::Port.label(),
             None,
             field(Field::Port, &f.port, ""),
+        ),
+        row(
+            pal,
+            client::hosts_keep_address(),
+            Some(client::hosts_keep_address_hint()),
+            keep,
         ),
         row(
             pal,
