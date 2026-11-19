@@ -1010,6 +1010,7 @@ object SkiaConsole {
         "SetProfile" to ::setProfile,
         "BindPreset" to ::bindPreset,
         "SetClipboard" to ::setClipboard,
+        "SetKeepAddress" to ::setKeepAddress,
         "PadTest" to { c -> state.now { padTest = if (c.optBoolean("on")) PadTestReading() else null } },
         "PadAction" to { c -> state.now { onPadAction }?.invoke(c.optString("action"), c.optString("pad_key")) },
     )
@@ -1104,6 +1105,13 @@ object SkiaConsole {
     private fun setClipboard(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
         HostRecords.setClipboard(services.store, kh, c.optBoolean("on"))
+        pushHosts(); pushKnownHosts()
+    }
+
+    /** `ConsoleCmd::SetKeepAddress` — [HostRecords.setKeepAddress]. */
+    private fun setKeepAddress(c: JSONObject) {
+        val kh = hostForKey(c.optString("key")) ?: return
+        HostRecords.setKeepAddress(services.store, kh, c.optBoolean("on"))
         pushHosts(); pushKnownHosts()
     }
 

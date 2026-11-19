@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.discovery.WakeLoop
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -115,6 +116,21 @@ class HostServicesTest {
         services.wakes.next()
         assertFalse(services.wake(older, kh.mac, kh.address, isOnline = { false }) { _, _, _ -> error("ticked") })
         assertEquals(15, native.packets)
+    }
+
+    /** A kept address is probed alone and stays saved, whatever the advert says or answers. */
+    @Test
+    fun a_kept_address_ignores_the_advert_in_a_wake_and_a_sweep() {
+        val kh = store.trust(ADDR, PORT, "Desk", FP, paired = true).copy(keepAddress = true)
+        store.save(kh)
+        val advert = DiscoveredHost(key = "id", name = "Desk", host = "10.0.0.5", port = PORT, fingerprint = FP)
+        assertFalse(services.answers(kh, advert, 900))
+        assertEquals(listOf("$ADDR:$PORT"), native.probed)
+        native.probed.clear()
+        native.answers = { FP }
+        services.sweep(listOf(kh)) { advert }
+        assertEquals(listOf("$ADDR:$PORT"), native.probed)
+        assertEquals(ADDR, store.byId(kh.id)!!.address)
     }
 
     @Test

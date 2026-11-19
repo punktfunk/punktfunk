@@ -55,6 +55,14 @@ impl HostTarget {
             self.pin().and_then(crate::trust::parse_hex32),
         )
     }
+
+    /// Whether the saved record this names keeps its address ([`KnownHost::keep_addr`]): a
+    /// woken host is then dialed there, not where it advertised from. Reads the store.
+    pub fn keeps_addr(&self) -> bool {
+        KnownHosts::read()
+            .resolve(self.fp_hex.as_deref(), &self.addr, self.port)
+            .is_some_and(|h| h.keep_addr)
+    }
 }
 
 /// A saved card is never a typed address: an unpinned record maps to `Some("")`, so

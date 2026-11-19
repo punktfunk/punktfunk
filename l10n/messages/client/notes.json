@@ -31,6 +31,8 @@
 	"hosts_clipboard": "Switch in the host form: copy and paste between this device and the host.",
 	"hosts_clipboard_hint": "Under the shared-clipboard switch in the host form.",
 	"hosts_edit_title": "Title of the form that edits a saved host.",
+	"hosts_keep_address": "Switch in the host form: always connect at the address above, never at another one the host also has, like a second network card.",
+	"hosts_keep_address_hint": "Under the keep-this-address switch in the host form.",
 	"hosts_error_address_invalid": "Under the address field of the add-host form. address: what was typed.",
 	"hosts_error_mac_invalid": "Under the Wake-on-LAN field of the host form. mac: the first entry that isn't one, as typed.",
 	"hosts_error_port_invalid": "Under the port field of the add-host form. port: what was typed.",

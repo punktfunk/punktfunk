@@ -42,6 +42,10 @@ pub struct KnownHost {
     /// Per-host, not global. Default off; the host must also advertise `HOST_CAP_CLIPBOARD`.
     #[serde(default)]
     pub clipboard_sync: bool,
+    /// The player's pick: dial and probe `addr` alone, never follow the host to another
+    /// address. A host on two networks, such as a direct link beside the LAN, stays put.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_addr: bool,
     /// Default settings preset for a plain click (design/client-settings-profiles.md).
     /// `None` or a deleted id → global defaults; a dangling binding never blocks a connect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,6 +139,7 @@ impl Default for KnownHost {
             os: String::new(),
             mgmt_port: None,
             clipboard_sync: false,
+            keep_addr: false,
             preset_id: None,
             pinned_presets: Vec::new(),
             game_presets: BTreeMap::new(),
@@ -662,7 +667,8 @@ impl KnownHosts {
 
     /// Insert or refresh an entry, keyed by fingerprint ([`same_pin`]): an entry without one
     /// is always a new record, never the first placeholder saved anywhere. `paired` only ever
-    /// upgrades (a later TOFU connect must not demote a PIN-paired host).
+    /// upgrades (a later TOFU connect must not demote a PIN-paired host). The entry's address
+    /// lands unless the record keeps its own (`keep_addr`).
     pub fn upsert(&mut self, entry: KnownHost) {
         let same = |h: &&mut KnownHost| same_pin(&h.fp_hex, &entry.fp_hex) == Some(true);
         if let Some(h) = self.hosts.iter_mut().find(same) {
@@ -672,8 +678,11 @@ impl KnownHosts {
             if !entry.name.is_empty() && (entry.name != entry.addr || h.name.is_empty()) {
                 h.name = entry.name;
             }
-            h.addr = entry.addr;
-            h.port = entry.port;
+            // A kept address is the player's: a pairing elsewhere does not move it.
+            if !h.keep_addr {
+                h.addr = entry.addr;
+                h.port = entry.port;
+            }
             h.paired |= entry.paired;
             // A refresh without a timestamp must not erase the stored one.
             if entry.last_used.is_some() {
@@ -778,9 +787,9 @@ impl KnownHosts {
     /// identity. Both OS installs of a dual-boot box answer at one lease with one MAC
     /// and a certificate each, so retiring by address takes the sibling the user
     /// paired. A re-keyed host leaves its old card behind for one Forget.
-    /// Box fields (typed name, MAC, OS, preset, pins, last_used) ride onto the survivor. Not
-    /// carried: `paired`, `clipboard_sync` (cert decisions), and the stable id (a deep
-    /// link must not silently retarget).
+    /// Box fields (typed name, MAC, OS, preset, pins, last_used, keep_addr) ride onto the
+    /// survivor. Not carried: `paired`, `clipboard_sync` (cert decisions), and the stable id
+    /// (a deep link must not silently retarget).
     ///
     /// Discovery and wake re-key stay on plain `upsert` — an unauthenticated advert
     /// must not delete a saved host by claiming its address.
@@ -841,6 +850,7 @@ impl KnownHosts {
             if h.last_used.is_none() {
                 h.last_used = old.last_used;
             }
+            h.keep_addr |= old.keep_addr;
         }
     }
 }
@@ -974,10 +984,11 @@ pub fn learn_from_advert(fp_hex: &str, addr: &str, port: u16, advert: &Discovere
 }
 
 /// Re-point a saved host at the address it now answers at, matched by fingerprint, keeping
-/// the one it leaves in `prev_addrs`. No-op, and no disk write, when unchanged. Only for an
-/// address where the pin answered: an mDNS advert's address is not proof of who is there.
+/// the one it leaves in `prev_addrs`. No-op, and no disk write, when unchanged or when the
+/// host keeps its address. Only for an address where the pin answered: an mDNS advert's
+/// address is not proof of who is there.
 pub fn rekey_addr(fp_hex: &str, addr: &str, port: u16) {
-    KnownHosts::update_by_fp(fp_hex, |h| h.move_to(addr, port));
+    KnownHosts::update_by_fp(fp_hex, |h| !h.keep_addr && h.move_to(addr, port));
 }
 
 /// Stamp now as this host's last successful connect. No-op if the fingerprint is not stored:
@@ -1319,6 +1330,7 @@ mod tests {
                 // Not the default port: that would make the keep-on-upsert assertions vacuous.
                 mgmt_port: Some(47991),
                 clipboard_sync: true,
+                keep_addr: false,
                 preset_id: Some("aaaaaaaaaaaa".into()),
                 pinned_presets: vec!["bbbbbbbbbbbb".into()],
                 game_presets: [("halo".to_string(), "cccccccccccc".to_string())].into(),
@@ -1490,6 +1502,7 @@ mod tests {
                 os: "windows".into(),
                 mgmt_port: Some(47991),
                 clipboard_sync: true,
+                keep_addr: false,
                 preset_id: Some("aaaaaaaaaaaa".into()),
                 pinned_presets: vec!["bbbbbbbbbbbb".into()],
                 game_presets: [("halo".to_string(), "cccccccccccc".to_string())].into(),
@@ -1533,6 +1546,42 @@ mod tests {
         assert!(k.find_by_fp(&second).is_some());
         // The address alone can only answer with one of them: the newest decision.
         assert_eq!(k.find_by_addr("127.0.0.1", 9777).unwrap().fp_hex, second);
+    }
+
+    /// A kept address is the player's: pairing at the host's other address leaves it, and a
+    /// placeholder the pairing retires hands the switch to the record that survives.
+    #[test]
+    fn a_kept_address_survives_a_pairing_elsewhere() {
+        let mut k = KnownHosts {
+            hosts: vec![KnownHost {
+                addr: "10.10.0.2".into(),
+                fp_hex: fp('a'),
+                keep_addr: true,
+                ..Default::default()
+            }],
+        };
+        k.upsert_trusted(KnownHost {
+            addr: "192.168.1.50".into(),
+            fp_hex: fp('a'),
+            ..Default::default()
+        });
+        assert_eq!(k.hosts.len(), 1);
+        assert_eq!(k.hosts[0].addr, "10.10.0.2");
+
+        let mut k = KnownHosts {
+            hosts: vec![KnownHost {
+                addr: "10.10.0.2".into(),
+                keep_addr: true,
+                ..Default::default()
+            }],
+        };
+        k.upsert_trusted(KnownHost {
+            addr: "10.10.0.2".into(),
+            fp_hex: fp('a'),
+            ..Default::default()
+        });
+        assert_eq!(k.hosts.len(), 1);
+        assert!(k.hosts[0].keep_addr, "the placeholder's switch rides over");
     }
 
     /// A host that only moved address keeps its one record, `paired`, clipboard, and id.

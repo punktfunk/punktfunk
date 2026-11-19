@@ -375,9 +375,10 @@ internal class ConnectController(
         val macs = kh?.mac ?: emptyList()
         // "Up" = a live advert that is THIS host — matched by fingerprint first (so it survives a DHCP
         // address change on a cold boot), else by address:port. Returns the CURRENT advert so we can
-        // dial its live address rather than the stale saved one.
+        // dial its live address rather than the stale saved one. A record that keeps its address has
+        // none: the wake probes and redials the saved address alone.
         fun liveAdvert(): DiscoveredHost? =
-            if (kh != null) discovered.firstOrNull { kh.matches(it) }
+            if (kh != null) discovered.firstOrNull { !kh.keepAddress && kh.matches(it) }
             else discovered.firstOrNull { it.host == targetHost && it.port == targetPort }
         val down = kh == null || !kh.isOnline(reachable)
         if (settings.autoWakeEnabled && macs.isNotEmpty() && down) {

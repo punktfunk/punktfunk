@@ -605,11 +605,12 @@ fn wake_and_connect(
             match tick.outcome {
                 Some(WakeOutcome::Online) => {
                     let mut target = target.clone();
-                    // Came back on a new IP (DHCP): dial the fresh address. The saved card
-                    // moves only when the probe sweep hears its pin there — an advert's
-                    // address can be another machine's.
-                    if let Some((addr, port)) =
-                        resolved.filter(|(a, p)| *a != target.host.addr || *p != target.host.port)
+                    // Came back on a new IP (DHCP): dial it, unless the card keeps its address.
+                    // The saved card moves only when the probe sweep hears its pin there — an
+                    // advert's address can be another machine's.
+                    if let Some((addr, port)) = resolved
+                        .filter(|(a, p)| *a != target.host.addr || *p != target.host.port)
+                        .filter(|_| !target.host.keeps_addr())
                     {
                         target.host.addr = addr;
                         target.host.port = port;

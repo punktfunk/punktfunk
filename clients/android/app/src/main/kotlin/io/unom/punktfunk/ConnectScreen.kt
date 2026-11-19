@@ -437,6 +437,7 @@ fun ConnectScreen(
                 pickScreen = { row -> pickScreen(kh, row) },
                 edit = { editTarget = kh },
                 setClipboard = { on -> write { HostRecords.setClipboard(knownHostStore, it, on) } },
+                setKeepAddress = { on -> write { HostRecords.setKeepAddress(knownHostStore, it, on) } },
                 speedTest = { startSpeedTest(HostCardEntry(kh, null)) },
                 copyLink = { copyLink(kh, null) },
                 pair = {

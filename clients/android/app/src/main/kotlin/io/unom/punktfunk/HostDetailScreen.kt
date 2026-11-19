@@ -62,6 +62,7 @@ internal class HostPageActs(
     val pickScreen: (DisplayTargets.ScreenRow) -> Unit,
     val edit: () -> Unit,
     val setClipboard: (Boolean) -> Unit,
+    val setKeepAddress: (Boolean) -> Unit,
     val speedTest: () -> Unit,
     val copyLink: () -> Unit,
     val pair: () -> Unit,
@@ -212,6 +213,12 @@ internal fun HostDetailScreen(
                         subtitle = stringResource(R.string.hosts_clipboard_hint),
                         checked = host.clipboardSync,
                         onCheckedChange = acts.setClipboard,
+                    )
+                    ToggleRow(
+                        title = stringResource(R.string.hosts_keep_address),
+                        subtitle = stringResource(R.string.hosts_keep_address_hint),
+                        checked = host.keepAddress,
+                        onCheckedChange = acts.setKeepAddress,
                     )
                     ActRow(stringResource(R.string.hostcard_edit), onClick = acts.edit)
                     ActRow(stringResource(R.string.hostcard_speed_test), onClick = acts.speedTest)

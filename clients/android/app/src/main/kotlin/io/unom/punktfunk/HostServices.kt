@@ -341,9 +341,12 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
     fun answers(pinHex: String, address: String, port: Int, live: DiscoveredHost?, timeoutMs: Int): Boolean =
         Presence.isSelf(pinHex, native.probe(live?.host ?: address, live?.port ?: port, timeoutMs))
 
-    /** [answers] for a saved record, which carries its own pin and address. */
+    /**
+     * [answers] for a saved record, which carries its own pin and address. A record that keeps
+     * its address ignores [live].
+     */
     fun answers(kh: KnownHost, live: DiscoveredHost?, timeoutMs: Int): Boolean =
-        answers(kh.fpHex, kh.address, kh.port, live, timeoutMs)
+        answers(kh.fpHex, kh.address, kh.port, live.takeUnless { kh.keepAddress }, timeoutMs)
 
     /**
      * Wakes [macs] at [lastIp] and waits for [isOnline] ([WakeLoop]) while [claim] is the latest
@@ -378,8 +381,8 @@ class HostServices(val store: KnownHostStore, private val native: HostNative) {
 
     /**
      * Probes every host in [saved] ([Presence.sweep]) at its address and at [liveFor]'s advert,
-     * follows a pinned host that answered somewhere else, and folds the answers into
-     * [reachable]. Blocking.
+     * follows a pinned host that answered somewhere else (unless it keeps its address), and folds
+     * the answers into [reachable]. Blocking.
      */
     fun sweep(saved: List<KnownHost>, liveFor: (KnownHost) -> DiscoveredHost?): Swept {
         val up = Presence.sweep(saved, liveFor) { addr, port -> native.probe(addr, port, Presence.PROBE_MS) }

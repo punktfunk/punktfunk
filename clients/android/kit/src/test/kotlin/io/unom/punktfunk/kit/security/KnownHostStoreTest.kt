@@ -46,6 +46,19 @@ class KnownHostStoreTest {
     }
 
     @Test
+    fun keepAddressRoundTripsAndDefaultsOff() {
+        val plain = KnownHost("10.0.0.5", 9777, "HTPC", "a".repeat(64), true)
+        assertFalse(plain.keepAddress)
+        assertFalse(KnownHostStore.decode(KnownHostStore.encode(plain))!!.keepAddress)
+        val kept = plain.copy(keepAddress = true)
+        assertTrue(JSONObject(KnownHostStore.encode(kept)).getBoolean("keep_addr"))
+        assertTrue(KnownHostStore.decode(KnownHostStore.encode(kept))!!.keepAddress)
+        // A record written before the field existed has no key and reads back off.
+        val legacy = JSONObject(KnownHostStore.encode(kept)).apply { remove("keep_addr") }
+        assertFalse(KnownHostStore.decode(legacy.toString())!!.keepAddress)
+    }
+
+    @Test
     fun encodedRecordCarriesTheOsChainAndLegacyRecordsReadBackEmpty() {
         val h = KnownHost("10.0.0.5", 9777, "HTPC", "a".repeat(64), true, os = "linux/fedora/bazzite")
         val j = JSONObject(KnownHostStore.encode(h))

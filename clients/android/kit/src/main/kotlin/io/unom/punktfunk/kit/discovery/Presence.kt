@@ -16,7 +16,8 @@ data class HostAddr(val address: String, val port: Int)
  * Each is asked at its saved address first; only when that is silent, at the live advert's and
  * the addresses it left ([KnownHost.prevAddresses]). The sweep reports WHICH answered, so the
  * caller re-points the record there: a Tailscale address survives coming home, the LAN one takes
- * over when the VPN is off, and Tailscale takes back over on mobile data.
+ * over when the VPN is off, and Tailscale takes back over on mobile data. A record that keeps
+ * its address ([KnownHost.keepAddress]) is asked there alone.
  */
 object Presence {
     /** The probe's budget per address. A LAN host answers in milliseconds. */
@@ -28,11 +29,12 @@ object Presence {
 
     /**
      * The addresses to ask, in order: the saved one, the live advert's, then the ones it left.
-     * A host saved by address alone is named by it, so it is asked there only.
+     * A host saved by address alone is named by it, and one that keeps its address is pinned to
+     * it, so each is asked there only.
      */
     fun candidates(saved: KnownHost, live: DiscoveredHost?): List<HostAddr> {
         val stored = HostAddr(saved.address, saved.port)
-        if (saved.fpHex.isEmpty()) return listOf(stored)
+        if (saved.fpHex.isEmpty() || saved.keepAddress) return listOf(stored)
         val advertised = listOfNotNull(live?.let { HostAddr(it.host, it.port) })
         return (listOf(stored) + advertised + saved.prevAddresses.map { HostAddr(it, saved.port) }).distinct()
     }
@@ -55,10 +57,13 @@ object Presence {
 
     /**
      * Is [saved] up? Asked at [live]'s address when there is an advert (a cold boot can move the
-     * lease), else at the saved one. The advert alone never counts. Blocking.
+     * lease), else at the saved one; a record that keeps its address ignores the advert. The
+     * advert alone never counts. Blocking.
      */
-    fun probeSelf(saved: KnownHost, live: DiscoveredHost?, probe: (String, Int) -> String?): Boolean =
-        isSelf(saved, probe(live?.host ?: saved.address, live?.port ?: saved.port))
+    fun probeSelf(saved: KnownHost, live: DiscoveredHost?, probe: (String, Int) -> String?): Boolean {
+        val at = live.takeUnless { saved.keepAddress }
+        return isSelf(saved, probe(at?.host ?: saved.address, at?.port ?: saved.port))
+    }
 
     /**
      * Probe every host in [saved] and return the address each one answered AT AND AS ITSELF,

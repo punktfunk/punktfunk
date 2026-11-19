@@ -122,6 +122,7 @@ pub struct DetailPage {
     port_row: adw::EntryRow,
     mac_row: adw::EntryRow,
     mgmt_row: adw::ActionRow,
+    keep_row: adw::SwitchRow,
     clipboard_row: adw::SwitchRow,
     speed_row: adw::ActionRow,
     pair_row: adw::ActionRow,
@@ -239,6 +240,19 @@ impl DetailPage {
             .title(client::hostcard_management_port())
             .build();
         mgmt_row.add_css_class("property");
+        let keep_row = adw::SwitchRow::builder()
+            .title(client::hosts_keep_address())
+            .subtitle(client::hosts_keep_address_hint())
+            .build();
+        {
+            let ctx = ctx.clone();
+            keep_row.connect_active_notify(move |row| {
+                if !ctx.quiet.get() {
+                    let on = row.is_active();
+                    ctx.edit(|h| h.keep_addr = on);
+                }
+            });
+        }
         let clipboard_row = adw::SwitchRow::builder()
             .title(client::hostcard_share_clipboard())
             .subtitle(desktop::desktop_hostcard_share_clipboard_hint())
@@ -283,9 +297,11 @@ impl DetailPage {
             let ctx = ctx.clone();
             speed_row.connect_activated(move |_| ctx.act(Act::SpeedTest(ctx.request())));
         }
-        for row in [&name_row, &addr_row, &port_row, &mac_row] {
+        for row in [&name_row, &addr_row, &port_row] {
             connection.add(row);
         }
+        connection.add(&keep_row);
+        connection.add(&mac_row);
         connection.add(&mgmt_row);
         connection.add(&clipboard_row);
         connection.add(&link_row);
@@ -417,6 +433,7 @@ impl DetailPage {
             port_row,
             mac_row,
             mgmt_row,
+            keep_row,
             clipboard_row,
             speed_row,
             pair_row,
@@ -478,6 +495,7 @@ impl DetailPage {
                 pf_client_core::library::DEFAULT_MGMT_PORT,
             ),
         });
+        self.keep_row.set_active(k.keep_addr);
         self.clipboard_row.set_active(k.clipboard_sync);
         gate(
             &self.speed_row,

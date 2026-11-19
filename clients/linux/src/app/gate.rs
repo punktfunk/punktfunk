@@ -64,10 +64,12 @@ pub fn wake_and_connect(
                 Some(WakeOutcome::Online) => {
                     waiting.close();
                     let mut req = req.clone();
-                    // Dial a new DHCP lease. The saved card moves only when the probe
-                    // sweep hears its pin there — an advert's address can be another machine's.
-                    if let Some((addr, port)) =
-                        seen.filter(|(a, p)| *a != req.host.addr || *p != req.host.port)
+                    // Dial a new DHCP lease, unless the card keeps its address. The saved card
+                    // moves only when the probe sweep hears its pin there — an advert's
+                    // address can be another machine's.
+                    if let Some((addr, port)) = seen
+                        .filter(|(a, p)| *a != req.host.addr || *p != req.host.port)
+                        .filter(|_| !req.host.keeps_addr())
                     {
                         req.host.addr = addr;
                         req.host.port = port;

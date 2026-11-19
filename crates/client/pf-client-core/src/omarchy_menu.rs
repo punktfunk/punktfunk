@@ -312,6 +312,7 @@ mod tests {
             os: String::new(),
             mgmt_port: None,
             clipboard_sync: false,
+            keep_addr: false,
             preset_id: None,
             pinned_presets: vec![],
             game_presets: Default::default(),

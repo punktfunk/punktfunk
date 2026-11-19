@@ -20,6 +20,7 @@
     {"SetProfile": {"key": "ab12", "profile": {"id": "p1", "display_name": "Ada", "remember": true}}},
     {"BindPreset": {"key": "ab12", "game": null, "preset_id": "couch"}},
     {"SetClipboard": {"key": "ab12", "on": true}},
+    {"SetKeepAddress": {"key": "ab12", "on": true}},
     {"UnpairHost": {"key": "ab12"}},
     {"SavePreset": {"id": "couch", "name": "Couch", "overrides": {"bitrate_kbps": 50000}}},
     {"DeletePreset": {"id": "couch"}},

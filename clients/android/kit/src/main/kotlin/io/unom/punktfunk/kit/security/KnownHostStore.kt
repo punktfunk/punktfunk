@@ -80,7 +80,8 @@ data class KnownHost(
     /**
      * Addresses this host was moved away from automatically, newest first, at most
      * [PREV_ADDRESSES_MAX]. A host lives at more than one — its LAN lease at home, a Tailscale
-     * address anywhere — so when [address] goes silent the presence sweep asks these too.
+     * address anywhere — so when [address] goes silent the presence sweep asks these too, unless
+     * [keepAddress] is on.
      * Mirrors the Rust `KnownHost.prev_addrs` and the Apple client's `StoredHost.previousAddresses`.
      */
     val prevAddresses: List<String> = emptyList(),
@@ -94,6 +95,12 @@ data class KnownHost(
     val asProfile: ProfilePick? = null,
     /** The name the host last advertised; empty until learned. See [followingName]. */
     val advertName: String = "",
+    /**
+     * The player's pick: dial and probe [address] alone, never follow the host to another one.
+     * A host on two networks, such as a direct link beside the LAN, stays where it was saved.
+     * Mirrors the Rust `KnownHost.keep_addr`.
+     */
+    val keepAddress: Boolean = false,
 ) {
     /** This record re-pointed at [to]:[toPort], remembering the address it leaves. */
     fun movedTo(to: String, toPort: Int): KnownHost = copy(
@@ -201,7 +208,8 @@ class KnownHostStore(context: Context) {
      * `punktfunk://` shortcut still point at it), the per-host clipboard decision, the binding,
      * the pins and the learned MACs. Only the pin and paired flag are refreshed, plus [name] on a
      * placeholder taking its first pin: a pinned record keeps the name the user knows it by, even
-     * when a dial meant for another card at this address landed on it. Returns the stored record.
+     * when a dial meant for another card at this address landed on it. A record that keeps its
+     * address stays there. Returns the stored record.
      *
      * The record is found by its PIN wherever it now answers, so re-pairing a host that moved
      * lease re-points the one record instead of forking a second with the same fingerprint;
@@ -213,8 +221,8 @@ class KnownHostStore(context: Context) {
     fun trust(address: String, port: Int, name: String, fpHex: String, paired: Boolean): KnownHost {
         val existing = getByFp(fpHex) ?: placeholderAt(address, port)
         val host = existing?.copy(
-            address = address,
-            port = port,
+            address = if (existing.keepAddress) existing.address else address,
+            port = if (existing.keepAddress) existing.port else port,
             name = if (existing.fpHex.isEmpty()) name else existing.name,
             fpHex = fpHex,
             paired = paired,
@@ -285,13 +293,13 @@ class KnownHostStore(context: Context) {
      * fingerprint — the record's identity, which neither a new DHCP lease nor a VPN changes.
      * Every dial, library fetch and wake reads the saved address. The one it leaves is kept in
      * [KnownHost.prevAddresses], so the sweep can find the host there again. Unpinned records
-     * are left alone: the address is all that names them. No-op, and no write, when unchanged.
-     * Returns whether anything moved.
+     * are left alone: the address is all that names them, and a record that keeps its address
+     * stays put. No-op, and no write, when unchanged. Returns whether anything moved.
      */
     fun learnAddress(fpHex: String, address: String, port: Int): Boolean {
         if (fpHex.isEmpty() || address.isBlank() || port !in 1..65535) return false
         val h = getByFp(fpHex) ?: return false
-        if (h.address == address && h.port == port) return false
+        if (h.keepAddress || (h.address == address && h.port == port)) return false
         save(h.movedTo(address, port))
         return true
     }
@@ -432,6 +440,7 @@ class KnownHostStore(context: Context) {
             // Not `profile`: that key is the old spelling of the settings preset.
             .put("as_profile", host.asProfile?.toJson() ?: JSONObject.NULL)
             .put("advert_name", host.advertName)
+            .put("keep_addr", host.keepAddress)
             .toString()
 
         /** One stored record, or null when it does not parse. */
@@ -465,6 +474,7 @@ class KnownHostStore(context: Context) {
                 lastUsed = j.optLong("last_used", 0).takeIf { it > 0 },
                 asProfile = ProfilePick.fromJson(j.optJSONObject("as_profile")),
                 advertName = j.optString("advert_name", ""),
+                keepAddress = j.optBoolean("keep_addr", false),
             )
         }.getOrNull()
 

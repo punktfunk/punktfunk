@@ -62,6 +62,10 @@ object HostRecords {
     fun setClipboard(store: KnownHostStore, kh: KnownHost, on: Boolean) =
         store.save(kh.copy(clipboardSync = on))
 
+    /** The per-host switch that pins the saved address ([KnownHost.keepAddress]). */
+    fun setKeepAddress(store: KnownHostStore, kh: KnownHost, on: Boolean) =
+        store.save(kh.copy(keepAddress = on))
+
     /** Save [pick] as [kh]'s profile (or clear it); a no-op when the record is gone. */
     fun savePick(store: KnownHostStore, kh: KnownHost, pick: ProfilePick?) {
         val h = store.byId(kh.id) ?: return
