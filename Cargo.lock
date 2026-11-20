@@ -1029,7 +1029,6 @@ dependencies = [
  "env_logger",
  "log",
  "memchr",
- "serde_json",
 ]
 
 [[package]]

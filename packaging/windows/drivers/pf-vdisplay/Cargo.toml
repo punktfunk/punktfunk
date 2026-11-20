@@ -31,8 +31,6 @@ encode-probe = []
 pf-encode-win.workspace = true
 pf-encode-session.workspace = true
 pf-frame.workspace = true
-# The backends' error type; the driver only formats it.
-anyhow = "1"
 # The backends' diagnostics: bridged into `dbglog!` (`log::install_tracing_bridge`) — without a
 # subscriber every NVENC status string and AMF rejection inside WUDFHost is dropped.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
