@@ -19,7 +19,7 @@ if (-not (Test-Path $bun)) { throw "bun not found at $bun" }
 
 Set-Location $web
 Write-Host "bun install + build ..."
-& $bun install
+& $bun install --frozen-lockfile --ignore-scripts
 & $bun run build
 if ($LASTEXITCODE -ne 0) { throw "web build failed (exit $LASTEXITCODE)" }
 # No .output/server install step: noExternals means the output has no externalized deps to resolve.

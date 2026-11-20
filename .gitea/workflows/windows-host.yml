@@ -866,7 +866,7 @@ jobs:
         working-directory: packaging/winget/server
         run: |
           set -euo pipefail
-          npm install --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
           node build-data.mjs --out data/data.json
           # A wrong response SHAPE does not fail loudly — winget just reports "no package found".
           # Gate on the suite before anything reaches the box.
