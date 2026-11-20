@@ -63,7 +63,7 @@ Each session gets its own display at the client's resolution and refresh rate â€
 10. Umbriel starts with no monitor plugged in, and virtual outputs should work there; not yet run
     on a box.
 11. mango's own headless outputs, driven over its IPC. Needs a GPU encoder: the host captures
-    mango only directly. Not yet run on real hardware. See [mango](/docs/mango).
+    mango only directly. See [mango](/docs/mango).
 12. Not yet run on a box with no monitor plugged in.
 13. Cinnamon's compositor has no virtual-output API. A Mint or LMDE box can still stream games
    through a headless gamescope â€” see [Requirements](/docs/requirements#cinnamon-linux-mint-and-lmde).
