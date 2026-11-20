@@ -166,6 +166,7 @@ pub(crate) fn is_desktop_kind(kind: ActiveKind) -> bool {
             | ActiveKind::DesktopHyprland
             | ActiveKind::DesktopNiri
             | ActiveKind::DesktopUmbriel
+            | ActiveKind::DesktopMango
     )
 }
 
@@ -184,6 +185,8 @@ pub enum ActiveKind {
     DesktopNiri,
     /// Umbriel: JSON IPC on `$UMBRIEL_SOCKET`, wlr virtual input.
     DesktopUmbriel,
+    /// mango: JSON IPC on `$MANGO_INSTANCE_SIGNATURE`, wlr virtual input.
+    DesktopMango,
     None,
 }
 
@@ -223,6 +226,7 @@ pub fn compositor_for_kind(kind: ActiveKind) -> Option<Compositor> {
         ActiveKind::DesktopHyprland => Some(Compositor::Hyprland),
         ActiveKind::DesktopNiri => Some(Compositor::Niri),
         ActiveKind::DesktopUmbriel => Some(Compositor::Umbriel),
+        ActiveKind::DesktopMango => Some(Compositor::Mango),
         ActiveKind::None => None,
     }
 }
@@ -242,6 +246,7 @@ struct EnvProbe {
     swaysock: Option<String>,
     niri_socket: Option<String>,
     umbriel_socket: Option<String>,
+    mango_socket: Option<String>,
 }
 
 impl EnvProbe {
@@ -259,6 +264,7 @@ impl EnvProbe {
             swaysock: v("SWAYSOCK"),
             niri_socket: v("NIRI_SOCKET"),
             umbriel_socket: v("UMBRIEL_SOCKET"),
+            mango_socket: v("MANGO_INSTANCE_SIGNATURE"),
         })
     }
 }
@@ -326,6 +332,7 @@ pub fn detect_active_session() -> ActiveSession {
                 umbriels.push(pid);
                 (ActiveKind::DesktopUmbriel, 4)
             }
+            "mango" => (ActiveKind::DesktopMango, 4),
             _ => continue,
         };
         // Lowest pid among same-priority hits, so `/proc` order cannot flap `winning_pid`
@@ -343,7 +350,8 @@ pub fn detect_active_session() -> ActiveSession {
         | ActiveKind::DesktopWlroots
         | ActiveKind::DesktopHyprland
         | ActiveKind::DesktopNiri
-        | ActiveKind::DesktopUmbriel => find_wayland_socket(&env, &xdg_runtime_dir, uid),
+        | ActiveKind::DesktopUmbriel
+        | ActiveKind::DesktopMango => find_wayland_socket(&env, &xdg_runtime_dir, uid),
         _ => None,
     };
     let xdg_current_desktop = match kind {
@@ -355,6 +363,7 @@ pub fn detect_active_session() -> ActiveSession {
         ActiveKind::DesktopHyprland => Some("Hyprland".to_string()),
         ActiveKind::DesktopNiri => Some("niri".to_string()),
         ActiveKind::DesktopUmbriel => Some("umbriel".to_string()),
+        ActiveKind::DesktopMango => Some("mango".to_string()),
         ActiveKind::Gaming => Some("gamescope".to_string()),
         ActiveKind::None => None,
     };
@@ -580,6 +589,47 @@ pub(crate) fn umbriel_socket() -> Option<String> {
         crate::proc::current_uid(),
         wayland.as_deref(),
     )
+}
+
+/// The compositor pid in a mango IPC socket name, `mango-<pid>.sock`.
+#[cfg(target_os = "linux")]
+fn mango_socket_pid(name: &str) -> Option<u32> {
+    name.strip_prefix("mango-")?
+        .strip_suffix(".sock")?
+        .parse()
+        .ok()
+}
+
+/// Live mango IPC socket for this uid: the inherited `MANGO_INSTANCE_SIGNATURE`, else the newest
+/// owned `mango-<pid>.sock`. Either counts only while its pid runs: a crashed mango leaves the
+/// file behind.
+#[cfg(target_os = "linux")]
+fn find_mango_socket(env: &EnvProbe, runtime: &str, uid: u32) -> Option<String> {
+    let live = |name: &str| mango_socket_pid(name).is_some_and(crate::proc::pid_alive);
+    let file_name = |p: &str| {
+        std::path::Path::new(p)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned)
+    };
+    if let Some(s) = env
+        .mango_socket
+        .as_ref()
+        .filter(|s| file_name(s).is_some_and(|n| live(&n)))
+    {
+        return Some(s.clone());
+    }
+    newest_owned(std::path::Path::new(runtime), uid, |name, _, path| {
+        live(name).then(|| path.to_string_lossy().into_owned())
+    })
+}
+
+/// `MANGO_INSTANCE_SIGNATURE` for the mango backend, resolved per call like [`umbriel_socket`].
+#[cfg(target_os = "linux")]
+pub(crate) fn mango_socket() -> Option<String> {
+    let probe = EnvProbe::sample();
+    let runtime = default_runtime_dir(&probe);
+    find_mango_socket(&probe, &runtime, crate::proc::current_uid())
 }
 
 /// The inode of the socket listening at `path`, from `/proc/net/unix` text. Accepted
@@ -1176,6 +1226,33 @@ mod tests {
         };
         assert_eq!(find(&gone, Some("wayland-1")), Some(path(&ours)));
         assert_eq!(find(&gone, None), Some(path(&other)), "the newest");
+    }
+
+    /// mango's socket counts only while the pid in its name runs, inherited or found.
+    #[test]
+    fn a_mango_socket_names_a_running_compositor() {
+        let rt = FakeRuntime::new("mango", &[]);
+        let live = rt.dir.join(format!("mango-{}.sock", std::process::id()));
+        let dead = rt.dir.join(format!("mango-{DEAD_PID}.sock"));
+        std::fs::write(&live, b"").unwrap();
+        std::fs::write(&dead, b"").unwrap();
+        backdate(&live);
+        let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        let find = |env: &EnvProbe| find_mango_socket(env, rt.path(), rt.uid);
+        assert_eq!(
+            find(&EnvProbe::default()),
+            Some(path(&live)),
+            "the newer file is dead"
+        );
+        let inherited_dead = EnvProbe {
+            mango_socket: Some(path(&dead)),
+            ..EnvProbe::default()
+        };
+        assert_eq!(find(&inherited_dead), Some(path(&live)));
+        assert_eq!(mango_socket_pid("mango-12.sock"), Some(12));
+        for name in ["mango-x.sock", "mango-12", "umbriel-12.sock"] {
+            assert_eq!(mango_socket_pid(name), None, "{name}");
+        }
     }
 
     /// Only the listener carries `__SO_ACCEPTCON`; an accepted connection lists the same path.

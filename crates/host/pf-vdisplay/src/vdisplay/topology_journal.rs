@@ -58,6 +58,9 @@ pub struct Head {
     /// The exact mode to put back where the compositor forgets a disabled head's (KWin, Umbriel).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// The position to put back where the compositor re-places a re-enabled head (mango).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<(i32, i32)>,
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -74,6 +77,7 @@ pub(crate) fn push_heads(backend: &'static str, names: &[String]) -> u64 {
         .map(|name| Head {
             name: name.clone(),
             mode: None,
+            at: None,
         })
         .collect();
     push(backend, Undo::EnableHeads { heads })
@@ -502,6 +506,7 @@ mod linux {
                     .map(|n| Head {
                         name: n.to_string(),
                         mode: None,
+                        at: None,
                     })
                     .collect(),
             }
@@ -850,10 +855,12 @@ mod shape_tests {
                 Head {
                     name: "DP-1".into(),
                     mode: None,
+                    at: None,
                 },
                 Head {
                     name: "DP-2".into(),
                     mode: Some("2560x1440@144".into()),
+                    at: None,
                 },
             ],
         };

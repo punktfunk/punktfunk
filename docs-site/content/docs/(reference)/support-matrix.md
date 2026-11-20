@@ -37,8 +37,9 @@ Each session gets its own display at the client's resolution and refresh rate �
 | Hyprland | ✅ | ✅ | ⚠️ ⁶ |
 | niri (biri) | ✅ ⁷ | ✅ | ✅ ⁸ |
 | Umbriel | ✅ ⁹ | ✅ | ⚠️ ¹⁰ |
-| Cinnamon (Mint · LMDE) | ❌ ¹¹ | ❌ | ❌ |
-| River, dwl, COSMIC, others | ❌ ¹² | ❌ | ❌ |
+| mango | ✅ ¹¹ | ✅ | ⚠️ ¹² |
+| Cinnamon (Mint · LMDE) | ❌ ¹³ | ❌ | ❌ |
+| River, dwl, COSMIC, others | ❌ ¹⁴ | ❌ | ❌ |
 
 1. Punktfunk's own display driver. Needs Windows 11 22H2 (build 22621); the installer refuses
    anything older. Each paired client gets its own monitor identity carrying its screen's HDR
@@ -61,9 +62,12 @@ Each session gets its own display at the client's resolution and refresh rate �
    Umbriel only directly. See [Umbriel](/docs/umbriel).
 10. Umbriel starts with no monitor plugged in, and virtual outputs should work there; not yet run
     on a box.
-11. Cinnamon's compositor has no virtual-output API. A Mint or LMDE box can still stream games
+11. mango's own headless outputs, driven over its IPC. Needs a GPU encoder: the host captures
+    mango only directly. Not yet run on real hardware. See [mango](/docs/mango).
+12. Not yet run on a box with no monitor plugged in.
+13. Cinnamon's compositor has no virtual-output API. A Mint or LMDE box can still stream games
    through a headless gamescope — see [Requirements](/docs/requirements#cinnamon-linux-mint-and-lmde).
-12. No host backend. River is detected and takes input, but has no video path.
+14. No host backend. River is detected and takes input, but has no video path.
 
 ### Input, cursor and HDR
 
@@ -77,6 +81,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 | Hyprland | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ✅ ¹³ |
 | niri (biri) | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 | Umbriel | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
+| mango | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 
 1. The host must run in the signed-in console session, not session 0; the installed service
    starts it there. Over SSH you land in session 0 — see [Windows host](/docs/windows-host).
@@ -99,8 +104,8 @@ Each session gets its own display at the client's resolution and refresh rate �
 11. Mouse and keyboard reach Windows as a USB-style HID device, so games that refuse injected input
     take them. Text, touch and pen use `SendInput` and synthetic pointers. A seat host, and a point
     off the primary monitor, use `SendInput` too.
-12. The host doesn't carry niri's or Umbriel's pointer separately, so it is always part of the
-    video.
+12. The host doesn't carry niri's, Umbriel's or mango's pointer separately, so it is always part
+    of the video.
 13. A virtual display runs in 10-bit HDR when the client asks, and a monitor in HDR mode streams
     HDR. Needs Hyprland's colour management, on by default — see
     [HDR](/docs/hdr#linux--hyprland).
@@ -120,6 +125,7 @@ Each session gets its own display at the client's resolution and refresh rate �
   crash niri when an `off` virtual output is removed. See [niri](/docs/niri#get-biri).
 - **Umbriel built 2026-09-28 or later** — older builds can't create virtual outputs. See
   [Umbriel](/docs/umbriel#install).
+- **mango 0.17.1** — the first that names the outputs it creates; the host refuses older ones.
 - **gamescope 3.16.22** — below it, headless capture deadlocks against PipeWire 1.6 and newer.
   **3.16.23** — below it, the Steam overlay never reaches the stream. The host warns but doesn't
   refuse.

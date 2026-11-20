@@ -457,6 +457,7 @@ pub(crate) fn compositor_embeds_pointer(compositor: pf_vdisplay::Compositor) -> 
             | Compositor::Hyprland
             | Compositor::Niri
             | Compositor::Umbriel
+            | Compositor::Mango
     )
 }
 
@@ -827,6 +828,7 @@ pub(crate) mod tests {
             Compositor::Hyprland,
             Compositor::Niri,
             Compositor::Umbriel,
+            Compositor::Mango,
         ] {
             assert!(compositor_embeds_pointer(c));
             assert!(!cursor_blend_for(

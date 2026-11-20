@@ -7,7 +7,7 @@
 //! EIS socket).
 //!
 //! Each arm self-gates: KDE in-process `org_kde_kwin_dpms` then `kscreen-doctor`; sway /
-//! Hyprland / Umbriel / niri via native IPC; DRM CRTCs when no compositor holds master.
+//! Hyprland / Umbriel / mango / niri via native IPC; DRM CRTCs when no compositor holds master.
 //! GNOME cannot be served (Mutter exposes no client DPMS and holds DRM master); [`darken`]
 //! logs that at `warn!`.
 //!
@@ -15,7 +15,7 @@
 //! every gamescope spawn is its own display group, so group restore would re-light under
 //! a second still-streaming session. [`acquire_stream_darken`] on 0→1,
 //! [`release_stream_darken`] as per-display topology restore on 1→0. KWin and niri wake a
-//! blanked panel on input; sway, Hyprland and Umbriel do not, so their heads are journaled
+//! blanked panel on input; sway, Hyprland, Umbriel and mango do not, so their heads are journaled
 //! as `EnableHeads` before they go dark, and the next host wakes them when this one dies.
 //!
 //! [`wake_head`] is the reverse for a mirror stream: it lights the one head the stream
@@ -385,6 +385,8 @@ enum Darkened {
     Niri,
     /// Umbriel: `dpms-off` per name. Same per-name discipline as [`Darkened::Sway`].
     Umbriel(Journaled),
+    /// mango: `sleep_monitor` per name, which keeps each head's place. Same discipline.
+    Mango(Journaled),
     /// [`crate::drm_dpms`] hold: open `/dev/dri/cardN` fds. Re-light is
     /// [`crate::drm_dpms::release`]; the kernel restores the console on last close.
     Drm(crate::drm_dpms::DrmDarken),
@@ -499,9 +501,9 @@ pub fn release_stream_darken() {
 }
 
 /// Non-KDE desktops, preference order. Each self-gates on its IPC
-/// (`SWAYSOCK` / `HYPRLAND_INSTANCE_SIGNATURE` / Umbriel's or niri's socket). Heads are
+/// (`SWAYSOCK` / `HYPRLAND_INSTANCE_SIGNATURE` / Umbriel's, mango's or niri's socket). Heads are
 /// addressed by name so re-light never wakes a sibling session's output, and
-/// journaled on sway, Hyprland and Umbriel, which input never wakes; niri has no
+/// journaled on sway, Hyprland, Umbriel and mango, which input never wakes; niri has no
 /// per-output DPMS. GNOME is absent on purpose — see the module docs.
 fn non_kde_desktop_darken() -> Option<Darkened> {
     if let Some(sway) = journaled("wlroots", |record| crate::wlroots::dpms_other_heads(record)) {
@@ -528,6 +530,15 @@ fn non_kde_desktop_darken() -> Option<Darkened> {
             "umbriel: desktop outputs off for the exclusive gamescope stream"
         );
         return Some(Darkened::Umbriel(umbriel));
+    }
+    if let Some(mango) = journaled("mango", |record| {
+        crate::mango::desktop::dpms_other_heads(record)
+    }) {
+        tracing::info!(
+            outputs = ?mango.heads,
+            "mango: desktop outputs asleep for the exclusive gamescope stream"
+        );
+        return Some(Darkened::Mango(mango));
     }
     if crate::niri::is_available() && crate::niri::desktop::power_off_others() {
         tracing::info!("niri: desktop monitors off for the exclusive gamescope stream");
@@ -612,7 +623,7 @@ fn darken() -> Option<Darkened> {
 
 /// 1→0 re-light. Every arm that gives up logs it: a dark panel with no
 /// line is the failure this chain exists to prevent. Local input still wakes a
-/// KWin or niri panel; a sway, Hyprland or Umbriel head stays journaled until it is back.
+/// KWin or niri panel; a sway, Hyprland, Umbriel or mango head stays journaled until it is back.
 fn relight(d: Darkened) {
     match d {
         Darkened::Wayland(outputs) => {
@@ -685,6 +696,18 @@ fn relight(d: Darkened) {
                 tracing::info!(outputs = ?back, "umbriel: desktop outputs back on");
             }
         }
+        Darkened::Mango(blanked) => {
+            let back = relit(&blanked, crate::mango::desktop::relight_heads);
+            if back.is_empty() {
+                tracing::error!(
+                    outputs = ?blanked.heads,
+                    "mango: the desktop outputs did not re-light — they stay dark until \
+                     `mmsg dispatch wakeup_monitor,<name>`"
+                );
+            } else {
+                tracing::info!(outputs = ?back, "mango: desktop outputs back on");
+            }
+        }
         Darkened::Niri => match crate::niri::desktop::power_on_all() {
             Ok(()) => tracing::info!("niri: desktop monitors back on"),
             Err(e) => tracing::error!(
@@ -720,6 +743,9 @@ pub(crate) fn wake_head(compositor: crate::Compositor, connector: &str) -> anyho
                 crate::umbriel::desktop::set_dpms(connector, true)
             })
         }
+        Compositor::Mango => wake_if_dark(crate::mango::desktop::head_powered(connector), || {
+            crate::mango::desktop::set_dpms(connector, true)
+        }),
         Compositor::Kwin => Ok(wake_kwin_head(connector)),
         Compositor::Niri | Compositor::Mutter | Compositor::Gamescope | Compositor::Windows => {
             Ok(false)
@@ -874,6 +900,7 @@ mod tests {
                 heads: vec![Head {
                     name: "DP-1".into(),
                     mode: None,
+                    at: None,
                 }],
             };
             assert_eq!(sway.take_calls(), [Call::Undo(woken)]);

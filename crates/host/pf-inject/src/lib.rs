@@ -407,10 +407,14 @@ pub fn default_backend() -> Backend {
         }
         if c.eq_ignore_ascii_case("wlroots")
             || c.eq_ignore_ascii_case("sway")
-            // Hyprland and niri serve the wlr virtual-input protocols; same backend as sway/river.
+            // Hyprland, niri and mango serve the wlr virtual-input protocols; same backend as
+            // sway/river.
             || c.eq_ignore_ascii_case("hyprland")
             || c.eq_ignore_ascii_case("niri")
             || c.eq_ignore_ascii_case("biri")
+            || ["mango", "mangowm", "mangowc"]
+                .iter()
+                .any(|m| c.eq_ignore_ascii_case(m))
         {
             return Backend::WlrVirtual;
         }

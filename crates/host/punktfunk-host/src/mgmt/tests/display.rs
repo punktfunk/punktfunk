@@ -89,7 +89,8 @@ async fn compositors_lists_all_backends_with_flags() {
                 "wlroots",
                 "hyprland",
                 "niri",
-                "umbriel"
+                "umbriel",
+                "mango"
             ]
         );
     }
