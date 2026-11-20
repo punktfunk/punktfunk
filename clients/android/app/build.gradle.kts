@@ -147,10 +147,6 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
 
-    // Backdrop blur (RenderEffect on API 31+, a translucent scrim below). No source file imports
-    // it.
-    implementation("dev.chrisbanes.haze:haze:2.0.1")
-
     // The TV UI is the gamepad console (console/); nothing uses androidx.tv:tv-material.
     // The manifest declares leanback so the app installs on TV.
 
