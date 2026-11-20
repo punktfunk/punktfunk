@@ -865,7 +865,8 @@ public final class StreamLayerView: NSView {
     ///
     /// In the desktop mouse model the cursor is free, so bare `.mouseMoved` events exist only
     /// while `window.acceptsMouseMovedEvents` is true: raised here, restored on removal. A
-    /// press there reaches the host only on the video.
+    /// press there reaches the host only on the video. AppKit keeps a drag on the window it
+    /// began in, so every drag lands here and goes to the screen whose window is under it.
     private func installMouseMonitor() {
         guard mouseEventMonitor == nil else { return }
         if desktopMouse {
@@ -885,7 +886,11 @@ public final class StreamLayerView: NSView {
                     // Desktop mouse model: forward the ABSOLUTE position (mapped through the
                     // aspect-fit letterbox into host pixels), the same path the iPad pointer
                     // fallback uses. Events in the letterbox bars are dropped (nil host point).
-                    if let p = self.hostPoint(from: event) {
+                    if event.type != .mouseMoved, let s = self.furtherPoint(of: event) {
+                        ic.sendMouseAbs(
+                            x: s.x, y: s.y, surfaceWidth: s.width, surfaceHeight: s.height,
+                            screen: s.screen)
+                    } else if let p = self.hostPoint(from: event) {
                         ic.sendMouseAbs(x: p.x, y: p.y, surfaceWidth: p.w, surfaceHeight: p.h)
                     }
                 } else if !self.trackpadGate.forwarding {
@@ -997,6 +1002,17 @@ public final class StreamLayerView: NSView {
             trackpadIDs.removeAll() // core takes nothing now, a lift included
             setTrackpadContacts(false)
         }
+    }
+
+    /// `event` over one of the further screens' windows, as a pixel of that screen's picture.
+    /// nil over any other window, and with no further screens.
+    private func furtherPoint(of event: NSEvent)
+        -> (screen: UInt8, x: Int32, y: Int32, width: UInt32, height: UInt32)?
+    {
+        guard let screenWindows else { return nil }
+        let onScreen = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) }
+            ?? event.locationInWindow
+        return screenWindows.picturePoint(atScreen: onScreen)
     }
 
     /// One host-pixel point on the negotiated output, with the surface dimensions the host

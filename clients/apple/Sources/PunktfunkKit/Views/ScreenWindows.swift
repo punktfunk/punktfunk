@@ -106,10 +106,8 @@ final class ScreenStreamView: NSView {
     override func cursorUpdate(with event: NSEvent) { Self.noCursor.set() }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // A drag goes to the stream view's monitor, which follows it onto the window under it.
     override func mouseMoved(with event: NSEvent) { point(event) }
-    override func mouseDragged(with event: NSEvent) { point(event) }
-    override func rightMouseDragged(with event: NSEvent) { point(event) }
-    override func otherMouseDragged(with event: NSEvent) { point(event) }
     override func mouseDown(with event: NSEvent) { press(event, down: true) }
     override func mouseUp(with event: NSEvent) { press(event, down: false) }
     override func rightMouseDown(with event: NSEvent) { press(event, down: true) }
@@ -119,13 +117,20 @@ final class ScreenStreamView: NSView {
     override func scrollWheel(with event: NSEvent) { onScroll?(event) }
 
     private func point(_ event: NSEvent) {
+        guard let p = picturePoint(event.locationInWindow) else { return }
+        onPointer?(screen, p.x, p.y, p.width, p.height)
+    }
+
+    /// `inWindow`, a point in this window, as a pixel of the picture, with the picture's size.
+    /// nil in the bars and before the first frame.
+    func picturePoint(_ inWindow: NSPoint) -> (x: Int32, y: Int32, width: UInt32, height: UInt32)? {
         guard let connection, let window, let content = contentSize,
               let p = StreamLayerView.picturePoint(
-                  convert(event.locationInWindow, from: nil), bounds: bounds,
+                  convert(inWindow, from: nil), bounds: bounds,
                   scale: window.backingScaleFactor, content: content,
                   fit: VideoFit(name: connection.settings.videoFit))
-        else { return }
-        onPointer?(screen, p.x, p.y, content.width, content.height)
+        else { return nil }
+        return (p.x, p.y, content.width, content.height)
     }
 
     /// A press lands where it was pressed.
@@ -187,6 +192,17 @@ final class ScreenWindows {
                 }
             },
         ]
+    }
+
+    /// The further screen whose window holds `onScreen`, a point in screen coordinates, and the
+    /// picture pixel there. nil over no further window, or over its bars.
+    func picturePoint(atScreen onScreen: NSPoint)
+        -> (screen: UInt8, x: Int32, y: Int32, width: UInt32, height: UInt32)?
+    {
+        guard let hit = windows.first(where: { $0.value.window.frame.contains(onScreen) }),
+              let p = hit.value.view.picturePoint(hit.value.window.convertPoint(fromScreen: onScreen))
+        else { return nil }
+        return (hit.key, p.x, p.y, p.width, p.height)
     }
 
     func stop() {
