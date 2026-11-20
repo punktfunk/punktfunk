@@ -35,8 +35,7 @@ jobs:
     steps:
       # SHA-pinned, not by tag: this job holds UPDATE_MANIFEST_KEY — the Ed25519 key every host
       # pins to decide whether an update is real — and a tag is mutable, so whoever can move it
-      # runs code in front of that key. Same style as the appleboy pins in deploy-services.yml;
-      # the trailing comment is the release it resolves to.
+      # runs code in front of that key. The trailing comment is the release it resolves to.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Publish the SIGNED stable update manifest — the moment every host's update check learns
