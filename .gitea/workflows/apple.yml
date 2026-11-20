@@ -104,6 +104,8 @@ on:
       - 'scripts/build-xcframework.sh'
       - 'tools/gen-headers/**'
       - 'scripts/ci/ensure-sccache.sh'
+      - 'ci/install-rustup.sh'
+      - 'ci/rustup.env'
       - 'scripts/ci/gitea-release.sh'
       - 'scripts/ci/pf-version.sh'
       - 'Cargo.toml'
@@ -127,6 +129,8 @@ on:
       - 'scripts/build-xcframework.sh'
       - 'tools/gen-headers/**'
       - 'scripts/ci/ensure-sccache.sh'
+      - 'ci/install-rustup.sh'
+      - 'ci/rustup.env'
       - 'scripts/ci/gitea-release.sh'
       - 'scripts/ci/pf-version.sh'
       - 'Cargo.toml'
@@ -215,8 +219,7 @@ jobs:
       - name: Rust toolchain (self-healing on a fresh runner)
         run: |
           if ! command -v rustup >/dev/null && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal
+            sh ci/install-rustup.sh -y --no-modify-path --profile minimal
           fi
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
@@ -884,8 +887,7 @@ jobs:
       - name: Rust toolchain + iOS Simulator targets (+ nightly for the tvOS slices)
         run: |
           if ! command -v rustup >/dev/null && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal
+            sh ci/install-rustup.sh -y --no-modify-path --profile minimal
           fi
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"

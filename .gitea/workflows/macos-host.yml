@@ -55,6 +55,8 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'scripts/ci/ensure-sccache.sh'
+      - 'ci/install-rustup.sh'
+      - 'ci/rustup.env'
       - '.gitea/workflows/macos-host.yml'
   pull_request:
     paths:
@@ -87,6 +89,8 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'scripts/ci/ensure-sccache.sh'
+      - 'ci/install-rustup.sh'
+      - 'ci/rustup.env'
       - '.gitea/workflows/macos-host.yml'
   workflow_dispatch:
 
@@ -115,8 +119,7 @@ jobs:
       - name: Rust toolchain (self-healing on a fresh runner)
         run: |
           if ! command -v rustup >/dev/null && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal
+            sh ci/install-rustup.sh -y --no-modify-path --profile minimal
           fi
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
