@@ -35,7 +35,7 @@ pub struct Trees<'a> {
 }
 
 pub fn build(trees: &Trees, manifest: &Manifest) -> Result<Vec<u8>, String> {
-    use xz2::stream::{Check, Filters, LzmaOptions, MtStreamBuilder};
+    use liblzma::stream::{Check, Filters, LzmaOptions, MtStreamBuilder};
     let mut filters = Filters::new();
     filters.x86();
     filters.lzma2(&LzmaOptions::new_preset(9).map_err(|e| e.to_string())?);
@@ -49,7 +49,7 @@ pub fn build(trees: &Trees, manifest: &Manifest) -> Result<Vec<u8>, String> {
         .check(Check::Crc64)
         .encoder()
         .map_err(|e| e.to_string())?;
-    let mut tar = tar::Builder::new(xz2::write::XzEncoder::new_stream(Vec::new(), stream));
+    let mut tar = tar::Builder::new(liblzma::write::XzEncoder::new_stream(Vec::new(), stream));
     tar.follow_symlinks(false);
     append(&mut tar, "runtime", trees.runtime)?;
     if let Some(app) = trees.app {
@@ -78,7 +78,7 @@ fn append<W: Write>(tar: &mut tar::Builder<W>, name: &str, dir: &Path) -> Result
 
 /// Unpack into `into` (created as needed) and return the manifest.
 pub fn extract(payload: &[u8], into: &Path) -> Result<Manifest, String> {
-    let mut archive = tar::Archive::new(xz2::read::XzDecoder::new(payload));
+    let mut archive = tar::Archive::new(liblzma::read::XzDecoder::new(payload));
     archive
         .unpack(into)
         .map_err(|e| format!("unpack into {}: {e}", into.display()))?;
@@ -94,7 +94,7 @@ pub fn manifest_at(root: &Path) -> Result<Manifest, String> {
 /// Read the manifest and count entries without touching the disk.
 pub fn peek(payload: &[u8]) -> Result<(Manifest, usize), String> {
     use std::io::Read;
-    let mut archive = tar::Archive::new(xz2::read::XzDecoder::new(payload));
+    let mut archive = tar::Archive::new(liblzma::read::XzDecoder::new(payload));
     let mut count = 0;
     for entry in archive.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;
