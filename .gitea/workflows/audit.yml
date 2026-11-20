@@ -195,14 +195,14 @@ jobs:
         working-directory: clients/decky
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # decky is pnpm-managed (pnpm-lock.yaml lockfileVersion 9.0 → pnpm 10 reads it). Like
-      # bun audit, `pnpm audit` needs no install/build — lockfile + registry advisory DB only.
+      # decky is pnpm-managed; corepack runs the pnpm its packageManager pins. Like bun audit,
+      # `pnpm audit` needs no install/build — lockfile + registry advisory DB only.
       # --prod: rollup bundles only the prod deps into the shipped plugin; devDependencies are
       # build tooling that never leaves CI (auditing them fails on toolchain advisories that
       # can't reach a user — the docs-site problem in miniature).
       - name: pnpm audit
         run: |
-          npm install -g pnpm@10
+          corepack enable
           pnpm audit --prod
 
   # The regression guard about.toml documents: fail if any crate in a shipped Rust workspace carries

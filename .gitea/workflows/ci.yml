@@ -687,7 +687,6 @@ jobs:
       - name: Typecheck + test
         run: |
           corepack enable
-          corepack prepare pnpm@9 --activate
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm run test
       # The backend (main.py + py_modules/pf_decky) against a stubbed `decky` module: argv shapes,
