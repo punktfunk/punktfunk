@@ -1027,6 +1027,8 @@
 	"player_mouse_mode_desktop": "Bureau (absolu)",
 	"player_invert_scroll": "Inverser le sens de défilement",
 	"player_invert_scroll_hint": "Inverse le sens de défilement de la molette et du pavé tactile envoyé à l’hôte.",
+	"player_raw_mouse": "Entrée souris brute",
+	"player_raw_mouse_hint": "Envoie le mouvement propre de la souris, sans la vitesse ni l’accélération du pointeur de cet appareil.",
 	"player_inhibit_shortcuts": "Capturer les raccourcis système",
 	"player_inhibit_shortcuts_hint": "Transmet {keys} à l’hôte pendant la capture des entrées.",
 	"player_overlay_actions": "Actions rapides",

@@ -1027,6 +1027,8 @@
 	"player_mouse_mode_desktop": "Escritorio (absoluto)",
 	"player_invert_scroll": "Invertir dirección de desplazamiento",
 	"player_invert_scroll_hint": "Invierte la dirección de desplazamiento de la rueda y del trackpad que se envía al host.",
+	"player_raw_mouse": "Entrada de ratón directa",
+	"player_raw_mouse_hint": "Envía el movimiento propio del ratón, sin la velocidad ni la aceleración del puntero de este dispositivo.",
 	"player_inhibit_shortcuts": "Capturar atajos del sistema",
 	"player_inhibit_shortcuts_hint": "Envía {keys} al host mientras la entrada está capturada.",
 	"player_overlay_actions": "Acciones rápidas",

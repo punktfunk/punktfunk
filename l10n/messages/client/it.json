@@ -1027,6 +1027,8 @@
 	"player_mouse_mode_desktop": "Desktop (assoluto)",
 	"player_invert_scroll": "Inverti direzione di scorrimento",
 	"player_invert_scroll_hint": "Inverte la direzione di scorrimento di rotellina e trackpad inviata all’host.",
+	"player_raw_mouse": "Input mouse diretto",
+	"player_raw_mouse_hint": "Invia il movimento proprio del mouse, senza la velocità e l’accelerazione del puntatore di questo dispositivo.",
 	"player_inhibit_shortcuts": "Cattura scorciatoie di sistema",
 	"player_inhibit_shortcuts_hint": "Inoltra {keys} all’host mentre l’input è catturato.",
 	"player_overlay_actions": "Azioni rapide",

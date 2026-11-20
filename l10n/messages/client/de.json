@@ -1089,6 +1089,8 @@
 	"player_mouse_mode_desktop": "Desktop (absolut)",
 	"player_invert_scroll": "Scrollrichtung umkehren",
 	"player_invert_scroll_hint": "Kehrt die Scrollrichtung von Mausrad und Trackpad um, die an den Host geht.",
+	"player_raw_mouse": "Rohe Mauseingabe",
+	"player_raw_mouse_hint": "Sendet die reine Mausbewegung, ohne Zeigergeschwindigkeit und Beschleunigung dieses Geräts.",
 	"player_inhibit_shortcuts": "Systemkürzel erfassen",
 	"player_inhibit_shortcuts_hint": "Leitet {keys} an den Host weiter, solange die Eingabe erfasst ist.",
 	"player_overlay_actions": "Schnellaktionen",

@@ -1102,6 +1102,8 @@
 	"player_mouse_mode_desktop": "Desktop (absolute)",
 	"player_invert_scroll": "Invert scroll direction",
 	"player_invert_scroll_hint": "Reverses the wheel and trackpad scroll direction sent to the host.",
+	"player_raw_mouse": "Raw mouse input",
+	"player_raw_mouse_hint": "Sends the mouse's own movement, without this device's pointer speed and acceleration.",
 	"player_inhibit_shortcuts": "Capture system shortcuts",
 	"player_inhibit_shortcuts_hint": "Forward {keys} to the host while input is captured.",
 	"player_overlay_actions": "Quick actions",
