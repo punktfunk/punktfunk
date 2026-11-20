@@ -11,12 +11,6 @@
 		BB0000000000000000000005 /* PunktfunkKit in Frameworks */ = {isa = PBXBuildFile; productRef = BB0000000000000000000006 /* PunktfunkKit */; };
 		CC0000000000000000000005 /* PunktfunkKit in Frameworks */ = {isa = PBXBuildFile; productRef = CC0000000000000000000006 /* PunktfunkKit */; };
 		DD0000000000000000000003 /* SwiftUINavigationTransitions in Frameworks */ = {isa = PBXBuildFile; productRef = DD0000000000000000000002 /* SwiftUINavigationTransitions */; };
-		EE0000000000000000000012 /* Glur in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000002 /* Glur */; };
-		EE0000000000000000000013 /* GlurBackdrop in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000003 /* GlurBackdrop */; };
-		EE0000000000000000000014 /* Glur in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000004 /* Glur */; };
-		EE0000000000000000000015 /* GlurBackdrop in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000005 /* GlurBackdrop */; };
-		EE0000000000000000000016 /* Glur in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000006 /* Glur */; };
-		EE0000000000000000000017 /* GlurBackdrop in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000007 /* GlurBackdrop */; };
 		E295569A300948B9009F939C /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E2955699300948B9009F939C /* WidgetKit.framework */; };
 		E295569C300948B9009F939C /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E295569B300948B9009F939C /* SwiftUI.framework */; };
 		E29556A9300948BA009F939C /* PunktfunkWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E2955697300948B9009F939C /* PunktfunkWidgetsExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -105,8 +99,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA0000000000000000000005 /* PunktfunkKit in Frameworks */,
-				EE0000000000000000000012 /* Glur in Frameworks */,
-				EE0000000000000000000013 /* GlurBackdrop in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -115,8 +107,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				BB0000000000000000000005 /* PunktfunkKit in Frameworks */,
-				EE0000000000000000000014 /* Glur in Frameworks */,
-				EE0000000000000000000015 /* GlurBackdrop in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,8 +116,6 @@
 			files = (
 				CC0000000000000000000005 /* PunktfunkKit in Frameworks */,
 				DD0000000000000000000003 /* SwiftUINavigationTransitions in Frameworks */,
-				EE0000000000000000000016 /* Glur in Frameworks */,
-				EE0000000000000000000017 /* GlurBackdrop in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -201,8 +189,6 @@
 			name = Punktfunk;
 			packageProductDependencies = (
 				AA0000000000000000000006 /* PunktfunkKit */,
-				EE0000000000000000000002 /* Glur */,
-				EE0000000000000000000003 /* GlurBackdrop */,
 			);
 			productName = Punktfunk;
 			productReference = AA0000000000000000000001 /* Punktfunk.app */;
@@ -229,8 +215,6 @@
 			name = "Punktfunk-iOS";
 			packageProductDependencies = (
 				BB0000000000000000000006 /* PunktfunkKit */,
-				EE0000000000000000000004 /* Glur */,
-				EE0000000000000000000005 /* GlurBackdrop */,
 			);
 			productName = "Punktfunk-iOS";
 			productReference = BB0000000000000000000001 /* Punktfunk-iOS.app */;
@@ -256,8 +240,6 @@
 			packageProductDependencies = (
 				CC0000000000000000000006 /* PunktfunkKit */,
 				DD0000000000000000000002 /* SwiftUINavigationTransitions */,
-				EE0000000000000000000006 /* Glur */,
-				EE0000000000000000000007 /* GlurBackdrop */,
 			);
 			productName = "Punktfunk-tvOS";
 			productReference = CC0000000000000000000001 /* Punktfunk-tvOS.app */;
@@ -315,7 +297,6 @@
 			packageReferences = (
 				AA000000000000000000000F /* XCLocalSwiftPackageReference "." */,
 				DD0000000000000000000001 /* XCRemoteSwiftPackageReference "swiftui-navigation-transitions" */,
-				EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA0000000000000000000008 /* Products */;
@@ -904,14 +885,6 @@
 				minimumVersion = 0.19.0;
 			};
 		};
-		EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/joogps/Glur.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.0.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -931,36 +904,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DD0000000000000000000001 /* XCRemoteSwiftPackageReference "swiftui-navigation-transitions" */;
 			productName = SwiftUINavigationTransitions;
-		};
-		EE0000000000000000000002 /* Glur */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */;
-			productName = Glur;
-		};
-		EE0000000000000000000003 /* GlurBackdrop */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */;
-			productName = GlurBackdrop;
-		};
-		EE0000000000000000000004 /* Glur */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */;
-			productName = Glur;
-		};
-		EE0000000000000000000005 /* GlurBackdrop */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */;
-			productName = GlurBackdrop;
-		};
-		EE0000000000000000000006 /* Glur */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */;
-			productName = Glur;
-		};
-		EE0000000000000000000007 /* GlurBackdrop */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */;
-			productName = GlurBackdrop;
 		};
 		E2CAFE000000000000000002 /* PunktfunkShared */ = {
 			isa = XCSwiftPackageProductDependency;

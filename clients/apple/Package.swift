@@ -17,11 +17,6 @@ let package = Package(
         .library(name: "PunktfunkShared", targets: ["PunktfunkShared"]),
         .executable(name: "PunktfunkClient", targets: ["PunktfunkClient"]),
     ],
-    dependencies: [
-        // Progressive backdrop blur with no material tint; `pf-console-ui`'s `blur.rs` follows it.
-        // GlurBackdrop first ships in 2.0.
-        .package(url: "https://github.com/joogps/Glur.git", from: "2.0.0"),
-    ],
     targets: [
         .binaryTarget(name: "PunktfunkCore", path: "PunktfunkCore.xcframework"),
         // No dependencies by design — an extension process links this alone. `Generated/` is
@@ -80,10 +75,7 @@ let package = Package(
         // Punktfunk-tvOS target links it; the #if os(tvOS) import never compiles here.)
         .executableTarget(
             name: "PunktfunkClient",
-            dependencies: [
-                "PunktfunkKit",
-                .product(name: "GlurBackdrop", package: "Glur"),
-            ]),
+            dependencies: ["PunktfunkKit"]),
         // PunktfunkCore is a direct dep too so the wire tests can name the C ABI's
         // `PunktfunkInputEvent` / `PUNKTFUNK_INPUT_KIND_*` when asserting the gamepad byte layout.
         // Pins the tests to English; see TestLanguage.m.
