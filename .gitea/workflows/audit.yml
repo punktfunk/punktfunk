@@ -110,7 +110,14 @@ jobs:
           # rsa Marvin (RUSTSEC-2023-0071) is fixed in rsa 0.10.0, which the host is on. The
           # keeper's RDP stack (picky, sspi, winscard) pins `=0.10.0-rc.18`. It logs in with a
           # password and holds no RSA private key. Drop the flag when those three move.
-          cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file crates/host/pf-seat-keeper/Cargo.lock
+          # heapless 0.7 (RUSTSEC-2026-0574…0582) comes in through ironrdp-connector's forced
+          # `scard` (winscard → iso7816), which only builds `heapless::Vec<u8, N>`. None of the
+          # flagged APIs are reached. Drop the flags when winscard leaves iso7816 0.1.
+          cargo audit --deny unsound --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0574 --ignore RUSTSEC-2026-0575 --ignore RUSTSEC-2026-0576 \
+            --ignore RUSTSEC-2026-0577 --ignore RUSTSEC-2026-0578 --ignore RUSTSEC-2026-0579 \
+            --ignore RUSTSEC-2026-0580 --ignore RUSTSEC-2026-0581 --ignore RUSTSEC-2026-0582 \
+            --file crates/host/pf-seat-keeper/Cargo.lock
           cargo audit --deny unsound --file fuzz/Cargo.lock
 
   # cargo-audit matches registry crates by name and version, so a vendored tree has no feed but
