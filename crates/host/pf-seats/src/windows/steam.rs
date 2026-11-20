@@ -9,11 +9,12 @@
 
 use crate::persistence::{default_root, SecretRoot};
 use crate::steam;
+use crate::steam::shortcuts;
 use crate::windows::accounts;
 use crate::windows::enable::run;
 use crate::windows::util::{io_error, wide, with_privilege, WinResult};
 use pf_paths_win::SecurityAttributes;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -260,10 +261,10 @@ fn delete_tree(hive: &RegKey, path: &str) {
 }
 
 /// The copy for `account`, signed in to `session`, when the box has Steam and the seat has none
-/// yet, then its library list and its launchers. The files are written as that user: the profile
-/// is theirs, and SYSTEM writing into a folder its user controls could be steered elsewhere
-/// through a junction.
-pub(super) fn ensure_copy(session: u32, account: &str, seat_id: &str) {
+/// yet, then its library list and its launchers, and with `share` the owner's shortcuts
+/// ([`share_shortcuts`]). The files are written as that user: the profile is theirs, and SYSTEM
+/// writing into a folder its user controls could be steered elsewhere through a junction.
+pub(super) fn ensure_copy(session: u32, account: &str, seat_id: &str, share: bool) {
     let (Some(src), Some(exe)) = (box_install(), seat_exe(account)) else {
         return;
     };
@@ -282,6 +283,9 @@ pub(super) fn ensure_copy(session: u32, account: &str, seat_id: &str) {
     let spawned = std::thread::Builder::new()
         .name("seat-steam-copy".into())
         .spawn(move || {
+            if share {
+                share_shortcuts(session, &src, &dst, &seat_id);
+            }
             match as_user(session, |_| prepare(&src, &dst)) {
                 Ok(Ok(())) if copied => {}
                 Ok(Ok(())) => {
@@ -696,6 +700,196 @@ fn prepare(src: &Path, dst: &Path) -> std::io::Result<()> {
         tracing::warn!(%error, "seat steam library list not written");
     }
     Ok(())
+}
+
+/// Grid art Steam shows for a shortcut: `<appid><suffix>.<png|jpg>` in an account's `config/grid`.
+const ART: [&str; 4] = ["p", "", "_hero", "_logo"];
+/// A catalog with descriptions runs to tens of megabytes; past this it isn't the box's.
+const MAX_CATALOG_BYTES: u64 = 64 * 1024 * 1024;
+/// A `shortcuts.vdf`, a piece of grid art or the box's shortcut list; past this it isn't one.
+const MAX_STEAM_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Seats starting together rewrite the box's one [`shortcuts::SEAT_FILE`] in turn.
+static SEAT_FILE_LOCK: Mutex<()> = Mutex::new(());
+
+/// One owner's shortcut a seat may get: its entry and its grid art, read as SYSTEM.
+struct Owned {
+    entry: shortcuts::Fields,
+    art: Vec<(String, Vec<u8>)>,
+}
+
+/// The box owner's shortcuts that seat `seat_id`, signed in to `session`, can start, into each
+/// account of its Steam copy at `dst`, and their appids into the box's [`shortcuts::SEAT_FILE`].
+/// SYSTEM reads the owner's files and the catalog; the seat's own are written as its user, and
+/// only a shortcut whose program that user can open goes in. Steam reads the file at its start
+/// and rewrites it only when a shortcut changes or starts, so a Steam running now gets them next.
+fn share_shortcuts(session: u32, src: &Path, dst: &Path, seat_id: &str) {
+    let config = pf_paths::config_dir();
+    let owned = owner_shortcuts(src, &config);
+    let list = config.join(shortcuts::SEAT_FILE);
+    let _turn = SEAT_FILE_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let had = match read_capped(&list, MAX_STEAM_FILE_BYTES) {
+        Ok(had) => had,
+        Err(error) => {
+            tracing::warn!(seat = seat_id, %error, "box shortcut list unreadable; none shared");
+            return;
+        }
+    };
+    let before = had
+        .as_deref()
+        .map_or_else(BTreeSet::new, |f| shortcuts::shared_with(f, seat_id));
+    let ours = match as_user(session, |_| place_shortcuts(dst, &owned, &before)) {
+        Ok(ours) => ours,
+        Err(error) => {
+            tracing::warn!(seat = seat_id, %error, "seat shortcuts not shared");
+            return;
+        }
+    };
+    let file = shortcuts::with_seat(had.as_deref(), seat_id, &ours);
+    if had.as_deref() != Some(file.as_slice())
+        && let Err(error) = replace(&list, &file)
+    {
+        tracing::warn!(seat = seat_id, %error, "box shortcut list not written");
+    }
+    tracing::info!(seat = seat_id, shared = ours.len(), "seat shortcuts shared");
+}
+
+/// Every shortcut the box's catalog lists from a source left on, from each account of the box's
+/// Steam at `src`, the first of an appid kept, with its grid art.
+fn owner_shortcuts(src: &Path, config: &Path) -> Vec<Owned> {
+    let catalog = read_capped(&config.join("library.json"), MAX_CATALOG_BYTES);
+    let scanners = read_capped(&config.join("library-scanners.json"), MAX_STEAM_FILE_BYTES);
+    let off = scanners
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|json| {
+            let ids = json.get("disabled")?.as_array()?.iter();
+            Some(
+                ids.filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    let listed = shortcuts::listed(&catalog.ok().flatten().unwrap_or_default(), &off);
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for account in std::fs::read_dir(src.join("userdata"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let config = account.path().join("config");
+        let file = read_capped(&config.join("shortcuts.vdf"), MAX_STEAM_FILE_BYTES);
+        let Some(entries) = file
+            .ok()
+            .flatten()
+            .and_then(|bytes| shortcuts::parse(&bytes))
+        else {
+            continue;
+        };
+        for entry in entries {
+            let Some(id) = shortcuts::appid(&entry).filter(|id| listed.contains(id)) else {
+                continue;
+            };
+            if !seen.insert(id) {
+                continue;
+            }
+            let art = art_names(id)
+                .filter_map(|name| {
+                    let path = config.join("grid").join(&name);
+                    Some((name, read_capped(&path, MAX_STEAM_FILE_BYTES).ok()??))
+                })
+                .collect();
+            out.push(Owned { entry, art });
+        }
+    }
+    out
+}
+
+fn art_names(id: u32) -> impl Iterator<Item = String> {
+    ART.into_iter()
+        .flat_map(move |suffix| ["png", "jpg"].map(|ext| format!("{id}{suffix}.{ext}")))
+}
+
+/// As the seat's user: the shortcuts of `owned` it can start, merged into each account of the
+/// copy at `dst` that has signed in, with their art. The appids the box's in any of them.
+fn place_shortcuts(dst: &Path, owned: &[Owned], before: &BTreeSet<u32>) -> BTreeSet<u32> {
+    let reachable: Vec<&Owned> = owned.iter().filter(|o| opens(&o.entry)).collect();
+    let entries: Vec<shortcuts::Fields> = reachable.iter().map(|o| o.entry.clone()).collect();
+    let mut ours = BTreeSet::new();
+    for account in std::fs::read_dir(dst.join("userdata"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let config = account.path().join("config");
+        if !config.is_dir() {
+            continue;
+        }
+        let file = config.join("shortcuts.vdf");
+        let merged = read_capped(&file, MAX_STEAM_FILE_BYTES)
+            .map(|had| (shortcuts::merge(had.as_deref(), &entries, before), had));
+        let (merged, had) = match merged {
+            Ok((Some(merged), had)) => (merged, had),
+            Ok((None, _)) | Err(_) => {
+                tracing::warn!(file = %file.display(), "seat's shortcuts.vdf unreadable; left as it is");
+                continue;
+            }
+        };
+        if had.as_deref() != Some(merged.file.as_slice())
+            && let Err(error) = replace(&file, &merged.file)
+        {
+            tracing::warn!(file = %file.display(), %error, "seat's shortcuts.vdf not written");
+            continue;
+        }
+        let placed =
+            |o: &&&Owned| shortcuts::appid(&o.entry).is_some_and(|id| merged.ours.contains(&id));
+        for (name, bytes) in reachable.iter().filter(placed).flat_map(|o| &o.art) {
+            let path = config.join("grid").join(name);
+            let same = read_capped(&path, MAX_STEAM_FILE_BYTES).ok().flatten();
+            if same.as_deref() != Some(bytes.as_slice()) {
+                let written = std::fs::create_dir_all(config.join("grid"))
+                    .and_then(|()| replace(&path, bytes));
+                if let Err(error) = written {
+                    tracing::warn!(file = %path.display(), %error, "seat's shortcut art not written");
+                }
+            }
+        }
+        ours.extend(merged.ours);
+    }
+    ours
+}
+
+/// Whether this thread's user can open the program `entry` starts. Steam keeps it quoted.
+fn opens(entry: &shortcuts::Fields) -> bool {
+    let Some(shortcuts::Value::Str(exe)) = shortcuts::field(entry, "exe") else {
+        return false;
+    };
+    let exe = String::from_utf8_lossy(exe);
+    let path = Path::new(exe.trim().trim_matches('"'));
+    path.is_absolute() && std::fs::File::open(path).is_ok()
+}
+
+/// `path`'s bytes: `Ok(None)` when it isn't there, an error when it can't be read or runs over
+/// `max`.
+fn read_capped(path: &Path, max: u64) -> std::io::Result<Option<Vec<u8>>> {
+    match std::fs::metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+        Ok(meta) if meta.len() > max => Err(std::io::Error::other("over the size cap")),
+        Ok(_) => std::fs::read(path).map(Some),
+    }
+}
+
+/// `bytes` at `path` through a sibling written whole first, so Steam never reads half a file.
+fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".punktfunk");
+    std::fs::write(&temp, bytes)?;
+    std::fs::rename(&temp, path)
 }
 
 /// A Steam library list is a few kilobytes. The seat's copy is the seat user's to write, and
