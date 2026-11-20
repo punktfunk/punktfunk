@@ -66,13 +66,13 @@ running as long as its screen does.
 Devices that may [choose their screen](/docs/access-levels#individual-grants) can pick otherwise
 ([Per-device settings](#per-device-settings)).
 
-| | KWin | GNOME | Sway · Hyprland · niri · Umbriel | Windows |
+| | KWin | GNOME | Sway · Hyprland · niri · Umbriel · mango | Windows |
 |---|---|---|---|---|
 | Stay on | ✅ | ✅ | ✅ | ✅ |
 | Stay on, stream is main | ✅ | ✅ | acts as Stay on | ✅ |
 | Turn off | ✅ | ✅ | ✅ | ✅ |
 
-- **Sway, Hyprland, niri and Umbriel** have no main screen. The host focuses the streamed screen at session start
+- **Sway, Hyprland, niri, Umbriel and mango** have no main screen. The host focuses the streamed screen at session start
   and before each library launch; a window that opens later follows whatever has focus then.
 - **Hyprland** turns monitors back on with `hyprctl reload` when the screen is removed. That
   re-reads your config: changes made with `hyprctl keyword` are lost, and `exec =` lines run again.
@@ -80,7 +80,9 @@ Devices that may [choose their screen](/docs/access-levels#individual-grants) ca
   host dies first, its next start lights them again.
 - **Umbriel** switches monitors off and on over its IPC. Saving an output change in its config
   lights them mid-stream: see [Umbriel](/docs/umbriel#config-save).
-- **KWin, Sway, Hyprland, niri and Umbriel** can keep chosen monitors lit under **Turn off**: set each to
+- **mango** switches monitors off and on over output management, and puts each back where it was.
+  A config reload lights them mid-stream.
+- **KWin, Sway, Hyprland, niri, Umbriel and mango** can keep chosen monitors lit under **Turn off**: set each to
   **Stay on** on its row in **Screens**.
 - Punktfunk never turns off a screen it created, so a second device never goes dark.
 
@@ -137,8 +139,8 @@ host** or an answer for this device only:
 The first device to stream decides what your monitors do. A device that connects while another
 one holds a screen, live or [kept](#keep-alive), never turns them off:
 
-- A later **Only screen** acts as **Main screen**, or as **Second screen** on Sway, Hyprland, niri
-  and Umbriel. **Main screen** and **Second screen** keep their role.
+- A later **Only screen** acts as **Main screen**, or as **Second screen** on Sway, Hyprland, niri,
+  Umbriel and mango. **Main screen** and **Second screen** keep their role.
 - A device set to a monitor that is off or streamed by another device gets its own screen.
 
 Monitors the first device turned off come back as each desktop restores them: see the notes
@@ -200,6 +202,7 @@ Set scaling once while streaming and each device gets it back on the next connec
 | **niri** | Pick **Scale its screen at** in the device's **Display settings…**; the screen starts at it. |
 | **Sway** | Not supported; set the scale in your sway config. |
 | **Umbriel** | Not supported; the streamed screen is always at scale 1. |
+| **mango** | Not supported; the streamed screen runs at scale 1 unless a mango monitor rule names it. |
 
 ## Troubleshooting
 

@@ -935,9 +935,16 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<Said> {
     if let Some(m) = e.downcast_ref::<pf_vdisplay::UmbrielIpcMismatch>() {
         return Some(Said::new("close_umbriel_mismatch", m.user_message()));
     }
-    // Umbriel is the one Linux backend whose outputs have no PipeWire node.
+    // Umbriel and mango are the Linux backends whose outputs have no PipeWire node. The backend
+    // in use says which one refused.
     #[cfg(target_os = "linux")]
     if e.downcast_ref::<pf_capture::NoPipeWireNode>().is_some() {
+        if crate::vdisplay::in_use() == Some(crate::vdisplay::Compositor::Mango) {
+            return Some(Said::new(
+                "close_mango_no_capture",
+                "This mango session can't be captured directly; the stream needs a GPU encoder.",
+            ));
+        }
         return Some(Said::new(
             "close_umbriel_no_capture",
             "This Umbriel session can't be captured directly; the stream needs a GPU encoder.",

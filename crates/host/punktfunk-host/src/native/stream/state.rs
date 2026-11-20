@@ -1602,6 +1602,7 @@ fn window_source(
             | Compositor::Wlroots
             | Compositor::Niri
             | Compositor::Umbriel
+            | Compositor::Mango
             | Compositor::Kwin
             | Compositor::Mutter => Some(WindowSource::Toplevels {
                 compositor,

@@ -217,6 +217,8 @@ impl MirrorDisplay {
             #[cfg(target_os = "linux")]
             Compositor::Umbriel => crate::umbriel::stream_existing_output(&target.connector),
             #[cfg(target_os = "linux")]
+            Compositor::Mango => crate::mango::stream_existing_output(&target.connector),
+            #[cfg(target_os = "linux")]
             Compositor::Hyprland => crate::portal_cast::stream_existing_output(
                 &crate::hyprland::SELECTOR,
                 &target.connector,
@@ -305,7 +307,11 @@ fn check_mirrorable(target: &monitors::PhysicalMonitor, compositor: Compositor) 
 fn names_ours_conclusively(compositor: Compositor) -> bool {
     match compositor {
         // `Virtual-punktfunk-<id>` and `PF-N` / `PF-<pid>-<n>` are minted only by us.
-        Compositor::Kwin | Compositor::Hyprland | Compositor::Niri | Compositor::Umbriel => true,
+        Compositor::Kwin
+        | Compositor::Hyprland
+        | Compositor::Niri
+        | Compositor::Umbriel
+        | Compositor::Mango => true,
         // Sway's `HEADLESS-N` includes its own; Mutter has no distinguishing name;
         // gamescope only reports the real DRM head. A hint at most.
         Compositor::Wlroots | Compositor::Mutter | Compositor::Gamescope => false,
@@ -403,6 +409,7 @@ mod tests {
         assert!(names_ours_conclusively(Compositor::Hyprland));
         assert!(names_ours_conclusively(Compositor::Niri));
         assert!(names_ours_conclusively(Compositor::Umbriel));
+        assert!(names_ours_conclusively(Compositor::Mango));
         assert!(!names_ours_conclusively(Compositor::Wlroots));
         assert!(!names_ours_conclusively(Compositor::Mutter));
         assert!(!names_ours_conclusively(Compositor::Gamescope));

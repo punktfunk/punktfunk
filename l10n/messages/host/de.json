@@ -366,6 +366,7 @@
 	}],
 	"close_lock_pin_wrong": "Das ist nicht die PIN dieses Profils.",
 	"close_lock_signed_out": "Dieses Gerät wurde von diesem Profil abgemeldet.",
+	"close_mango_no_capture": "Diese mango-Sitzung lässt sich nicht direkt aufnehmen; der Stream braucht einen GPU-Encoder.",
 	"close_monitor_missing": "Der Host soll „{monitor}“ streamen, der nicht angeschlossen ist. Wähl in seiner Web-Konsole unter „Anzeigen“ einen anderen Bildschirm.",
 	"close_monitor_none": "Der Host soll einen Monitor namens „{monitor}“ aufnehmen und meldet überhaupt keine Monitore. Entferne das in den Anzeigeeinstellungen des Hosts, um stattdessen eine virtuelle Anzeige zu streamen.",
 	"close_niri_no_outputs": "Das niri des Hosts kann für diesen Stream keine Anzeige anlegen. Sein Besitzer kann biri installieren; die Web-Konsole zeigt, wie.",

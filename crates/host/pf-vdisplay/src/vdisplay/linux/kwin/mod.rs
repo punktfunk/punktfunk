@@ -529,6 +529,7 @@ fn journal_heads(plan: &[(String, String)], pre_enabled: &[(String, String)]) ->
         .map(|(name, mode)| Head {
             name,
             mode: (!mode.is_empty()).then_some(mode),
+            at: None,
         })
         .collect();
     let mut held = HELD_DARK.lock().unwrap_or_else(|e| e.into_inner());

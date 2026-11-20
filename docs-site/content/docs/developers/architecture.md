@@ -9,7 +9,7 @@ must keep. The user-level version is [How it works](/docs/how-it-works).
 ## A frame, host to glass
 
 1. **Mode.** The client's Hello names `WxH@Hz`. The `pf-vdisplay` crate creates a virtual output at
-   that mode through the compositor's backend (KWin, Mutter, Hyprland, niri, Umbriel, wlroots, gamescope) or, on
+   that mode through the compositor's backend (KWin, Mutter, Hyprland, niri, Umbriel, mango, wlroots, gamescope) or, on
    Windows, through the IddCx driver of the same name.
 2. **Capture.** On Linux, `pf-capture` takes dmabufs straight from the compositor over
    `ext-image-copy-capture-v1` where it can, and otherwise over PipeWire (the ScreenCast portal, or

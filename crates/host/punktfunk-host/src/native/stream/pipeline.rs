@@ -395,6 +395,10 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
         "predates virtual outputs",
         // Every request to this Umbriel fails the same way until the host is updated.
         "parses neither request shape",
+        // A mango older than 0.17.1 stays so until it is updated.
+        "can't name a virtual output",
+        // A nested mango makes windows, not screens, for as long as it runs nested.
+        "its virtual outputs are windows",
         // The screen's one stream stays in the other session's format while that one lives.
         "shared capture is taken",
     ];
@@ -1161,7 +1165,9 @@ mod tests {
     fn only_a_backend_that_runs_fractions_gets_one() {
         let session = punktfunk_core::Mode::exact(2560, 1440, 59_940);
         let mult = |c| pf_host_config::config().vdisplay_hz_mult_for(60, cfg!(windows)) * c;
-        for id in ["wlroots", "hyprland", "mutter", "kwin", "niri", "umbriel"] {
+        for id in [
+            "wlroots", "hyprland", "mutter", "kwin", "niri", "umbriel", "mango",
+        ] {
             assert_eq!(
                 display_mode_for(session, id).millihz(),
                 mult(59_940),
@@ -1198,6 +1204,14 @@ mod tests {
         assert!(is_permanent_build_error(
             "create virtual output: umbriel has no output-destroy: it predates virtual outputs \
              (2026-09-28); update it"
+        ));
+        assert!(is_permanent_build_error(
+            "create virtual output: mango 0.16.2 can't name a virtual output; update it to 0.17.1 \
+             or newer"
+        ));
+        assert!(is_permanent_build_error(
+            "create virtual output: mango runs nested (WL-1): its virtual outputs are windows, not \
+             screens"
         ));
         assert!(!is_permanent_build_error(
             "create virtual output: KWin created the virtual output disabled and refused to \

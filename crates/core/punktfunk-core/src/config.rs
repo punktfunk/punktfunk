@@ -139,6 +139,8 @@ pub enum CompositorPref {
     Niri,
     /// Umbriel, Noctalia's wlroots compositor: native virtual outputs.
     Umbriel,
+    /// mango, a dwl-based wlroots compositor: named headless outputs over its IPC.
+    Mango,
 }
 
 impl CompositorPref {
@@ -153,6 +155,7 @@ impl CompositorPref {
             CompositorPref::Windows => 6,
             CompositorPref::Niri => 7,
             CompositorPref::Umbriel => 8,
+            CompositorPref::Mango => 9,
         }
     }
 
@@ -167,6 +170,7 @@ impl CompositorPref {
             6 => CompositorPref::Windows,
             7 => CompositorPref::Niri,
             8 => CompositorPref::Umbriel,
+            9 => CompositorPref::Mango,
             _ => CompositorPref::Auto,
         }
     }
@@ -183,6 +187,7 @@ impl CompositorPref {
             "windows" => CompositorPref::Windows,
             "niri" | "biri" => CompositorPref::Niri,
             "umbriel" => CompositorPref::Umbriel,
+            "mango" => CompositorPref::Mango,
             _ => return None,
         })
     }
@@ -198,6 +203,7 @@ impl CompositorPref {
             CompositorPref::Windows => "windows",
             CompositorPref::Niri => "niri",
             CompositorPref::Umbriel => "umbriel",
+            CompositorPref::Mango => "mango",
         }
     }
 }
@@ -997,6 +1003,7 @@ mod tests {
             CompositorPref::Windows,
             CompositorPref::Niri,
             CompositorPref::Umbriel,
+            CompositorPref::Mango,
         ] {
             assert_eq!(CompositorPref::from_u8(p.to_u8()), p);
             assert_eq!(CompositorPref::from_name(p.as_str()), Some(p));
@@ -1012,6 +1019,7 @@ mod tests {
         );
         assert_eq!(CompositorPref::from_u8(7), CompositorPref::Niri);
         assert_eq!(CompositorPref::from_u8(8), CompositorPref::Umbriel);
+        assert_eq!(CompositorPref::from_u8(9), CompositorPref::Mango);
         assert_eq!(CompositorPref::from_name("nope"), None);
         // Unknown wire byte degrades to Auto.
         assert_eq!(CompositorPref::from_u8(200), CompositorPref::Auto);

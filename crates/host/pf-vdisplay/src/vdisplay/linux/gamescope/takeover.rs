@@ -618,16 +618,7 @@ fn lift_autologin_mask() {
 
 /// Only a desktop switch ends the mask window. Gaming is our own session; None is a relaunch gap.
 fn switch_ends_mask_window(kind: crate::ActiveKind) -> bool {
-    use crate::ActiveKind;
-    matches!(
-        kind,
-        ActiveKind::DesktopKde
-            | ActiveKind::DesktopGnome
-            | ActiveKind::DesktopWlroots
-            | ActiveKind::DesktopHyprland
-            | ActiveKind::DesktopNiri
-            | ActiveKind::DesktopUmbriel
-    )
+    crate::session::is_desktop_kind(kind)
 }
 
 /// Watcher half of the mid-stream hand-back (sentinel detector is the other). Both must run or
@@ -1833,16 +1824,7 @@ fn do_restore_tv_session(verify: bool) {
         );
     }
     unset_forced_session_screen_env();
-    use crate::ActiveKind;
-    if matches!(
-        crate::detect_active_session().kind,
-        ActiveKind::DesktopKde
-            | ActiveKind::DesktopGnome
-            | ActiveKind::DesktopWlroots
-            | ActiveKind::DesktopHyprland
-            | ActiveKind::DesktopNiri
-            | ActiveKind::DesktopUmbriel
-    ) {
+    if crate::session::is_desktop_kind(crate::detect_active_session().kind) {
         tracing::info!(
             "gamescope: a desktop session is active — not restoring the TV gaming session"
         );
@@ -1929,16 +1911,7 @@ fn hand_back_steamos(verify: bool) -> bool {
         remove_steamos_dropin();
     }
     systemctl_user(&["daemon-reload"]);
-    use crate::ActiveKind;
-    if matches!(
-        crate::detect_active_session().kind,
-        ActiveKind::DesktopKde
-            | ActiveKind::DesktopGnome
-            | ActiveKind::DesktopWlroots
-            | ActiveKind::DesktopHyprland
-            | ActiveKind::DesktopNiri
-            | ActiveKind::DesktopUmbriel
-    ) {
+    if crate::session::is_desktop_kind(crate::detect_active_session().kind) {
         if remove_steamos_dropin() {
             systemctl_user(&["daemon-reload"]);
         }
@@ -2883,6 +2856,7 @@ mod tests {
             ActiveKind::DesktopHyprland,
             ActiveKind::DesktopNiri,
             ActiveKind::DesktopUmbriel,
+            ActiveKind::DesktopMango,
         ] {
             assert!(switch_ends_mask_window(kind), "{kind:?}");
         }

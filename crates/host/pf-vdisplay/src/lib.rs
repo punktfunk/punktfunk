@@ -122,6 +122,9 @@ pub enum Compositor {
     /// Umbriel, Noctalia's wlroots compositor — `output-create` over its JSON IPC socket,
     /// captured directly (no portal). `design/umbriel-support.md`.
     Umbriel,
+    /// mango, a dwl-based wlroots compositor: a named headless output over its JSON IPC socket,
+    /// moded over output management and captured directly (no portal).
+    Mango,
     /// The pf-vdisplay IddCx driver — a Windows host's only backend. Never in [`Compositor::all`].
     Windows,
 }
@@ -148,6 +151,7 @@ impl Compositor {
                 | Compositor::Wlroots
                 | Compositor::Niri
                 | Compositor::Umbriel
+                | Compositor::Mango
         )
     }
 
@@ -172,7 +176,11 @@ impl Compositor {
     pub fn places_launch_workspace(self) -> bool {
         matches!(
             self,
-            Compositor::Hyprland | Compositor::Wlroots | Compositor::Niri | Compositor::Umbriel
+            Compositor::Hyprland
+                | Compositor::Wlroots
+                | Compositor::Niri
+                | Compositor::Umbriel
+                | Compositor::Mango
         )
     }
 
@@ -191,6 +199,7 @@ impl Compositor {
             Compositor::Hyprland => "Hyprland",
             Compositor::Niri => "niri",
             Compositor::Umbriel => "Umbriel",
+            Compositor::Mango => "mango",
             Compositor::Windows => "Windows virtual display",
         }
     }
@@ -205,6 +214,7 @@ impl Compositor {
             Compositor::Hyprland => P::Hyprland,
             Compositor::Niri => P::Niri,
             Compositor::Umbriel => P::Umbriel,
+            Compositor::Mango => P::Mango,
             Compositor::Windows => P::Windows,
         }
     }
@@ -222,12 +232,13 @@ impl Compositor {
             P::Hyprland => Compositor::Hyprland,
             P::Niri => Compositor::Niri,
             P::Umbriel => Compositor::Umbriel,
+            P::Mango => Compositor::Mango,
             P::Windows => Compositor::Windows,
         })
     }
 
     /// Every Linux backend, in stable UI/enumeration order.
-    pub fn all() -> [Compositor; 7] {
+    pub fn all() -> [Compositor; 8] {
         [
             Compositor::Kwin,
             Compositor::Gamescope,
@@ -236,6 +247,7 @@ impl Compositor {
             Compositor::Hyprland,
             Compositor::Niri,
             Compositor::Umbriel,
+            Compositor::Mango,
         ]
     }
 }
@@ -255,7 +267,7 @@ pub fn runs_fractional_rates(backend: &str) -> bool {
     }
     matches!(
         backend,
-        "wlroots" | "hyprland" | "mutter" | "niri" | "umbriel" | "kwin"
+        "wlroots" | "hyprland" | "mutter" | "niri" | "umbriel" | "mango" | "kwin"
     )
 }
 
@@ -293,6 +305,7 @@ pub fn available() -> Vec<Compositor> {
                         Compositor::Hyprland => hyprland::is_available(),
                         Compositor::Niri => niri::is_available(),
                         Compositor::Umbriel => umbriel::is_available(),
+                        Compositor::Mango => mango::is_available(),
                         Compositor::Windows => false,
                     }
             })
@@ -314,6 +327,7 @@ fn compositor_from_pin(v: &str) -> Option<Compositor> {
         // biri is the niri fork with virtual outputs; one backend serves both.
         "niri" | "biri" => Compositor::Niri,
         "umbriel" => Compositor::Umbriel,
+        "mango" | "mangowm" | "mangowc" => Compositor::Mango,
         "wlroots" | "sway" | "wlr" | "river" => Compositor::Wlroots,
         "mutter" | "gnome" => Compositor::Mutter,
         "gamescope" => Compositor::Gamescope,
@@ -370,6 +384,16 @@ pub fn detect() -> Result<Compositor> {
     }
 }
 
+/// The backend [`detect`] picks from the pin or the live session, read without storing the
+/// session: for wording an error after the fact.
+#[cfg(target_os = "linux")]
+pub fn in_use() -> Option<Compositor> {
+    match pf_host_config::config().compositor.as_deref() {
+        Some(v) => compositor_from_pin(v),
+        None => compositor_for_kind(detect_active_session().kind),
+    }
+}
+
 /// Error for a `PUNKTFUNK_COMPOSITOR` value that names no backend.
 ///
 /// `cinnamon`/`muffin` get their own answer: the bare list invites `mutter`
@@ -377,7 +401,7 @@ pub fn detect() -> Result<Compositor> {
 /// There is no working desktop value; name the gamescope route instead.
 #[cfg(target_os = "linux")]
 fn unknown_pin_error(v: &str) -> anyhow::Error {
-    const ACCEPTED: &str = "kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel";
+    const ACCEPTED: &str = "kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel|mango";
     if matches!(
         v.trim().to_ascii_lowercase().as_str(),
         "cinnamon" | "muffin"
@@ -412,6 +436,8 @@ fn compositor_from_xdg(desktop: &str) -> Result<Compositor> {
         Ok(Compositor::Niri)
     } else if desktop.contains("UMBRIEL") {
         Ok(Compositor::Umbriel)
+    } else if desktop.contains("MANGO") {
+        Ok(Compositor::Mango)
     } else if desktop.contains("KDE") {
         Ok(Compositor::Kwin)
     } else if desktop.contains("GNOME") {
@@ -582,6 +608,7 @@ fn backend(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
         Compositor::Hyprland => Ok(Box::new(hyprland::HyprlandDisplay::new()?)),
         Compositor::Niri => Ok(Box::new(niri::NiriDisplay::new()?)),
         Compositor::Umbriel => Ok(Box::<umbriel::UmbrielDisplay>::default()),
+        Compositor::Mango => Ok(Box::<mango::MangoDisplay>::default()),
         Compositor::Windows => {
             anyhow::bail!("the Windows virtual display needs a Windows host")
         }
@@ -632,6 +659,8 @@ pub fn probe(compositor: Compositor) -> Result<()> {
             Compositor::Niri => niri::probe(),
             // The IPC socket must answer, from an Umbriel new enough to create outputs.
             Compositor::Umbriel => umbriel::probe(),
+            // The IPC socket must answer.
+            Compositor::Mango => mango::probe(),
             // Spawn / D-Bus / output-on-demand: nothing to pre-check beyond "Linux".
             Compositor::Gamescope | Compositor::Mutter | Compositor::Wlroots => Ok(()),
             Compositor::Windows => {
@@ -1042,6 +1071,15 @@ mod umbriel;
 #[cfg(target_os = "linux")]
 pub use umbriel::UmbrielIpcMismatch;
 
+#[cfg(target_os = "linux")]
+#[path = "vdisplay/linux/mango/mod.rs"]
+mod mango;
+
+/// One head at a time over `zwlr_output_manager_v1`: Umbriel and mango.
+#[cfg(target_os = "linux")]
+#[path = "vdisplay/linux/output_mgmt.rs"]
+mod output_mgmt;
+
 /// Bounded dispatch loop shared by the in-process Wayland protocol clients.
 #[cfg(target_os = "linux")]
 #[path = "vdisplay/linux/wl_pump.rs"]
@@ -1129,6 +1167,7 @@ mod tests {
         assert_eq!(compositor_from_xdg("NIRI").unwrap(), Compositor::Niri);
         assert_eq!(compositor_from_xdg("NIRI:GNOME").unwrap(), Compositor::Niri);
         assert_eq!(compositor_from_xdg("UMBRIEL").unwrap(), Compositor::Umbriel);
+        assert_eq!(compositor_from_xdg("MANGO").unwrap(), Compositor::Mango);
     }
 
     /// The operator pin and the wire byte both name Umbriel.
@@ -1139,6 +1178,22 @@ mod tests {
         assert_eq!(Compositor::from_pref(byte), Some(Compositor::Umbriel));
         assert_eq!(Compositor::Umbriel.id(), "umbriel");
         assert!(Compositor::all().contains(&Compositor::Umbriel));
+    }
+
+    /// mango: its pin under each project name, the wire byte, and the desk integration it
+    /// implements.
+    #[test]
+    fn mango_is_named_by_its_pin_and_its_byte() {
+        for pin in ["mango", " MangoWM ", "mangowc"] {
+            assert_eq!(compositor_from_pin(pin), Some(Compositor::Mango), "{pin}");
+        }
+        let byte = punktfunk_core::CompositorPref::from_u8(9);
+        assert_eq!(Compositor::from_pref(byte), Some(Compositor::Mango));
+        assert_eq!(Compositor::Mango.id(), "mango");
+        assert!(Compositor::all().contains(&Compositor::Mango));
+        assert!(Compositor::Mango.honours_keep_monitors());
+        assert!(Compositor::Mango.places_launch_workspace());
+        assert!(runs_fractional_rates("mango"));
     }
 
     /// Muffin has no virtual-output API: there is no `PUNKTFUNK_COMPOSITOR`
@@ -1171,7 +1226,7 @@ mod tests {
         }
         let typo = unknown_pin_error("kwim").to_string();
         assert!(
-            typo.contains("kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel"),
+            typo.contains("kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel|mango"),
             "{typo}"
         );
         assert!(!typo.contains("Muffin"), "{typo}");
@@ -1215,6 +1270,10 @@ mod tests {
         assert_eq!(
             compositor_for_kind(ActiveKind::DesktopUmbriel),
             Some(Compositor::Umbriel)
+        );
+        assert_eq!(
+            compositor_for_kind(ActiveKind::DesktopMango),
+            Some(Compositor::Mango)
         );
         // No live session → no backend; the caller maps this to handshake error / fallback.
         assert_eq!(compositor_for_kind(ActiveKind::None), None);
