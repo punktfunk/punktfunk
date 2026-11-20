@@ -7,8 +7,6 @@ Stream a [mango](https://github.com/mangowm/mango) session, the dwl-based wlroot
 creates headless outputs itself, so it needs no fork or plugin. Install the host first:
 [Arch](/docs/arch), [Ubuntu](/docs/ubuntu) or [Fedora](/docs/fedora).
 
-This backend hasn't been run on real hardware yet.
-
 ## What works
 
 - Each client gets its own headless output at its size and refresh rate, with a name starting
