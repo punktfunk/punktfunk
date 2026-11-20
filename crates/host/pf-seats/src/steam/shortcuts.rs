@@ -8,7 +8,7 @@
 //! code never reads too.
 
 use serde_json::Value as Json;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One field's value: a nested map, a string, or a fixed-width number as its raw bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -220,6 +220,29 @@ pub fn listed(catalog: &[u8], off: &BTreeSet<String>) -> BTreeSet<u32> {
         .collect()
 }
 
+/// The file in the box's library folder that names, per seat id, the shortcut appids the
+/// supervisor put into that seat's Steam. A seat lists a shortcut only when its row names it.
+/// The `library` prefix puts it in the key of the host's cached library lists.
+pub const SEAT_FILE: &str = "library-seat-shortcuts.json";
+
+/// Seat `seat`'s appids in a [`SEAT_FILE`]: none when the file or the seat's row doesn't read.
+pub fn shared_with(file: &[u8], seat: &str) -> BTreeSet<u32> {
+    serde_json::from_slice::<BTreeMap<String, BTreeSet<u32>>>(file)
+        .ok()
+        .and_then(|mut rows| rows.remove(seat))
+        .unwrap_or_default()
+}
+
+/// `file`, a [`SEAT_FILE`], with seat `seat`'s row set to `ours`. One that doesn't read starts
+/// afresh.
+pub fn with_seat(file: Option<&[u8]>, seat: &str, ours: &BTreeSet<u32>) -> Vec<u8> {
+    let mut rows: BTreeMap<String, BTreeSet<u32>> = file
+        .and_then(|f| serde_json::from_slice(f).ok())
+        .unwrap_or_default();
+    rows.insert(seat.to_owned(), ours.clone());
+    serde_json::to_vec(&rows).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +364,18 @@ mod tests {
             Some(2_803_639_124)
         );
         assert_eq!(appid_of_game_id(570), None);
+    }
+
+    #[test]
+    fn a_seat_reads_back_only_its_own_row() {
+        let one = with_seat(None, "aa", &BTreeSet::from([1, 2]));
+        let both = with_seat(Some(&one), "bb", &BTreeSet::from([3]));
+        assert_eq!(shared_with(&both, "aa"), BTreeSet::from([1, 2]));
+        assert_eq!(shared_with(&both, "bb"), BTreeSet::from([3]));
+        assert!(shared_with(&both, "cc").is_empty());
+        assert!(shared_with(b"junk", "aa").is_empty());
+        let afresh = with_seat(Some(b"junk"), "aa", &BTreeSet::from([4]));
+        assert_eq!(shared_with(&afresh, "aa"), BTreeSet::from([4]));
     }
 
     #[test]

@@ -283,8 +283,8 @@ impl AsProfile {
         } else if owner.as_deref() == Some(id) {
             (Whose::Owner, Reach::default())
         } else if let crate::profiles::OsAccount::Seat { seat: Some(seat) } = profile.os_account {
-            let own_account = on_own_account(seat).await?;
-            (Whose::Seat { own_account }, Reach::seat(own_account))
+            let own_account = on_own_account(seat.clone()).await?;
+            (Whose::Seat { own_account }, Reach::seat(own_account, &seat))
         } else {
             (Whose::Shares, Reach::default())
         };

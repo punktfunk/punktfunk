@@ -32,28 +32,41 @@ pub(crate) struct Reach {
     pub(crate) linux_seat: bool,
     /// That host runs on a person's own account: no program the operator wrote runs there.
     pub(crate) own_account: bool,
+    /// That host is this seat's, its id as a number: it lists only the Steam shortcuts the seat
+    /// service put into that seat's Steam.
+    pub(crate) seat: Option<u128>,
 }
 
 impl Reach {
     /// This process's.
     pub(crate) fn here() -> Self {
+        let own_host = pf_paths::seat::box_library_dir().is_some();
+        let seat = pf_paths::seat::seat_id().ok().flatten();
         Self {
-            own_host: pf_paths::seat::box_library_dir().is_some(),
+            own_host,
             contract: pf_paths::seat::role().follows_contract(),
             linux_seat: linux_seat(),
             own_account: pf_paths::seat::own_account(),
+            seat: seat.filter(|_| own_host).as_deref().and_then(seat_key),
         }
     }
 
-    /// A seat's host, on a person's own account when `own_account`.
-    pub(crate) fn seat(own_account: bool) -> Self {
+    /// Seat `seat`'s host, on a person's own account when `own_account`.
+    pub(crate) fn seat(own_account: bool, seat: &str) -> Self {
         Self {
             own_host: true,
             contract: true,
             linux_seat: cfg!(target_os = "linux"),
             own_account,
+            seat: seat_key(seat),
         }
     }
+}
+
+/// A seat id, 32 lowercase hex, as the number [`Reach::seat`] keeps.
+fn seat_key(id: &str) -> Option<u128> {
+    let hex = id.len() == 32 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    hex.then(|| u128::from_str_radix(id, 16).ok()).flatten()
 }
 
 /// Whose library a call reads or writes.
