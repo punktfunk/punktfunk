@@ -37,7 +37,7 @@ dependencies {
     // mTLS HTTPS client for the host's management API (the game-library fetch + cover-art loads).
     // OkHttp lets us present the paired client cert and pin the host's self-signed cert by SHA-256.
     // `api`: the client type is in this module's signature, and Coil's POM pins 4.12.0 for :app.
-    api("com.squareup.okhttp3:okhttp:5.5.0")
+    api("com.squareup.okhttp3:okhttp:5.5.1")
     testImplementation("junit:junit:4.13.2") // JVM unit tests for the pure parsers/migrations
     // A REAL org.json on the unit-test classpath. The mockable android.jar's org.json methods
     // throw "not mocked", so the host-store migration test — which asserts over the very JSON
