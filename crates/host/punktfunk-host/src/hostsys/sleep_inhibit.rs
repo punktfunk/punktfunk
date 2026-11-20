@@ -1,25 +1,26 @@
 //! Refcounted, session-scoped Linux suspend inhibition for live streams.
 //!
-//! The desktop is asked first: the Inhibit portal's `Suspend | Idle` vetoes its
-//! idle suspend and blanking while any session lives, whether or not client
-//! input reaches the desktop (a headless gamescope's never does). KDE and GNOME
-//! back it, and neither refuses a deliberate Sleep.
+//! Every host but the door holds a ScreenSaver inhibit while any session lives
+//! ([`hold_screensaver_inhibit`]). Steam's Game Mode counts it as activity, so its idle sleep
+//! never starts.
 //!
-//! Without such a backend, after [`QUIET_BEFORE_VETO`] without client input the
-//! host holds a logind `sleep:idle` block so an idle timer cannot suspend the
-//! machine. [`note_input`] releases it synchronously: the same inhibitor would
-//! refuse an intentional Sleep. Silence re-arms it. A local Sleep during a
-//! passive stream is indistinguishable from idle there and stays blocked.
-//! While seat0's active session is another user's, a greeter's too, neither input nor the
-//! portal reaches its idle timer, so the block stands for the whole stream.
+//! The desktop is asked too: the Inhibit portal's `Suspend | Idle` vetoes its idle suspend and
+//! blanking whether or not client input reaches the desktop (a headless gamescope's never does).
+//! KDE and GNOME back it, and neither refuses a deliberate Sleep.
+//!
+//! Without such a backend, after [`QUIET_BEFORE_VETO`] without client input the host holds a
+//! logind `sleep:idle` block so an idle timer cannot suspend the machine. [`note_input`] releases
+//! it synchronously: the same inhibitor would refuse an intentional Sleep. Silence re-arms it. A
+//! local Sleep during a passive stream is indistinguishable from idle there and stays blocked.
+//! While seat0's active session is another user's, a greeter's too, neither input nor the portal
+//! reaches its idle timer, so the block stands for the whole stream.
 //!
 //! A seat is the door's to hold: its input and portal stop at its own desktop, and its seatless
-//! session may not take a logind block. The seat host asks for nothing. The door takes a share
-//! while anyone plays on a seat, a block on `sleep` alone, so the desk's screen still goes dark.
+//! session may not take a logind block. Its host takes the ScreenSaver inhibit alone. The door
+//! takes a share while anyone plays on a seat, a block on `sleep` alone, so the desk still dims.
 //!
-//! Acquisition is best-effort, shared by native and GameStream sessions, and
-//! a no-op off Linux. The hold count's 0↔1 edges also drive the Windows
-//! Instant Replay pause ([`crate::windows::instant_replay`]).
+//! Acquisition is best-effort, shared by native and GameStream sessions, and a no-op off Linux.
+//! The 0↔1 edges also drive the Windows Instant Replay pause ([`crate::windows::instant_replay`]).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -53,6 +54,9 @@ struct State {
     /// session that ends and restarts inside one tick would spawn a second watcher.
     #[cfg(target_os = "linux")]
     watching: bool,
+    /// True while [`hold_screensaver_inhibit`] runs, for the same reason.
+    #[cfg(target_os = "linux")]
+    screensaver: bool,
     /// Logind inhibitor pipe. Inhibition lasts exactly as long as this fd stays open.
     #[cfg(target_os = "linux")]
     fd: Option<ashpd::zbus::zvariant::OwnedFd>,
@@ -65,6 +69,8 @@ fn state() -> &'static Mutex<State> {
             count: 0,
             #[cfg(target_os = "linux")]
             watching: false,
+            #[cfg(target_os = "linux")]
+            screensaver: false,
             #[cfg(target_os = "linux")]
             fd: None,
         })
@@ -106,8 +112,9 @@ pub fn note_input() {
     }
 }
 
-/// Take a share. Nothing is acquired here: [`watch`] takes the desktop's inhibit or the
-/// logind block. A seat's session has neither to give, so its host only counts.
+/// Take a share. Nothing is acquired here: [`watch`] takes the desktop's inhibit or the logind
+/// block, [`hold_screensaver_inhibit`] the ScreenSaver inhibit. A seat's host runs only the
+/// latter, the door only the former.
 pub fn hold() -> StreamHold {
     // Seed the quiet clock so a connect never vetoes and costs no D-Bus round trip.
     LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
@@ -118,22 +125,38 @@ pub fn hold() -> StreamHold {
         crate::windows::instant_replay::on_stream_start();
     }
     #[cfg(target_os = "linux")]
-    if !st.watching && !pf_paths::seat::role().runs_seat_session() {
-        st.watching = true;
+    {
+        let role = pf_paths::seat::role();
+        let veto = !st.watching && !role.runs_seat_session();
+        let screensaver = !st.screensaver && !role.is_door();
+        st.watching |= veto;
+        st.screensaver |= screensaver;
         drop(st);
-        if let Err(e) = std::thread::Builder::new()
-            .name("punktfunk-sleep-veto".into())
-            .spawn(watch)
+        if veto && let Err(e) = start("punktfunk-sleep-veto", watch, |s| &mut s.watching) {
+            tracing::warn!(error = %e, "sleep-veto watcher did not start");
+        }
+        if screensaver
+            && let Err(e) = start("punktfunk-idle-inhibit", hold_screensaver_inhibit, |s| {
+                &mut s.screensaver
+            })
         {
-            state().lock().unwrap_or_else(|e| e.into_inner()).watching = false;
-            tracing::warn!(
-                error = %e,
-                "could not start the sleep-veto watcher — the box may auto-suspend under a \
-                 passive (video-only) viewer"
-            );
+            tracing::warn!(error = %e, "screensaver inhibit did not start");
         }
     }
     StreamHold(())
+}
+
+/// Run `work` on a thread named `name`, clearing `flag` again when the thread doesn't start.
+#[cfg(target_os = "linux")]
+fn start(name: &str, work: fn(), flag: fn(&mut State) -> &mut bool) -> std::io::Result<()> {
+    let started = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(work)
+        .map(drop);
+    if started.is_err() {
+        *flag(&mut state().lock().unwrap_or_else(|e| e.into_inner())) = false;
+    }
+    started
 }
 
 impl Drop for StreamHold {
@@ -288,6 +311,85 @@ fn desk_uid() -> Option<u32> {
         let (uid, _): (u32, OwnedObjectPath) = user.try_into().ok()?;
         Some(uid)
     })
+}
+
+/// Keep an `org.freedesktop.ScreenSaver` inhibit on that name's owner until the last share ends.
+/// In Game Mode the owner is Steam, which counts an inhibitor from any process but a game as
+/// activity, so its idle sleep never starts. A sleep Steam starts and logind refuses
+/// leaves Steam on its suspend screen. Steam can take the name after the stream starts, or
+/// restart, so each tick inhibits a new owner again. Steam drops the inhibit when this
+/// connection closes; a desktop that owns the name reads an idle inhibit.
+#[cfg(target_os = "linux")]
+fn hold_screensaver_inhibit() {
+    use ashpd::zbus::{Connection, Result};
+    const NAME: &str = "org.freedesktop.ScreenSaver";
+    const PATH: &str = "/org/freedesktop/ScreenSaver";
+    async fn owner(conn: &Connection) -> Result<String> {
+        let bus = "org.freedesktop.DBus";
+        let reply = conn
+            .call_method(
+                Some(bus),
+                "/org/freedesktop/DBus",
+                Some(bus),
+                "GetNameOwner",
+                &NAME,
+            )
+            .await?;
+        reply.body().deserialize()
+    }
+    async fn inhibit(conn: &Connection) -> Result<u32> {
+        let why = ("Punktfunk", "a client is streaming");
+        let reply = conn.call_method(Some(NAME), PATH, Some(NAME), "Inhibit", &why);
+        let reply = tokio::time::timeout(PORTAL_REPLY, reply)
+            .await
+            .map_err(|_| ashpd::zbus::Error::Failure("no answer".into()))??;
+        reply.body().deserialize()
+    }
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        state()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .screensaver = false;
+        return;
+    };
+    // One `block_on` for the whole hold keeps the connection's reader pumped.
+    rt.block_on(async {
+        let mut conn = None;
+        let mut held: Option<(String, u32)> = None; // owner, cookie
+        loop {
+            {
+                let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
+                if st.count == 0 {
+                    st.screensaver = false;
+                    break;
+                }
+            }
+            if conn.is_none() {
+                conn = pf_portal::session_bus().await.ok();
+            }
+            if let Some(c) = &conn
+                && let Ok(now) = owner(c).await
+                && held.as_ref().is_none_or(|(was, _)| *was != now)
+            {
+                match inhibit(c).await {
+                    Ok(cookie) => {
+                        tracing::info!(owner = %now, "holding a screensaver inhibit");
+                        held = Some((now, cookie));
+                    }
+                    Err(e) => tracing::debug!(error = %e, "screensaver inhibit refused"),
+                }
+            }
+            tokio::time::sleep(WATCH_TICK).await;
+        }
+        if let (Some(c), Some((_, cookie))) = (&conn, held) {
+            let release = c.call_method(Some(NAME), PATH, Some(NAME), "UnInhibit", &cookie);
+            let _ = tokio::time::timeout(PORTAL_REPLY, release).await;
+            tracing::info!("released the screensaver inhibit");
+        }
+    });
 }
 
 /// Veto the desktop's idle suspend and blanking through the Inhibit portal until the
