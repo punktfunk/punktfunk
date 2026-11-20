@@ -18,8 +18,9 @@ pf-driver-proto = { path = "../pf-driver-proto" }
 anyhow = "1"
 tracing = "0.1"
 # `nvEncodeAPI` types for `nvenc_core`/`nvenc_status`/`nvenc_session`, which serve the Linux CUDA
-# and the Windows D3D11 backend alike.
-nvidia-video-codec-sdk = { version = "0.4", features = ["ci-check"], optional = true }
+# and the Windows D3D11 backend alike. Pinned exactly here, in pf-encode and in pf-encode-win:
+# one maintainer and little use, so a new release is read before it builds into the encoder.
+nvidia-video-codec-sdk = { version = "=0.4.0", features = ["ci-check"], optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 # The packetize step both PyroWave backends share (`pyrowave_ffi`), only under `pyrowave`.

@@ -55,7 +55,7 @@ ash = { workspace = true }
 libloading = "0.9"
 # Direct-SDK NVENC (raw `sys::nvEncodeAPI` types; entry points resolved at runtime). `ci-check` =
 # vendored bindings, no CUDA toolkit at build.
-nvidia-video-codec-sdk = { version = "0.4", features = ["ci-check"], optional = true }
+nvidia-video-codec-sdk = { version = "=0.4.0", features = ["ci-check"], optional = true }
 # PyroWave (opt-in wired-LAN wavelet codec) — vendored codec + bindgen'd C API, only under `pyrowave`.
 pyrowave-sys = { path = "../../codec/pyrowave-sys", optional = true }
 

@@ -20,7 +20,7 @@ tracing = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Direct-SDK NVENC on D3D11, only under `nvenc`.
-nvidia-video-codec-sdk = { version = "0.4", features = ["ci-check"], optional = true }
+nvidia-video-codec-sdk = { version = "=0.4.0", features = ["ci-check"], optional = true }
 # The Windows NV12 zero-copy PyroWave encoder, only under `pyrowave`.
 pyrowave-sys = { path = "../../codec/pyrowave-sys", optional = true }
 # Native Intel QSV (VPL): vendored static MIT dispatcher + bindgen'd C API, only under `qsv`.
