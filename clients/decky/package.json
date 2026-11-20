@@ -29,13 +29,12 @@
     "@rollup/rollup-linux-x64-musl": "^4.64.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "@types/webpack": "^5.28.5",
     "rollup": "^4.64.1",
     "typescript": "^7.0.2"
   },
   "pnpm": {
     "overrides": {
-      "fast-uri": "^3.1.9"
+      "@rollup/plugin-commonjs>glob": "^14.0.2"
     },
     "peerDependencyRules": {
       "ignoreMissing": [
