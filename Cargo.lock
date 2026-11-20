@@ -4967,9 +4967,9 @@ dependencies = [
 
 [[package]]
 name = "rusty_enet"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1c0b43e27d8d86bb3a15b9eac232b6d78a06afee258a9861deb5a0d15b65c33"
+checksum = "5944ffaf525ad41a2b9192bec1b32bd22f71e8329369c19ccb92a6e04b25937a"
 dependencies = [
  "js-sys",
 ]

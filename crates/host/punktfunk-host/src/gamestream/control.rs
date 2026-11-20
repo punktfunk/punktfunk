@@ -345,9 +345,8 @@ pub(crate) fn sync(state: &Arc<AppState>) -> Result<()> {
 
 /// [`rusty_enet::Socket`] that drops datagrams whose source IP is not the launch owner's.
 ///
-/// rusty_enet 0.4.0 has no setter for `maximum_waiting_data` (C default 32 MiB of per-peer
-/// reassembly), so an unauthenticated LAN peer can pin 32 MiB × `peer_limit` and occupy
-/// slots. Filter here, before ENet allocates per-peer state.
+/// Filtered here, before ENet allocates per-peer state, so an unauthenticated LAN peer
+/// occupies no slot and holds no reassembly memory.
 ///
 /// The launch is read live: no `/launch` → drop every datagram (nothing on this port is
 /// legitimate yet; `accept_connect` agrees). With a launch, only the owner's IP passes.
@@ -464,11 +463,20 @@ fn accept_connect(launch: Option<LaunchSession>, from: Option<IpAddr>) -> bool {
     }
 }
 
-fn spawn(state: Arc<AppState>) -> Result<Running> {
-    let socket = UdpSocket::bind(("0.0.0.0", CONTROL_PORT)).context("bind control UDP")?;
+/// Largest control packet either side sends or accepts. Moonlight's control messages run to a
+/// few hundred bytes; ENet's default is 32 MiB.
+const MAX_CONTROL_PACKET: usize = 64 * 1024;
+
+/// Most one peer may hold received but not yet dispatched. ENet's default, 32 MiB, is pinned
+/// per peer slot.
+const MAX_WAITING_DATA: usize = 1024 * 1024;
+
+/// The control stream's ENet host: Moonlight's channel count, four peers, and the two caps
+/// above in place of ENet's defaults. The session and the tests both build it here.
+fn control_host<S: rusty_enet::Socket>(socket: S) -> Result<Host<S>> {
     // `Host::new` calls `init`, which installs the idle read timeout that paces the loop.
     let mut host = Host::new(
-        OwnerFilteredSocket::new(socket, state.clone(), IDLE_TICK),
+        socket,
         HostSettings {
             peer_limit: 4,
             // Moonlight uses CTRL_CHANNEL_COUNT (0x30) and sends gamepad on 0x10+n.
@@ -478,6 +486,16 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
         },
     )
     .map_err(|e| anyhow!("ENet host init: {e:?}"))?;
+    host.set_maximum_packet_size(MAX_CONTROL_PACKET)
+        .map_err(|e| anyhow!("cap the ENet packet size: {e:?}"))?;
+    host.set_maximum_waiting_data(MAX_WAITING_DATA)
+        .map_err(|e| anyhow!("cap the ENet waiting data: {e:?}"))?;
+    Ok(host)
+}
+
+fn spawn(state: Arc<AppState>) -> Result<Running> {
+    let socket = UdpSocket::bind(("0.0.0.0", CONTROL_PORT)).context("bind control UDP")?;
+    let mut host = control_host(OwnerFilteredSocket::new(socket, state.clone(), IDLE_TICK))?;
     tracing::info!(port = CONTROL_PORT, "ENet control listening");
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -1247,6 +1265,59 @@ mod tests {
             got.duration_since(sent) < idle / 2,
             "dispatched {:?} after the send",
             got.duration_since(sent)
+        );
+        server.join().unwrap();
+    }
+
+    /// The session's own host: a control-sized packet arrives, and one past
+    /// `MAX_CONTROL_PACKET` is never reassembled or dispatched.
+    #[test]
+    fn the_control_host_drops_a_packet_over_its_cap() {
+        use rusty_enet::{Event, Host, HostSettings, Packet};
+        use std::time::{Duration, Instant};
+        let (sock, to) = filtered(&launched_state(), Duration::from_millis(2));
+        let (tx, rx) = channel();
+        let server = std::thread::spawn(move || {
+            let mut host = super::control_host(sock).unwrap();
+            assert_eq!(host.maximum_packet_size(), super::MAX_CONTROL_PACKET);
+            assert_eq!(host.maximum_waiting_data(), super::MAX_WAITING_DATA);
+            let end = Instant::now() + Duration::from_secs(8);
+            while Instant::now() < end {
+                if let Ok(Some(Event::Receive { packet, .. })) = host.service() {
+                    let _ = tx.send(packet.data().len());
+                }
+            }
+        });
+        let client_sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut client = Host::new(client_sock, HostSettings::default()).unwrap();
+        let id = client.connect(to, 1, 0).unwrap().id();
+        let end = Instant::now() + Duration::from_secs(20);
+        while !matches!(client.service(), Ok(Some(Event::Connect { .. }))) {
+            assert!(Instant::now() < end, "the client connects");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let small = [7u8; 200];
+        let over = vec![0u8; super::MAX_CONTROL_PACKET + 1];
+        client
+            .peer_mut(id)
+            .send(0, &Packet::reliable(&small[..]))
+            .unwrap();
+        client
+            .peer_mut(id)
+            .send(0, &Packet::reliable(&over[..]))
+            .unwrap();
+        // Keep servicing the client: the fragments go out, and go out again unacknowledged.
+        let mut got = Vec::new();
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end {
+            let _ = client.service();
+            got.extend(rx.try_iter());
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            got,
+            vec![200],
+            "only the control-sized packet is dispatched"
         );
         server.join().unwrap();
     }
