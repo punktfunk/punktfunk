@@ -59,6 +59,10 @@ public final class ConsoleMetalView: ConsolePlatformView {
     /// Presses taken on the way down. Their release stays ours, even when the Back one carried
     /// reached the root in between.
     private var claimed = Set<ObjectIdentifier>()
+    #if os(iOS) || os(visionOS)
+    private var keySink: ConsoleKeySink?
+    private var keyWatches: [NSObjectProtocol] = []
+    #endif
 
     public init(bridge: ConsoleBridge, device: MTLDevice, queue: MTLCommandQueue, delegate: ConsoleViewDelegate?) {
         self.bridge = bridge
@@ -111,6 +115,10 @@ public final class ConsoleMetalView: ConsolePlatformView {
         #if canImport(UIKit)
         held?.timer.invalidate()
         held = nil
+        #endif
+        #if os(iOS) || os(visionOS)
+        keyWatches.forEach(NotificationCenter.default.removeObserver(_:))
+        keyWatches.removeAll()
         #endif
     }
 
@@ -318,8 +326,52 @@ public final class ConsoleMetalView: ConsolePlatformView {
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
+        #if os(iOS) || os(visionOS)
+        if window != nil, keyWatches.isEmpty {
+            // Only a console that holds the chain re-anchors: under a stream it must not take it.
+            for name in [FullKeyboardAccess.didChange, .GCKeyboardDidConnect, .GCKeyboardDidDisconnect] {
+                keyWatches.append(NotificationCenter.default.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.isFirstResponder || self.keySink?.isFirstResponder == true
+                        else { return }
+                        self.anchorKeys()
+                    }
+                })
+            }
+        }
+        anchorKeys()
+        #else
         if window != nil { becomeFirstResponder() }
+        #endif
     }
+
+    #if os(iOS) || os(visionOS)
+    /// Who holds the responder chain: the console, or under Full Keyboard Access its key sink,
+    /// which also takes focus (`ConsoleKeySink`).
+    private func anchorKeys() {
+        guard window != nil else { return }
+        // The sink is a text input: with no hardware keyboard it would raise the soft one.
+        guard FullKeyboardAccess.proven, GCKeyboard.coalesced != nil else {
+            keySink?.removeFromSuperview()
+            keySink = nil
+            becomeFirstResponder()
+            return
+        }
+        let sink = keySink ?? ConsoleKeySink(frame: bounds)
+        if sink.superview == nil {
+            sink.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(sink)
+            keySink = sink
+        }
+        sink.becomeFirstResponder()
+        if let focus = UIFocusSystem.focusSystem(for: sink) {
+            focus.requestFocusUpdate(to: sink)
+            focus.updateFocusIfNeeded()
+        }
+    }
+    #endif
 
     public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let unclaimed = presses.filter { press in
@@ -522,5 +574,23 @@ extension ConsoleView: NSViewRepresentable {
     public static func dismantleNSView(_ view: ConsoleMetalView, coordinator: ()) {
         MainActor.assumeIsolated { view.stop() }
     }
+}
+#endif
+
+#if os(iOS) || os(visionOS)
+/// The console's keys under Full Keyboard Access. It hands every key to a focused text input
+/// and keeps arrows, Tab and Space from anything else, and the console draws its own controls:
+/// nothing in it can take focus. This empty text input does, over the whole console, and its
+/// presses climb to the console as any other. Touches pass through it.
+private final class ConsoleKeySink: UIView, UIKeyInput {
+    override var canBecomeFirstResponder: Bool { true }
+    override var canBecomeFocused: Bool { true }
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+    /// Space under Full Keyboard Access activates the focused item: that starts its Input mode.
+    override func accessibilityActivate() -> Bool { true }
+
+    var hasText: Bool { false }
+    func insertText(_ text: String) {}
+    func deleteBackward() {}
 }
 #endif

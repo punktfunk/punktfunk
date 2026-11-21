@@ -20,6 +20,7 @@
 
 #if os(iOS) || os(visionOS) || os(tvOS)
 import AVFoundation
+import Accessibility
 import GameController
 import PunktfunkCore
 import PunktfunkShared
@@ -371,68 +372,73 @@ public final class StreamViewController: StreamViewControllerBase {
         updatePointerLockChain() // chain shape changed — re-anchor (or no-op if not yet in a window)
     }
 
-    /// Put THIS controller on the responder chain for hardware key presses.
+    /// Put the stream on the responder chain, and key focus on its view, for hardware key
+    /// presses.
     ///
-    /// Nothing of ours is otherwise a first responder during a normal stream: keys arrive on the
-    /// GameController (`GCKeyboard`) path, which is a parallel HID feed that does not consume the
-    /// UIKit event, and `StreamLayerUIView` only becomes first responder to summon the SOFT
-    /// keyboard (it is `UIKeyInput`, so making it one for any other reason would raise the on-screen
-    /// keyboard mid-game). With no responder of ours in the chain, every hardware key press reaches
-    /// UIKit unclaimed — and an unclaimed press is what lets the system apply its own default for
-    /// that key. `pressesBegan` below is where we claim Escape; this is what gets it delivered.
+    /// Keys arrive on GameController (`GCKeyboard`), a parallel feed that does not consume the
+    /// UIKit event, so each press reaches UIKit too: `pressesBegan` claims the ones the system
+    /// must not act on. Under Full Keyboard Access presses are the only feed. UIKit sends them
+    /// to the focused item, which is an overlay control unless the view holds focus.
     ///
-    /// A controller is not `UIKeyInput`, so being first responder raises no keyboard. Deferred to
-    /// the soft keyboard whenever the view has taken over, so the three-finger-swipe keyboard is
-    /// unaffected.
+    /// A controller is not `UIKeyInput`, so being first responder raises no keyboard. The view
+    /// is, and keeps the chain while its soft keyboard is up. With Full Keyboard Access proven
+    /// the view takes the chain itself and focus follows it (`StreamLayerUIView.takeKeyChain`).
     ///
-    /// Only while captured — the whole claim is scoped to "the stream owns the keyboard", and
-    /// holding the chain outside that would sit in front of SwiftUI's focus for no reason. Safe to
-    /// call from anywhere: `start()` engages capture BEFORE SwiftUI puts us in a window (where
-    /// `becomeFirstResponder` cannot succeed), so `viewDidAppear` calls it again to catch up.
+    /// Only while captured. `start()` engages capture before SwiftUI puts the view in a window,
+    /// where neither call succeeds, so `viewDidAppear` calls this again.
     private func anchorKeyResponder() {
-        guard captured, !streamView.isFirstResponder, !isFirstResponder else { return }
-        becomeFirstResponder()
+        guard captured else { return }
+        streamView.holdsKeyFocus = true
+        if streamView.takeKeyChain() { return }
+        if !streamView.isFirstResponder, !isFirstResponder { becomeFirstResponder() }
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
     }
 
     public override var canBecomeFirstResponder: Bool { true }
 
-    /// Claim Escape while the stream owns the keyboard, so the SYSTEM never gets to act on it.
+    /// Hardware key presses: each key goes to `InputCapture.pressKey`, and the stream claims
+    /// the ones that are its own.
     ///
-    /// The platform releases the scene's pointer lock on an Escape that nothing claimed, and
-    /// refuses a re-lock for a while after it. A claimed press releases nothing.
+    /// While captured it claims the keys the system acts on (`systemKeys`), so they reach the
+    /// host alone. It also claims every key the press feed carries, which is all of them while
+    /// GameController is silent under Full Keyboard Access.
     ///
-    /// Escape is forwarded to the host on the GCKeyboard path, which is untouched by this — that
-    /// path never sees the UIKit responder chain, so the host still receives the keystroke and
-    /// in-game menus still open. Only the system's own interpretation is suppressed.
-    ///
-    /// Strictly scoped: only while `captured` (the stream owns input), and only Escape. Anything
-    /// else — including every key while the pointer is released — goes to `super` untouched, so
-    /// Escape still dismisses sheets, exits full screen and does everything else it should whenever
-    /// we are not holding the keyboard. The deliberate ways out are unaffected: ⌘⎋ and ⌃⌥⇧Q are
-    /// read on the GCKeyboard path, which this leaves alone.
+    /// Everything else goes to `super` untouched, as does every key while capture is released:
+    /// Escape still dismisses sheets and exits full screen then.
     public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let unclaimed = presses.filter { !claimsPress($0) }
+        let unclaimed = presses.filter { !takesPress($0, down: true) }
         if !unclaimed.isEmpty || presses.isEmpty {
             super.pressesBegan(unclaimed, with: event)
         }
     }
 
     public override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let unclaimed = presses.filter { !claimsPress($0) }
+        let unclaimed = presses.filter { !takesPress($0, down: false) }
         if !unclaimed.isEmpty || presses.isEmpty {
             super.pressesEnded(unclaimed, with: event)
         }
     }
 
     public override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        // Never swallowed: a cancelled press is the system taking the key away from us, and
-        // dropping it here would strand UIKit's own bookkeeping for a press we did claim.
+        // A release for the press feed. Never swallowed: UIKit keeps books on a claimed press.
+        for press in presses { _ = takesPress(press, down: false) }
         super.pressesCancelled(presses, with: event)
     }
 
-    /// Is this press one the stream owns outright (Escape while captured)?
-    private func claimsPress(_ press: UIPress) -> Bool {
-        captured && press.key?.keyCode == .keyboardEscape
+    /// Keys the system acts on when nothing claims them: Escape releases the scene's pointer
+    /// lock and refuses a re-lock for a while, Tab and the arrows move focus.
+    private static let systemKeys: Set<UIKeyboardHIDUsage> = [
+        .keyboardEscape, .keyboardTab,
+        .keyboardRightArrow, .keyboardLeftArrow, .keyboardDownArrow, .keyboardUpArrow,
+    ]
+
+    /// Feeds the press's key to `InputCapture`. True when the stream claims it: while captured,
+    /// the `systemKeys` and every key that feed carries.
+    private func takesPress(_ press: UIPress, down: Bool) -> Bool {
+        guard let key = press.key?.keyCode else { return false }
+        let fed = inputCapture?.pressKey(usage: key.rawValue, down: down) ?? false
+        return captured && (fed || Self.systemKeys.contains(key))
     }
     #endif
 
@@ -474,6 +480,22 @@ public final class StreamViewController: StreamViewControllerBase {
         capture.onPreempted = { [weak self] in
             self?.setCaptured(false)
         }
+        capture.onKeyboardReposted = { on in FullKeyboardAccess.proven = on }
+        streamView.onFullKeyboardAccess = { [weak self] in
+            self?.inputCapture?.gameControllerFellSilent()
+            FullKeyboardAccess.proven = true
+        }
+        streamView.onActivate = { [weak self] in self?.setCaptured(true) }
+        // Proven on, the view takes the responder chain. Off, the controller takes it back.
+        // The proof also changes outside this stream.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: FullKeyboardAccess.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if !FullKeyboardAccess.proven { self?.streamView.dropKeyChain() }
+                self?.anchorKeyResponder()
+            }
+        })
         capture.start()
         inputCapture = capture
         // Match window: follow the picture's own pixel size, so a resized scene, a fold or the
@@ -1246,6 +1268,7 @@ public final class StreamViewController: StreamViewControllerBase {
             // Hand the chain back: released means Escape is the system's again, and staying first
             // responder for a stream that no longer owns input would sit in front of SwiftUI focus.
             if isFirstResponder { resignFirstResponder() }
+            streamView.holdsKeyFocus = false
         }
         setNeedsUpdateOfPrefersPointerLocked()
         updatePointerLockChain() // (re)anchor the SwiftUI ancestors so the lock actually resolves
@@ -1350,6 +1373,98 @@ extension StreamViewController: UIPointerInteractionDelegate {
 /// rescale is the identity); touches outside the video area are clamped onto its edge.
 final class StreamLayerUIView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+    #if os(iOS) || os(visionOS)
+    /// The stream owns the keyboard (`anchorKeyResponder`). UIKit sends key presses to the
+    /// focused item, so the view is one then.
+    var holdsKeyFocus = false {
+        didSet { if !holdsKeyFocus { dropKeyChain() } }
+    }
+    /// Activation is the click: the controller captures.
+    var onActivate: (() -> Void)?
+    /// Full Keyboard Access sent a request for the view: the controller records the proof.
+    var onFullKeyboardAccess: (() -> Void)?
+    /// First responder for Full Keyboard Access's Input mode, not for the soft keyboard.
+    private var inInputMode = false
+
+    /// Under Full Keyboard Access the view stays focusable when released: moving onto it and
+    /// activating is the way back in.
+    override var canBecomeFocused: Bool { holdsKeyFocus || FullKeyboardAccess.proven }
+
+    /// Tab or an arrow does not move focus off a view that owns the keyboard. An update with
+    /// no heading still does, so an alert takes focus. Full Keyboard Access moves it freely:
+    /// Ctrl-Tab is its way out of Input mode.
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        FullKeyboardAccess.proven || !holdsKeyFocus || context.nextFocusedItem === self
+            || context.focusHeading.isEmpty
+    }
+
+    override func didUpdateFocus(
+        in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator
+    ) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        if context.nextFocusedItem === self {
+            takeKeyChain()
+        } else if context.previouslyFocusedItem === self {
+            dropKeyChain()
+        }
+    }
+
+    /// Under Full Keyboard Access the view is first responder while it owns the keyboard, as a
+    /// text field is while edited: a text input in that place starts its Input mode, where
+    /// every key reaches the app, and focus follows a change of first responder. False where
+    /// that does not apply: unproven, or no hardware keyboard, where the soft one would rise.
+    @discardableResult
+    func takeKeyChain() -> Bool {
+        guard FullKeyboardAccess.proven, holdsKeyFocus, GCKeyboard.coalesced != nil
+        else { return false }
+        // Asked before the view is in a window, UIKit takes it up once it is: the screen's
+        // first focus pick then lands here, not on an overlay button.
+        if !isFirstResponder { becomeFirstResponder() }
+        inInputMode = true
+        return true
+    }
+
+    /// Focus left the view, or the stream let the keyboard go: Input mode ends with the chain.
+    func dropKeyChain() {
+        guard inInputMode else { return }
+        inInputMode = false
+        if isFirstResponder { resignFirstResponder() }
+    }
+
+    /// Full Keyboard Access reads these before it acts on the view, and no API says it is on.
+    override var accessibilityTraits: UIAccessibilityTraits {
+        get {
+            noteFullKeyboardAccess()
+            return super.accessibilityTraits
+        }
+        set { super.accessibilityTraits = newValue }
+    }
+
+    override var isAccessibilityElement: Bool {
+        get {
+            noteFullKeyboardAccess()
+            return super.isAccessibilityElement
+        }
+        set { super.isAccessibilityElement = newValue }
+    }
+
+    /// Activation is the click: Space under Full Keyboard Access captures a released stream.
+    override func accessibilityActivate() -> Bool {
+        noteFullKeyboardAccess()
+        guard let onActivate else { return super.accessibilityActivate() }
+        onActivate()
+        return true
+    }
+
+    /// The request being answered comes from Full Keyboard Access (iOS 18): tell the
+    /// controller, outside the accessibility callback.
+    private func noteFullKeyboardAccess() {
+        guard #available(iOS 18.0, *), !FullKeyboardAccess.proven,
+              AccessibilityRequest.current?.technology == .fullKeyboardAccess
+        else { return }
+        DispatchQueue.main.async { [weak self] in self?.onFullKeyboardAccess?() }
+    }
+    #endif
     var displayLayer: AVSampleBufferDisplayLayer {
         // swiftlint:disable:next force_cast
         layer as! AVSampleBufferDisplayLayer
@@ -1503,6 +1618,7 @@ final class StreamLayerUIView: UIView {
         super.init(frame: frame)
         displayLayer.videoGravity = .resizeAspect
         #if os(iOS) || os(visionOS)
+        focusEffect = nil // the picture is no control: no halo around it
         isMultipleTouchEnabled = true
         // Button-less mouse/trackpad movement (no lock) arrives as hover, not touches —
         // forward it as absolute cursor moves so the host cursor tracks without a click held.

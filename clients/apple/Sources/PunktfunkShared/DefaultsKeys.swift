@@ -45,6 +45,9 @@ public enum DefaultsKey {
     /// disconnect, so a button legend keeps speaking the pad the user owns once it sleeps or
     /// disconnects. See `GamepadGlyphs`.
     public static let lastGamepadKind = "punktfunk.lastGamepadKind"
+    /// Full Keyboard Access drove the keyboard when a stream last looked. An observation, not
+    /// a setting: `FullKeyboardAccess.proven` writes it and nothing resets it by hand.
+    public static let fullKeyboardAccess = "punktfunk.fullKeyboardAccess"
     /// Forward this device's controllers to the host at all (default true). Off is for a
     /// couch whose controller reaches the host another way — USB passthrough such as
     /// VirtualHere, or a pad plugged into the host — where forwarding as well would give the

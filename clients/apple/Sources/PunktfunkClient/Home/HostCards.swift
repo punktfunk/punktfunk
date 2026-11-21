@@ -65,7 +65,7 @@ func monogramTile(
                 .scaledToFit()
                 .frame(width: m.monogram, height: m.monogram)
                 .foregroundStyle(filled ? Color.white : Color.brand)
-                .accessibilityLabel(osChain ?? "")
+                .accessibilityLabel(osIconName(for: osChain) ?? "")
         } else {
             // Fixed size (not Dynamic Type): the glyph is pinned inside a fixed tile, so it must
             // not scale up and spill out at large accessibility text sizes. minimumScaleFactor +
@@ -75,6 +75,7 @@ func monogramTile(
                 .minimumScaleFactor(0.5)
                 .lineLimit(1)
                 .foregroundStyle(filled ? Color.white : Color.brand)
+                .accessibilityHidden(true) // the name beside it says it
         }
     }
     .frame(width: m.tile, height: m.tile)
