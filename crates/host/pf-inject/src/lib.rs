@@ -982,6 +982,10 @@ pub mod mouse_windows;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/pad_broker.rs"]
 pub mod pad_broker;
+/// Buddy pads ([`pad_buddy::BuddyHub`]): sessions sharing one OS slot. Pure state, built on
+/// every target like [`pad_pool`].
+#[path = "inject/pad_buddy.rs"]
+pub mod pad_buddy;
 /// Virtual-pad creation-retry ([`pad_gate::PadGate`]), driven by [`pad_slots`]. Replaces a
 /// per-backend permanent `broken` latch with capped-backoff retry.
 ///

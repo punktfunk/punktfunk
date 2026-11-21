@@ -1423,6 +1423,7 @@
 	"sessions_player": "Player",
 	"sessions_player_auto": "Any player",
 	"sessions_player_n": "Player {n}",
+	"sessions_player_share_n": "Shares Player {n}",
 	"action_player_failed": "Couldn't place the session's player",
 	"nav_controllers": "Controllers",
 	"controllers_intro": "What the host receives, not what the client thinks it sent.",

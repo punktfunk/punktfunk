@@ -249,6 +249,11 @@ pub(crate) struct SessionAccess {
 /// stays theirs and this call answers `reserved: false`. It is remembered against
 /// the device's pairing, so the same device reconnects as the same player — an
 /// anonymous session's pick lasts only as long as the session.
+///
+/// With `share`, this session's pads join the slot's controller instead: buttons
+/// combine, each trigger and stick takes the stronger input, and every pad on it
+/// rumbles. With no one on the slot, the session takes it as a pick would. A share
+/// lasts this session only and leaves the remembered pick alone.
 #[utoipa::path(
     put,
     path = "/session/{id}/player",
@@ -284,22 +289,32 @@ pub(crate) async fn set_session_player(
     if crate::session_status::has_native_lanes(id) == Some(false) {
         return not_on_this_plane();
     }
-    let reserved = controls.set_player(req.slot);
-    // Remember it against the pairing, so the next connect is the same player. A
-    // session with no record (anonymous) keeps the pick for this session only.
-    if let (Some(np), Some(fp)) = (st.native.as_ref(), controls.fingerprint.as_deref()) {
-        if let Err(e) = np.set_pad_slot(fp, req.slot) {
-            tracing::warn!(session = id, error = %format!("{e:#}"), "store player pick");
+    let share = req.share && req.slot.is_some();
+    let reserved = if share {
+        controls.set_shared(req.slot);
+        true
+    } else {
+        controls.set_shared(None);
+        let reserved = controls.set_player(req.slot);
+        // Remember it against the pairing, so the next connect is the same player. A
+        // session with no record (anonymous) keeps the pick for this session only.
+        if let (Some(np), Some(fp)) = (st.native.as_ref(), controls.fingerprint.as_deref()) {
+            if let Err(e) = np.set_pad_slot(fp, req.slot) {
+                tracing::warn!(session = id, error = %format!("{e:#}"), "store player pick");
+            }
         }
-    }
+        reserved
+    };
     tracing::info!(
         session = id,
         slot = ?req.slot,
+        share,
         reserved,
         "management API: session player slot"
     );
     Json(SessionPlayer {
         slot: req.slot,
+        share,
         reserved,
         pads: controls.pads(),
     })
@@ -313,6 +328,10 @@ pub(crate) struct SessionPlayerRequest {
     #[schema(value_type = u32, required = false, example = 1)]
     #[serde(default)]
     slot: Option<u8>,
+    /// Join `slot`'s controller with whoever holds it, for this session only. Ignored
+    /// without a `slot`.
+    #[serde(default)]
+    share: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -320,8 +339,10 @@ pub(crate) struct SessionPlayer {
     /// The pick now stored for this session.
     #[schema(value_type = u32, required = false)]
     slot: Option<u8>,
+    /// The session's pads share `slot`'s controller.
+    share: bool,
     /// `false` = another live session asked for that slot first and keeps it; this
-    /// session stays on the first-free claim.
+    /// session stays on the first-free claim. Always `true` for a share.
     reserved: bool,
     /// OS pad slots the session holds right now. A pad already built keeps its slot
     /// until it re-plugs, so this can still name the old player for a moment.

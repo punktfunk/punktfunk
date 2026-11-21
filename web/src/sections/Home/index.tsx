@@ -155,11 +155,11 @@ function useSessionActions(active: number): SessionActions {
 				{ id: row.id, data: { level } },
 				{ onSuccess: invalidate, onError: failed(m.access_edit_failed()) },
 			),
-		onPlayer: (row, slot) =>
+		onPlayer: (row, slot, share) =>
 			row.id != null &&
 			player.mutate(
 				// `undefined`, not null: the host reads an omitted slot as the first-free claim.
-				{ id: row.id, data: { slot: slot ?? undefined } },
+				{ id: row.id, data: { slot: slot ?? undefined, share } },
 				{ onSuccess: invalidate, onError: failed(m.action_player_failed()) },
 			),
 		busy:

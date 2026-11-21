@@ -494,6 +494,11 @@ pub(crate) struct SessionRow {
     #[schema(value_type = u32, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
     preferred_pad_slot: Option<u8>,
+    /// Player slot this session's pads share with whoever holds it, 0-based (`PUT
+    /// /session/{id}/player` with `share`). Their buttons and sticks combine on one controller.
+    #[schema(value_type = u32, required = false)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shared_pad_slot: Option<u8>,
     /// Seconds since the stream started.
     uptime_s: u64,
     /// The last closed minute of link health: loss, the recovery frames it cost, and the FEC
@@ -956,6 +961,7 @@ pub(crate) async fn get_status(
                     .then(|| super::native::access_level(Some(s.grants)).to_string()),
                 pads: s.pads.clone(),
                 preferred_pad_slot: s.preferred_pad_slot,
+                shared_pad_slot: s.shared_pad_slot,
                 uptime_s: s.uptime_s,
                 link: s.link.clone(),
                 shared_path_with: s.shared_path_with.clone(),

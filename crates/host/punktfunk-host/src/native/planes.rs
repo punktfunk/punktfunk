@@ -147,6 +147,7 @@ pub(super) fn spawn_input_plane(
         let pen_on = welcome.host_caps & punktfunk_core::quic::HOST_CAP_PEN != 0;
         let grants = controls.grants.clone();
         let pad_slots = controls.pad_slots.clone();
+        let shared = controls.shared_pad_slot.clone();
         let frame_map = frame_map.clone();
         let pad_feed = controls.pads.clone();
         let counters = counters.clone();
@@ -161,6 +162,7 @@ pub(super) fn spawn_input_plane(
                     pad_audio_on,
                     pad_id,
                     pad_slots,
+                    shared,
                     Some(pad_tx),
                     pad_writes,
                     touchpad_on,
