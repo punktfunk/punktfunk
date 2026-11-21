@@ -456,6 +456,7 @@
 			}
 		}
 	],
+	"diag_pad_audio_provisioning_summary": "The host is still setting up the controller speaker endpoint.",
 	"diag_pad_audio_refused_impact": "Games can't pair the DualSense with its speaker, so haptics fall back to rumble and the controller stays silent.",
 	"diag_pad_audio_refused_remedy": "Update Steam — its streaming audio driver backs the endpoint — and restart the Punktfunk host. If it stays, run “punktfunk-host pad-endpoint repair” as administrator.",
 	"diag_pad_audio_refused_summary": "The controller speaker endpoint refuses the 4-channel format",

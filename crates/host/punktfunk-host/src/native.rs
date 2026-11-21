@@ -360,6 +360,9 @@ pub(crate) async fn serve(
         // Console registry after the probed subsystems are up, so a probe never names a node
         // that was about to appear.
         crate::diagnostics::preflight();
+        // After the reading, so its stale "still setting up" never lands over a pushed verdict.
+        #[cfg(target_os = "windows")]
+        crate::audio::pad_endpoint::on_health_change(crate::diagnostics::catalog::push_pad_audio);
         install_shutdown_restore();
     }
     // Headless CLI: surface the PIN if armed at startup. The console arms on demand.
