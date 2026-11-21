@@ -78,5 +78,15 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Core Audio capture.
+objc2 = { workspace = true }
+block2 = { workspace = true }
+dispatch2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true }
+objc2-core-audio = { workspace = true }
+objc2-core-audio-types = { workspace = true }
+
 [lints]
 workspace = true

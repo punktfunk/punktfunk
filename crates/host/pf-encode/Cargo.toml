@@ -72,6 +72,16 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi_Common",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# VideoToolbox encode.
+objc2 = { workspace = true }
+block2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true }
+objc2-core-video = { workspace = true }
+objc2-core-media = { workspace = true }
+objc2-video-toolbox = { workspace = true }
+
 [features]
 default = []
 # NVENC hardware encode (Linux CUDA + Windows D3D11); entry points resolved at runtime.

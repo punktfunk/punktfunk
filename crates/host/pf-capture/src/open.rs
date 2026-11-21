@@ -12,6 +12,31 @@ use crate::{CursorChannelSender, CursorForwardSender, EncodeCtlSender, SetEncode
 #[cfg(target_os = "linux")]
 use anyhow::Result;
 
+/// What [`open_display`] captures and how. Named fields, as [`VirtualOutputOpts`].
+#[cfg(target_os = "macos")]
+pub struct DisplayCaptureOpts {
+    /// The `CGDirectDisplayID` to capture.
+    pub display_id: u32,
+    /// The session's size in pixels. The capture scales the display to it.
+    pub width: u32,
+    pub height: u32,
+    /// The wire rate. The capture delivers no faster.
+    pub stream_hz: u32,
+    /// The session's negotiated format: `hdr`, `ten_bit_sdr`, `chroma_444`, `full_range`.
+    pub output: pf_frame::OutputFormat,
+    /// The client draws the pointer: frames leave it out and [`crate::CursorSource`] reports it.
+    pub metadata_cursor: bool,
+    /// Held for the capture's life: the display's lease.
+    pub keepalive: Box<dyn Send>,
+}
+
+/// ScreenCaptureKit capture of one display. Frames are [`pf_frame::FramePayload::PixelBuffer`].
+#[cfg(target_os = "macos")]
+pub fn open_display(opts: DisplayCaptureOpts) -> anyhow::Result<Box<dyn crate::Capturer>> {
+    let _ = opts;
+    anyhow::bail!("macOS display capture is not built")
+}
+
 /// Least zero-copy pool depth asked of a compositor. 2 is what every producer already
 /// serves; the negotiated depth minus the hold reserve is the deferred-requeue budget.
 pub const POOL_MIN: i32 = 2;

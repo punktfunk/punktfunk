@@ -59,5 +59,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# NSPasteboard.
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-app-kit = { workspace = true }
+
 [lints]
 workspace = true

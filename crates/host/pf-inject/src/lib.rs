@@ -1200,6 +1200,12 @@ pub use stream_target::{set_screen_target, set_stream_target};
 pub mod stream_output;
 #[cfg(target_os = "linux")]
 pub use stream_output::{set_stream_output, stream_output};
+/// The display absolute coordinates map into, as a `CGDirectDisplayID`: counterpart of
+/// Windows `stream_target`. Published at capture bring-up.
+#[cfg(target_os = "macos")]
+pub fn set_stream_display(display: Option<u32>) {
+    let _ = display;
+}
 /// Stub — pen injection needs the Linux uinput tablet or Windows synthetic pointers.
 /// `pen_supported()` is false here, so no host advertises the cap and no batches arrive.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]

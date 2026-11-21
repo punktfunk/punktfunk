@@ -458,6 +458,20 @@ pub struct DmabufFrame {
     pub rebuild: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// A captured frame still in its `CVPixelBuffer`. ScreenCaptureKit hands out IOSurface-backed
+/// buffers and VideoToolbox encodes them with no copy. [`CapturedFrame::format`] names the
+/// layout the buffer holds.
+#[cfg(target_os = "macos")]
+pub struct PixelBufferFrame(pub objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>);
+
+// SAFETY: a `CVPixelBuffer` retains and releases atomically, and its pixels are only reached
+// under `CVPixelBufferLockBaseAddress`. The frame owns one retain.
+#[cfg(target_os = "macos")]
+unsafe impl Send for PixelBufferFrame {}
+// SAFETY: as above; a shared reference can only retain or lock.
+#[cfg(target_os = "macos")]
+unsafe impl Sync for PixelBufferFrame {}
+
 pub enum FramePayload {
     /// Tightly-packed CPU pixels in `format`, `width*height*bytes_per_pixel` (no row padding).
     Cpu(Vec<u8>),
@@ -475,6 +489,9 @@ pub enum FramePayload {
     /// copied frame.
     #[cfg(target_os = "windows")]
     D3d11(dxgi::D3d11Frame),
+    /// IOSurface-backed `CVPixelBuffer` (macOS zero-copy: VideoToolbox encodes it in place).
+    #[cfg(target_os = "macos")]
+    PixelBuffer(PixelBufferFrame),
 }
 
 impl CapturedFrame {
