@@ -35,8 +35,8 @@ pub(super) fn av1_coded_frame(w: u32, h: u32, align: vk::Extent2D) -> vk::Extent
     }
 }
 
-/// Whether the driver has a bitrate mode [`rc_plan`] installs. Intel's has neither without HuC
-/// firmware, and CBR forced on it does not encode the picture.
+/// Whether the driver has a bitrate mode [`rc_plan`] installs. Mesa 26.2's Intel driver has
+/// neither on any GPU, and CBR forced on it does not encode the picture.
 pub(super) fn rate_controlled(modes: vk::VideoEncodeRateControlModeFlagsKHR) -> bool {
     use vk::VideoEncodeRateControlModeFlagsKHR as Rc;
     modes.intersects(Rc::CBR | Rc::VBR)

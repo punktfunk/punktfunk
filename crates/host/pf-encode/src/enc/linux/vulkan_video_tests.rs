@@ -61,7 +61,7 @@ fn rc_plan_prefers_offered_vbr_and_clamps_to_the_driver() {
     assert_eq!(rc_plan(both, Some(" CBR "), 60, 20_000_000, u64::MAX), cbr);
     // `vbr` is honoured only when advertised.
     assert_eq!(rc_plan(Rc::CBR, Some("vbr"), 60, 20_000_000, u64::MAX), cbr);
-    // A driver with neither is not opened: Intel without HuC lists DISABLED alone.
+    // A driver with neither is not opened: Mesa 26.2's Intel driver lists DEFAULT and DISABLED.
     assert!(super::rate_controlled(Rc::VBR) && super::rate_controlled(both));
     assert!(!super::rate_controlled(Rc::DISABLED) && !super::rate_controlled(Rc::empty()));
     assert_eq!(
