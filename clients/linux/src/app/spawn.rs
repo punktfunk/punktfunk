@@ -35,7 +35,19 @@ pub use orchestrate::{session_process, CancelHandle};
 ///
 /// Resolving is not optional: `orchestrate::session_command` writes `plan.settings` into the
 /// child's `--resolved-spec`, and a session running from a spec reads NO stores.
-fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) -> ConnectPlan {
+///
+/// `None` for this device's own host (`here`, [`pf_client_core::trust::local::is_this_device`]):
+/// it is played on, never streamed.
+fn plan_for(
+    req: &ConnectRequest,
+    fp_hex: &str,
+    tofu: bool,
+    opts: &SpawnOpts,
+    here: impl Fn(&str) -> bool,
+) -> Option<ConnectPlan> {
+    if here(fp_hex) {
+        return None;
+    }
     let mut plan = ConnectPlan::for_target(
         HostTarget {
             fp_hex: Some(fp_hex.to_string()),
@@ -56,7 +68,7 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
     if let Some(profile) = &opts.profile {
         plan.play_as(profile.clone());
     }
-    plan
+    Some(plan)
 }
 
 /// Spawns the session with `fp_hex` pinned and translates its lifecycle into [`AppMsg`]s.
@@ -66,7 +78,8 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
 /// is wiped before this returns.
 ///
 /// The caller takes the slot; [`AppMsg::SessionExited`] frees it. `Ok` is the child's
-/// handle; `Err` reports a spawn failure before supervision starts.
+/// handle; `Err` reports a spawn failure before supervision starts, or this device's own host,
+/// which is never streamed.
 pub fn spawn_session(
     sender: relm4::Sender<AppMsg>,
     req: ConnectRequest,
@@ -74,7 +87,11 @@ pub fn spawn_session(
     tofu: bool,
     mut opts: SpawnOpts,
 ) -> Result<CancelHandle, String> {
-    let plan = plan_for(&req, &fp_hex, tofu, &opts);
+    let here = pf_client_core::trust::local::is_this_device;
+    let Some(plan) = plan_for(&req, &fp_hex, tofu, &opts, here) else {
+        tracing::info!(host = %req.host.addr, "stream to this device's own host refused");
+        return Err(pf_l10n::client::error_local_nothing_to_stream().to_string());
+    };
     let unlock = opts.unlock.take();
     let (cmd, spec) = orchestrate::session_command(&plan);
     let (mut error, mut ended) = (None::<orchestrate::SessionError>, None::<String>);
@@ -149,6 +166,29 @@ pub fn spawn_console(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This device's own host never builds a `ConnectPlan`, whatever the click carried: it is
+    /// played on, never streamed.
+    #[test]
+    fn a_local_host_never_builds_a_connect_plan() {
+        let here = "c".repeat(64);
+        let req = ConnectRequest {
+            host: HostTarget {
+                name: "Desk".into(),
+                addr: "192.168.1.50".into(),
+                port: 9777,
+                fp_hex: Some(here.clone()),
+                ..HostTarget::default()
+            },
+            launch: Some("steam:570".into()),
+            preset: Some(String::new()),
+            ..ConnectRequest::default()
+        };
+        for tofu in [false, true] {
+            let plan = plan_for(&req, &here, tofu, &SpawnOpts::default(), |fp| fp == here);
+            assert!(plan.is_none());
+        }
+    }
 
     /// The plan a card click builds carries THIS DEVICE'S settings, with the host's bound
     /// preset overlaid — not `Settings::default()`.
@@ -225,7 +265,7 @@ mod tests {
         let opts = SpawnOpts::default();
 
         // A card click: globals, with the BOUND preset's overrides on top.
-        let plan = plan_for(&req, &"a".repeat(64), false, &opts);
+        let plan = plan_for(&req, &"a".repeat(64), false, &opts, |_| false).unwrap();
         assert_eq!(plan.settings.bitrate_kbps, 750_000, "preset override");
         assert_eq!((plan.settings.width, plan.settings.height), (2560, 1440));
         assert_eq!(plan.settings.codec, "av1");
@@ -237,9 +277,16 @@ mod tests {
             profile: Some(profile),
             ..SpawnOpts::default()
         };
-        let plan_pick = plan_for(&req, &"a".repeat(64), false, &pick(Some("other".into())));
+        let plan_pick = plan_for(
+            &req,
+            &"a".repeat(64),
+            false,
+            &pick(Some("other".into())),
+            |_| false,
+        )
+        .unwrap();
         assert_eq!(plan_pick.profile.as_deref(), Some("other"));
-        let plan_none = plan_for(&req, &"a".repeat(64), false, &pick(None));
+        let plan_none = plan_for(&req, &"a".repeat(64), false, &pick(None), |_| false).unwrap();
         assert_eq!(plan_none.profile, None);
         // …and the spec the child actually runs from is those same settings.
         assert_eq!(plan.spec(plan.clipboard).settings, plan.settings);
@@ -252,7 +299,7 @@ mod tests {
             preset: Some(String::new()),
             ..req.clone()
         };
-        let plan = plan_for(&defaults_req, &"a".repeat(64), false, &opts);
+        let plan = plan_for(&defaults_req, &"a".repeat(64), false, &opts, |_| false).unwrap();
         assert_eq!(plan.settings.bitrate_kbps, 200_000, "back to the globals");
         assert_eq!(plan.preset, None);
         let args = plan.session_args();

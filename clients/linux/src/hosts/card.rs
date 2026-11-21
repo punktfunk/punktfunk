@@ -12,7 +12,8 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 
 /// The card for `m`, wrapped in the FlowBox child the page appends. `presets` feeds
-/// Connect with ▸; the screen line, when there is one, also ends the accessible label.
+/// Connect with ▸; the screen line, when there is one, also ends the accessible label. A click
+/// connects, wakes first, or on this device's own host opens its library.
 pub fn build(
     m: &CardModel,
     presets: &[Preset],
@@ -78,12 +79,14 @@ pub fn build(
         child.set_sensitive(false);
     }
     {
-        let (sender, req, wake) = (sender.clone(), m.request.clone(), m.wake_first());
+        // This device's own host has nothing to stream: a click opens its games.
+        let (sender, req, wake, local) =
+            (sender.clone(), m.request.clone(), m.wake_first(), m.local());
         child.connect_activate(move |_| {
-            sender.emit(HostsMsg::Act(if wake {
-                Act::WakeConnect(req.clone())
-            } else {
-                Act::Connect(req.clone())
+            sender.emit(HostsMsg::Act(match (local, wake) {
+                (true, _) => Act::Library(req.clone()),
+                (false, true) => Act::WakeConnect(req.clone()),
+                (false, false) => Act::Connect(req.clone()),
             }))
         });
     }
@@ -202,7 +205,8 @@ fn status_line(m: &CardModel) -> gtk::Box {
 }
 
 /// At most five rows and one submenu (design/linux-client-overhaul.md §2.3). A pinned card is
-/// a shortcut: it browses, hands out its link and unpins itself.
+/// a shortcut: it browses, hands out its link and unpins itself. This device's own host offers
+/// no Connect with and no Wake.
 fn menu(
     m: &CardModel,
     host: &HostRef,
@@ -213,6 +217,7 @@ fn menu(
         paired,
         pinned,
         profile,
+        local,
         ..
     } = &m.kind
     else {
@@ -307,7 +312,7 @@ fn menu(
     if m.status == Status::Streaming {
         menu.append(Some(desktop::desktop_disconnect()), Some("card.disconnect"));
     }
-    if !presets.is_empty() {
+    if !presets.is_empty() && !local {
         let with = gio::Menu::new();
         for (label, id) in std::iter::once((client::hostcard_default_settings(), ""))
             .chain(presets.iter().map(|p| (p.name.as_str(), p.id.as_str())))
@@ -325,7 +330,7 @@ fn menu(
             Some("card.library"),
         );
     }
-    if !m.status.live() && !m.request.host.mac.is_empty() {
+    if !m.status.live() && !m.request.host.mac.is_empty() && !local {
         menu.append(Some(client::hostcard_wake()), Some("card.wake"));
     }
     if profile.is_some() {

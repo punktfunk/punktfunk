@@ -23,6 +23,8 @@ use std::rc::Rc;
 pub struct Live {
     pub status: Status,
     pub online: bool,
+    /// This device's own host: nothing on the page connects to, streams or wakes it.
+    pub local: bool,
     pub presets: Vec<Preset>,
     /// The host's own actions this device may run (sleep, restart, shut down).
     pub actions: Vec<ActionInfo>,
@@ -452,7 +454,8 @@ impl DetailPage {
         self.ctx.host.borrow().clone()
     }
 
-    /// Show `k` as it is now. Rows being edited keep their text; handlers stay quiet.
+    /// Show `k` as it is now. Rows being edited keep their text; handlers stay quiet. This
+    /// device's own host shows no Connect, presets, screen, clipboard, speed test or wake.
     pub fn refresh(&self, k: &KnownHost, live: &Live) {
         self.ctx.quiet.set(true);
         *self.ctx.current.borrow_mut() = k.clone();
@@ -480,6 +483,16 @@ impl DetailPage {
             Status::Connecting | Status::Streaming
         ));
         self.library.set_visible(k.paired);
+        let streams = !live.local;
+        for row in [
+            self.connect.upcast_ref::<gtk::Widget>(),
+            self.presets_group.upcast_ref(),
+            self.clipboard_row.upcast_ref(),
+            self.speed_row.upcast_ref(),
+            self.wake_row.upcast_ref(),
+        ] {
+            row.set_visible(streams);
+        }
 
         self.refresh_presets(k, &live.presets);
         let (rows, note) = screen_section(live.screens.as_ref(), k, &live.presets);

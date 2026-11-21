@@ -47,6 +47,8 @@ pub enum CardKind {
         is_default: bool,
         /// The profile this device plays as on the host.
         profile: Option<ProfilePick>,
+        /// This device's own host: a click opens its library, and nothing streams it.
+        local: bool,
     },
     /// Found on the network and not saved. `pair_optional`: the host offers trust on first use.
     Discovered { pair_optional: bool },
@@ -77,6 +79,12 @@ impl CardModel {
     pub fn wake_first(&self) -> bool {
         matches!(self.status, Status::Offline | Status::OfflineWakes)
             && !self.request.host.mac.is_empty()
+            && !self.local()
+    }
+
+    /// This device's own host: a click opens its library, and it is never streamed or woken.
+    pub fn local(&self) -> bool {
+        matches!(self.kind, CardKind::Saved { local: true, .. })
     }
 }
 
@@ -112,6 +120,9 @@ pub struct Live<'a> {
     pub playing: &'a dyn Fn(&str) -> String,
     /// The host's Screen answer, by fingerprint.
     pub screen: &'a dyn Fn(&str) -> Option<Targets>,
+    /// Whether a fingerprint is this device's own host
+    /// ([`pf_client_core::trust::local::is_this_device`]).
+    pub here: &'a dyn Fn(&str) -> bool,
 }
 
 impl Live<'_> {
@@ -122,7 +133,8 @@ impl Live<'_> {
 
 /// The saved cards in the device's order, split into its bands. A host's pinned cards follow
 /// it and read its live state; a pin whose preset is gone does not render. A card's screen
-/// line is the host's, or its preset's where that decides (`Targets::card_line_under`).
+/// line is the host's, or its preset's where that decides (`Targets::card_line_under`). This
+/// device's own host has one card, with no preset and no screen: nothing streams it.
 pub fn saved_bands(
     hosts: &[KnownHost],
     presets: &[Preset],
@@ -132,16 +144,17 @@ pub fn saved_bands(
     let mut cards = Vec::new();
     for k in hosts {
         let online = live.online(k);
+        let local = (live.here)(&k.fp_hex);
         let (playing, targets) = if k.fp_hex.is_empty() {
             (String::new(), None)
         } else {
-            ((live.playing)(&k.fp_hex), (live.screen)(&k.fp_hex))
+            let screen = (!local).then(|| (live.screen)(&k.fp_hex)).flatten();
+            ((live.playing)(&k.fp_hex), screen)
         };
         let is_default = k.id.is_some() && settings.default_host.as_deref() == k.id.as_deref();
         let card = |pinned: Option<&Preset>, phase: Option<Phase>| {
-            let bound = k
-                .preset_id
-                .as_deref()
+            let bound = (k.preset_id.as_deref())
+                .filter(|_| !local)
                 .and_then(|id| presets.iter().find(|p| p.id == id));
             let mut request = ConnectRequest {
                 host: HostTarget::from(k),
@@ -158,14 +171,7 @@ pub fn saved_bands(
                 name: k.name.clone(),
                 address: format!("{}:{}", k.addr, k.port),
                 os: k.os.clone(),
-                status: Status::of(
-                    k,
-                    online,
-                    phase,
-                    &playing,
-                    settings.auto_wake,
-                    pf_client_core::trust::local::is_this_device(&k.fp_hex),
-                ),
+                status: Status::of(k, online, phase, &playing, settings.auto_wake, local),
                 chip: chip.cloned(),
                 screen: targets.as_ref().and_then(|t| t.card_line_under(preset)),
                 kind: CardKind::Saved {
@@ -174,6 +180,7 @@ pub fn saved_bands(
                     pinned: pinned.map(|p| (p.id.clone(), p.name.clone())),
                     is_default,
                     profile: k.profile.clone(),
+                    local,
                 },
                 request,
                 last_used: k.last_used,
@@ -181,7 +188,7 @@ pub fn saved_bands(
         };
         // The session shows on the host's own card, never on a pinned one.
         cards.push(card(None, live.sessions.get(&k.card_key()).copied()));
-        for id in &k.pinned_presets {
+        for id in k.pinned_presets.iter().filter(|_| !local) {
             if let Some(p) = presets.iter().find(|p| &p.id == id) {
                 cards.push(card(Some(p), None));
             }
@@ -282,6 +289,7 @@ mod tests {
                 }
             },
             screen: &|_| None,
+            here: &|_| false,
         };
         saved_bands(hosts, presets, s, &live)
     }
@@ -381,6 +389,7 @@ mod tests {
             sessions: &sessions,
             playing: &|_| String::new(),
             screen: &|_| None,
+            here: &|_| false,
         };
         let status = |name: &str| {
             saved_bands(&hosts, &[], &Settings::default(), &live)
@@ -420,10 +429,55 @@ mod tests {
             sessions: &HashMap::new(),
             playing: &|_| String::new(),
             screen: &|fp| (fp == "ab").then(|| roles.clone()),
+            here: &|_| false,
         };
         let out = saved_bands(&[desk], &presets, &Settings::default(), &live);
         let lines: Vec<_> = out[0].cards.iter().map(|c| c.screen.as_deref()).collect();
         let (second, main) = (client::screen_role_second(), client::screen_role_main());
         assert_eq!(lines, [Some(second), Some(second), Some(main)]);
+    }
+
+    /// This device's own host is one card: "This device", no preset, no screen, no pinned
+    /// cards, and a click that never wakes or dials.
+    #[test]
+    fn this_devices_host_is_one_card_that_streams_nothing() {
+        let mut desk = host("Desk", "10.0.0.2", "ab");
+        desk.pinned_presets = vec!["g".into()];
+        desk.preset_id = Some("g".into());
+        desk.mac = vec!["aa:bb:cc:dd:ee:ff".into()];
+        let game = Preset {
+            id: "g".into(),
+            name: "Game".into(),
+            accent: None,
+            host_screen: None,
+        };
+        let roles: Targets = serde_json::from_str(
+            r#"{"targets": [{"id": "own"}],
+               "role": {"yours": "second", "host_default": "only", "offered": ["only", "main", "second"]}}"#,
+        )
+        .unwrap();
+        let up: HashMap<String, bool> = [("ab".to_string(), true)].into_iter().collect();
+        let sessions = HashMap::new();
+        let cards = |probed: &HashMap<String, bool>| {
+            let live = Live {
+                probed,
+                sessions: &sessions,
+                playing: &|_| String::new(),
+                screen: &|_| Some(roles.clone()),
+                here: &|fp| fp == "ab",
+            };
+            let (hosts, presets) = (std::slice::from_ref(&desk), std::slice::from_ref(&game));
+            saved_bands(hosts, presets, &Settings::default(), &live)
+                .remove(0)
+                .cards
+        };
+        let awake = cards(&up);
+        assert_eq!(awake.len(), 1, "no pinned card");
+        assert_eq!(awake[0].status, Status::Here);
+        assert_eq!((&awake[0].chip, &awake[0].screen), (&None, &None));
+        assert!(awake[0].local());
+        let asleep = cards(&HashMap::new());
+        assert_eq!(asleep[0].status, Status::Offline);
+        assert!(!asleep[0].wake_first(), "never woken from here");
     }
 }
