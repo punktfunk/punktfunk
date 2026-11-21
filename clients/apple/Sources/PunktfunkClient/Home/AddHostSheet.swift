@@ -125,13 +125,17 @@ struct AddHostSheet: View {
             }
             .padding([.top, .horizontal], Self.margin)
             #endif
+            // A field's title is not its accessibility label in an iOS form, which shows the
+            // prompt alone: unlabelled, the port field reads as a bare number.
             Form {
                 TextField(
                     String(localized: L10n.hostsFieldName), text: $name,
                     prompt: Text(L10n.hostsFieldNamePlaceholder))
+                    .accessibilityLabel(L10n.hostsFieldName)
                 TextField(
                     String(localized: L10n.hostsFieldAddress), text: $address,
                     prompt: Text(L10n.hostsFieldAddressPlaceholder))
+                    .accessibilityLabel(L10n.hostsFieldAddress)
                     .autocorrectionDisabled()
                     #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
@@ -140,12 +144,14 @@ struct AddHostSheet: View {
                 TextField(
                     String(localized: L10n.hostsFieldPort), text: $port,
                     prompt: Text(verbatim: String(HostFormDraft.defaultPort)))
+                    .accessibilityLabel(L10n.hostsFieldPort)
                     #if os(iOS) || os(visionOS)
                     .keyboardType(.numberPad)
                     #endif
                 TextField(
                     String(localized: L10n.hostsFieldMac), text: $mac,
                     prompt: Text(L10n.hostsFieldMacPlaceholder))
+                    .accessibilityLabel(L10n.hostsFieldMac)
                     .autocorrectionDisabled()
                     #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
