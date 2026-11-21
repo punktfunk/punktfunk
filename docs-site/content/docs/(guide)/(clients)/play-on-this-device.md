@@ -108,9 +108,9 @@ The game reads your controllers directly. For an emulator, the host sets the pla
 | Windows | None set. The emulator keeps its own. |
 
 The order of a mix, a DualSense beside an Xbox controller, isn't promised: on an emulator that goes
-by index, set the players in the emulator. In a Steam entry with Steam Input on, the players are
-Steam's virtual controllers in Steam's order. With Steam Input off for the entry, they are the
-physical ones.
+by index, set the players in the emulator. In a Steam entry with Steam Input on, the game sees
+Steam's virtual controllers, which the host can't name: none are set and the emulator keeps its
+own. With Steam Input off for the entry, the players are the physical controllers.
 
 ## Steam on a desktop
 
