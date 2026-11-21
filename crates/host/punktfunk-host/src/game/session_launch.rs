@@ -42,10 +42,8 @@ pub(crate) enum Pads {
         kind: punktfunk_core::config::GamepadPref,
         slots: Option<std::sync::Arc<std::sync::atomic::AtomicU16>>,
     },
-    /// The pads at the desk, in seat order.
-    Desk(
-        #[allow(dead_code, reason = "the host does not read the desk's pads")] Vec<hermir::PadRef>,
-    ),
+    /// The pads at the desk, in seat order, each named as SDL names it. Empty binds no players.
+    Desk(Vec<hermir::PadRef>),
 }
 
 /// A claimed, prepped launch.

@@ -344,9 +344,10 @@ impl Drop for Unsettled {
     }
 }
 
-/// Row `n`'s launch: prepare, start, then the lease in the row until the game is gone. A launch
-/// that never starts leaves its outcome on the row. Once End sets `cancel`, the download wait
-/// stops, nothing spawns, and the row goes with no outcome.
+/// Row `n`'s launch: prepare, start, then the lease in the row until the game is gone. On Linux
+/// the pads at the desk are read just before prepare, for an emulator's players. A launch that
+/// never starts leaves its outcome on the row. Once End sets `cancel`, the download wait stops,
+/// nothing spawns, and the row goes with no outcome.
 #[cfg_attr(
     not(any(windows, target_os = "linux")),
     allow(unused_variables, reason = "no launch path")
@@ -355,6 +356,13 @@ fn run(n: u64, target: LaunchTarget, owner: LaunchOwner, at: At, cancel: &Atomic
     let _unsettled = Unsettled {
         n,
         title: target.game.title.clone(),
+    };
+    #[cfg(target_os = "linux")]
+    let owner = LaunchOwner {
+        pads: Pads::Desk(crate::emulators::desk_pads(
+            &crate::emulators::SdlFilter::default(),
+        )),
+        ..owner
     };
     let called_off = || cancel.load(Ordering::Relaxed);
     let crate::session_launch::Prepared {
