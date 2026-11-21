@@ -91,16 +91,9 @@ public final class SessionAudio: @unchecked Sendable {
     private static let sessionQueue = DispatchQueue(label: "io.unom.punktfunk.audio.session")
     #endif
     #if !os(macOS)
-    /// Token for the route-change observer: it revives an engine the route change stopped, and on
-    /// iOS re-applies the earpiece steer (see `installRouteObserver`). Guarded by `stateLock`.
-    private var routeObserver: NSObjectProtocol?
-    /// Token for the media-services-reset observer — the audio server restarting takes the
-    /// session's configuration and every engine with it. Guarded by `stateLock`.
-    private var mediaResetObserver: NSObjectProtocol?
-    /// Token for the interruption observer — a phone call or a non-mixable app stops the engines,
-    /// and ending the interruption restarts nothing by itself (see
-    /// `installInterruptionObserver`). Guarded by `stateLock`.
-    private var interruptionObserver: NSObjectProtocol?
+    /// The audio session's observers: route change, media-services reset, interruption (see
+    /// `observe`). Guarded by `stateLock`.
+    private var sessionObservers: [NSObjectProtocol] = []
     #endif
 
     // MARK: - Device changes (see `installDeviceChangeRecovery`)
@@ -155,13 +148,7 @@ public final class SessionAudio: @unchecked Sendable {
         // drop them here too rather than leaking them when an owner skips stop().
         deviceWatcher?.stop()
         #if !os(macOS)
-        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
-        if let mediaResetObserver {
-            NotificationCenter.default.removeObserver(mediaResetObserver)
-        }
-        if let interruptionObserver {
-            NotificationCenter.default.removeObserver(interruptionObserver)
-        }
+        sessionObservers.forEach { NotificationCenter.default.removeObserver($0) }
         #endif
     }
 
@@ -385,26 +372,34 @@ public final class SessionAudio: @unchecked Sendable {
     /// `installDeviceChangeRecovery`), which is why this is installed for `.playback` sessions and
     /// on tvOS too, where there is no earpiece to steer away from.
     private func installRouteObserver() {
-        let observer = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification,
-            object: AVAudioSession.sharedInstance(), queue: nil
-        ) { [weak self] _ in
-            // Arrives on whatever thread AVFoundation posts it from, and the session API blocks
-            // on the audio server — so do the work on the shared session queue, like every
-            // other call into it.
+        observe(AVAudioSession.routeChangeNotification) { audio in
+            #if os(iOS) || os(visionOS)
+            audio.steerBuiltInOutputToSpeaker(AVAudioSession.sharedInstance())
+            #endif
+            audio.reviveStoppedEngines("the audio route changed")
+        }
+    }
+
+    /// Run `work` on the shared session queue for each `name` notification `when` accepts, while
+    /// the session is not stopped. Notifications arrive on whatever thread AVFoundation posts
+    /// from, and the session API blocks on the audio server. `stop()` drops the token.
+    private func observe(
+        _ name: Notification.Name, object: Any? = AVAudioSession.sharedInstance(),
+        when accepts: @escaping (Notification) -> Bool = { _ in true },
+        _ work: @escaping (SessionAudio) -> Void
+    ) {
+        let token = NotificationCenter.default.addObserver(
+            forName: name, object: object, queue: nil
+        ) { [weak self] note in
+            guard accepts(note) else { return }
             SessionAudio.sessionQueue.async {
                 guard let self, !self.flag.isStopped else { return }
-                #if os(iOS) || os(visionOS)
-                self.steerBuiltInOutputToSpeaker(AVAudioSession.sharedInstance())
-                #endif
-                self.reviveStoppedEngines("the audio route changed")
+                work(self)
             }
         }
         stateLock.lock()
-        let stale = routeObserver
-        routeObserver = observer
+        sessionObservers.append(token)
         stateLock.unlock()
-        if let stale { NotificationCenter.default.removeObserver(stale) }
     }
     #endif
 
@@ -520,12 +515,8 @@ public final class SessionAudio: @unchecked Sendable {
         let watcher = deviceWatcher
         deviceWatcher = nil
         #if !os(macOS)
-        let route = routeObserver
-        routeObserver = nil
-        let mediaReset = mediaResetObserver
-        mediaResetObserver = nil
-        let interruption = interruptionObserver
-        interruptionObserver = nil
+        let observers = sessionObservers
+        sessionObservers = []
         #endif
         stateLock.unlock()
         // Every watcher goes before the engines do: a device change landing during teardown must
@@ -534,9 +525,7 @@ public final class SessionAudio: @unchecked Sendable {
         // also ahead of the deactivate below, so a route change cannot re-steer a dying session.
         watcher?.stop()
         #if !os(macOS)
-        if let route { NotificationCenter.default.removeObserver(route) }
-        if let mediaReset { NotificationCenter.default.removeObserver(mediaReset) }
-        if let interruption { NotificationCenter.default.removeObserver(interruption) }
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
         #endif
         tearDownEngines()
         #if !os(macOS)
@@ -876,22 +865,12 @@ public final class SessionAudio: @unchecked Sendable {
     /// with it, and the documented recovery is to build all of it again — the same rebuild a route
     /// change uses, with the session activation back in front of it.
     private func installMediaResetObserver(micEnabled: Bool) {
-        let observer = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil
-        ) { [weak self] _ in
-            SessionAudio.sessionQueue.async {
-                guard let self, !self.flag.isStopped else { return }
-                self.activateAudioSession(micEnabled: micEnabled)
-                DispatchQueue.main.async {
-                    self.scheduleEngineRebuild(reason: "the audio services were reset")
-                }
+        observe(AVAudioSession.mediaServicesWereResetNotification, object: nil) { audio in
+            audio.activateAudioSession(micEnabled: micEnabled)
+            DispatchQueue.main.async {
+                audio.scheduleEngineRebuild(reason: "the audio services were reset")
             }
         }
-        stateLock.lock()
-        let stale = mediaResetObserver
-        mediaResetObserver = observer
-        stateLock.unlock()
-        if let stale { NotificationCenter.default.removeObserver(stale) }
     }
 
     /// Interruptions still happen to a mixable session — a phone call, Siri, an app that claims
@@ -901,25 +880,15 @@ public final class SessionAudio: @unchecked Sendable {
     /// keep hearing it is not in doubt, and `reviveStoppedEngines` declines when playback never
     /// went down.
     private func installInterruptionObserver(micEnabled: Bool) {
-        let observer = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification,
-            object: AVAudioSession.sharedInstance(), queue: nil
-        ) { [weak self] note in
-            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
-            SessionAudio.sessionQueue.async {
-                guard let self, !self.flag.isStopped else { return }
-                // The full activation, not a bare `setActive`: an interruption can drop the
-                // category configuration too, and on iOS the earpiece steer is per-route.
-                self.activateAudioSession(micEnabled: micEnabled)
-                self.reviveStoppedEngines("an audio interruption ended")
-            }
+        observe(AVAudioSession.interruptionNotification, when: { note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            return raw.flatMap { AVAudioSession.InterruptionType(rawValue: $0) } == .ended
+        }) { audio in
+            // The full activation, not a bare `setActive`: an interruption can drop the
+            // category configuration too, and on iOS the earpiece steer is per-route.
+            audio.activateAudioSession(micEnabled: micEnabled)
+            audio.reviveStoppedEngines("an audio interruption ended")
         }
-        stateLock.lock()
-        let stale = interruptionObserver
-        interruptionObserver = observer
-        stateLock.unlock()
-        if let stale { NotificationCenter.default.removeObserver(stale) }
     }
     #endif
 
