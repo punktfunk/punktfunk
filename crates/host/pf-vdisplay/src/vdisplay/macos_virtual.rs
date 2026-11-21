@@ -27,8 +27,6 @@ pub(crate) struct Spec<'a> {
     pub name: &'a str,
     pub width: u32,
     pub height: u32,
-    /// The largest pixel size a later mode may take in place.
-    pub max: (u32, u32),
     pub refresh_hz: f64,
     pub vendor: u32,
     pub product: u32,
@@ -133,7 +131,6 @@ fn missing() -> Option<String> {
 pub(crate) struct Display {
     object: Option<Retained<AnyObject>>,
     id: u32,
-    max: (u32, u32),
 }
 
 // SAFETY: `Display` owns its object alone and reaches it only through borrows the caller
@@ -160,8 +157,8 @@ impl Display {
             // to take exactly the type passed. The setters retain the name and the queue.
             unsafe {
                 let _: () = msg_send![d, setName: &*name];
-                let _: () = msg_send![d, setMaxPixelsWide: spec.max.0];
-                let _: () = msg_send![d, setMaxPixelsHigh: spec.max.1];
+                let _: () = msg_send![d, setMaxPixelsWide: spec.width];
+                let _: () = msg_send![d, setMaxPixelsHigh: spec.height];
                 let _: () = msg_send![d, setSizeInMillimeters: size];
                 let _: () = msg_send![d, setVendorID: spec.vendor];
                 let _: () = msg_send![d, setProductID: spec.product];
@@ -185,7 +182,6 @@ impl Display {
             let display = Display {
                 object: Some(object),
                 id,
-                max: spec.max,
             };
             if id == 0 {
                 bail!("the virtual display has no display id");
@@ -201,13 +197,8 @@ impl Display {
         self.id
     }
 
-    /// Whether a mode this size can be set in place: it fits the pixels the descriptor allowed.
-    pub(crate) fn fits(&self, width: u32, height: u32) -> bool {
-        width <= self.max.0 && height <= self.max.1
-    }
-
     /// Set the display's one mode, one pixel to a point: `false` when macOS refuses it.
-    pub(crate) fn apply(&self, width: u32, height: u32, refresh_hz: f64) -> Result<bool> {
+    fn apply(&self, width: u32, height: u32, refresh_hz: f64) -> Result<bool> {
         let object = self.object.as_deref().context("the display is gone")?;
         autoreleasepool(|_| {
             let mode_class = AnyClass::get(MODE).context("find CGVirtualDisplayMode")?;

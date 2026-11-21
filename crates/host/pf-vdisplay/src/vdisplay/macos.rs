@@ -25,8 +25,9 @@ use objc2_core_graphics::{
     kCGNullDirectDisplay, CGBeginDisplayConfiguration, CGCancelDisplayConfiguration,
     CGCompleteDisplayConfiguration, CGConfigureDisplayMirrorOfDisplay, CGConfigureDisplayOrigin,
     CGConfigureOption, CGDisplayBounds, CGDisplayConfigRef, CGDisplayCopyDisplayMode,
-    CGDisplayIsActive, CGDisplayMode, CGDisplayModelNumber, CGDisplayVendorNumber, CGError,
-    CGGetActiveDisplayList, CGGetOnlineDisplayList, CGMainDisplayID,
+    CGDisplayIsActive, CGDisplayMode, CGDisplayModelNumber, CGDisplayPixelsHigh,
+    CGDisplayPixelsWide, CGDisplayVendorNumber, CGError, CGGetActiveDisplayList,
+    CGGetOnlineDisplayList, CGMainDisplayID,
 };
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -37,11 +38,11 @@ const MAX_DISPLAYS: usize = 32;
 /// real panel reads as ours.
 const VENDOR: u32 = 0x7fff;
 const PRODUCT: u32 = 0x5046;
-/// The smallest size a virtual display allows in place: a mode switch inside it is a new mode
-/// on the same display.
-const MIN_MAX_PIXELS: (u32, u32) = (3840, 2160);
-/// How long macOS gets to bring a display online, move it to a mode, or take it away.
+/// How long macOS gets to bring a display online or take it away.
 const SETTLE: Duration = Duration::from_secs(3);
+/// How long a released display may stay listed before [`Screen::retire`] unpins it. An
+/// unconfigured one goes in about 100 ms.
+const UNPINNED: Duration = Duration::from_millis(500);
 
 /// Every online display, sorted by `(x, y, connector)`. One asleep or mirroring another is
 /// listed disabled: it shows nothing of its own to capture.
@@ -90,16 +91,27 @@ fn list(call: impl FnOnce(u32, *mut u32, &mut u32) -> CGError) -> Result<Vec<u32
 fn read(id: u32, main: u32) -> PhysicalMonitor {
     let origin = CGDisplayBounds(id).origin;
     let mode = CGDisplayCopyDisplayMode(id);
-    let mode = mode.as_deref();
+    // A process reads no mode for a display that came online after it first read the display
+    // list (macOS 27). Its size still reads, as points.
+    let (pixels, points_wide) = match mode.as_deref() {
+        Some(m) => (
+            (
+                CGDisplayMode::pixel_width(Some(m)),
+                CGDisplayMode::pixel_height(Some(m)),
+            ),
+            CGDisplayMode::width(Some(m)),
+        ),
+        None => (
+            (CGDisplayPixelsWide(id), CGDisplayPixelsHigh(id)),
+            CGDisplayPixelsWide(id),
+        ),
+    };
     let mut head = head(
         id,
         (origin.x, origin.y),
-        (
-            CGDisplayMode::pixel_width(mode),
-            CGDisplayMode::pixel_height(mode),
-        ),
-        CGDisplayMode::width(mode),
-        CGDisplayMode::refresh_rate(mode),
+        pixels,
+        points_wide,
+        CGDisplayMode::refresh_rate(mode.as_deref()),
         id == main,
         CGDisplayIsActive(id),
     );
@@ -138,10 +150,10 @@ fn head(
     }
 }
 
-/// A session's own screen: a virtual display at the asked mode. A mode switch while the last
-/// display it made lives sets the new mode on that display; a `join` session shares the oldest
-/// live one. A display that can't be made falls back to a mirror of the main display, framed at
-/// the asked size.
+/// A session's own screen: a virtual display at the asked mode. A rebuild at the same mode keeps
+/// the display it made; another mode replaces it. A `join` session shares the oldest live one. A
+/// display that can't be made falls back to a mirror of the main display, framed at the asked
+/// size.
 #[derive(Default)]
 pub(crate) struct OwnScreen {
     topology: Option<Topology>,
@@ -181,15 +193,24 @@ impl VirtualDisplay for OwnScreen {
     }
 
     fn create(&mut self, mode: Mode) -> Result<VirtualOutput> {
-        if let Some(out) = self.resize(mode) {
-            return Ok(out);
+        if let Some(screen) = self.live.upgrade() {
+            let asked = (mode.width, mode.height, mode.refresh_hz);
+            if let Some(l) = live().into_iter().find(|l| l.entry == screen.entry) {
+                if l.mode == asked {
+                    return Ok(output(screen, l.id, mode.millihz()));
+                }
+            }
+            // A new mode needs a new display: a live one takes a mode only from its own list,
+            // where macOS prefers the mode its identity last ran. The old display goes first.
+            tracing::info!(mode = ?asked, "making the virtual display again at the new mode");
+            screen.retire();
         }
         if self.join
-            && let Some((screen, id)) =
-                (live().into_iter()).find_map(|l| Some((l.screen.upgrade()?, l.id)))
+            && let Some((screen, l)) =
+                (live().into_iter()).find_map(|l| Some((l.screen.upgrade()?, l)))
         {
-            tracing::info!(display_id = id, "sharing the live virtual display");
-            return Ok(output(screen, id));
+            tracing::info!(display_id = l.id, "sharing the live virtual display");
+            return Ok(output(screen, l.id, l.mode.2.saturating_mul(1000)));
         }
         match self.make(mode) {
             Ok(out) => Ok(out),
@@ -221,20 +242,29 @@ impl OwnScreen {
             (width, height),
             crate::policy::Identity::Shared,
         );
+        let taken: Vec<u32> = live().iter().map(|l| l.serial).collect();
+        let serial = serial(self.slot, mode, &taken);
         let display = Display::create(&Spec {
             name: "Punktfunk",
             width,
             height,
-            max: (width.max(MIN_MAX_PIXELS.0), height.max(MIN_MAX_PIXELS.1)),
             refresh_hz: f64::from(mode.millihz()) / 1000.0,
             vendor: VENDOR,
             product: PRODUCT,
-            serial: self.slot.unwrap_or_else(anonymous_serial),
+            serial,
         })?;
         let id = display.id();
-        settle("come online", || {
+        settle(SETTLE, "come online", || {
             let head = read(id, 0);
             head.enabled && (head.width, head.height) == (width, height)
+        })
+        .with_context(|| {
+            let head = read(id, 0);
+            let listed = online().unwrap_or_default();
+            format!(
+                "display {id} reads {}x{} active={} listed={listed:?}",
+                head.width, head.height, head.enabled
+            )
         })?;
         let topology = crate::resolve_topology(crate::create_topology(self.topology, self.client));
         let restore = if live().is_empty() {
@@ -247,7 +277,7 @@ impl OwnScreen {
             );
             None
         };
-        let screen = Screen::new(display, restore, mode, self.slot);
+        let screen = Screen::new(display, restore, mode, self.slot, serial);
         let label = format!("{width}x{height}@{}", mode.refresh_hz);
         tracing::info!(display_id = id, mode = %label, ?topology, "virtual display created");
         crate::emit_display_event(crate::DisplayEvent::Created {
@@ -257,89 +287,65 @@ impl OwnScreen {
             refresh_hz: mode.refresh_hz,
         });
         self.live = Arc::downgrade(&screen);
-        Ok(output(screen, id))
-    }
-
-    /// The new mode on the display this backend made, while a session still holds it.
-    fn resize(&mut self, mode: Mode) -> Option<VirtualOutput> {
-        let screen = self.live.upgrade()?;
-        let (width, height) = (mode.width, mode.height);
-        let id = {
-            let held = screen.display.lock().unwrap_or_else(|e| e.into_inner());
-            let held = held.as_ref()?;
-            let id = held.id();
-            if !held.fits(width, height) {
-                tracing::info!(
-                    display_id = id,
-                    "the new mode outgrows the virtual display: making another"
-                );
-                return None;
-            }
-            let hz = f64::from(mode.millihz()) / 1000.0;
-            if !matches!(held.apply(width, height, hz), Ok(true)) {
-                tracing::warn!(
-                    display_id = id,
-                    "the virtual display refused the new mode: making another"
-                );
-                return None;
-            }
-            id
-        };
-        let moved = settle("take the new mode", || {
-            let head = read(id, 0);
-            (head.width, head.height) == (width, height)
-        });
-        if let Err(e) = moved {
-            let error = format!("{e:#}");
-            tracing::warn!(display_id = id, %error, "making another virtual display");
-            return None;
-        }
-        set_live_mode(screen.entry, mode);
-        let label = format!("{width}x{height}@{}", mode.refresh_hz);
-        tracing::info!(
-            display_id = id,
-            mode = %label,
-            "virtual display moved to a new mode in place"
-        );
-        Some(output(screen, id))
+        Ok(output(screen, id, mode.millihz()))
     }
 }
 
-fn output(screen: Arc<Screen>, id: u32) -> VirtualOutput {
+/// The output streaming display `id`, at the rate it reads back, else `asked_mhz`, the rate it
+/// was set to.
+fn output(screen: Arc<Screen>, id: u32, asked_mhz: u32) -> VirtualOutput {
     let head = read(id, 0);
-    let refresh_hz = head.refresh_mhz.saturating_add(500) / 1000;
+    let mhz = Some(head.refresh_mhz)
+        .filter(|&m| m > 0)
+        .unwrap_or(asked_mhz);
+    let refresh_hz = mhz.saturating_add(500) / 1000;
     let mut out = VirtualOutput::owned(
         0,
         Some((head.width, head.height, refresh_hz)),
         Box::new(screen),
     );
-    out.refresh_mhz = Some(head.refresh_mhz).filter(|&mhz| mhz > 0);
+    out.refresh_mhz = Some(mhz).filter(|&m| m > 0);
     out.cg_display = Some(id);
     out
 }
 
-/// A serial for a session with no identity slot: never one a slot takes (1..=15).
-fn anonymous_serial() -> u32 {
-    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x100);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// The serial a display of `mode` for identity `slot` carries. macOS brings a display back at
+/// the mode it last ran under its identity whenever the new mode list holds it, so the mode is
+/// part of the identity. Live displays hold the `taken` ones: macOS refuses a repeat, so of two
+/// sessions making the same serial at once, one falls back to the mirror.
+fn serial(slot: Option<u32>, mode: Mode, taken: &[u32]) -> u32 {
+    let key = [slot.unwrap_or(0), mode.width, mode.height, mode.millihz()];
+    // FNV-1a: the same serial for the same key on every host build.
+    let hash = (key.iter().flat_map(|k| k.to_le_bytes())).fold(0x811c_9dc5u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    });
+    let mut serial = hash.max(1);
+    while taken.contains(&serial) {
+        serial = serial.wrapping_add(1).max(1);
+    }
+    serial
 }
 
-/// Poll `done` until it holds, for at most [`SETTLE`].
-fn settle(what: &str, done: impl Fn() -> bool) -> Result<()> {
+/// Poll `done` until it holds, for at most `limit`.
+fn settle(limit: Duration, what: &str, done: impl Fn() -> bool) -> Result<()> {
     let start = Instant::now();
     while !done() {
-        if start.elapsed() >= SETTLE {
-            bail!("the display did not {what} within {SETTLE:?}");
+        if start.elapsed() >= limit {
+            bail!("the display did not {what} within {limit:?}");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     Ok(())
 }
 
+fn listed(id: u32) -> bool {
+    online().is_ok_and(|ids| ids.contains(&id))
+}
+
 /// One live virtual display, held by every output that streams it.
 struct Screen {
     display: Mutex<Option<Display>>,
-    restore: Option<Restore>,
+    restore: Mutex<Option<Restore>>,
     entry: u64,
 }
 
@@ -350,13 +356,14 @@ impl Screen {
         restore: Option<Restore>,
         mode: Mode,
         slot: Option<u32>,
+        serial: u32,
     ) -> Arc<Screen> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let entry = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let id = display.id();
         let screen = Arc::new(Screen {
             display: Mutex::new(Some(display)),
-            restore,
+            restore: Mutex::new(restore),
             entry,
         });
         lock_live().push(Live {
@@ -364,39 +371,57 @@ impl Screen {
             id,
             mode: (mode.width, mode.height, mode.refresh_hz),
             slot,
+            serial,
             screen: Arc::downgrade(&screen),
         });
         screen
+    }
+
+    /// Put the arrangement back and remove the display now, while outputs may still hold the
+    /// screen. Once only; the last drop calls it too.
+    fn retire(&self) {
+        let restore = self
+            .restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(restore) = restore {
+            restore.run();
+        }
+        let display = self
+            .display
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let Some(display) = display else {
+            return;
+        };
+        let id = display.id();
+        drop(display);
+        lock_live().retain(|l| l.entry != self.entry);
+        // A configuration that named the display keeps it online after its release, until a
+        // later one names it again. Checked on macOS 27.2.
+        if settle(UNPINNED, "go away", || !listed(id)).is_err() {
+            let _ = configure(|cfg| {
+                // SAFETY: `cfg` is the open configuration `configure` passes in.
+                let _ = unsafe { CGConfigureDisplayMirrorOfDisplay(cfg, id, kCGNullDirectDisplay) };
+                Ok(())
+            });
+        }
+        match settle(SETTLE, "go away", || !listed(id)) {
+            Ok(()) => tracing::info!(display_id = id, "virtual display removed"),
+            Err(e) => {
+                let error = format!("{e:#}");
+                tracing::warn!(display_id = id, %error, "virtual display still listed after release");
+            }
+        }
+        crate::emit_display_event(crate::DisplayEvent::Released { count: 1 });
     }
 }
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        if let Some(restore) = self.restore.take() {
-            restore.run();
-        }
-        let display = self
-            .display
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        let id = display.as_ref().map(Display::id);
-        drop(display);
-        if let Some(id) = id {
-            match settle("go away", || !online().is_ok_and(|ids| ids.contains(&id))) {
-                Ok(()) => tracing::info!(display_id = id, "virtual display removed"),
-                Err(e) => {
-                    let error = format!("{e:#}");
-                    tracing::warn!(
-                        display_id = id,
-                        %error,
-                        "virtual display still listed after release"
-                    );
-                }
-            }
-        }
-        lock_live().retain(|l| l.entry != self.entry);
-        crate::emit_display_event(crate::DisplayEvent::Released { count: 1 });
+        self.retire();
     }
 }
 
@@ -407,6 +432,7 @@ struct Live {
     id: u32,
     mode: (u32, u32, u32),
     slot: Option<u32>,
+    serial: u32,
     screen: Weak<Screen>,
 }
 
@@ -418,12 +444,6 @@ fn lock_live() -> std::sync::MutexGuard<'static, Vec<Live>> {
 
 fn live() -> Vec<Live> {
     lock_live().clone()
-}
-
-fn set_live_mode(entry: u64, mode: Mode) {
-    if let Some(l) = lock_live().iter_mut().find(|l| l.entry == entry) {
-        l.mode = (mode.width, mode.height, mode.refresh_hz);
-    }
 }
 
 /// The live virtual displays for `/display/state`: active, each its session's alone.
@@ -636,6 +656,28 @@ mod tests {
         assert_eq!(primary_origins(&before, 7), None);
     }
 
+    /// A display's serial is the same for the same device and mode, differs by mode, and steps
+    /// past one a live display holds.
+    #[test]
+    fn a_serial_names_the_device_and_the_mode() {
+        let mode = |w, h, hz: u32| Mode {
+            width: w,
+            height: h,
+            refresh_hz: hz,
+            refresh_mhz: hz * 1000,
+        };
+        let hd = serial(Some(1), mode(1920, 1080, 60), &[]);
+        assert_eq!(hd, serial(Some(1), mode(1920, 1080, 60), &[]));
+        assert_ne!(hd, serial(Some(1), mode(2560, 1440, 60), &[]));
+        assert_ne!(hd, serial(Some(2), mode(1920, 1080, 60), &[]));
+        assert_ne!(hd, serial(None, mode(1920, 1080, 60), &[]));
+        assert_eq!(
+            serial(Some(1), mode(1920, 1080, 60), &[hd]),
+            hd.wrapping_add(1).max(1)
+        );
+        assert_ne!(hd, 0);
+    }
+
     /// `exclusive` mirrors every lit head but ours, a kept one and one already dark.
     #[test]
     fn exclusive_mirrors_the_lit_heads_it_does_not_keep() {
@@ -661,9 +703,9 @@ mod tests {
         assert!(mains[0].primary);
     }
 
-    /// Makes a 1280x720 virtual display beside the others, moves it to 1920x1080 in place, has a
-    /// join share it, and checks it is gone once the last output drops. Changes the desktop for
-    /// a few seconds.
+    /// Makes a 1280x720 virtual display beside the others, keeps it for the same mode, makes it
+    /// again for 1920x1080, has a join share that, and checks each is gone once its last output
+    /// drops. Changes the desktop for a few seconds.
     #[test]
     #[ignore = "adds a display to this Mac's desktop"]
     fn a_virtual_display_lives_exactly_as_long_as_its_output() {
@@ -683,11 +725,17 @@ mod tests {
         let first = screen.create(mode(1280, 720)).expect("create");
         let id = first.cg_display.expect("display id");
         assert_eq!(first.preferred_mode.map(|m| (m.0, m.1)), Some((1280, 720)));
-        assert!(online().unwrap().contains(&id));
-        let second = screen.create(mode(1920, 1080)).expect("resize");
-        assert_eq!(second.cg_display, Some(id), "resized in place");
+        let again = screen.create(mode(1280, 720)).expect("same mode");
         assert_eq!(
-            second.preferred_mode.map(|m| (m.0, m.1)),
+            again.cg_display,
+            Some(id),
+            "the same mode keeps the display"
+        );
+        let bigger = screen.create(mode(1920, 1080)).expect("new mode");
+        let id2 = bigger.cg_display.expect("display id");
+        assert!(id2 != id && !listed(id), "a new mode replaces the display");
+        assert_eq!(
+            bigger.preferred_mode.map(|m| (m.0, m.1)),
             Some((1920, 1080))
         );
         let mut joiner = OwnScreen {
@@ -697,13 +745,13 @@ mod tests {
         let joined = joiner.create(mode(1280, 720)).expect("join");
         assert_eq!(
             joined.cg_display,
-            Some(id),
+            Some(id2),
             "a join shares the live display"
         );
-        drop((first, second));
-        assert!(online().unwrap().contains(&id), "the joiner still holds it");
+        drop((first, again, bigger));
+        assert!(listed(id2), "the joiner still holds it");
         drop(joined);
-        assert!(!online().unwrap().contains(&id));
-        assert!(live().iter().all(|l| l.id != id));
+        assert!(!listed(id2));
+        assert!(live().is_empty());
     }
 }
