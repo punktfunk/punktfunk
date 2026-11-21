@@ -102,6 +102,8 @@ const LAUNCHES = "what every launch of that emulator already does";
 const DOWNLOADS = "an installed plugin downloads its own title";
 const INSTALLED =
 	"starts only installed plugins: each install was the decision";
+const LISTED =
+	"starts only a title the library lists: adding the entry was the decision";
 const ADMITS_NONE =
 	"makes a seat but admits no device; removing one is gated. A Windows password it carries is one the caller already holds";
 const PERSON_TICKET =
@@ -141,6 +143,7 @@ export const GATES: readonly Route[] = [
 	gated("POST", "emulators/{id}/saves/export", exportPost),
 	gated("POST", "emulators/{id}/saves/import", importPost),
 	open("POST", "game/end", STEERS),
+	open("POST", "game/launch", LISTED),
 	refused("POST", "game/holds/{token}/release", holdReleasePost),
 	refused("POST", "events/relay", relayPost),
 	open("PUT", "gpus/preference", SETTING),

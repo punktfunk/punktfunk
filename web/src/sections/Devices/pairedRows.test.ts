@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import type { NativeClient } from "@/api/gen/model/nativeClient";
 import type { PairedClient } from "@/api/gen/model/pairedClient";
+import type { SessionRow } from "@/api/gen/model/sessionRow";
 import {
 	deviceName,
 	hasAccess,
+	isStreaming,
 	type PairedRow,
 	pairedListView,
 	pairedRows,
@@ -216,6 +218,22 @@ test("unpair-all calls only the planes that hold a device", () => {
 		native: true,
 		moonlight: true,
 	});
+});
+
+test("a device streams when a native session's client is its fingerprint's prefix", () => {
+	const session = (plane: string, client: string) =>
+		({ plane, client }) as SessionRow;
+	expect(isStreaming([], "aa11")).toBe(false);
+	expect(isStreaming([session("native", "aa")], "aa11")).toBe(true);
+	expect(isStreaming([session("native", "bb")], "aa11")).toBe(false);
+	expect(isStreaming([session("web", "aa")], "aa11")).toBe(true);
+	expect(isStreaming([session("gamestream", "aa")], "aa11")).toBe(false);
+});
+
+test("a local row is no device's session, whatever its key spells", () => {
+	const desk = { plane: "local", client: "desk" } as SessionRow;
+	expect(isStreaming([desk], "desk-like")).toBe(false);
+	expect(isStreaming([desk], "aa11")).toBe(false);
 });
 
 test("the pending fingerprint is the first running unpair that knows its device", () => {
