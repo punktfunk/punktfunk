@@ -3584,8 +3584,6 @@ name = "pf-audio"
 version = "0.47.0"
 dependencies = [
  "anyhow",
- "block2",
- "dispatch2",
  "objc2",
  "objc2-core-audio",
  "objc2-core-audio-types",
@@ -3603,6 +3601,7 @@ dependencies = [
  "punktfunk-core",
  "sha2 0.11.0",
  "tracing",
+ "tracing-subscriber",
  "wasapi",
  "windows 0.62.2",
  "windows-service",
