@@ -14,6 +14,9 @@
 //! lit head a mirror of the virtual display, since no public call turns a panel off: those
 //! panels show the stream's picture. Only the first live virtual display arranges; the rest
 //! extend. Teardown puts the arrangement back before it removes the display.
+//!
+//! After its first display configuration, a process sees a display made later only while an
+//! AppKit loop runs on its main thread; `punktfunk-host` runs one.
 
 use crate::backend::{VirtualDisplay, VirtualOutput};
 use crate::macos_virtual::{Display, Spec};
@@ -25,9 +28,9 @@ use objc2_core_graphics::{
     kCGNullDirectDisplay, CGBeginDisplayConfiguration, CGCancelDisplayConfiguration,
     CGCompleteDisplayConfiguration, CGConfigureDisplayMirrorOfDisplay, CGConfigureDisplayOrigin,
     CGConfigureOption, CGDisplayBounds, CGDisplayConfigRef, CGDisplayCopyDisplayMode,
-    CGDisplayIsActive, CGDisplayMode, CGDisplayModelNumber, CGDisplayPixelsHigh,
-    CGDisplayPixelsWide, CGDisplayVendorNumber, CGError, CGGetActiveDisplayList,
-    CGGetOnlineDisplayList, CGMainDisplayID,
+    CGDisplayIsActive, CGDisplayMirrorsDisplay, CGDisplayMode, CGDisplayModelNumber,
+    CGDisplayPixelsHigh, CGDisplayPixelsWide, CGDisplayVendorNumber, CGError,
+    CGGetActiveDisplayList, CGGetOnlineDisplayList, CGMainDisplayID,
 };
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -91,8 +94,8 @@ fn list(call: impl FnOnce(u32, *mut u32, &mut u32) -> CGError) -> Result<Vec<u32
 fn read(id: u32, main: u32) -> PhysicalMonitor {
     let origin = CGDisplayBounds(id).origin;
     let mode = CGDisplayCopyDisplayMode(id);
-    // A process reads no mode for a display that came online after it first read the display
-    // list (macOS 27). Its size still reads, as points.
+    // Without the AppKit loop, a process reads no mode for a display that came online after its
+    // first display read. Its size still reads, as points.
     let (pixels, points_wide) = match mode.as_deref() {
         Some(m) => (
             (
@@ -151,9 +154,9 @@ fn head(
 }
 
 /// A session's own screen: a virtual display at the asked mode. A rebuild at the same mode keeps
-/// the display it made; another mode replaces it. A `join` session shares the oldest live one. A
-/// display that can't be made falls back to a mirror of the main display, framed at the asked
-/// size.
+/// the display it made; another mode changes it in place, or replaces it when the display
+/// refuses the mode. A `join` session shares the oldest live one. A display that can't be made
+/// falls back to a mirror of the main display, framed at the asked size.
 #[derive(Default)]
 pub(crate) struct OwnScreen {
     topology: Option<Topology>,
@@ -199,10 +202,25 @@ impl VirtualDisplay for OwnScreen {
                 if l.mode == asked {
                     return Ok(output(screen, l.id, mode.millihz()));
                 }
+                let start = Instant::now();
+                match screen.change(mode) {
+                    Ok(()) => {
+                        tracing::info!(
+                            display_id = l.id,
+                            mode = ?asked,
+                            ms = start.elapsed().as_millis() as u64,
+                            "virtual display changed mode in place"
+                        );
+                        return Ok(output(screen, l.id, mode.millihz()));
+                    }
+                    Err(e) => tracing::info!(
+                        mode = ?asked,
+                        error = %format!("{e:#}"),
+                        "making the virtual display again at the new mode"
+                    ),
+                }
             }
-            // A new mode needs a new display: a live one takes a mode only from its own list,
-            // where macOS prefers the mode its identity last ran. The old display goes first.
-            tracing::info!(mode = ?asked, "making the virtual display again at the new mode");
+            // macOS refuses a second display with the same identity: the old one goes first.
             screen.retire();
         }
         if self.join
@@ -377,6 +395,33 @@ impl Screen {
         screen
     }
 
+    /// Change the display to `mode` where it stands, then mirror again each head the change
+    /// let go.
+    fn change(&self, mode: Mode) -> Result<()> {
+        let display = self.display.lock().unwrap_or_else(|e| e.into_inner());
+        let display = display.as_ref().context("the display is gone")?;
+        let (id, width, height) = (display.id(), mode.width, mode.height);
+        if !display.apply(width, height, f64::from(mode.millihz()) / 1000.0)? {
+            bail!("the display refused {width}x{height}");
+        }
+        settle(SETTLE, "take the mode", || {
+            let head = read(id, 0);
+            (head.width, head.height) == (width, height)
+        })?;
+        if let Some(restore) = self
+            .restore
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            restore.hold(id);
+        }
+        for l in lock_live().iter_mut().filter(|l| l.entry == self.entry) {
+            l.mode = (width, height, mode.refresh_hz);
+        }
+        Ok(())
+    }
+
     /// Put the arrangement back and remove the display now, while outputs may still hold the
     /// screen. Once only; the last drop calls it too.
     fn retire(&self) {
@@ -481,11 +526,41 @@ struct Restore {
 }
 
 impl Restore {
-    /// Unmirror the heads and put every display still listed back where it was.
+    /// Mirror `ours` again on each head that no longer does. macOS ends the mirror when ours
+    /// takes the mode a head runs (macOS 27.2).
+    fn hold(&self, ours: u32) {
+        let lapsed: Vec<u32> = (self.mirrors.iter().copied())
+            .filter(|&head| CGDisplayMirrorsDisplay(head) != ours)
+            .collect();
+        if lapsed.is_empty() {
+            return;
+        }
+        let result = configure(|cfg| {
+            for &head in &lapsed {
+                // SAFETY: `cfg` is the open configuration `configure` passes in.
+                check(unsafe { CGConfigureDisplayMirrorOfDisplay(cfg, head, ours) })?;
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                tracing::info!(display_id = ours, mirrors = ?lapsed, "display arrangement held")
+            }
+            Err(e) => tracing::warn!(error = %format!("{e:#}"), "display arrangement not held"),
+        }
+    }
+
+    /// Unmirror the heads still mirroring and put every display still listed back where it was.
     fn run(self) {
         let listed = online().unwrap_or_default();
         let result = configure(|cfg| {
-            for &head in self.mirrors.iter().filter(|h| listed.contains(h)) {
+            let mirroring = |h: &&u32| CGDisplayMirrorsDisplay(**h) != kCGNullDirectDisplay;
+            for &head in self
+                .mirrors
+                .iter()
+                .filter(|h| listed.contains(h))
+                .filter(mirroring)
+            {
                 // SAFETY: `cfg` is the open configuration `configure` passes in.
                 check(unsafe {
                     CGConfigureDisplayMirrorOfDisplay(cfg, head, kCGNullDirectDisplay)
@@ -704,8 +779,8 @@ mod tests {
     }
 
     /// Makes a 1280x720 virtual display beside the others, keeps it for the same mode, makes it
-    /// again for 1920x1080, has a join share that, and checks each is gone once its last output
-    /// drops. Changes the desktop for a few seconds.
+    /// again for the larger 1920x1080, changes that to 1600x900 in place, has a join share it,
+    /// and checks each is gone once its last output drops. Changes the desktop for a few seconds.
     #[test]
     #[ignore = "adds a display to this Mac's desktop"]
     fn a_virtual_display_lives_exactly_as_long_as_its_output() {
@@ -738,6 +813,16 @@ mod tests {
             bigger.preferred_mode.map(|m| (m.0, m.1)),
             Some((1920, 1080))
         );
+        let smaller = screen.create(mode(1600, 900)).expect("smaller mode");
+        assert_eq!(
+            smaller.cg_display,
+            Some(id2),
+            "a smaller mode keeps the display"
+        );
+        assert_eq!(
+            smaller.preferred_mode.map(|m| (m.0, m.1)),
+            Some((1600, 900))
+        );
         let mut joiner = OwnScreen {
             join: true,
             ..OwnScreen::default()
@@ -748,7 +833,7 @@ mod tests {
             Some(id2),
             "a join shares the live display"
         );
-        drop((first, again, bigger));
+        drop((first, again, bigger, smaller));
         assert!(listed(id2), "the joiner still holds it");
         drop(joined);
         assert!(!listed(id2));

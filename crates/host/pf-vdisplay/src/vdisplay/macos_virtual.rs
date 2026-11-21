@@ -131,6 +131,8 @@ fn missing() -> Option<String> {
 pub(crate) struct Display {
     object: Option<Retained<AnyObject>>,
     id: u32,
+    /// The size it was made at, the largest it takes.
+    max: (u32, u32),
 }
 
 // SAFETY: `Display` owns its object alone and reaches it only through borrows the caller
@@ -182,6 +184,7 @@ impl Display {
             let display = Display {
                 object: Some(object),
                 id,
+                max: (spec.width, spec.height),
             };
             if id == 0 {
                 bail!("the virtual display has no display id");
@@ -197,9 +200,14 @@ impl Display {
         self.id
     }
 
-    /// Set the display's one mode, one pixel to a point: `false` when macOS refuses it.
-    fn apply(&self, width: u32, height: u32, refresh_hz: f64) -> Result<bool> {
+    /// Set the display's one mode, one pixel to a point: `false` when macOS refuses it, or when
+    /// the mode is past `max`, which macOS refuses by dropping the display to 1x1. One mode
+    /// only: lists of two aborted the WindowServer, ending the desktop session (macOS 27.2).
+    pub(crate) fn apply(&self, width: u32, height: u32, refresh_hz: f64) -> Result<bool> {
         let object = self.object.as_deref().context("the display is gone")?;
+        if width > self.max.0 || height > self.max.1 {
+            return Ok(false);
+        }
         autoreleasepool(|_| {
             let mode_class = AnyClass::get(MODE).context("find CGVirtualDisplayMode")?;
             // SAFETY: `alloc` on a class `available` found; the initializer takes the
