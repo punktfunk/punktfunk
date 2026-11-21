@@ -291,11 +291,10 @@ public final class SessionAudio: @unchecked Sendable {
                 try? session.setPreferredOutputNumberOfChannels(wireChannels)
             }
             try session.setActive(true)
-            // Apple validates the channel ask against the ACTIVE route's maximum, so the ask
-            // above can come back as 2. Ask again, clamped: an 8-channel wire on a 5.1 AVR gets 6.
-            let reachable = min(wireChannels, session.maximumOutputNumberOfChannels)
-            if reachable > 2, session.outputNumberOfChannels < reachable {
-                try? session.setPreferredOutputNumberOfChannels(reachable)
+            if let ask = AudioFormatPlan.channelReask(
+                wire: wireChannels, maximum: session.maximumOutputNumberOfChannels,
+                current: session.outputNumberOfChannels) {
+                try? session.setPreferredOutputNumberOfChannels(ask)
             }
             // What we were actually GRANTED, not what we asked for: all three are best-effort, and
             // the ring's behaviour depends on the quantum it really gets.
@@ -1060,27 +1059,24 @@ public final class SessionAudio: @unchecked Sendable {
         return (ring, source, format)
     }
 
-    /// Connect the main mixer to the output at the output's own width. The connection the engine
-    /// makes on first use of `mainMixerNode` is stereo whatever the route carries, so a 5.1 or 7.1
-    /// source folds to 2 channels inside the engine and HDMI gets PCM 2.0 in 8 slots.
-    ///
-    /// A `captureRate` above 0 (the voice processor is engaged) sets the render rate. The
-    /// processor fails to initialize (-10875, "client-side input and output formats do not
-    /// match") unless render and capture share one rate, and its render side otherwise opens at
-    /// 44.1 kHz while its capture follows the device. Without it, a stereo route keeps the
-    /// default connection.
+    /// Connect the main mixer to the output as `AudioFormatPlan.mixerOutput` decides. A
+    /// `captureRate` above 0 means the voice processor is engaged.
     private func connectMixerAtOutputWidth(_ engine: AVAudioEngine, captureRate: Double = 0) {
         let hw = engine.outputNode.outputFormat(forBus: 0)
-        let rate = captureRate > 0 ? captureRate : hw.sampleRate
-        if hw.channelCount > 2, rate > 0,
-           let layout = hw.channelLayout ?? wireChannelLayout(channels: Int(hw.channelCount)),
-           layout.channelCount == hw.channelCount {
-            let format = AVAudioFormat(standardFormatWithSampleRate: rate, channelLayout: layout)
-            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
-        } else if captureRate > 0,
-                  let stereo = AVAudioFormat(standardFormatWithSampleRate: captureRate, channels: 2) {
-            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereo)
+        let layout = (hw.channelLayout ?? wireChannelLayout(channels: Int(hw.channelCount)))
+            .flatMap { $0.channelCount == hw.channelCount ? $0 : nil }
+        let format: AVAudioFormat?
+        switch AudioFormatPlan.mixerOutput(
+            outputChannels: Int(hw.channelCount), outputRate: hw.sampleRate,
+            hasLayout: layout != nil, captureRate: captureRate) {
+        case .engineDefault:
+            return
+        case .width(_, let rate):
+            format = layout.map { AVAudioFormat(standardFormatWithSampleRate: rate, channelLayout: $0) }
+        case .stereo(let rate):
+            format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)
         }
+        if let format { engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format) }
     }
 
     /// Say — out loud, in the log — what rate and channel count this engine is REALLY rendering
@@ -1107,42 +1103,40 @@ public final class SessionAudio: @unchecked Sendable {
         stateLock.unlock()
         ring?.noteOutputLatency(ns: Int64(max(0, latency) * 1_000_000_000))
         let outFormat = engine.outputNode.outputFormat(forBus: 0)
-        let deviceRate = Int(outFormat.sampleRate)
-        // 0 = the node has no device yet (a start that is about to fail) — nothing to compare.
-        guard deviceRate > 0 else { return }
         let outChannels = Int(outFormat.channelCount)
         let wireChannels = Int(connection.audioFormat.channels)
-        let mixerChannels = Int(engine.mainMixerNode.outputFormat(forBus: 0).channelCount)
-        if mixerChannels < wireChannels, outChannels >= wireChannels {
-            log.warning("""
-                the engine mixes to \(mixerChannels)ch before a \(outChannels)ch output — the \
-                \(wireChannels)ch session folds inside the engine
-                """)
-        }
-        if deviceRate == wireRateHz, outChannels == wireChannels {
-            log.info("""
-                audio output opened at \(wireRateHz) Hz \(outChannels)ch — the negotiated format
-                """)
-            return
-        }
-        if deviceRate != wireRateHz {
-            log.warning("""
-                audio output is \(deviceRate) Hz but the session negotiated \(wireRateHz) Hz — \
-                the engine is resampling. Playback is correct; this session is NOT \
-                \(wireRateHz) Hz at the speaker, whatever the host resolved
-                """)
-        }
-        if outChannels < wireChannels {
-            log.warning("""
-                audio output is \(outChannels)ch but the session negotiated \(wireChannels)ch — \
-                the stream is folded to the route's width before it leaves the box. On an HDMI \
-                route that is PCM 2.0 to the AVR, whatever the host sent
-                """)
-        } else if outChannels > wireChannels {
-            log.info("""
-                audio output is \(outChannels)ch on a \(wireChannels)ch session — the tail \
-                channels carry silence
-                """)
+        for note in AudioFormatPlan.notes(
+            deviceRate: Int(outFormat.sampleRate), outputChannels: outChannels,
+            mixerChannels: Int(engine.mainMixerNode.outputFormat(forBus: 0).channelCount),
+            wireRate: wireRateHz, wireChannels: wireChannels) {
+            switch note {
+            case .mixerFolds(let mixerChannels):
+                log.warning("""
+                    the engine mixes to \(mixerChannels)ch before a \(outChannels)ch output — the \
+                    \(wireChannels)ch session folds inside the engine
+                    """)
+            case .negotiated:
+                log.info("""
+                    audio output opened at \(wireRateHz) Hz \(outChannels)ch — the negotiated format
+                    """)
+            case .resampling(let deviceRate):
+                log.warning("""
+                    audio output is \(deviceRate) Hz but the session negotiated \(wireRateHz) Hz — \
+                    the engine is resampling. Playback is correct; this session is NOT \
+                    \(wireRateHz) Hz at the speaker, whatever the host resolved
+                    """)
+            case .folded:
+                log.warning("""
+                    audio output is \(outChannels)ch but the session negotiated \(wireChannels)ch — \
+                    the stream is folded to the route's width before it leaves the box. On an HDMI \
+                    route that is PCM 2.0 to the AVR, whatever the host sent
+                    """)
+            case .silentTail:
+                log.info("""
+                    audio output is \(outChannels)ch on a \(wireChannels)ch session — the tail \
+                    channels carry silence
+                    """)
+            }
         }
     }
 
