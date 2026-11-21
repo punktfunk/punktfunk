@@ -876,7 +876,7 @@ extension SettingsView {
                         described(Self.backgroundTimeoutCaption) {
                             settingPicker(
                                 L10n.playerBackgroundTimeoutMinutes,
-                                options: [1, 5, 10, 30].map {
+                                options: [1, 5, 10, 30, 60].map {
                                     (label: L10n.playerBackgroundTimeoutMinutesCount(count: $0),
                                      tag: $0)
                                 },

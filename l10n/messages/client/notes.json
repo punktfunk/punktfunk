@@ -646,7 +646,7 @@
 	"player_fullscreen_stream": "Option of Fullscreen: only while a stream runs.",
 	"player_fullscreen_always_hint": "Punktfunk is the app's name.",
 	"player_background_timeout_minutes": "Setting label, followed by a number of minutes: how long a backgrounded session lasts.",
-	"player_background_timeout_minutes_count": "Option of Disconnect after. {count}: whole minutes (1, 5, 10, 30).",
+	"player_background_timeout_minutes_count": "Option of Disconnect after. {count}: whole minutes (1, 5, 10, 30, 60).",
 	"player_background_timeout_minutes_tv_hint": "TV variant of the hint: a TV has no battery.",
 	"player_stats_verbosity_hint": "Compact, Normal and Detailed are this setting's option names.",
 	"player_stats_verbosity_cycle_hint": "Second line under Statistics overlay. {keys}: the shortcut that cycles the tiers, from the client's shortcut table (\"Ctrl+Alt+Shift+S\", \"⌃⌥⇧S\").",
