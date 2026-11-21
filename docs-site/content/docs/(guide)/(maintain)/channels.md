@@ -43,7 +43,7 @@ The [releases page](https://git.unom.io/unom/punktfunk/releases) and winget carr
 | **pacman** | `sudo pacman -U /var/cache/pacman/pkg/punktfunk-host-<version>-x86_64.pkg.tar.zst`, then `IgnorePkg = punktfunk-host` in `/etc/pacman.conf` so `-Syu` leaves it. |
 | **Bazzite sysext** | `punktfunk-sysext status` prints the feed URL; download `punktfunk-<version>-x86-64.raw` from it and `sudo punktfunk-sysext install --from-file punktfunk-<version>-x86-64.raw`. |
 | **Windows installer** | Run the older `punktfunk-host-setup-<version>.exe` over the current install. |
-| **winget** | `winget install unom.PunktfunkHost --version <x.y.z>` |
+| **winget** | `winget install unom.PunktfunkHost --version <x.y.z>`, or `unom.PunktfunkClient` |
 | **Decky plugin** | Install from URL: `…/generic/punktfunk-decky/<version>/punktfunk.zip`. |
 | **SteamOS on-device build** | `git -C ~/punktfunk checkout v<x.y.z>`, then `bash ~/punktfunk/scripts/steamdeck/update.sh`. Updates stop until you switch back to a branch. |
 | **NixOS** | `sudo nixos-rebuild switch --rollback`, or pin the flake input to a `v<x.y.z>` tag and rebuild. |

@@ -21,7 +21,7 @@ convention instead.
 | --- | --- | --- |
 | Packages, binaries, systemd units, sysext images | Lowercase, hyphenated | `punktfunk-host`, `punktfunk-client.raw` |
 | Windows services, tasks, registry keys | CamelCase, no dots | `PunktfunkHost`, `HKLM\SOFTWARE\Punktfunk` |
-| winget | Publisher.Package | `unom.PunktfunkHost` |
+| winget | Publisher.Package | `unom.PunktfunkHost`, `unom.PunktfunkClient` |
 | URL scheme, DNS-SD service | Lowercase | `punktfunk://`, `_punktfunk._udp` |
 | GNOME Shell extension | name@domain | `punktfunk-windows@unom.io` |
 

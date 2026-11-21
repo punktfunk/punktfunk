@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+#
+# Version manifest — the pointer that ties the installer + locale manifests together.
+# Generated per stable tag by scripts/ci/winget-manifest.ps1 -Package PunktfunkClient; this
+# checked-in copy is the template + the reference for what a release looks like.
+PackageIdentifier: unom.PunktfunkClient
+PackageVersion: 0.47.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

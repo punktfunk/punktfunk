@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+PackageIdentifier: unom.PunktfunkClient
+PackageVersion: 0.47.0
+PackageLocale: de-DE
+
+Publisher: unom
+PublisherUrl: https://git.unom.io/unom/punktfunk
+PublisherSupportUrl: https://punktfunk.unom.io/community
+PrivacyUrl: https://unom.io/en/legal/privacy#punktfunk-apps
+PackageName: Punktfunk Client
+PackageUrl: https://docs.punktfunk.unom.io/docs/install-client
+License: MIT OR Apache-2.0
+LicenseUrl: https://git.unom.io/unom/punktfunk/src/branch/main/LICENSE-MIT
+Copyright: Copyright (c) unom
+ShortDescription: Game-Streaming-Client mit geringer Latenz — spiele die Spiele deines Punktfunk-Hosts an einem Windows-PC oder Laptop.
+Description: |-
+  Punktfunk Client streamt Spiele von einem Punktfunk-Host auf einen Windows-10- oder Windows-11-PC
+  oder Laptop, für x64 und Arm64. Er verbindet sich über das eigene QUIC-Protokoll, dekodiert Video
+  auf der GPU (Vulkan Video oder D3D11VA) mit HDR, gibt Audio über WASAPI wieder und reicht Tastatur-,
+  Maus- und Controller-Eingaben an den Host weiter.
+
+  Das Paket installiert außerdem Punktfunk Console, eine Controller-Oberfläche für Fernseher und
+  HTPC (nur x64), und den Befehl punktfunk für Skripte. Es wird für den aktuellen Benutzer
+  installiert und braucht keine Administratorrechte.
+Tags:
+  - game-streaming
+  - remote-desktop
+  - streaming
+  - remote-play
+ReleaseNotesUrl: https://git.unom.io/unom/punktfunk/src/branch/main/docs/releases/v0.47.0.md
+InstallationNotes: |-
+  Öffne Punktfunk im Startmenü und koppel es einmalig mit deinem Host:
+    https://docs.punktfunk.unom.io/docs/pairing
+
+  Punktfunk Console (x64) ist die Controller-Oberfläche für Fernseher und HTPC.
+
+  Installiert in:  %LOCALAPPDATA%\Programs\Punktfunk
+  Der Befehl `punktfunk` liegt in neuen Terminalfenstern im PATH.
+Documentations:
+  - DocumentLabel: Windows-Client
+    DocumentUrl: https://docs.punktfunk.unom.io/docs/clients#windows-desktop-client
+
+ManifestType: locale
+ManifestVersion: 1.6.0

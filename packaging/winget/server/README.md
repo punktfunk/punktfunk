@@ -1,8 +1,8 @@
 # Punktfunk winget REST source
 
 A self-hosted [winget REST source](https://github.com/microsoft/winget-cli-restsource) serving the
-Punktfunk Windows host, so users can install and upgrade with `winget` instead of downloading a
-`setup.exe` by hand.
+Punktfunk Windows host and client, so users can install and upgrade with `winget` instead of
+downloading a `setup.exe` by hand.
 
 ```powershell
 # one-time, from an ELEVATED prompt (winget requires admin to add a source)
@@ -47,7 +47,7 @@ which Inno gives us exactly (`<AppId>_is1`).
 | `handler.mjs` | The three endpoints. Pure `(Request, catalogue) -> Response`, no I/O, no deps. |
 | `server.mjs` | node:http front. Loads the catalogue, reloads on mtime change. |
 | `build-data.mjs` | Generates `data/data.json` from the published release manifests. Build-time only. |
-| `test.mjs` | 30 checks driving `handler.mjs` directly. |
+| `test.mjs` | 38 checks driving `handler.mjs` directly. |
 | `compose.production.yml` | The unom-1 service. |
 
 ## How it runs
@@ -71,7 +71,9 @@ Gitea is `build-data.mjs`'s job, and that runs in CI. Only that build step needs
 **Content and config deploy separately**, matching the flatpak repo:
 
 - `deploy-services.yml` (`winget` job) ships `compose.production.yml` + the two `.mjs` files.
-- `windows-host.yml` (`winget-source` job) builds and ships `data/data.json` on each stable tag.
+- `windows-host.yml` and `windows-client.yml` (each a `winget-source` job) build and ship
+  `data/data.json` on each stable tag. Both rebuild the whole catalogue, host and client, so the
+  later one carries the other's manifests; a package no release has manifests for yet is left out.
 
 `server.mjs` reloads the catalogue when its mtime changes, so publishing a release needs no restart.
 A half-written file mid-rsync keeps the previous catalogue rather than taking the source down.
@@ -91,7 +93,7 @@ lost deployment is one command away and nothing can drift.
 ```bash
 npm install
 npm run build:local     # data/data.json from ../*.yaml (single version — fine for dev)
-npm test                # 30 checks, no network, no server
+npm test                # 38 checks, no network, no server
 npm start               # http://localhost:3240
 ```
 

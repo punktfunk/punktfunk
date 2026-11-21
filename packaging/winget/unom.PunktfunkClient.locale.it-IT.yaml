@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+PackageIdentifier: unom.PunktfunkClient
+PackageVersion: 0.47.0
+PackageLocale: it-IT
+
+Publisher: unom
+PublisherUrl: https://git.unom.io/unom/punktfunk
+PublisherSupportUrl: https://punktfunk.unom.io/community
+PrivacyUrl: https://unom.io/en/legal/privacy#punktfunk-apps
+PackageName: Punktfunk Client
+PackageUrl: https://docs.punktfunk.unom.io/docs/install-client
+License: MIT OR Apache-2.0
+LicenseUrl: https://git.unom.io/unom/punktfunk/src/branch/main/LICENSE-MIT
+Copyright: Copyright (c) unom
+ShortDescription: Client di streaming di giochi a bassa latenza — gioca i giochi del tuo host Punktfunk da un PC o un portatile Windows.
+Description: |-
+  Punktfunk Client trasmette i giochi da un host Punktfunk a un PC o un portatile con Windows 10 o 11,
+  su x64 e Arm64. Si collega tramite il proprio protocollo QUIC nativo, decodifica il video sulla GPU
+  (Vulkan Video o D3D11VA) con HDR, riproduce l’audio con WASAPI e invia all’host l’input di tastiera,
+  mouse e controller.
+
+  Il pacchetto installa anche Punktfunk Console, un’interfaccia per controller pensata per un televisore
+  o un HTPC (solo x64), e il comando punktfunk per gli script. Si installa per l’utente corrente e non
+  richiede privilegi di amministratore.
+Tags:
+  - game-streaming
+  - remote-desktop
+  - streaming
+  - remote-play
+ReleaseNotesUrl: https://git.unom.io/unom/punktfunk/src/branch/main/docs/releases/v0.47.0.md
+InstallationNotes: |-
+  Apri Punktfunk dal menu Start e abbinalo una volta al tuo host:
+    https://docs.punktfunk.unom.io/docs/pairing
+
+  Punktfunk Console (x64) è l’interfaccia per controller di un televisore o di un HTPC.
+
+  Installato in:  %LOCALAPPDATA%\Programs\Punktfunk
+  Il comando `punktfunk` è nel PATH nelle nuove finestre del terminale.
+Documentations:
+  - DocumentLabel: Client Windows
+    DocumentUrl: https://docs.punktfunk.unom.io/docs/clients#windows-desktop-client
+
+ManifestType: locale
+ManifestVersion: 1.6.0
