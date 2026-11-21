@@ -1695,10 +1695,16 @@ mod tests {
                 1,
             )
         };
+        // VideoToolbox converts packed RGB at studio range, so a macOS session signals that.
+        let bt709 = if cfg!(target_os = "macos") {
+            ColorInfo::SDR_BT709_STUDIO
+        } else {
+            ColorInfo::SDR_BT709
+        };
         let f = format_of(&plan(true), &sdr, 10);
-        assert_eq!((f.bit_depth, f.color), (8, ColorInfo::SDR_BT709));
+        assert_eq!((f.bit_depth, f.color), (8, bt709));
         let f = format_of(&plan(false), &sdr, 10);
-        assert_eq!((f.bit_depth, f.color), (10, ColorInfo::SDR_BT709));
+        assert_eq!((f.bit_depth, f.color), (10, bt709));
     }
 
     /// Native passes the connection's fingerprint and address; GameStream the paired
