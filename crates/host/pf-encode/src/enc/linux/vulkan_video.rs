@@ -696,11 +696,12 @@ fn required_device_exts(av1: bool) -> [&'static CStr; 6] {
     ]
 }
 
-/// First physical device whose driver [`super::vk_util::encode_trusted`] accepts, with a
-/// `VIDEO_ENCODE` queue family for `codec_op` (llvmpipe has none) and every
-/// [`required_device_exts`] entry advertised. The open, [`probe_encode_caps`] and
-/// [`vulkan_capture_modifiers`] all pick here, so capture never offers the modifiers of a
-/// device the open then fails to create.
+/// Searches the device that owns the node VAAPI encodes on ([`pf_gpu::linux_render_node`]), or
+/// every device when none does, for one whose driver [`super::vk_util::encode_trusted`] accepts,
+/// with a `VIDEO_ENCODE` queue family for `codec_op` (llvmpipe has none) and every
+/// [`required_device_exts`] entry advertised. Another GPU would read the capture across
+/// devices. The open, [`probe_encode_caps`] and [`vulkan_capture_modifiers`] all pick here, so
+/// capture never offers the modifiers of a device the open then fails to create.
 ///
 /// # Safety
 /// `instance` must be a live `ash::Instance` and `devices` handles enumerated from it.
@@ -709,7 +710,16 @@ unsafe fn find_encode_device(
     devices: &[vk::PhysicalDevice],
     codec_op: vk::VideoCodecOperationFlagsKHR,
 ) -> Option<(vk::PhysicalDevice, u32)> {
-    for &pd in devices {
+    let node = pf_gpu::linux_render_node();
+    let (rdev, pci) = (
+        super::vk_util::node_rdev(&node),
+        super::vk_util::node_pci_address(&node),
+    );
+    let owner = devices
+        .iter()
+        .find(|&&pd| super::vk_util::device_owns_node(instance, pd, rdev, pci));
+    let candidates = owner.map_or(devices, std::slice::from_ref);
+    for &pd in candidates {
         if !super::vk_util::encode_trusted(&instance.get_physical_device_properties(pd)) {
             continue;
         }
