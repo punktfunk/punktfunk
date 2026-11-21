@@ -1,13 +1,14 @@
-// The host area: hosts this Deck can stream, then hosts that need access, then Refresh as the last
-// row of whichever section comes last. A missing or outdated client explains itself in place of an
-// empty list: "no hosts on your network" would blame the network for the plugin's problem.
+// The host area: hosts this Deck can stream, and its own host, which opens the console; then hosts
+// that need access, then Refresh as the last row of whichever section comes last. A missing or
+// outdated client explains itself in place of an empty list: "no hosts on your network" would
+// blame the network for the plugin's problem.
 import { ButtonItem, Field, PanelSection, PanelSectionRow, Spinner } from "@decky/ui";
 import { FC } from "react";
 import { FaSyncAlt } from "react-icons/fa";
 import { splitByAccess } from "../hosts/model";
 import { useHosts } from "../hosts/store";
 import { t } from "../i18n";
-import { AccessRow, HostList, HostRow } from "./HostRow";
+import { AccessRow, HostList, HostRow, LocalHostRow } from "./HostRow";
 import { sharedNames } from "./model";
 
 const ProblemRow: FC<{ problem: string }> = ({ problem }) => (
@@ -56,9 +57,13 @@ export const HostsSection: FC = () => {
           )}
           {ready.length > 0 && (
             <HostList>
-              {ready.map((v) => (
-                <HostRow key={v.ref} host={v} showAddress={shared.has(v.name)} />
-              ))}
+              {ready.map((v) =>
+                v.local ? (
+                  <LocalHostRow key={v.ref} host={v} showAddress={shared.has(v.name)} />
+                ) : (
+                  <HostRow key={v.ref} host={v} showAddress={shared.has(v.name)} />
+                ),
+              )}
             </HostList>
           )}
           {access.length === 0 && refreshRow}

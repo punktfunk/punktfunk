@@ -10,6 +10,7 @@ libraries. The plugins dir is root-owned, so nothing may rely on writing ``__pyc
 * ``steam_input`` — the native-touch controller layout written into Steam's config.
 * ``art`` — shortcut artwork: the plugin's own, a game's own art and icon.
 * ``session`` — the running stream: control socket, end game, force stop.
+* ``host`` — this device's own host, through its CLI: the titles synced into Steam, their art.
 
 A call into another module goes through the module (``client._run_cli``), so one patch in a test
 reaches every caller. ``scripts/test-backend.py`` pins the loader shape.

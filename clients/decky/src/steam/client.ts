@@ -38,10 +38,37 @@ export interface SteamClientGlobal {
 
 // `SetAppsAsHidden` looks the app up in appStore, which registers a fresh shortcut a moment after
 // AddShortcut; called at once it throws on a null overview. Visibility is therefore best-effort
-// and deferred, never launch-blocking.
+// and deferred, never launch-blocking. Every method reads the store through `this`, and throws
+// until the player's collections have loaded.
 export type CollectionStoreGlobal =
-  | { SetAppsAsHidden?: (appIds: number[], hidden: boolean) => void }
+  | {
+      SetAppsAsHidden?: (appIds: number[], hidden: boolean) => void;
+      GetCollection?: (id: string) => SteamCollection | null | undefined;
+      /** Steam's own name match, case-insensitive: saving a new collection deletes every user
+       *  collection this returns for its name. */
+      GetUserCollectionsByName?: (name: string) => SteamCollection[];
+      GetCollectionListForAppID?: (appId: number) => SteamCollection[];
+      NewUnsavedCollection?: (
+        name: string,
+        filter: undefined,
+        apps: SteamAppOverviewLike[],
+      ) => SteamCollection;
+    }
   | undefined;
+
+// A user collection. `AddApps` and `RemoveApps` save it themselves. A shortcut's membership is
+// kept on this device only; the collection itself roams to the account's other devices.
+export interface SteamCollection {
+  id: string;
+  displayName: string;
+  apps: ReadonlySet<number>;
+  AsDragDropCollection?: () => {
+    AddApps(apps: SteamAppOverviewLike[]): void;
+    RemoveApps(apps: SteamAppOverviewLike[]): void;
+  } | null;
+  AsDeletableCollection?: () => { Delete(): Promise<unknown> } | null;
+  Save?: () => Promise<void>;
+}
 
 // Every registered app and shortcut by appId. `GetAppOverviewByAppID` reads the store's own
 // state through `this`, so it is only ever called as a method on appStore.

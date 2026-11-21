@@ -562,6 +562,111 @@ with _tf.TemporaryDirectory() as _root:
     check("layouts: the triton copy is typed triton", '"controller_type"\t\t"controller_triton"' in _triton)
     check("layouts: no neptune type left in it", '"controller_neptune"' not in _triton)
 
+# ---- host: this device's punktfunk-host, through its own CLI -------------------------------
+#
+# The binary named in every synced entry's launch options and the one every `ctl steam` call
+# runs: the user unit's ExecStart first, then a package, then a source build.
+import json  # noqa: E402
+import tempfile as _tmp  # noqa: E402
+
+from pf_decky import host  # noqa: E402
+
+check("unit: the binary of ExecStart", host._unit_bin("ExecStart=/a/punktfunk-host serve", "/h") == "/a/punktfunk-host")
+check("unit: the last ExecStart wins, and a reset names none",
+      host._unit_bin("ExecStart=/a/punktfunk-host serve\nExecStart=\n", "/h") is None)
+check("unit: %h and systemd's prefixes", host._unit_bin("ExecStart=-!%h/x/punktfunk-host serve", "/h") == "/h/x/punktfunk-host")
+check("unit: a relative path is none", host._unit_bin("ExecStart=punktfunk-host serve", "/h") is None)
+check("unit: another program is none", host._unit_bin("ExecStart=/usr/bin/env punktfunk-host", "/h") is None)
+check("unit: no ExecStart is none", host._unit_bin("[Service]\nRestart=always\n", "/h") is None)
+
+_real_which, _real_home = host.shutil.which, decky.DECKY_USER_HOME
+with _tmp.TemporaryDirectory(dir="/tmp") as _home:
+    decky.DECKY_USER_HOME = _home
+    _unit = Path(_home) / ".config" / "systemd" / "user" / "punktfunk-host.service"
+    _unit.parent.mkdir(parents=True)
+    _built = Path(_home) / "punktfunk" / "target-steamos" / "release" / "punktfunk-host"
+    host.shutil.which = lambda name, path=None: None
+    check("host bin: none anywhere is None", host.host_bin() is None)
+    _built.parent.mkdir(parents=True)
+    _built.write_text("")
+    check("host bin: a source build", host.host_bin() == str(_built))
+    host.shutil.which = lambda name, path=None: "/usr/bin/punktfunk-host" if name == "punktfunk-host" else None
+    check("host bin: a package before a source build", host.host_bin() == "/usr/bin/punktfunk-host")
+    _own = Path(_home) / "opt" / "punktfunk-host"
+    _own.parent.mkdir()
+    _own.write_text("")
+    _unit.write_text("[Service]\nExecStart=%h/opt/punktfunk-host serve --open\n")
+    check("host bin: the unit's ExecStart before both", host.host_bin() == str(_own))
+    check("host bin: the bridge answers it as a path",
+          asyncio.run(main.Plugin().host_bin()) == {"path": str(_own)})
+    _unit.write_text("[Service]\nExecStart=/nowhere/punktfunk-host serve\n")
+    check("host bin: a unit naming a missing file falls through", host.host_bin() == "/usr/bin/punktfunk-host")
+host.shutil.which, decky.DECKY_USER_HOME = _real_which, _real_home
+
+_host_calls: list = []
+_host_answer: tuple = (0, "", "")
+
+
+async def _host_exec(argv, label, timeout, **kw):
+    _host_calls.append((argv, kw))
+    return _host_answer
+
+
+_real_host_bin = host.host_bin
+host.host_bin = lambda: "/usr/bin/punktfunk-host"
+client._exec = _host_exec
+_host_answer = (0, '{"steam_owns_desk": true, "sources": [], "entries": []}', "")
+got = asyncio.run(main.Plugin().local_entries())
+check("entries: argv is `ctl steam entries --json`",
+      _host_calls[-1][0] == ["/usr/bin/punktfunk-host", "ctl", "steam", "entries", "--json"])
+check("entries: the body merged under ok", got == {"steam_owns_desk": True, "sources": [], "entries": [], "ok": True})
+_host_answer = (0, "not json", "")
+check("entries: unreadable output is a failure",
+      asyncio.run(main.Plugin().local_entries()) == {"ok": False, "error": "host-error"})
+_host_answer = (-1, "", "")
+check("entries: no host is host-unavailable",
+      asyncio.run(main.Plugin().local_entries()) == {"ok": False, "error": "host-unavailable"})
+
+_png = b"\x89PNG\r\n\x1a\n...."
+_host_answer = (0, _png, "")
+got = asyncio.run(main.Plugin().local_art("rom-manager:snes/Super Metroid (USA)", "hero"))
+check("art: argv is `ctl steam art <id> <kind>`, bytes kept",
+      _host_calls[-1][0] == ["/usr/bin/punktfunk-host", "ctl", "steam", "art",
+                             "rom-manager:snes/Super Metroid (USA)", "hero"]
+      and _host_calls[-1][1].get("text") is False)
+check("art: a png comes back base64", got == {"ok": True, "data": _b64.b64encode(_png).decode(), "type": "png"})
+_host_answer = (0, b"RIFF\x00\x00\x00\x00WEBPVP8 ", "")
+check("art: webp is told by its bytes", asyncio.run(main.Plugin().local_art("a", "logo"))["type"] == "webp")
+_host_answer = (0, b"-----BEGIN", "")
+check("art: bytes that are no image are refused",
+      asyncio.run(main.Plugin().local_art("a", "logo")) == {"ok": False, "error": "bad-image"})
+_host_calls.clear()
+for _id, _kind in (("-x", "hero"), ("a\nb", "hero"), ("", "hero"), ("a", "icon"), ("a", "../hero")):
+    check(f"art: {_id!r} {_kind!r} is refused before the host",
+          asyncio.run(main.Plugin().local_art(_id, _kind)) == {"ok": False, "error": "bad-input"})
+check("art: nothing refused ran", _host_calls == [])
+
+_host_answer = (0, "", "")
+_map = {"version": 1, "entries": {"rom-manager:snes/chrono": 2890012345}, "own": [2764001122]}
+check("map: sent", asyncio.run(main.Plugin().local_map(_map)) == {"ok": True})
+check("map: argv is `ctl steam map`, the map on stdin",
+      _host_calls[-1][0] == ["/usr/bin/punktfunk-host", "ctl", "steam", "map"]
+      and json.loads(_host_calls[-1][1]["stdin_text"]) == _map)
+_host_calls.clear()
+for _name, _bad in (
+    ("not an object", []),
+    ("another version", {**_map, "version": 2}),
+    ("an app id past 32 bits", {**_map, "entries": {"a": 2**32}}),
+    ("a zero app id", {**_map, "own": [0]}),
+    ("a bool for an app id", {**_map, "own": [True]}),
+    ("a string app id", {**_map, "entries": {"a": "1"}}),
+    ("no own", {"version": 1, "entries": {}}),
+):
+    check(f"map: {_name} never reaches the host",
+          asyncio.run(main.Plugin().local_map(_bad)) == {"ok": False, "error": "bad-input"})
+check("map: nothing refused ran", _host_calls == [])
+host.host_bin, client._exec = _real_host_bin, _real_exec
+
 # ---- Decky's loader shape ---------------------------------------------------------------
 #
 # Decky appends only <plugin>/py_modules to sys.path and loads main.py as module `_`, so a

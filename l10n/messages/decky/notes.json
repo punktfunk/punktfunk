@@ -110,5 +110,10 @@
 	"decky_launch_failed_preset": "Toast when a pinned card's stream did not start. {preset}: the preset's name; the quotes are this language's.",
 	"decky_end_game_unresolved": "Toast when the panel lost track of the streamed game.",
 	"decky_trust_request_failed": "Trust sheet error when the access request failed with no reason given. {host}: the host's name.",
-	"decky_trust_bad_fingerprint": "Trust sheet error when the identity the host advertised is malformed. {host}: the host's name."
+	"decky_trust_bad_fingerprint": "Trust sheet error when the identity the host advertised is malformed. {host}: the host's name.",
+	"decky_local_title": "Panel section heading over the switches that add this device's own games to Steam's library.",
+	"decky_local_source_hint": "Line under a switch named after one source of this device's games (a launcher or ROM manager).",
+	"decky_local_progress": "Panel line while games are added to or removed from Steam's library. {count}: how many are left.",
+	"decky_local_gone_hint": "Line under the Remove button. {count}: games this panel added to Steam whose title left this device's library; Remove takes them out of Steam.",
+	"decky_local_shared_layout_hint": "Line under a game's name in the panel: Steam keeps one controller layout per name, and a game streamed from its page has the same name."
 }

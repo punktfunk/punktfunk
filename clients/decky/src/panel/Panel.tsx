@@ -1,6 +1,6 @@
 // The Quick Access Menu panel, state first: a pending update, the running stream, the hosts, the
-// app, the repairs, About. Focus follows that order, so with no stream and no update the first
-// press lands on a host. It mounts fresh on every QAM open.
+// app, this device's games in Steam, the repairs, About. Focus follows that order, so with no
+// stream and no update the first press lands on a host. It mounts fresh on every QAM open.
 import { ButtonItem, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
 import { FC, useState } from "react";
 import { FaTv } from "react-icons/fa";
@@ -9,6 +9,7 @@ import { t } from "../i18n";
 import { launchGamepadUi } from "../steam/launch";
 import { useUpdate } from "../update/actions";
 import { HostsSection } from "./HostsSection";
+import { LocalSection } from "./LocalSection";
 import { SessionSection } from "./SessionSection";
 import { TroubleshootingSection } from "./TroubleshootingSection";
 import { AboutSection, UpdateSection } from "./UpdateSection";
@@ -46,6 +47,7 @@ export const QamPanel: FC = () => {
       <SessionSection />
       <HostsSection />
       <PunktfunkSection />
+      <LocalSection />
       <TroubleshootingSection />
       <AboutSection info={info} checking={checking} check={check} />
     </>

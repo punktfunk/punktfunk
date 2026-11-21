@@ -55,13 +55,14 @@ export function steamAppId(id: string): number | null {
 }
 
 /**
- * Refresh the snapshot of every paired host that is answering. A host that is off keeps the
- * snapshot it had; one that has withdrawn its trust loses it, because listing a host that
- * will refuse the connect is worse than not listing it. Records that are gone are pruned.
+ * Refresh the snapshot of every paired host that is answering, this device's own excepted. A
+ * host that is off keeps the snapshot it had; one that has withdrawn its trust loses it, because
+ * listing a host that will refuse the connect is worse than not listing it. Records that are gone
+ * are pruned.
  */
 export async function refreshLibraries(views: HostView[]): Promise<void> {
   hydrate();
-  const live = new Set(views.filter((v) => v.saved).map((v) => v.ref));
+  const live = new Set(views.filter((v) => v.saved && !v.local).map((v) => v.ref));
   for (const ref of [...snapshots.keys()]) {
     if (!live.has(ref)) {
       snapshots.delete(ref);
@@ -70,7 +71,7 @@ export async function refreshLibraries(views: HostView[]): Promise<void> {
   }
   await Promise.all(
     views
-      .filter((v) => v.saved && v.paired && v.online)
+      .filter((v) => live.has(v.ref) && v.paired && v.online)
       .map(async (v) => {
         const r = await library(v.ref).catch(() => null);
         if (!r) {
@@ -105,6 +106,7 @@ export async function refreshLibraries(views: HostView[]): Promise<void> {
 /**
  * The hosts that can stream this Steam title, best first: online before asleep, then most
  * recently used. Paired records only — the library came from them, and only they can launch.
+ * Never this device's own host: its titles play here, through Steam itself.
  */
 export function hostsForApp(appId: number, views: HostView[]): HostView[] {
   hydrate();
@@ -112,6 +114,7 @@ export function hostsForApp(appId: number, views: HostView[]): HostView[] {
     .filter(
       (v) =>
         v.saved &&
+        !v.local &&
         v.paired &&
         (v.online || v.wakeable) &&
         (snapshots.get(v.ref)?.steamAppIds.includes(appId) ?? false),

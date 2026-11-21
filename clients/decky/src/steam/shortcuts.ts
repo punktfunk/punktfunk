@@ -135,7 +135,9 @@ export interface ShortcutRole {
   key: string;
   /** Library name. Steam files the controller layout under it too. */
   name: string;
-  hidden: boolean;
+  /** Library visibility to set at every ensure. Absent for a synced title: a fresh entry is
+   *  visible, and each call saves the account's hidden collection. */
+  hidden?: boolean;
   /** The other fixed role's key: a same-named shortcut it does not hold is adopted before a new
    *  one is minted. Absent for a per-game shortcut, whose title could be the user's own entry. */
   adoptExcept?: string;
@@ -197,7 +199,9 @@ async function ensureShortcutOnce(role: ShortcutRole): Promise<Ensured> {
   if (role.launchOptions) {
     SteamClient.Apps.SetAppLaunchOptions(appId, role.launchOptions(info.runner, info.client_bin));
   }
-  setShortcutHidden(appId, role.hidden);
+  if (role.hidden != null) {
+    setShortcutHidden(appId, role.hidden);
+  }
   role.dress(appId);
   return { appId, runner: info.runner, clientBin: info.client_bin ?? "" };
 }
