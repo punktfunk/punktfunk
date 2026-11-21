@@ -99,9 +99,12 @@ objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
 objc2-core-video = { workspace = true }
 objc2-core-media = { workspace = true }
-objc2-io-surface = { workspace = true }
 objc2-screen-capture-kit = { workspace = true }
 objc2-app-kit = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# `mac_capture_probe` prints the capturer's log lines.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 [features]
 # `FakeCapturer`, the scripted source the host's stream-loop tests drive. Never in a shipped build.

@@ -10,7 +10,7 @@
 //! - `knobs.rs`: `Knobs`, every switch the crate reads, with its parser.
 //! - `synthetic.rs`: sources with no display behind them.
 //! - `fake.rs`: the stream loops' scripted source, behind `test-support`.
-//! - `pts_provenance.rs`: which clock a Linux frame's wire stamp comes from.
+//! - `pts_provenance.rs`: which clock a Linux or macOS frame's wire stamp comes from.
 //! - `pwinit.rs`: PipeWire's one-time init, shared with audio capture.
 //! - `linux/`: the cells a capture shares with its thread, one buffer-to-frame delivery.
 //! - `linux/pipewire/`: the PipeWire stream, from the portal monitor or a virtual output.
@@ -18,6 +18,7 @@
 //! - `windows/`: the pure models every target tests, WGC, the GPU-preference hook.
 //! - `windows/remote/`: one source for every remote encoder: transport, AU proxy, supervisor.
 //! - `windows/idd/`: IDD-push, where the pf-vdisplay driver encodes.
+//! - `macos/`: ScreenCaptureKit display capture.
 
 // The frame vocabulary, at the crate root for every module's `crate::` imports.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -47,9 +48,10 @@ pub use pf_frame::hdr::{
 #[cfg(target_os = "linux")]
 pub mod pwinit;
 
-// Which clock the wire's `pts_ns` comes from. Linux-only consumer; arithmetic
-// is platform-independent so tests run everywhere.
-#[cfg(any(target_os = "linux", test))]
+// Which clock the wire's `pts_ns` comes from. The arithmetic is platform-independent, so tests
+// run everywhere; macOS reads `wire_pts` alone.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 mod pts_provenance;
 
 mod windows;
@@ -62,6 +64,12 @@ pub use self::windows::{gpu_pref, synthetic_nv12};
 #[cfg(target_os = "linux")]
 #[path = "linux/mod.rs"]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+// The macOS capture's plan is pure, so its tests run on every target.
+#[cfg(all(test, not(target_os = "macos")))]
+#[path = "macos/plan.rs"]
+mod macos_plan;
 // The direct capture's frame-loop model is pure, so its table runs on every target.
 #[cfg(all(test, not(target_os = "linux")))]
 #[path = "linux/direct/frame_loop.rs"]
