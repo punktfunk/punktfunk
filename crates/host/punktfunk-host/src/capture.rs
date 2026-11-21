@@ -447,10 +447,10 @@ pub fn capturer_delivers_sdr10_for(
 #[cfg(target_os = "windows")]
 pub(crate) use crate::windows::idd::{capture_virtual_output, open_driver_encoder};
 
-/// macOS: ScreenCaptureKit on the display the output stands for, at the display's own pixel
-/// size; the session's encoder frames it for the client, as on a mirror elsewhere. Absolute
-/// input for the first screen aims at that display. The client draws the pointer only when
-/// the session forwards it.
+/// macOS: ScreenCaptureKit on the display the output stands for, at the size it names: a
+/// virtual display's own mode, captured unscaled, or a mirrored display's pixels, which the
+/// session's encoder frames for the client. Absolute input for the first screen aims at that
+/// display. The client draws the pointer only when the session forwards it.
 #[cfg(target_os = "macos")]
 pub fn capture_virtual_output(
     vout: crate::vdisplay::VirtualOutput,
@@ -468,7 +468,7 @@ pub fn capture_virtual_output(
         stream_hz,
         screen,
         gamescope_cursor: _gamescope_cursor,
-        // Every macOS session mirrors; the capture is the same either way.
+        // A virtual display and a mirror capture alike.
         mirrored: _mirrored,
     } = request;
     let display_id = vout

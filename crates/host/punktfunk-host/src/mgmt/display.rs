@@ -191,6 +191,12 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if session.keep_monitors {
         enforced.push("keep_monitors".into());
     }
+    // A macOS display ends with its session and sits where macOS puts it; its `exclusive`
+    // reads the keep-list.
+    if cfg!(target_os = "macos") {
+        enforced.retain(|f| f != "keep_alive" && f != "layout");
+        enforced.push("keep_monitors".into());
+    }
     // What acts per device. The rest are stored and served but read inside a backend
     // `create`, which takes no client — advertising one would put a control on the
     // device sheet that this host would store and ignore.
@@ -199,6 +205,8 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
         "mode_conflict".into(),
         "identity".into(),
     ];
+    // A device field the host ignores everywhere would be a dead control.
+    client_enforced.retain(|f| enforced.contains(f));
     // The cap is applied in the native handshake, before Welcome, so the client is told the
     // mode it actually gets rather than the one it asked for.
     client_enforced.push("max_mode".into());

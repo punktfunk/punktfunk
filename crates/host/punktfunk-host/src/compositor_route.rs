@@ -121,7 +121,7 @@ pub(crate) fn resolve_compositor(
     Option<crate::vdisplay::GamescopeRoute>,
 )> {
     use crate::vdisplay::Compositor;
-    // Windows has one virtual-display backend and macOS one mirror, so skip the Linux
+    // Windows and macOS have one display backend each, so skip the Linux
     // session-detection state machine.
     #[cfg(target_os = "windows")]
     {

@@ -77,7 +77,12 @@ x11rb = { version = "0.14", default-features = false }
 socket2 = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The online displays a macOS mirror streams (`vdisplay/macos.rs`).
+# The online displays, their arrangement (`vdisplay/macos.rs`) and the private virtual-display
+# classes reached through the runtime (`vdisplay/macos_virtual.rs`).
+objc2 = { workspace = true }
+dispatch2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

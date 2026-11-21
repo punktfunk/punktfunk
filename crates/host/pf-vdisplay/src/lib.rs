@@ -127,8 +127,8 @@ pub enum Compositor {
     Mango,
     /// The pf-vdisplay IddCx driver — a Windows host's only backend. Never in [`Compositor::all`].
     Windows,
-    /// A macOS host: no virtual display, so every session mirrors an existing one. Never in
-    /// [`Compositor::all`].
+    /// A macOS host: a session's own screen is a virtual display where macOS offers one, else
+    /// a mirror of the main display (`vdisplay/macos.rs`). Never in [`Compositor::all`].
     #[cfg(target_os = "macos")]
     MacOs,
 }
@@ -153,6 +153,10 @@ impl Compositor {
     /// Keeps a `keep_monitors` head lit under `exclusive`: its exclusive path filters through
     /// `monitors::darkens`. Mutter's sole-monitor config and Windows never read the list.
     pub fn honours_keep_monitors(self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return true;
+        }
         matches!(
             self,
             Compositor::Kwin
@@ -175,6 +179,10 @@ impl Compositor {
     /// Makes the streamed screen the desktop's main one under `primary`. The tiling backends
     /// only focus it, so there `primary` is `extend` (`exclusive_wanted`).
     pub fn has_primary(self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return true;
+        }
         matches!(
             self,
             Compositor::Kwin | Compositor::Mutter | Compositor::Windows
@@ -530,20 +538,14 @@ pub fn streamed_monitors() -> Vec<(String, Option<String>)> {
 }
 
 /// Whether a session opened now on `target` streams that monitor instead of a virtual display:
-/// a monitor, and on Windows a desktop that can be captured (see [`open_for`]). Always on
-/// macOS, whose own screen is the main display.
+/// a monitor, and on Windows a desktop that can be captured (see [`open_for`]).
 pub fn mirrors(target: &policy::DisplayTarget) -> bool {
     let monitor = matches!(target, policy::DisplayTarget::Monitor(_));
     #[cfg(target_os = "windows")]
     {
         monitor && mirror::desktop_capturable()
     }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = monitor;
-        true
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(target_os = "windows"))]
     {
         monitor
     }
@@ -561,7 +563,8 @@ pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
 
 /// Open the display `target` names on `compositor`: the mirror backend for a monitor
 /// (physical head, no virtual display), else the virtual-display driver. macOS mirrors the
-/// main display for a session's own screen. `design/per-monitor-portal-capture.md`.
+/// main display for an own screen when it has no virtual displays ([`creates_displays`]).
+/// `design/per-monitor-portal-capture.md`.
 pub fn open_for(
     compositor: Compositor,
     target: policy::DisplayTarget,
@@ -614,10 +617,16 @@ pub fn open_for(
         )?;
         Ok(Box::new(driver::PfVdisplayDisplay::new()?))
     }
+    // Only `MacOs` makes a display: any other name here is a test's stand-in.
     #[cfg(target_os = "macos")]
-    {
-        let connector = target.into_monitor().unwrap_or_else(macos::main_display);
-        Ok(Box::new(mirror::MirrorDisplay::new(compositor, connector)?))
+    match target.into_monitor() {
+        None if compositor == Compositor::MacOs && creates_displays() => {
+            Ok(Box::<macos::OwnScreen>::default())
+        }
+        connector => {
+            let connector = connector.unwrap_or_else(macos::main_display);
+            Ok(Box::new(mirror::MirrorDisplay::new(compositor, connector)?))
+        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
@@ -675,7 +684,7 @@ pub fn open_mirror(compositor: Compositor, connector: &str) -> Result<Box<dyn Vi
 
 /// Is `compositor` up and able to create a virtual output right now?
 /// KWin checks the privileged `zkde_screencast` global; Hyprland, niri and Umbriel check that
-/// their IPC answers. Gamescope, Mutter, wlroots and the macOS mirror have no pre-flight;
+/// their IPC answers. Gamescope, Mutter, wlroots and macOS have no pre-flight;
 /// `Ok(())` means try `create`.
 pub fn probe(compositor: Compositor) -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -790,10 +799,17 @@ impl DisplayAsleep {
 #[path = "vdisplay/mirror.rs"]
 mod mirror;
 
-// The displays a macOS mirror streams.
+// The displays a macOS host lists, mirrors and makes.
 #[cfg(target_os = "macos")]
 #[path = "vdisplay/macos.rs"]
 mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::creates_displays;
+
+// The private CoreGraphics classes behind a macOS virtual display, and nothing else.
+#[cfg(target_os = "macos")]
+#[path = "vdisplay/macos_virtual.rs"]
+mod macos_virtual;
 
 // Pure lifecycle state machine (refcount + linger + pin). Registry executes the transitions.
 #[path = "vdisplay/lifecycle.rs"]

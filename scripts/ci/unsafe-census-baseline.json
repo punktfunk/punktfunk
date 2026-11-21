@@ -27,7 +27,7 @@
     "crates/host/pf-paths-win": 7,
     "crates/host/pf-seat-audio": 17,
     "crates/host/pf-seats": 43,
-    "crates/host/pf-vdisplay": 5,
+    "crates/host/pf-vdisplay": 12,
     "crates/host/pf-win-display": 18,
     "crates/host/pf-zerocopy": 53,
     "crates/host/punktfunk-capture-worker": 3,

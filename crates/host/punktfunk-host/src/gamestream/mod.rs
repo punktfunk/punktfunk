@@ -213,7 +213,7 @@ const HDR_ADVERT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 /// at RTSP via [`pf_capture::gnome_hdr_monitor_active`]); a virtual output asks
 /// [`crate::capture::capturer_supports_hdr_for`] about the compositor and gamescope route
 /// this launch opens. Both Linux arms also need `encoder` to encode 10-bit, as macOS, whose
-/// launches all mirror one display, does.
+/// launches all capture through one backend, does.
 pub fn launch_hdr_capable(
     pin: Option<crate::vdisplay::Compositor>,
     launches: bool,
@@ -252,8 +252,8 @@ pub fn launch_hdr_capable(
     #[cfg(target_os = "macos")]
     {
         let _ = (pin, launches);
-        let mirror = Some(crate::vdisplay::Compositor::MacOs);
-        crate::capture::capturer_supports_hdr_for(mirror, None, encoder)
+        let macos = Some(crate::vdisplay::Compositor::MacOs);
+        crate::capture::capturer_supports_hdr_for(macos, None, encoder)
             && (encoder.can_encode_10bit(crate::encode::Codec::H265)
                 || encoder.can_encode_10bit(crate::encode::Codec::Av1))
     }

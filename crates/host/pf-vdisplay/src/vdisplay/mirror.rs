@@ -345,7 +345,7 @@ fn names_ours_conclusively(compositor: Compositor) -> bool {
         Compositor::Wlroots | Compositor::Mutter | Compositor::Gamescope => false,
         // The inventory reads our EDID manufacturer id, which nothing else carries.
         Compositor::Windows => true,
-        // A macOS host creates no display, so it lists none as its own.
+        // Ours carry a vendor and product no panel reports (`vdisplay/macos.rs`).
         #[cfg(target_os = "macos")]
         Compositor::MacOs => true,
     }
