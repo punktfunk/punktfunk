@@ -72,11 +72,12 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi_Common",
 ] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Reads the VideoToolbox live tests' access units back (IDR, parameter sets, colour, depth).
+pf-bitstream = { path = "../../codec/pf-bitstream" }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # VideoToolbox encode.
-objc2 = { workspace = true }
-block2 = { workspace = true }
-objc2-foundation = { workspace = true }
 objc2-core-foundation = { workspace = true }
 objc2-core-video = { workspace = true }
 objc2-core-media = { workspace = true }

@@ -1,25 +1,29 @@
 //! Backend resolution: which encoder a session opens and what it can encode. The host calls
 //! [`resolve`] once per entry and asks the [`Resolved`] it returns; [`crate::open_video`] opens
 //! the backend that value names, so the open and the advertisement read the same answer.
-//! `linux.rs` and `windows.rs` answer per OS; any other target answers from the stub arm below.
-//! The rules: `docs/adr/0002-encode-backend-resolution.md`.
+//! `linux.rs`, `windows.rs` and `macos.rs` answer per OS; any other target answers from the stub
+//! arm below. The rules: `docs/adr/0002-encode-backend-resolution.md`.
 
 use crate::*;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 use std::time::{Duration, Instant};
 
 // One module per OS, each answering the same `pub(crate)` questions; Linux's free public
 // functions re-export from here.
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(target_os = "linux")]
 use linux as imp;
+#[cfg(target_os = "macos")]
+use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
@@ -28,7 +32,7 @@ pub(crate) use imp::open;
 pub use imp::{anv_video_encode_flag, open_software_h264};
 
 /// No GPU encode backend on this target: nothing is probed and nothing opens.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod imp {
     use super::*;
     use crate::env_knobs::Knobs;
@@ -170,7 +174,10 @@ impl ResolveInputs {
 #[derive(Debug)]
 pub struct Resolved {
     inputs: ResolveInputs,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+        allow(dead_code)
+    )]
     probes: imp::Probes,
     /// [`Resolved::can_encode_444`]'s verdict, so its line logs once per inputs.
     hevc_444: OnceLock<bool>,
@@ -223,14 +230,20 @@ impl Resolved {
     }
 
     /// Whether the backend can emit 4:4:4 for `codec`, asked before Welcome. 4:4:4 is HEVC and
-    /// PyroWave only; VAAPI/AMF/QSV must be probed, never assumed. A verdict whose probe could
-    /// not ask is `false` for this call, and asked again once [`RETRY_AFTER`] has passed.
+    /// PyroWave only; VAAPI/AMF/QSV/VideoToolbox are probed, never assumed. A verdict whose probe
+    /// could not ask is `false` for this call, and asked again once [`RETRY_AFTER`] has passed.
     pub fn can_encode_444(&self, codec: Codec) -> bool {
         match codec {
             // Own RGB→YCbCr CSC from a full-chroma source — no GPU encode probe.
             // See `design/pyrowave-444-hdr.md`.
             Codec::PyroWave => cfg!(any(target_os = "linux", target_os = "windows")),
-            Codec::H265 if cfg!(any(target_os = "linux", target_os = "windows")) => {
+            Codec::H265
+                if cfg!(any(
+                    target_os = "linux",
+                    target_os = "windows",
+                    target_os = "macos"
+                )) =>
+            {
                 if let Some(v) = self.hevc_444.get() {
                     return *v;
                 }
@@ -250,14 +263,21 @@ impl Resolved {
     /// (label HDR / stream SDR). A verdict whose probe could not ask is `false` for this call,
     /// and asked again once [`RETRY_AFTER`] has passed.
     pub fn can_encode_10bit(&self, codec: Codec) -> bool {
-        if !codec.supports_10bit() || !cfg!(any(target_os = "linux", target_os = "windows")) {
+        if !codec.supports_10bit()
+            || !cfg!(any(
+                target_os = "linux",
+                target_os = "windows",
+                target_os = "macos"
+            ))
+        {
             return false;
         }
         if codec == Codec::PyroWave {
             // Wavelet is depth-agnostic; the CSC runs on the encoder's own Vulkan device, so
             // 10-bit needs no encode-profile probe — just the `pyrowave` backend existing on
             // this OS. See `design/pyrowave-444-hdr.md`.
-            return cfg!(target_os = "windows") || self.inputs.features.pyrowave;
+            return cfg!(target_os = "windows")
+                || (cfg!(target_os = "linux") && self.inputs.features.pyrowave);
         }
         let Some(slot) = codec_slot(codec) else {
             return false;
@@ -337,21 +357,21 @@ fn resolve_in(
 /// How long a probe that could not ask stays unasked. A driver still starting is up within a
 /// few seconds; a box that never answers costs one probe per half minute, not one per handshake
 /// ask and `/serverinfo` poll.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 const RETRY_AFTER: Duration = Duration::from_secs(30);
 
 /// One probe's kept answer. A probe that could not ask (`None`) leaves the cell empty and is not
 /// run again for [`RETRY_AFTER`]: asks inside that window answer "unanswered" without probing,
 /// so asks made together get the same answer. The probe runs under the cell's lock, one at a
 /// time, and must not ask its own cell.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[derive(Debug)]
 pub(crate) struct Probed<T> {
     answer: OnceLock<T>,
     missed_at: Mutex<Option<Instant>>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 impl<T> Default for Probed<T> {
     fn default() -> Self {
         Probed {
@@ -361,7 +381,7 @@ impl<T> Default for Probed<T> {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 impl<T: Copy> Probed<T> {
     /// The kept answer; `None` until a probe has answered.
     pub(crate) fn get(&self) -> Option<T> {
@@ -405,7 +425,7 @@ impl<T: Copy> Probed<T> {
 
 /// `probe`'s codec set once it finds a codec; `None` while it finds none, warning once per
 /// `missed`. The caller advertises its superset meanwhile.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn codec_found(
     missed: &OnceLock<()>,
     what: &'static str,
@@ -428,7 +448,7 @@ fn codec_found(
 /// `quic::CODEC_*` bits of a [`CodecSupport`] probe, or `None` when it found
 /// nothing — GPU unusable at probe time, not "zero codecs". Caller falls back
 /// to the static superset.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub(crate) fn codec_support_wire_mask(caps: CodecSupport) -> Option<u8> {
     let mut m = 0u8;
     if caps.h264 {
@@ -571,7 +591,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&auto, &resolve_in(&cache, other_gpu)));
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     #[test]
     fn codec_support_wire_mask_maps_the_probe_to_bits() {
         use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
@@ -600,7 +620,7 @@ mod tests {
     }
 
     /// A codec set that found nothing is unanswered, and warns once; a found set is the answer.
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     #[test]
     fn a_codec_set_that_found_nothing_is_unanswered() {
         let missed = OnceLock::new();
@@ -622,7 +642,7 @@ mod tests {
 
     /// An unanswered probe is not run again inside the window, runs again once it has passed,
     /// and an answer is kept for good.
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     #[test]
     fn an_unanswered_probe_waits_out_the_window() {
         let cell = Probed::<bool>::default();
