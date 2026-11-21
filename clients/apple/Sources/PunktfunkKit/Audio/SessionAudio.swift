@@ -39,22 +39,13 @@ public final class SessionAudio: @unchecked Sendable {
     private let connection: PunktfunkConnection
     private let flag = StopFlag()
     private let drainDone = DispatchSemaphore(value: 0)
-    /// Owns the engine handles + drainStarted, paired with `flag`: stop() sets the flag
-    /// BEFORE taking the engines, every publisher re-checks the flag under this lock
-    /// after publishing-side work — so a startCapture racing stop() (the mic-permission
-    /// callback arrives whenever the user clicks the prompt) can never leave a hot
-    /// microphone with no owner.
+    /// Owns `topology` and `drainStarted`, paired with `flag`: stop() sets the flag BEFORE
+    /// taking the engines, and `publish` re-checks it under this lock, so a capture start racing
+    /// stop() (the mic-permission callback arrives whenever the user clicks the prompt) can never
+    /// leave a hot microphone with no owner.
     private let stateLock = NSLock()
-    private var playbackEngine: AVAudioEngine?
-    private var captureEngine: AVAudioEngine?
-    /// The one engine running BOTH directions when the voice processor is engaged;
-    /// `playbackEngine`/`captureEngine` stay nil while this is set.
-    private var combinedEngine: AVAudioEngine?
-    #if !os(tvOS)
-    /// The capture behind whichever engine carries the mic. Guarded by `stateLock`, and
-    /// published with its engine.
-    private var micUplink: MicUplink?
-    #endif
+    /// The engines this session runs. Guarded by `stateLock`.
+    private var topology = AudioTopology.none
     private var drainStarted = false
     /// The mute LATCH: the effective mute the owner last asked for (see `setMicMuted`). Held
     /// because the uplink engine can appear LATER than the request — the mic permission prompt
@@ -63,7 +54,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// Guarded by `stateLock`, like the engines it applies to.
     private var micMuted = false
     /// The playback jitter ring — created by whichever engine starts playback first and KEPT
-    /// across an engine rebuild (the permission-grant upgrade in `startEngines` swaps engines,
+    /// across an engine rebuild (the permission-grant swap in `micGranted` swaps engines,
     /// not the ring, so the drain thread never has to be re-pointed). Guarded by `stateLock`:
     /// the start paths run on `engineQueue`, while `stats` reads from the main thread.
     private var ring: AudioRing?
@@ -416,73 +407,74 @@ public final class SessionAudio: @unchecked Sendable {
         // The tvOS app opens no microphone: playback only.
         startPlayback(speakerUID: speakerUID)
         #else
-        guard micEnabled else {
-            startPlayback(speakerUID: speakerUID)
-            return
-        }
+        var combined = wantsCombined(
+            speakerUID: speakerUID, micUID: micUID, micChannel: micChannel,
+            echoCancel: echoCancel)
         #if os(macOS)
         // A rebuild must not re-attempt a voice-processing start that already failed on this
         // input device: the failure repeats, and the failed attempt's HAL churn stops the healthy
         // fallback engines (see `CombinedTopologyGate`).
-        var combined = wantsCombined(
-            speakerUID: speakerUID, micUID: micUID, micChannel: micChannel,
-            echoCancel: echoCancel)
-        if combined, !combinedGate.shouldTry(input: AudioDevices.defaultInputDevice()) {
+        if micEnabled, combined, !combinedGate.shouldTry(input: AudioDevices.defaultInputDevice()) {
             log.info("""
                 voice processing already failed on this input device — split engines, no echo \
                 cancellation
                 """)
             combined = false
         }
-        #else
-        let combined = wantsCombined(
-            speakerUID: speakerUID, micUID: micUID, micChannel: micChannel,
-            echoCancel: echoCancel)
         #endif
+        let permission: AudioStart.Permission
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            if combined {
-                startCombined(speakerUID: speakerUID, micUID: micUID, micChannel: micChannel)
-            } else {
-                startPlayback(speakerUID: speakerUID)
-                startCapture(micUID: micUID, micChannel: micChannel)
-            }
-        case .notDetermined:
-            // Playback must not wait out the permission prompt (the user answers at their
-            // leisure) — start it now, and on a grant either bolt the capture engine on
-            // (split) or swap the playback engine for the combined one (the ring and its
-            // drain thread carry over — see `makePlaybackChain`).
+        case .authorized: permission = .authorized
+        case .notDetermined: permission = .notDetermined
+        default: permission = .denied
+        }
+        switch AudioStart.choose(micEnabled: micEnabled, combined: combined, permission: permission) {
+        case .playback:
+            startPlayback(speakerUID: speakerUID)
+        case .denied:
+            startPlayback(speakerUID: speakerUID)
+            log.warning("microphone access denied — mic uplink disabled (System Settings → Privacy)")
+        case .split:
+            startPlayback(speakerUID: speakerUID)
+            startCapture(micUID: micUID, micChannel: micChannel)
+        case .combined:
+            startCombined(speakerUID: speakerUID, micUID: micUID, micChannel: micChannel)
+        case .askThen(let combined):
+            // On a grant the capture engine joins, or the combined engine replaces playback;
+            // the ring and its drain thread carry over (see `makePlaybackChain`).
             startPlayback(speakerUID: speakerUID)
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 guard let self else { return }
                 self.engineQueue.async { [weak self] in
                     guard let self, granted, !self.flag.isStopped else { return }
-                    // A rebuild during the prompt asks again, so a grant can call back twice, and
-                    // a rebuild after it may have started the mic already. Never start a second.
-                    self.stateLock.lock()
-                    let micLive = self.captureEngine != nil || self.combinedEngine != nil
-                    self.stateLock.unlock()
-                    guard !micLive else { return }
-                    if combined {
-                        self.stateLock.lock()
-                        let playback = self.playbackEngine
-                        self.playbackEngine = nil
-                        self.stateLock.unlock()
-                        playback?.stop()
-                        self.retire(playback)
-                        self.startCombined(
-                            speakerUID: speakerUID, micUID: micUID, micChannel: micChannel)
-                    } else {
-                        self.startCapture(micUID: micUID, micChannel: micChannel)
-                    }
+                    self.micGranted(
+                        combined: combined, speakerUID: speakerUID, micUID: micUID,
+                        micChannel: micChannel)
                 }
             }
-        default:
-            startPlayback(speakerUID: speakerUID)
-            log.warning("microphone access denied — mic uplink disabled (System Settings → Privacy)")
         }
         #endif
     }
+
+    #if !os(tvOS)
+    /// The mic permission was granted while playback ran. Runs on `engineQueue`.
+    private func micGranted(combined: Bool, speakerUID: String, micUID: String, micChannel: Int) {
+        stateLock.lock()
+        let step = topology.onGrant(combined: combined)
+        let playback = step == .swapToCombined ? topology.takePlayback() : nil
+        stateLock.unlock()
+        switch step {
+        case .ignore:
+            return
+        case .addCapture:
+            startCapture(micUID: micUID, micChannel: micChannel)
+        case .swapToCombined:
+            playback?.stop()
+            retire(playback.map { [$0] } ?? [])
+            startCombined(speakerUID: speakerUID, micUID: micUID, micChannel: micChannel)
+        }
+    }
+    #endif
 
     #if !os(tvOS)
     /// One engine or two: the voice processor requires render + capture on one unit, and that
@@ -549,10 +541,9 @@ public final class SessionAudio: @unchecked Sendable {
     /// posts its configuration change from a block that does not retain the engine; freeing the
     /// engine while a device change has that block queued crashes inside AVFAudio. 3 s outlasts
     /// a device switch's notification burst.
-    private func retire(_ engines: AVAudioEngine?...) {
-        let held = engines.compactMap { $0 }
-        guard !held.isEmpty else { return }
-        engineQueue.asyncAfter(deadline: .now() + 3) { withExtendedLifetime(held) {} }
+    private func retire(_ engines: [AVAudioEngine]) {
+        guard !engines.isEmpty else { return }
+        engineQueue.asyncAfter(deadline: .now() + 3) { withExtendedLifetime(engines) {} }
     }
 
     /// Stop every engine we own and `retire` it, leaving the ring, the drain thread, the observers
@@ -560,24 +551,35 @@ public final class SessionAudio: @unchecked Sendable {
     /// any thread; the engines are taken under the lock before any of them is touched.
     private func tearDownEngines() {
         stateLock.lock()
-        let capture = captureEngine
-        captureEngine = nil
-        let playback = playbackEngine
-        playbackEngine = nil
-        let combined = combinedEngine
-        combinedEngine = nil
-        #if !os(tvOS)
-        let uplink = micUplink
-        micUplink = nil
-        #endif
+        let engines = topology
+        topology = .none
         stateLock.unlock()
-        capture?.stop()
-        playback?.stop()
-        combined?.stop()
-        #if !os(tvOS)
-        uplink?.stop() // after its engine: see `MicUplink.stop`
-        #endif
-        retire(capture, playback, combined)
+        halt(engines)
+    }
+
+    /// Stop every engine in `engines`, each uplink after its engine (see `MicUplink.stop`), and
+    /// `retire` the engines.
+    private func halt(_ engines: AudioTopology) {
+        engines.engines.forEach { $0.stop() }
+        engines.uplinks.forEach { $0.stop() }
+        retire(engines.engines)
+    }
+
+    /// Hold a started part, or halt it when `stop()` already ran: the flag is re-checked under
+    /// the lock `stop()` takes the engines under, so no started engine is left without an owner.
+    /// Returns the latched mute to apply, or nil when the part was not kept.
+    private func publish(_ part: AudioTopology.Part) -> Bool? {
+        stateLock.lock()
+        guard !flag.isStopped else {
+            stateLock.unlock()
+            halt(AudioTopology(part))
+            return nil
+        }
+        let displaced = topology.publish(part)
+        let muted = micMuted
+        stateLock.unlock()
+        halt(displaced)
+        return muted
     }
 
     // MARK: - Device changes
@@ -629,7 +631,7 @@ public final class SessionAudio: @unchecked Sendable {
     private func ownsEngine(_ posted: AnyObject?) -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return posted === playbackEngine || posted === captureEngine || posted === combinedEngine
+        return topology.engines.contains { $0 === posted }
     }
 
     /// The hardware moved (main queue, from `AudioDeviceWatcher`). Both reasons ask the same
@@ -691,15 +693,13 @@ public final class SessionAudio: @unchecked Sendable {
         }
     }
 
-    /// Is the render side actually running? Both engines can carry it (`combinedEngine` when the
-    /// voice processor is engaged, `playbackEngine` otherwise). Taken out from under `stateLock`
-    /// before asking AVAudioEngine anything — the lock guards our handles, not the framework.
+    /// Is the render side actually running? Taken out from under `stateLock` before asking
+    /// AVAudioEngine anything: the lock guards our handles, not the framework.
     private var playbackIsLive: Bool {
         stateLock.lock()
-        let playback = playbackEngine
-        let combined = combinedEngine
+        let render = topology.render
         stateLock.unlock()
-        return (playback?.isRunning ?? false) || (combined?.isRunning ?? false)
+        return render?.isRunning ?? false
     }
 
     /// Coalesce: one device switch produces a burst — the old device leaving, the default moving,
@@ -765,7 +765,7 @@ public final class SessionAudio: @unchecked Sendable {
         guard !flag.isStopped else { return }
         #if os(macOS)
         stateLock.lock()
-        let combined = combinedEngine
+        let combined = topology.combined
         stateLock.unlock()
         if CombinedTopologyGate.stoppedEngineFailed(
             stopped: combined.map { !$0.isRunning } ?? false,
@@ -827,7 +827,7 @@ public final class SessionAudio: @unchecked Sendable {
     private func defaultOutputChanged() {
         guard !flag.isStopped, let config = startConfig else { return }
         stateLock.lock()
-        let engine = combinedEngine ?? playbackEngine
+        let engine = topology.render
         stateLock.unlock()
         guard let engine, engine.isRunning, let unit = engine.outputNode.audioUnit,
               let playingOn = Self.currentDevice(of: unit)
@@ -850,7 +850,7 @@ public final class SessionAudio: @unchecked Sendable {
               let wanted = AudioDevices.deviceID(forUID: config.micUID)
         else { return }
         stateLock.lock()
-        let capture = captureEngine
+        let capture = topology.capture
         stateLock.unlock()
         guard let unit = capture?.inputNode.audioUnit, let micOn = Self.currentDevice(of: unit),
               micOn != wanted
@@ -916,10 +916,9 @@ public final class SessionAudio: @unchecked Sendable {
             guard let self else { return }
             self.stateLock.lock()
             let muted = self.micMuted // the newest request, if several queued
-            let capture = self.captureEngine
-            let combined = self.combinedEngine
+            let engines = self.topology
             self.stateLock.unlock()
-            self.apply(micMuted: muted, capture: capture, combined: combined)
+            self.apply(micMuted: muted, capture: engines.capture, combined: engines.combined)
         }
     }
 
@@ -990,7 +989,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// Used by `AudioDeviceSwitchTests`.
     var playbackState: (running: Bool, device: AudioDeviceID?) {
         stateLock.lock()
-        let engine = combinedEngine ?? playbackEngine
+        let engine = topology.render
         stateLock.unlock()
         guard let engine else { return (false, nil) }
         return (engine.isRunning, engine.outputNode.audioUnit.flatMap(Self.currentDevice(of:)))
@@ -1143,7 +1142,7 @@ public final class SessionAudio: @unchecked Sendable {
     private func startPlayback(speakerUID: String) {
         guard let (ring, source, format) = makePlaybackChain() else { return }
         let engine = AVAudioEngine()
-        defer { retire(engine) } // covers every failure return below
+        defer { retire([engine]) } // covers every failure return below
         #if os(macOS)
         if !speakerUID.isEmpty {
             if let dev = AudioDevices.deviceID(forUID: speakerUID),
@@ -1167,14 +1166,7 @@ public final class SessionAudio: @unchecked Sendable {
             return
         }
         noteOutputFormat(engine, wireRateHz: wireRateHz)
-        stateLock.lock()
-        if flag.isStopped {
-            stateLock.unlock()
-            engine.stop() // stop() already ran — don't strand a started engine
-            return
-        }
-        playbackEngine = engine
-        stateLock.unlock()
+        guard publish(.playback(engine)) != nil else { return }
         startDrain(into: ring)
     }
 
@@ -1260,7 +1252,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// mic chain can't be built — a session never loses audio to the echo-cancel feature.
     private func startCombined(speakerUID: String, micUID: String, micChannel: Int) {
         let engine = AVAudioEngine()
-        defer { retire(engine) } // covers every failure return below
+        defer { retire([engine]) } // covers every failure return below
         let input = engine.inputNode
         do {
             // Before anything reads the input's format: the voice processor changes it, often
@@ -1335,17 +1327,10 @@ public final class SessionAudio: @unchecked Sendable {
             startCapture(micUID: micUID, micChannel: micChannel)
             return
         }
-        stateLock.lock()
-        if flag.isStopped {
-            stateLock.unlock()
-            engine.stop() // stop() already ran — don't strand a started engine (or a hot mic)
-            uplink.stop()
+        // The mute may have been latched before this engine existed (a mute during the prompt).
+        guard let muted = publish(.combined(MicCapture(engine: engine, uplink: uplink))) else {
             return
         }
-        combinedEngine = engine
-        micUplink = uplink
-        let muted = micMuted // latched before this engine existed (a mute during the prompt)
-        stateLock.unlock()
         #if os(macOS)
         combinedDevices = Self.defaultDevices()
         #endif
@@ -1364,7 +1349,7 @@ public final class SessionAudio: @unchecked Sendable {
     /// pinned endpoints land here — see `wantsCombined`.
     private func startCapture(micUID: String, micChannel: Int) {
         let engine = AVAudioEngine()
-        defer { retire(engine) } // covers every failure return below
+        defer { retire([engine]) } // covers every failure return below
         let input = engine.inputNode
         #if os(macOS)
         if !micUID.isEmpty {
@@ -1396,19 +1381,10 @@ public final class SessionAudio: @unchecked Sendable {
             uplink.stop()
             return
         }
-        stateLock.lock()
-        if flag.isStopped {
-            // stop() ran while we were starting (the permission prompt resolves at the
-            // user's leisure) — tear the engine down ourselves, nobody else owns it now.
-            stateLock.unlock()
-            engine.stop()
-            uplink.stop()
+        // The mute may have been latched before this engine existed (a mute during the prompt).
+        guard let muted = publish(.capture(MicCapture(engine: engine, uplink: uplink))) else {
             return
         }
-        captureEngine = engine
-        micUplink = uplink
-        let muted = micMuted // latched before this engine existed (a mute during the prompt)
-        stateLock.unlock()
         apply(micMuted: muted, capture: engine, combined: nil)
         log.info("mic uplink started (\(micUID.isEmpty ? "default input" : micUID))")
     }

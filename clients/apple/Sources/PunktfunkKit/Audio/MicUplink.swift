@@ -8,7 +8,6 @@
 //
 // The IO thread allocates nothing and logs nothing. It takes one lock, held for a copy.
 
-#if !os(tvOS)
 import AVFoundation
 import os
 
@@ -262,4 +261,3 @@ final class MicUplink: @unchecked Sendable {
         wake.signal()
     }
 }
-#endif
