@@ -72,6 +72,41 @@ struct MicChannelPlan: Equatable, Sendable {
     }
 }
 
+/// Cuts the worker's resampled mono into the encoder's packet size and numbers the packets the
+/// encoder returns. A remainder short of a packet waits for the next batch. Worker-confined.
+struct MicPacketizer {
+    let packetFrames: Int
+    private var fifo: [Float] = []
+    private var seq: UInt32 = 0
+
+    init(packetFrames: Int) {
+        self.packetFrames = packetFrames
+        fifo.reserveCapacity(48_000)
+    }
+
+    /// Queue `samples`, give each whole packet to `encode`, and each packet it returns to `send`
+    /// with its sequence number. A packet `encode` refuses (nil) is dropped.
+    mutating func push(
+        _ samples: UnsafeBufferPointer<Float>,
+        encode: (UnsafeBufferPointer<Float>) -> [Data]?,
+        send: (Data, UInt32) -> Void
+    ) {
+        fifo.append(contentsOf: samples)
+        var head = 0
+        while fifo.count - head >= packetFrames {
+            let packets = fifo.withUnsafeBufferPointer {
+                encode(UnsafeBufferPointer(rebasing: $0[head..<head + packetFrames]))
+            }
+            head += packetFrames
+            for packet in packets ?? [] {
+                send(packet, seq)
+                seq &+= 1
+            }
+        }
+        if head > 0 { fifo.removeFirst(head) } // keeps capacity: no realloc
+    }
+}
+
 /// Mono capture on its way from the IO thread to the worker. Fixed size: a worker that falls
 /// behind loses the oldest audio, and the IO thread never waits on it.
 final class MicRing: @unchecked Sendable {

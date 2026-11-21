@@ -111,6 +111,24 @@ final class MicUplinkTests: XCTestCase {
         XCTAssertLessThan(frames, 4800, "the capture is batching like a tap")
     }
     #endif
+
+    // Whole packets go out in arrival order, numbered without gaps, whatever the batch sizes;
+    // the remainder waits for the next batch.
+    func testThePacketizerCutsWholePacketsAcrossBatches() {
+        var packetizer = MicPacketizer(packetFrames: 4)
+        var sent: [(first: UInt8, seq: UInt32)] = []
+        let samples = (0..<11).map(Float.init)
+        for range in [0..<3, 3..<9, 9..<11] {
+            Array(samples[range]).withUnsafeBufferPointer { batch in
+                packetizer.push(batch, encode: { packet in
+                    XCTAssertEqual(packet.count, 4)
+                    return [Data([UInt8(packet[0])]), Data([UInt8(packet[3])])]
+                }, send: { packet, seq in sent.append((packet[0], seq)) })
+            }
+        }
+        XCTAssertEqual(sent.map(\.first), [0, 3, 4, 7])
+        XCTAssertEqual(sent.map(\.seq), [0, 1, 2, 3])
+    }
 }
 
 private final class Tally: @unchecked Sendable {

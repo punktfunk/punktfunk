@@ -1516,10 +1516,8 @@ public final class SessionAudio: @unchecked Sendable {
         }
 
         // Worker-confined from here: copy into `chain.mono`, resample into `chain.staging`,
-        // gather in `fifo`, slice `framesPerPacket` chunks for the encoder.
-        var fifo: [Float] = []
-        fifo.reserveCapacity(48_000)
-        var seq: UInt32 = 0
+        // and cut packets in `packetizer`.
+        var packetizer = MicPacketizer(packetFrames: Int(encoder.framesPerPacket))
         var batches = 0
         let connection = connection
         let flag = flag
@@ -1583,28 +1581,18 @@ public final class SessionAudio: @unchecked Sendable {
                 return mono
             }
             guard status != .error, let p = staging.floatChannelData?[0] else { return }
-            fifo.append(contentsOf: UnsafeBufferPointer(
-                start: p, count: Int(staging.frameLength)))
-
-            // Whole chunks go out through a head index, and the eaten prefix is dropped in one
-            // move of the remainder.
-            let samplesPerChunk = Int(encoder.framesPerPacket)
-            var head = 0
-            while fifo.count - head >= samplesPerChunk {
-                chunk.frameLength = encoder.framesPerPacket
-                fifo.withUnsafeBufferPointer { src in
+            packetizer.push(
+                UnsafeBufferPointer(start: p, count: Int(staging.frameLength)),
+                encode: { samples in
+                    chunk.frameLength = encoder.framesPerPacket
                     chunk.floatChannelData![0].update(
-                        from: src.baseAddress! + head, count: samplesPerChunk)
-                }
-                head += samplesPerChunk
-                guard let packets = try? encoder.encode(chunk) else { continue }
-                for packet in packets {
+                        from: samples.baseAddress!, count: samples.count)
+                    return try? encoder.encode(chunk)
+                },
+                send: { packet, seq in
                     connection.sendMic(
                         packet, seq: seq, ptsNs: DispatchTime.now().uptimeNanoseconds)
-                    seq &+= 1
-                }
-            }
-            if head > 0 { fifo.removeFirst(head) } // keeps capacity — no realloc
+                })
         }
         return uplink
     }
