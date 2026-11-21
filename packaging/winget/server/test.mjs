@@ -134,5 +134,39 @@ const post = (p, body) =>
   check("unknown route -> 404", res.status === 404, `got ${res.status}`);
 }
 
+// ── the client package ──────────────────────────────────────────────────────────────────────────
+const byCode = async (code) =>
+  post("manifestSearch", { Inclusions: [{ PackageMatchField: "ProductCode", RequestMatch: { KeyWord: code, MatchType: "Exact" } }] });
+{
+  // ARP correlation: each package answers only to its own ProductCode.
+  const host = await (await byCode("{7C9E6A52-1F4B-4E8D-A3C7-2B5D8F1E0A93}_is1")).json();
+  check("ProductCode finds the host alone", host.Data?.map((p) => p.PackageIdentifier).join() === "unom.PunktfunkHost");
+}
+// A catalogue built from releases has no client until one carries its manifests, and the host's
+// release job must not fail for that.
+if (!DATA.packages.some((p) => p.PackageIdentifier === "unom.PunktfunkClient")) {
+  console.log("skip client checks: no release carries its manifests yet");
+} else {
+  const res = await get("packageManifests/unom.PunktfunkClient");
+  const body = await res.json();
+  check("client manifest: 200", res.status === 200, `got ${res.status}`);
+  const v = body.Data?.Versions?.[0];
+  const byArch = Object.fromEntries((v?.Installers ?? []).map((i) => [i.Architecture, i]));
+  check("client: one installer per architecture", Object.keys(byArch).sort().join() === "arm64,x64", `got ${Object.keys(byArch)}`);
+  check(
+    "client: each installer has its own URL and a sha256",
+    byArch.x64?.InstallerUrl?.endsWith("_x64.exe") && byArch.arm64?.InstallerUrl?.endsWith("_arm64.exe")
+      && /^[0-9A-F]{64}$/i.test(byArch.x64?.InstallerSha256 ?? "") && /^[0-9A-F]{64}$/i.test(byArch.arm64?.InstallerSha256 ?? ""),
+  );
+  check(
+    "client: a per-user exe that never elevates",
+    byArch.x64?.InstallerType === "exe" && byArch.x64?.Scope === "user" && !byArch.x64?.ElevationRequirement,
+  );
+  check("client: silent switches folded into the entry", !!byArch.arm64?.InstallerSwitches?.Silent);
+  check("client: other locales present", (v?.Locales ?? []).length >= 5, `got ${v?.Locales?.length}`);
+  const code = await (await byCode("{52464E61-68A1-4621-B6B3-5B8BBB823D1A}_is1")).json();
+  check("ProductCode finds the client alone", code.Data?.map((p) => p.PackageIdentifier).join() === "unom.PunktfunkClient");
+}
+
 console.log(failed === 0 ? "\nall checks passed" : `\n${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);

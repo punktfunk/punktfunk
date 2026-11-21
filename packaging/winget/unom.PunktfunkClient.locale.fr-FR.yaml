@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+PackageIdentifier: unom.PunktfunkClient
+PackageVersion: 0.47.0
+PackageLocale: fr-FR
+
+Publisher: unom
+PublisherUrl: https://git.unom.io/unom/punktfunk
+PublisherSupportUrl: https://punktfunk.unom.io/community
+PrivacyUrl: https://unom.io/en/legal/privacy#punktfunk-apps
+PackageName: Punktfunk Client
+PackageUrl: https://docs.punktfunk.unom.io/docs/install-client
+License: MIT OR Apache-2.0
+LicenseUrl: https://git.unom.io/unom/punktfunk/src/branch/main/LICENSE-MIT
+Copyright: Copyright (c) unom
+ShortDescription: Client de streaming de jeux à faible latence — jouez aux jeux de votre hôte Punktfunk depuis un PC ou un portable Windows.
+Description: |-
+  Punktfunk Client diffuse les jeux d’un hôte Punktfunk vers un PC ou un portable Windows 10 ou 11,
+  en x64 et Arm64. Il se connecte via son protocole QUIC natif, décode la vidéo sur le GPU (Vulkan Video
+  ou D3D11VA) avec HDR, joue le son via WASAPI et renvoie à l’hôte les entrées du clavier, de la souris
+  et de la manette.
+
+  Le paquet installe aussi Punktfunk Console, une interface à la manette pour un téléviseur ou un HTPC
+  (x64 uniquement), et la commande punktfunk pour les scripts. Il s’installe pour l’utilisateur actuel
+  et ne demande aucun droit d’administrateur.
+Tags:
+  - game-streaming
+  - remote-desktop
+  - streaming
+  - remote-play
+ReleaseNotesUrl: https://git.unom.io/unom/punktfunk/src/branch/main/docs/releases/v0.47.0.md
+InstallationNotes: |-
+  Ouvrez Punktfunk depuis le menu Démarrer, puis associez-le une fois à votre hôte :
+    https://docs.punktfunk.unom.io/docs/pairing
+
+  Punktfunk Console (x64) est l’interface à la manette pour un téléviseur ou un HTPC.
+
+  Installé dans :  %LOCALAPPDATA%\Programs\Punktfunk
+  La commande `punktfunk` est dans le PATH des nouvelles fenêtres de terminal.
+Documentations:
+  - DocumentLabel: Client Windows
+    DocumentUrl: https://docs.punktfunk.unom.io/docs/clients#windows-desktop-client
+
+ManifestType: locale
+ManifestVersion: 1.6.0

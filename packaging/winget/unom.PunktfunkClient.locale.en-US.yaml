@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: unom.PunktfunkClient
+PackageVersion: 0.47.0
+PackageLocale: en-US
+
+Publisher: unom
+PublisherUrl: https://git.unom.io/unom/punktfunk
+PublisherSupportUrl: https://punktfunk.unom.io/community
+PrivacyUrl: https://unom.io/en/legal/privacy#punktfunk-apps
+PackageName: Punktfunk Client
+PackageUrl: https://docs.punktfunk.unom.io/docs/install-client
+License: MIT OR Apache-2.0
+LicenseUrl: https://git.unom.io/unom/punktfunk/src/branch/main/LICENSE-MIT
+Copyright: Copyright (c) unom
+ShortDescription: Low-latency game-streaming client — play the games on your Punktfunk host from a Windows PC or laptop.
+Description: |-
+  Punktfunk Client streams games from a Punktfunk host to a Windows 10 or 11 PC or laptop, on x64 and
+  Arm64. It connects over the native QUIC protocol, decodes video on the GPU (Vulkan Video or D3D11VA)
+  with HDR, plays audio through WASAPI and passes keyboard, mouse and controller input back to the host.
+
+  The package also installs Punktfunk Console, a controller interface for a TV or HTPC (x64 only), and
+  the punktfunk command for scripts. It installs for the current user and needs no administrator rights.
+Moniker: punktfunk-client
+Tags:
+  - game-streaming
+  - remote-desktop
+  - streaming
+  - remote-play
+ReleaseNotesUrl: https://git.unom.io/unom/punktfunk/src/branch/main/docs/releases/v0.47.0.md
+Documentations:
+  - DocumentLabel: Windows Client
+    DocumentUrl: https://docs.punktfunk.unom.io/docs/clients#windows-desktop-client
+
+# Displayed after the install completes.
+InstallationNotes: |-
+  Open Punktfunk from the Start menu, then pair it with your host once:
+    https://docs.punktfunk.unom.io/docs/pairing
+
+  Punktfunk Console (x64) is the controller interface for a TV or HTPC.
+
+  Installed in:  %LOCALAPPDATA%\Programs\Punktfunk
+  The `punktfunk` command is on your PATH in new terminal windows.
+
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

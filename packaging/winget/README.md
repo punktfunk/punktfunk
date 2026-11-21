@@ -1,9 +1,9 @@
-# winget manifests — Windows host
+# winget manifests — Windows host and client
 
-The reviewed source of truth for the `unom.PunktfunkHost` winget package. Everything except
-`PackageVersion` / `InstallerUrl` / `InstallerSha256` / `ReleaseNotesUrl` is edited **here**;
-`scripts/ci/winget-manifest.ps1` only substitutes those four per release, so the switches,
-agreements and installation notes stay under normal code review.
+The reviewed source of truth for the `unom.PunktfunkHost` and `unom.PunktfunkClient` winget
+packages. Everything except `PackageVersion` / `InstallerUrl` / `InstallerSha256` /
+`ReleaseNotesUrl` is edited **here**; `scripts/ci/winget-manifest.ps1` only substitutes those four
+per release, so the switches, agreements and installation notes stay under normal code review.
 
 | File | Purpose |
 | --- | --- |
@@ -12,7 +12,28 @@ agreements and installation notes stay under normal code review.
 | `unom.PunktfunkHost.locale.en-US.yaml` | User-facing metadata, `Agreements`, `InstallationNotes`. |
 | `unom.PunktfunkHost.locale.<locale>.yaml` | One language's descriptions and notes. No `Agreements` or `Moniker`: winget takes those from en-US. |
 
-## Why these choices
+## The client package
+
+`unom.PunktfunkClient` has the same file set, `unom.PunktfunkClient.*.yaml`, and the same script
+(`-Package PunktfunkClient`). What differs:
+
+- **`InstallerType: exe`, `Scope: user`, no elevation.** It lists the per-user `punktfunk-client-setup`
+  exe, the default download, not the MSIX: the installer's stable `%LOCALAPPDATA%\Programs\Punktfunk`
+  path is what Steam's picker, the overlay and Big Picture need. It takes the same Inno silent
+  switches as the host.
+- **`ProductCode: {52464E61-…}_is1`.** It must track `CLIENT_ARP_KEY` in
+  `crates/install/punktfunk-setup/src/platform/windows/plan.rs`. Both architectures register it.
+- **x64 and arm64 in one manifest.** The script takes `-Arm64InstallerPath` and fills each
+  `Installers` entry with its own file's URL and hash. winget on an Arm device picks the arm64 entry.
+- **The file name carries the 4-part build version** (`punktfunk-client-setup-0.47.0.0_x64.exe`);
+  `PackageVersion` stays the 3-part tag version. winget drops trailing zero parts, so the ARP
+  `DisplayVersion` `0.47.0.0` equals it.
+- **No `Agreements`.** The disclosures there belong to the host.
+
+`windows-client.yml` emits them in a `winget` job after both legs attach their installers: a matrix
+leg holds only its own file, and one manifest needs both hashes.
+
+## Why these choices for the host
 
 - **`InstallerType: exe`, `Scope: machine`, `ElevationRequirement: elevatesSelf`.** The installer
   is punktfunk-setup-win (the self-contained engine exe), which speaks the Inno Setup silent

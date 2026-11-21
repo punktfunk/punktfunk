@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+#
+# Installer manifest for the Windows client: punktfunk-setup-client, the per-user engine exe
+# (crates/install/punktfunk-setup-win, packed by clients/windows/packaging/pack-client-installer.ps1).
+# It is the default download, not the MSIX: it installs to a stable %LOCALAPPDATA%\Programs\Punktfunk
+# path, which Steam's non-Steam-game picker, the overlay and Big Picture need. It speaks the Inno
+# Setup silent dialect and keeps Inno's ARP key, which is why the switches and ProductCode are Inno's.
+#
+# The client is a per-user install: HKCU only, no service, no drivers, and the exe's manifest is
+# asInvoker, so there is no UAC prompt.
+PackageIdentifier: unom.PunktfunkClient
+PackageVersion: 0.47.0
+
+InstallerType: exe
+Scope: user
+# The MSIX manifest's TargetDeviceFamily floor (clients/windows/packaging/AppxManifest.xml).
+MinimumOSVersion: 10.0.17763.0
+
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+
+InstallerSwitches:
+  # Spelled out: an `exe` manifest has no built-in switches. A silent install takes the same
+  # defaults the wizard shows. <LOGPATH> is winget's own token.
+  Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+  SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+  Log: /LOG="<LOGPATH>"
+
+# Inno's `<AppId>_is1` key under HKCU (CLIENT_ARP_KEY in
+# crates/install/punktfunk-setup/src/platform/windows/plan.rs): what correlates an installed client
+# with this package for `winget list` / `winget upgrade`, across the Inno -> engine boundary too.
+# Both architectures register the same key. DisplayVersion is the 4-part build version; winget
+# drops trailing zero parts, so 0.47.0.0 equals PackageVersion 0.47.0.
+ProductCode: '{52464E61-68A1-4621-B6B3-5B8BBB823D1A}_is1'
+# The engine stops the running client and replaces the files in place, so no uninstall first.
+UpgradeBehavior: install
+
+# The files are named for the 4-part build version (punktfunk-client-setup-0.47.0.0_x64.exe); the
+# script takes the name from the file it hashes. The hashes here are placeholders (SHA-256 of
+# nothing): a digits-only one would parse as a number.
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://git.unom.io/unom/punktfunk/releases/download/v0.47.0/punktfunk-client-setup-0.47.0.0_x64.exe
+    InstallerSha256: E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855
+  - Architecture: arm64
+    InstallerUrl: https://git.unom.io/unom/punktfunk/releases/download/v0.47.0/punktfunk-client-setup-0.47.0.0_arm64.exe
+    InstallerSha256: E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855
+
+ManifestType: installer
+ManifestVersion: 1.6.0

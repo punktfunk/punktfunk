@@ -60,6 +60,8 @@
 #
 # Registry (public, unom org): https://git.unom.io/unom/-/packages  (generic group)
 # Packaging internals: clients/windows/packaging/README.md.
+# winget: on a stable tag the `winget` job attaches the manifests for both installers, and
+# `winget-source` republishes the REST source (packaging/winget/server).
 #
 # Versioning — single project version; MSIX requires a strictly 4-part numeric version, so:
 #   vX.Y.Z tag -> X.Y.Z.0  (THE release; any -rc/+meta pre-release suffix is dropped for MSIX).
@@ -479,3 +481,96 @@ jobs:
           foreach ($f in @($env:CLIENT_SETUP_PATH, $env:CLIENT_ZIP_PATH, $env:MSIX_PATH, $env:MSIX_CER_PATH)) {
             if ($f -and (Test-Path $f)) { Upsert-GiteaAsset -ReleaseId $rid -File $f }
           }
+
+  # winget manifests for the release the two client legs just attached. A job of its own: one
+  # manifest lists both architectures and each matrix leg holds only its own installer. It hashes
+  # the assets as published, so the manifest cannot disagree with what winget downloads. Stable
+  # tags only, for the reason windows-host.yml gives. It needs both legs, so a failed arm64 leg
+  # holds back the x64 manifest too.
+  winget:
+    needs: client
+    if: startsWith(gitea.ref, 'refs/tags/v')
+    runs-on: windows-amd64
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Emit + attach winget manifests
+        shell: pwsh
+        env:
+          GITEA_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          . scripts/ci/gitea-release.ps1
+          $tag = $env:GITHUB_REF_NAME
+          $rid = Ensure-GiteaRelease -Tag $tag -Name $tag -Prerelease 'auto'
+          $api = "$($env:GITHUB_SERVER_URL)/api/v1/repos/$($env:GITHUB_REPOSITORY)/releases/$rid/assets"
+          $h = @{ Authorization = "token $($env:GITEA_TOKEN)" }
+          $in = Join-Path $env:RUNNER_TEMP 'winget-in'
+          New-Item -ItemType Directory -Force -Path $in | Out-Null
+          $setup = @{}
+          foreach ($arch in 'x64', 'arm64') {
+            # `*_<arch>.exe` skips the `.sha256` sidecar next to each asset.
+            $asset = @(Invoke-RestMethod -Uri $api -Headers $h | Where-Object { $_.name -like "punktfunk-client-setup-*_$arch.exe" })
+            if ($asset.Count -ne 1) { throw "expected one $arch client installer on $tag, found $($asset.Count)" }
+            $setup[$arch] = Join-Path $in $asset[0].name
+            Invoke-WebRequest -Uri $asset[0].browser_download_url -Headers $h -OutFile $setup[$arch]
+          }
+          $out = Join-Path $env:RUNNER_TEMP 'winget-out'
+          & scripts/ci/winget-manifest.ps1 -Package PunktfunkClient -Version ($tag -replace '^v', '') `
+            -InstallerPath $setup['x64'] -Arm64InstallerPath $setup['arm64'] -OutDir $out
+          foreach ($f in (Get-ChildItem $out -Filter *.yaml)) {
+            Upsert-GiteaAsset -ReleaseId $rid -File $f.FullName
+          }
+
+  # Republish the winget REST source once the release carries the client manifests.
+  # windows-host.yml's winget-source job does not wait for this workflow, so it can run first and
+  # miss them. Both jobs rebuild the whole catalogue from the releases; the verify step fails if
+  # the other one's upload landed last.
+  winget-source:
+    needs: winget
+    if: startsWith(gitea.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build + test the source catalogue
+        working-directory: packaging/winget/server
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          node build-data.mjs --out data/data.json
+          node test.mjs
+
+      - name: Ship the catalogue to unom-1
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "packaging/winget/server/data/data.json"
+          target: "~/unom-winget/data"
+          strip_components: 4
+          overwrite: true
+
+      # No restart: server.mjs reloads on mtime change. A 404 here means the served catalogue
+      # lacks this version of the client.
+      - name: Verify the served catalogue
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            curl -fsS http://127.0.0.1:3240/healthz
+            echo
+            curl -fsS -o /dev/null "http://127.0.0.1:3240/packageManifests/unom.PunktfunkClient?Version=${GITHUB_REF_NAME#v}"
+            echo "winget source serving the client ${GITHUB_REF_NAME#v}"
+          # `envs:` forwards the runner's variable into the remote shell, as in windows-host.yml.
+          envs: GITHUB_REF_NAME
+        env:
+          GITHUB_REF_NAME: ${{ gitea.ref_name }}
