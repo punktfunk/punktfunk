@@ -234,6 +234,55 @@ async fn a_paired_certificate_on_a_native_tunnel_reads_the_library() {
     );
 }
 
+/// A tunnelled call is from this machine only when its QUIC peer is: a paired device with the
+/// launch grant on a LAN tunnel is not this device, and the same call over a loopback tunnel
+/// passes the gate to the route's own answer.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn a_tunnelled_launch_is_this_device_only_from_loopback() {
+    use crate::webtransport::mgmt::{dispatch, Head};
+    use punktfunk_core::quic::GRANT_LAUNCH;
+    let _dir = ConfigDirOverride::new();
+    let path = crate::test_support::scratch().join("pf-mgmt-desk-tunnel.json");
+    let np =
+        Arc::new(crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap());
+    let fp = "ab".repeat(32);
+    let access = crate::native_pairing::Access {
+        grants: GRANT_LAUNCH,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    np.add_with_access("Phone", &fp, Some(access)).unwrap();
+    let app = test_app_native(test_state(), np);
+    let plane: std::net::SocketAddr = "0.0.0.0:9777".parse().unwrap();
+    let launch = |peer: &str| {
+        let app = app.clone();
+        let peer: std::net::SocketAddr = peer.parse().unwrap();
+        let head = Head {
+            m: "POST".into(),
+            p: "/api/v1/game/launch".into(),
+            h: vec![("content-type".into(), "application/json".into())],
+        };
+        let body = br#"{"app_id":"custom:no-such-desk-title"}"#.to_vec();
+        let cert = Some(fp.clone());
+        async move {
+            let res = dispatch(&app, peer, plane, cert, head, body).await;
+            let status = res.status();
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+            (status, json["code"].as_str().unwrap_or("").to_string())
+        }
+    };
+    assert_eq!(
+        launch("192.168.5.80:40100").await,
+        (StatusCode::FORBIDDEN, "local_not_this_device".into())
+    );
+    assert_eq!(
+        launch("127.0.0.1:40100").await,
+        (StatusCode::NOT_FOUND, "local_no_such_game".into())
+    );
+}
+
 /// The browser's whole route into the management API: challenge, sign, exchange, then use the
 /// token on the paired-device lane — and be refused everywhere that lane does not reach.
 ///

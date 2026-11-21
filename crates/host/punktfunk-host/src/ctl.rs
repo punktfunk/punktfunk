@@ -90,6 +90,19 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             out(json, &v, |_| println!("game ended"));
             Ok(())
         }
+        "launch" => {
+            let Some(id) = rest.first().filter(|a| !a.starts_with("--")) else {
+                return Err(Failure::usage(
+                    "launch: give the title's library id (steam:570)",
+                ));
+            };
+            let v = Client::one_shot()?.post("/api/v1/game/launch", &json!({ "app_id": id }))?;
+            out(json, &v, |v| match v["running"].as_bool() {
+                Some(true) => println!("already running"),
+                _ => println!("starting, via {}", v["via"].as_str().unwrap_or("host")),
+            });
+            Ok(())
+        }
         "pair" => pair(rest, json),
         "pending" => {
             let v = Client::one_shot()?.get("/api/v1/native/pending")?;
@@ -1055,6 +1068,7 @@ USAGE:
 STATE
     status                       host state, session count, paired counts
     sessions                     the active session(s) and any launched game
+    launch <ID>                  start a library title on this host's own screen, with no stream
     summary                      one call for a status surface: host version, what is streaming,
                                  the streaming client's name, paired counts, and any conflicting
                                  host on this box. The only verb that names a connected device.

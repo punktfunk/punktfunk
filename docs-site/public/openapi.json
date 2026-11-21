@@ -2831,7 +2831,7 @@
           "session"
         ],
         "summary": "End a launched game",
-        "description": "Ends games nobody is streaming: those waiting out the reconnect window and\nlaunches left running after their session ended (`detached` in `GET /status`).\nWith `streaming`, also ends games still on a live session; the session itself\nstays up (`DELETE /session` plus `game_on_session_end`). `app_id` narrows it to\none title. A paired device ends only games it launched.",
+        "description": "Ends games nobody is streaming: those waiting out the reconnect window and launches left\nrunning after their session ended (`detached` in `GET /status`). With `streaming`, also ends\ngames still on a live session; the session itself stays up (`DELETE /session` plus\n`game_on_session_end`). `app_id` narrows it to one title. A game this host started on its\nown screen (`local`) ends only when `app_id` names it. A paired device ends only games it\nlaunched, and a `local` game when it holds the launch grant and calls from this device.",
         "operationId": "endGame",
         "requestBody": {
           "content": {
@@ -2933,6 +2933,89 @@
           }
         },
         "x-scope": "profile-exec"
+      }
+    },
+    "/api/v1/game/launch": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Start a game on this host's own screen",
+        "description": "For a client on this same device: the host starts the title on its own screen, with no\nstream, and holds it until it is gone. What happens next rides `GET /status` as a `local`\nrow. The operator always may; a paired device may when it holds the launch grant and calls\nfrom this device. The title is the owner profile's, whichever device asked.",
+        "operationId": "launchGame",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchGameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This host already runs it; nothing new starts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchGameResult"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Claimed: the title starts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchGameResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This device may not start games, or isn't this device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No screen of its own, nobody signed in, no desktop running, or no Steam entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/gpus": {
@@ -11509,9 +11592,20 @@
             "description": "Seconds until this game is ended — only present on a `grace` row.",
             "minimum": 0
           },
+          "outcome": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GameOutcome",
+                "description": "On a `local` row that is `exited` because the launch was refused late or died at the\nstart, for a minute: why, as a host message."
+              }
+            ]
+          },
           "plane": {
             "$ref": "#/components/schemas/Plane",
-            "description": "`native`, `gamestream` or `web`."
+            "description": "`native`, `gamestream`, `web`, or `local`: this host started it on its own screen for a\nclient on the same device, with no stream. A `local` row's `client` is `desk`."
           },
           "seat": {
             "type": [
@@ -11528,7 +11622,7 @@
           },
           "state": {
             "type": "string",
-            "description": "`launching` | `running` | `window` (its window is on the streamed screen) | `exited` |\n`untracked` (exit will never be seen) | `grace` (reconnect window) | `detached` (still\nrunning, no session holds it).",
+            "description": "`launching` | `running` | `window` (its window is on the screen) | `exited` |\n`untracked` (exit will never be seen) | `grace` (reconnect window) | `detached` (still\nrunning, no session holds it).",
             "example": "running"
           },
           "store": {
@@ -15084,6 +15178,31 @@
           "always"
         ]
       },
+      "GameOutcome": {
+        "type": "object",
+        "description": "Why a launch did not start, as a host message the client words.",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The host message's id (`launch_*`).",
+            "example": "launch_download_failed"
+          },
+          "params": {
+            "type": "object",
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "GameOverrides": {
         "type": "object",
         "description": "Stream settings this host sets for a game. A field left out is the device's to decide.",
@@ -15717,6 +15836,7 @@
           "codecs",
           "gamestream",
           "door",
+          "local_play",
           "ports"
         ],
         "properties": {
@@ -15805,6 +15925,10 @@
           "local_ip": {
             "type": "string",
             "description": "Fresh LAN IP each request — do not cache. Cold-boot and network-move report\n`127.0.0.1` until a real address exists."
+          },
+          "local_play": {
+            "type": "boolean",
+            "description": "This host has a screen of its own and starts games there for a client on the same\ndevice (`POST /game/launch`). `false` on a seat and on the door."
           },
           "os": {
             "type": "string",
@@ -16289,6 +16413,34 @@
           }
         }
       },
+      "LaunchGameRequest": {
+        "type": "object",
+        "required": [
+          "app_id"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "Store-qualified library id (`steam:570`), as `GET /library` lists it."
+          }
+        }
+      },
+      "LaunchGameResult": {
+        "type": "object",
+        "required": [
+          "via"
+        ],
+        "properties": {
+          "running": {
+            "type": "boolean",
+            "description": "Present and true when this host already runs it."
+          },
+          "via": {
+            "$ref": "#/components/schemas/LaunchVia",
+            "description": "`host`: this host starts it. `steam`: the Steam that owns this host's screen was asked to."
+          }
+        }
+      },
       "LaunchSpec": {
         "type": "object",
         "description": "How the host launches a title. Open-ended so new stores slot in: the host builds each\nkind's command (`steam_appid` → `steam://rungameid/<value>`); `command` runs `<value>`\nthrough `sh -c` or `cmd.exe /c`.",
@@ -16317,6 +16469,14 @@
             "description": "Appid for `steam_appid`, the shell command for `command`, or — for `exec` — the name of a\ntemplate in the publishing plugin's manifest."
           }
         }
+      },
+      "LaunchVia": {
+        "type": "string",
+        "description": "How a game on the host's own screen starts.",
+        "enum": [
+          "host",
+          "steam"
+        ]
       },
       "Layer": {
         "type": "string",
@@ -17861,7 +18021,8 @@
         "enum": [
           "native",
           "gamestream",
-          "web"
+          "web",
+          "local"
         ]
       },
       "PlatformCount": {
@@ -19058,7 +19219,7 @@
             "items": {
               "$ref": "#/components/schemas/ActiveGame"
             },
-            "description": "Launched titles: live sessions' games, `grace` and `detached` rows, and launches still\nwaiting for their session. Empty for a desktop-only stream."
+            "description": "Launched titles: live sessions' games, `grace` and `detached` rows, the `local` games\nthis host started on its own screen, and launches still waiting for their session.\nEmpty for a desktop-only stream."
           },
           "grants": {
             "type": "integer",

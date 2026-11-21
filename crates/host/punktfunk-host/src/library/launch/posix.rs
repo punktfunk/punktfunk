@@ -186,6 +186,16 @@ fn heroic_launch_prefix() -> Option<String> {
     flatpak.then(|| "flatpak run com.heroicgameslauncher.hgl".into())
 }
 
+/// Where a launch into the live session lands.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// On the streamed head, which the last stream's capture published.
+    Stream,
+    /// On the desk as it is: the box's own screen, with no stream.
+    Desk,
+}
+
 /// Child from a session launch, for lifetime tracking
 /// (design/session-game-lifetime.md).
 #[cfg(target_os = "linux")]
@@ -235,9 +245,10 @@ pub fn adopt_launch_workspace(
     focus_and_claim(compositor, true, Some(want))
 }
 
-/// Host-resolved command into the live Linux session, after capture is up.
-/// Shared by native and GameStream. Best-effort: failure leaves the user on
-/// the streamed desktop rather than tearing the stream down.
+/// Host-resolved command into the live Linux session, after capture is up, or onto the desk
+/// with no stream ([`Place::Desk`]), which aims at no head. Shared by native, GameStream and
+/// the desk. Best-effort: failure leaves the user on the streamed desktop rather than tearing
+/// the stream down.
 ///
 /// * **KWin / Mutter** — session env already retargeted, virtual output is
 ///   primary; a plain spawn lands on the stream.
@@ -261,13 +272,17 @@ pub fn launch_session_command(
     cmd: &str,
     seat: Option<&str>,
     own_workspace: bool,
+    place: Place,
 ) -> Result<SpawnedLaunch> {
     use std::os::unix::process::CommandExt;
     let cmd = cmd.trim();
     anyhow::ensure!(!cmd.is_empty(), "empty command");
     // Before the spawn, so the game's first window maps where it belongs. Same
     // head as the absolute-input pointer, so focus and cursor share one.
-    let workspace = focus_and_claim(compositor, own_workspace, None);
+    let workspace = match place {
+        Place::Stream => focus_and_claim(compositor, own_workspace, None),
+        Place::Desk => None,
+    };
     let steam_forwarder = crate::vdisplay::launch_is_steam(cmd);
     let (child, group_leader) = match compositor {
         crate::vdisplay::Compositor::Gamescope => (
@@ -380,6 +395,19 @@ mod tests {
         if let Some(cmd) = hydra_big_picture() {
             assert!(cmd.ends_with(" --big-picture"), "{cmd}");
         }
+    }
+
+    /// A launch onto the desk starts its command as it is: no streamed head, no workspace of
+    /// its own, its own process group.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_desk_launch_claims_no_head() {
+        let compositor = crate::vdisplay::Compositor::Wlroots;
+        let mut spawned = launch_session_command(compositor, "exit 0", None, true, Place::Desk)
+            .expect("spawn the desk launch");
+        assert!(spawned.workspace.is_none());
+        assert!(spawned.group_leader && !spawned.steam_forwarder);
+        assert!(spawned.child.wait().expect("reap it").success());
     }
 
     #[cfg(not(target_os = "linux"))]

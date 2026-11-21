@@ -114,7 +114,7 @@ mod events;
 // Launch, lease and liveness of a session's game; the flat names keep `crate::gamelease::*`.
 mod game;
 use game::{
-    gamelease, holds, launchreg, procscan, runstate, session_launch, session_settings,
+    desk, gamelease, holds, launchreg, procscan, runstate, session_launch, session_settings,
     stream_marker,
 };
 mod gamestream;

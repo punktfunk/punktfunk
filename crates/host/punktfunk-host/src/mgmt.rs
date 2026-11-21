@@ -542,6 +542,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
             session::clear_session_settings
         ))
         .routes(routes!(session::end_game))
+        .routes(routes!(session::launch_game))
         .routes(routes!(session::release_game_hold))
         .routes(routes!(library::get_library))
         .routes(routes!(library::get_library_page))

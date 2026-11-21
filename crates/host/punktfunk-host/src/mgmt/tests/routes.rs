@@ -192,6 +192,9 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("DELETE", "/api/v1/session/settings", true, true),
         // A device ends only games it launched; the handler scopes it.
         ("POST", "/api/v1/game/end", true, true),
+        // A game on the host's own screen: a device with the launch grant, from this machine.
+        // Never a plugin.
+        ("POST", "/api/v1/game/launch", false, true),
         // A seat's held launch: only the host with the plugins lets it go.
         ("POST", "/api/v1/game/holds/{token}/release", false, false),
         // Library writes are plugin-lane (scanner job); privileged fields inside the payload
@@ -743,6 +746,7 @@ fn every_route_has_a_side_on_the_door() {
         ("DELETE", "/api/v1/session/settings", false),
         ("POST", "/api/v1/game/end", false),
         ("POST", "/api/v1/game/holds/{token}/release", false),
+        ("POST", "/api/v1/game/launch", false),
         // Moonlight is the owner's row's: the door never serves it.
         ("GET", "/api/v1/pair", false),
         ("POST", "/api/v1/pair/pin", false),
@@ -963,10 +967,11 @@ fn every_device_route_has_a_side_on_the_door() {
     use axum::http::Method;
 
     // What the door answers a device itself: what it merges, power, its logs, the profiles and
-    // the box's library copy.
+    // the box's library copy. A launch on the box's screen is refused there: the door has none.
     const DOOR_OWN: &[(&str, &str)] = &[
         ("GET", "/api/v1/host"),
         ("GET", "/api/v1/status"),
+        ("POST", "/api/v1/game/launch"),
         ("GET", "/api/v1/actions"),
         ("POST", "/api/v1/actions/{id}"),
         ("POST", "/api/v1/client-logs"),

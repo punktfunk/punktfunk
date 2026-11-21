@@ -613,19 +613,26 @@ pub fn prepare(
     pad: GamepadPref,
     slots: Option<&AtomicU16>,
 ) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
-    prepare_as(None, &mut None, id, platform, firmware_dir, pad, slots)
+    prepare_as(
+        None,
+        &mut None,
+        id,
+        platform,
+        firmware_dir,
+        Some((pad, slots)),
+    )
 }
 
 /// [`prepare`], its bindings `owner`'s: the library id of the launch they are for. `held` gets
-/// the count that names them before anything is written.
+/// the count that names them before anything is written. `seat` is the session's `pad` and
+/// `slots`; `None` writes no players.
 fn prepare_as(
     owner: Option<&str>,
     held: &mut Option<u64>,
     id: &str,
     platform: Option<&str>,
     firmware_dir: Option<&Path>,
-    pad: GamepadPref,
-    slots: Option<&AtomicU16>,
+    seat: Option<(GamepadPref, Option<&AtomicU16>)>,
 ) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
     let h = open()?;
     // A game that ended without a lease reporting it (its session took the nested gamescope
@@ -660,7 +667,7 @@ fn prepare_as(
     #[cfg(windows)]
     let_player_read(&firmware);
     let players = hermir::Patch {
-        players: Some(session_players(pad, slots)),
+        players: seat.map(|(pad, slots)| session_players(pad, slots)),
         ..Default::default()
     };
     emulator
@@ -932,15 +939,16 @@ pub fn in_catalog(id: &str) -> bool {
 
 /// Before an `emulator` entry starts: the RetroArch core it names when this host's RetroArch
 /// lacks it, and on Windows readable by the player, every copy past its first-run questions, the
-/// platform's firmware from the plugin's `firmware/<platform>` when it staged some, the session's
+/// platform's firmware from the plugin's `firmware/<platform>` when it staged some, a session's
 /// pads, which only this launch's exit reverts: their count comes back, for [`revert_players`].
-/// What it did goes to the log. A launch waits for the client's pads, at most [`SETTLE_ALL`], and
-/// never on the rest to succeed.
-pub fn prepare_launch(
-    library_id: &str,
-    pad: GamepadPref,
-    slots: Option<&AtomicU16>,
-) -> Option<u64> {
+/// The desk's pads are not written: the emulator keeps its own bindings. What it did goes to the
+/// log. A launch waits for the client's pads, at most [`SETTLE_ALL`], and never on the rest to
+/// succeed.
+pub(crate) fn prepare_launch(library_id: &str, pads: &crate::session_launch::Pads) -> Option<u64> {
+    let seat = match pads {
+        crate::session_launch::Pads::Session { kind, slots } => Some((*kind, slots.as_deref())),
+        crate::session_launch::Pads::Desk(_) => None,
+    };
     let entry = crate::library::entry_for_library_id(library_id)?;
     let spec = entry.launch.as_ref().filter(|s| s.kind == "emulator")?;
     let arg = |name: &str| {
@@ -977,8 +985,7 @@ pub fn prepare_launch(
         &spec.value,
         platform,
         staged.as_ref().map(handover::Scratch::path),
-        pad,
-        slots,
+        seat,
     ) {
         Ok(copies) => {
             for (exe, prepared) in copies {

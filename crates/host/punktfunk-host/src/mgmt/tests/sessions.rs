@@ -559,6 +559,130 @@ async fn stop_session_for_power_closes_as_power() {
     crate::power::set_closing(false);
 }
 
+/// A paired device with the launch grant, and its call from this machine: the rest of the
+/// launch route is the operator's alone to reach.
+fn desk_devices(store: &str) -> (Router, String, String) {
+    use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_LAUNCH};
+    let path = crate::test_support::scratch().join(store);
+    let np =
+        Arc::new(crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap());
+    let access = |grants| {
+        Some(crate::native_pairing::Access {
+            grants,
+            expires_unix: None,
+            until_disconnect: false,
+        })
+    };
+    let (player, guest) = ("a1".repeat(32), "b2".repeat(32));
+    np.add_with_access("player", &player, access(GRANT_GAMEPAD | GRANT_LAUNCH))
+        .unwrap();
+    np.add_with_access("guest", &guest, access(GRANT_GAMEPAD))
+        .unwrap();
+    (test_app_native(test_state(), np), player, guest)
+}
+
+/// `POST /game/launch` for a title no library has, from `peer`, as device `fp` or the operator.
+fn desk_launch(peer: &str, fp: Option<&str>) -> axum::http::Request<Body> {
+    let body = serde_json::json!({ "app_id": "custom:no-such-desk-title" });
+    let mut req = json_req(Method::POST, "/api/v1/game/launch", body);
+    req.extensions_mut().insert(PeerAddr(peer.parse().unwrap()));
+    if let Some(fp) = fp {
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.to_string())));
+    }
+    req
+}
+
+/// A device needs the launch grant and a call from this machine; the operator needs neither.
+/// A LAN peer with the grant, a relayed call and a device the door vouches for are not this
+/// device. Past the gate, a title the library lacks is the route's own 404.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn a_desk_launch_takes_the_launch_grant_and_this_machine() {
+    let _dir = ConfigDirOverride::new();
+    let (app, player, guest) = desk_devices("pf-mgmt-desk-launch.json");
+    let (here, lan) = ("127.0.0.1:40000", "192.168.1.50:40000");
+    let code = |body: &serde_json::Value| body["code"].as_str().unwrap_or("").to_string();
+
+    for peer in [here, lan] {
+        let (status, body) = send(&app, desk_launch(peer, Some(&guest))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{peer}");
+        assert_eq!(code(&body), "device_not_allowed_to_start_games", "{peer}");
+    }
+    let (status, body) = send(&app, desk_launch(lan, Some(&player))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(code(&body), "local_not_this_device");
+
+    let mut relayed = desk_launch(here, Some(&player));
+    relayed.headers_mut().insert(
+        punktfunk_core::provenance::CLIENT_ADDR_HEADER,
+        axum::http::HeaderValue::from_static("192.168.1.20"),
+    );
+    let (status, body) = send(&app, relayed).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a page server's call");
+    assert_eq!(code(&body), "local_not_this_device");
+
+    // The door's own call, from loopback, for a device it placed here.
+    let mut vouched = desk_launch(here, None);
+    vouched.headers_mut().insert(
+        auth::VOUCH_HEADER,
+        axum::http::HeaderValue::from_str(&player).unwrap(),
+    );
+    let (status, body) = send(&app, vouched).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a device the door vouches for"
+    );
+    assert_eq!(code(&body), "local_not_this_device");
+
+    for fp in [Some(player.as_str()), None] {
+        let (status, body) = send(&app, desk_launch(here, fp)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{fp:?}: {body}");
+        assert_eq!(code(&body), "local_no_such_game");
+    }
+    let (status, _) = send(&app, desk_launch(lan, None)).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the admin bearer is loopback-only"
+    );
+
+    let (_, host) = send(&app, get_req("/api/v1/host")).await;
+    assert_eq!(host["local_play"], true, "a plain host has a desk: {host}");
+}
+
+/// A call that names no title leaves the game someone plays at the box, even from a caller that
+/// may end it; naming the title ends it. A device's blanket call reaches no other test's games.
+#[cfg(target_os = "linux")]
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn a_blanket_end_leaves_the_desk_s_game() {
+    use crate::desk::lease_tests::{launch, state, target, wait_for};
+    let _dir = ConfigDirOverride::new();
+    let (app, player, _) = desk_devices("pf-mgmt-desk-end.json");
+    let id = "custom:desk-blanket-end";
+    launch(target(id, "sleep 60"));
+    let up = crate::gamelease::SHIM_WINDOW + std::time::Duration::from_secs(5);
+    wait_for(id, Some("running"), up);
+    let end = |body: serde_json::Value| {
+        let mut req = json_req(Method::POST, "/api/v1/game/end", body);
+        req.extensions_mut()
+            .insert(PeerAddr("127.0.0.1:40000".parse().unwrap()));
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(player.clone())));
+        req
+    };
+    let (status, body) = send(&app, end(serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "no_game_to_end");
+    assert_eq!(state(id), Some("running"), "the desk's game plays on");
+    let (status, body) = send(&app, end(serde_json::json!({ "app_id": id }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ended"], 1);
+    wait_for(id, None, std::time::Duration::from_secs(15));
+}
+
 #[tokio::test]
 async fn idr_requires_an_active_stream() {
     // A sibling test's live native session would look like an active stream to this route.

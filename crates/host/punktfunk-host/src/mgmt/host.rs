@@ -1,7 +1,7 @@
 //! Host-tagged `/api/v1` routes: identity, liveness, compositor list, live status,
 //! and the loopback tray summary.
 
-use super::auth::{AuthLane, PairedDevice};
+use super::auth::{AuthLane, Loopback, PairedDevice};
 use super::shared::*;
 use crate::encode::Codec;
 use crate::gamestream::APP_VERSION;
@@ -87,6 +87,9 @@ pub(crate) struct HostInfo {
     /// `null` only if the identity could not be parsed.
     #[schema(example = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")]
     fingerprint: Option<String>,
+    /// This host has a screen of its own and starts games there for a client on the same
+    /// device (`POST /game/launch`). `false` on a seat and on the door.
+    local_play: bool,
     ports: PortMap,
 }
 
@@ -178,8 +181,9 @@ pub(crate) struct RuntimeStatus {
     #[schema(value_type = u64, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<u64>,
-    /// Launched titles: live sessions' games, `grace` and `detached` rows, and launches still
-    /// waiting for their session. Empty for a desktop-only stream.
+    /// Launched titles: live sessions' games, `grace` and `detached` rows, the `local` games
+    /// this host started on its own screen, and launches still waiting for their session.
+    /// Empty for a desktop-only stream.
     games: Vec<ActiveGame>,
     /// Titles downloading, queued, paused, or finished in the last ten minutes. A launch hold
     /// joins its title's row by `app_id`. Absent when there are none.
@@ -414,13 +418,18 @@ pub(crate) struct ActiveGame {
     /// Which store surfaced it (`steam`, `heroic`, `custom`, …), when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     store: Option<String>,
-    /// `native`, `gamestream` or `web`.
+    /// `native`, `gamestream`, `web`, or `local`: this host started it on its own screen for a
+    /// client on the same device, with no stream. A `local` row's `client` is `desk`.
     plane: crate::events::Plane,
-    /// `launching` | `running` | `window` (its window is on the streamed screen) | `exited` |
+    /// `launching` | `running` | `window` (its window is on the screen) | `exited` |
     /// `untracked` (exit will never be seen) | `grace` (reconnect window) | `detached` (still
     /// running, no session holds it).
     #[schema(example = "running")]
     state: String,
+    /// On a `local` row that is `exited` because the launch was refused late or died at the
+    /// start, for a minute: why, as a host message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<GameOutcome>,
     /// Present and true while `running` on a host that will report `window` next. A launch hold
     /// waits for that instead of revealing a game that is still loading.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -437,6 +446,26 @@ pub(crate) struct ActiveGame {
     /// On a door, to the operator: the profile whose seat host runs it, whose proxy reaches it.
     #[serde(skip_serializing_if = "Option::is_none")]
     seat: Option<String>,
+}
+
+/// Why a launch did not start, as a host message the client words.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct GameOutcome {
+    /// The host message's id (`launch_*`).
+    #[schema(example = "launch_download_failed")]
+    code: String,
+    /// The values of that message's placeholders, by name.
+    params: std::collections::BTreeMap<String, String>,
+}
+
+impl GameOutcome {
+    /// `None` for an outcome with no words.
+    fn of(o: punktfunk_core::quic::LaunchOutcome) -> Option<Self> {
+        (!o.message_id.is_empty()).then(|| Self {
+            code: o.message_id,
+            params: o.message_params.into_iter().collect(),
+        })
+    }
 }
 
 /// One live session as the Dashboard lists it: who, where, since when, and the state
@@ -726,6 +755,7 @@ pub(crate) async fn get_host_info(
         elevated_commands: (cfg!(windows) && lane == AuthLane::Admin)
             .then(crate::hooks::elevated_on),
         fingerprint: st.identity_fingerprint.map(hex::encode),
+        local_play: crate::desk::has_desk(pf_paths::seat::role()),
         ports: PortMap {
             mgmt: st.port,
             native: st.app.native_port.get().copied(),
@@ -909,8 +939,10 @@ pub(crate) async fn get_status(
     State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     device: Option<Extension<PairedDevice>>,
+    loopback: Option<Extension<Loopback>>,
 ) -> Response {
-    let ender = super::session::GameEnder::of(&st, lane, device.as_ref().map(|d| d.0 .0.as_str()));
+    let fp = device.as_ref().map(|d| d.0 .0.as_str());
+    let ender = super::session::GameEnder::of(&st, lane, fp, loopback.is_some_and(|l| l.0 .0));
     let gs_launch = *st.app.launch.lock().unwrap_or_else(|e| e.into_inner());
     // Stream slot is GameStream-featured only; a native-only build has no compat-plane stream.
     #[cfg(feature = "gamestream")]
@@ -1049,7 +1081,8 @@ pub(crate) async fn get_status(
             .into_iter()
             .map(|g| ActiveGame {
                 session_id: g.session_id,
-                client: if shown(&g.client) {
+                // The desk's key names no device.
+                client: if shown(&g.client) || g.plane == crate::events::Plane::Local {
                     g.client
                 } else {
                     String::new()
@@ -1059,6 +1092,7 @@ pub(crate) async fn get_status(
                 store: g.store,
                 plane: g.plane,
                 state: g.state.to_string(),
+                outcome: g.outcome.and_then(GameOutcome::of),
                 awaiting_window: g.awaiting_window,
                 grace_remaining_s: g.grace_remaining_s,
                 endable: ender.may_end(g.state, g.launched_by.as_deref()),

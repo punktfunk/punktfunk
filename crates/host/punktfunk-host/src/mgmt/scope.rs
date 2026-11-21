@@ -120,6 +120,8 @@ pub(crate) const SCOPES: &[(&str, &str, Scope)] = &[
         "/api/v1/game/holds/{token}/release",
         Scope::ProfileExec,
     ),
+    // The desk host's own switch: no profile in it, so no person's.
+    ("POST", "/api/v1/game/launch", Scope::Host),
     ("GET", "/api/v1/gpus", Scope::Host),
     ("PUT", "/api/v1/gpus/preference", Scope::Box),
     ("GET", "/api/v1/health", Scope::Host),

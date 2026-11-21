@@ -1,28 +1,51 @@
-//! The launch sequence both planes run around a session's display
-//! (`design/session-game-lifetime.md`): [`prepare`] claims and preps before the display
-//! opens, [`spawn`] starts the title once capture is live, [`lease`] ties the game to the
-//! session. Each plane supplies its own prep steps and env, and native adds the lease's
-//! window, scope and outcome.
+//! The launch sequence every plane runs (`design/session-game-lifetime.md`): [`prepare`]
+//! claims and preps before a session's display opens, [`spawn`] starts the title once capture
+//! is live, [`lease`] ties the game to its owner. Each plane supplies its own prep steps and
+//! env, and native adds the lease's window, scope and outcome. The desk runs the same three
+//! with no session ([`crate::desk`]).
 
 use crate::events::{Plane, PresetRef};
 use crate::library::LaunchTarget;
 
 /// Who launches: the lease, the launch hold and the game events name this client.
 pub(crate) struct LaunchOwner {
-    /// Stats and lease label: native's fingerprint prefix or peer IP, GameStream's peer IP.
+    /// Stats and lease label: native's fingerprint prefix or peer IP, GameStream's peer IP,
+    /// the desk's key.
     pub client: String,
-    /// Hex fingerprint; `None` for an anonymous client, which nothing can reclaim.
+    /// The launch record's key: a hex fingerprint, or the desk's key. `None` for an anonymous
+    /// client, which nothing can reclaim.
     pub fingerprint: Option<String>,
     pub plane: Plane,
     pub preset: Option<PresetRef>,
     /// The session's profile, credited in play stats beside the title and named on the game
     /// events. `None` on GameStream.
     pub profile: Option<crate::events::ProfileRef>,
-    /// The kind this session's pads start as: an emulator's bindings name it before it exists.
-    pub pad: punktfunk_core::config::GamepadPref,
-    /// The OS slots this session's input thread has claimed, one bit per pad. `None` on
+    /// The pads an emulator's players are bound to.
+    pub pads: Pads,
+}
+
+impl LaunchOwner {
+    /// The device on the game events and the lease: `None` for the desk, whose key names none.
+    fn device(&self) -> Option<String> {
+        self.fingerprint
+            .clone()
+            .filter(|_| self.plane != Plane::Local)
+    }
+}
+
+/// Whose pads an emulator's players are.
+pub(crate) enum Pads {
+    /// A stream's: the kind its pads start as, which an emulator's bindings name before they
+    /// exist, and the OS slots its input thread claimed, one bit per pad. `slots` is `None` on
     /// GameStream, whose pads have no slot map.
-    pub pad_slots: Option<std::sync::Arc<std::sync::atomic::AtomicU16>>,
+    Session {
+        kind: punktfunk_core::config::GamepadPref,
+        slots: Option<std::sync::Arc<std::sync::atomic::AtomicU16>>,
+    },
+    /// The pads at the desk, in seat order.
+    Desk(
+        #[allow(dead_code, reason = "the host does not read the desk's pads")] Vec<hermir::PadRef>,
+    ),
 }
 
 /// A claimed, prepped launch.
@@ -49,9 +72,9 @@ pub(crate) struct Prepared {
 /// knows whether this session spawns: reprieve this client's copy left from a dropped
 /// session, claim and name the launch record, wait for a title that isn't installed to
 /// download, run the prep steps (HDR toggle, sink switch), then hold `game.launching` when
-/// this session will spawn, a seat's saves crossing to the owner's plugins and back around it.
-/// `gone` reports the session ending during the wait. Blocking: prep and holds run operator
-/// code, and a download takes as long as it takes.
+/// this session will spawn, a seat's saves crossing to the owner's plugins and back around it,
+/// and prepare an emulator for `owner`'s pads. `gone` reports the session ending during the
+/// wait. Blocking: prep and holds run operator code, and a download takes as long as it takes.
 pub(crate) fn prepare(
     target: Option<&LaunchTarget>,
     owner: &LaunchOwner,
@@ -97,7 +120,7 @@ pub(crate) fn prepare(
             title: t.game.title.clone(),
             store: t.game.store.clone(),
             client: owner.client.clone(),
-            fingerprint: owner.fingerprint.clone(),
+            fingerprint: owner.device(),
             plane: owner.plane,
             preset: owner.preset.clone(),
             profile: owner.profile.clone(),
@@ -105,7 +128,7 @@ pub(crate) fn prepare(
         crate::emulators::exchange::after_hold(t.game.id.as_deref());
         // After the holds: they stage the firmware this places.
         if let Some(id) = t.game.id.as_deref() {
-            let held = crate::emulators::prepare_launch(id, owner.pad, owner.pad_slots.as_deref());
+            let held = crate::emulators::prepare_launch(id, &owner.pads);
             if let Some(c) = claim.as_mut() {
                 c.bind(held);
             }
@@ -173,6 +196,7 @@ fn await_files(
         awaiting_window: false,
         grace_remaining_s: None,
         launched_by: owner.fingerprint.clone(),
+        outcome: None,
     });
     tracing::info!(title = %title, "the launch waits for the title to download");
     match downloads::wait(id, gone) {
@@ -195,6 +219,7 @@ pub(crate) struct SpawnAt<'a> {
     pub nested_spawn: bool,
     /// This session's compositor seat; `None` is the box's own.
     pub seat: Option<&'a str>,
+    pub place: crate::library::Place,
 }
 
 /// What [`spawn`] started.
@@ -215,11 +240,13 @@ pub(crate) struct Spawned {
 
 /// Once capture is live: end this client's other games, start the title unless the claim
 /// adopted a running copy, then settle the claim. Once per launch; a rebuild never re-spawns.
+/// Windows looks a library title up again in `view`.
 pub(crate) fn spawn(
     target: Option<&LaunchTarget>,
     owner: &LaunchOwner,
     claim: Option<&crate::launchreg::Claim>,
     #[cfg(target_os = "linux")] at: SpawnAt<'_>,
+    #[cfg(windows)] view: &crate::library::View,
 ) -> Spawned {
     #[allow(unused_mut)]
     let mut out = Spawned::default();
@@ -244,7 +271,7 @@ pub(crate) fn spawn(
     #[cfg(target_os = "windows")]
     if !adopt {
         let launched = match (t.game.id.as_deref(), t.command.as_deref()) {
-            (Some(id), _) => crate::library::launch_title(id).map(Some),
+            (Some(id), _) => crate::library::launch_title(view, id).map(Some),
             (None, Some(cmd)) => crate::library::launch_gamestream_command(cmd).map(Some),
             (None, None) => Ok(None),
         };
@@ -279,6 +306,7 @@ pub(crate) fn spawn(
             cmd,
             at.seat,
             t.own_workspace,
+            at.place,
         ) {
             Ok(mut spawned) => {
                 out.now = true;
@@ -330,8 +358,8 @@ pub(crate) struct LeaseExtras {
     pub outcome: Option<crate::gamelease::OutcomeTx>,
 }
 
-/// Open the game lease for what [`spawn`] started, adopting against [`Prepared::stamp`].
-/// `on_exit` fires once the game was seen running and is gone.
+/// Open the game lease for what [`spawn`] started, adopting against [`Prepared::stamp`], under
+/// `owner`'s device. `on_exit` fires once the game was seen running and is gone.
 pub(crate) fn lease(
     target: &LaunchTarget,
     owner: &LaunchOwner,
@@ -349,7 +377,7 @@ pub(crate) fn lease(
         crate::gamelease::LeaseRequest {
             game: target.game.clone(),
             client: owner.client.clone(),
-            fingerprint: owner.fingerprint.clone(),
+            fingerprint: owner.device(),
             preset: owner.preset.clone(),
             plane: owner.plane,
             profile: owner.profile.clone(),
@@ -421,8 +449,10 @@ mod tests {
             plane: Plane::Native,
             preset: None,
             profile: None,
-            pad: punktfunk_core::config::GamepadPref::default(),
-            pad_slots: None,
+            pads: Pads::Session {
+                kind: punktfunk_core::config::GamepadPref::default(),
+                slots: None,
+            },
         }
     }
 
