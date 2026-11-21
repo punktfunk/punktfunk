@@ -1,11 +1,12 @@
 #!/bin/sh
-# Live check of a macOS host's virtual displays over loopback, extend topology only.
+# Live check of a macOS host's virtual displays over loopback.
 # Usage: macos-virtual-display-check.sh <punktfunk-host> <punktfunk-probe> [port]
 #
 # Needs a logged-in desktop session, and Screen Recording for the process that runs the host
-# (the terminal it inherits from). Adds a display to the desktop for about ten seconds per
-# session; never makes it main, never mirrors, never touches a physical display. Sends no input.
-# A bring-up slower than BRINGUP_LIMIT_MS (default 2500) fails as a stall.
+# (the terminal it inherits from). Run it on a test machine: the default-topology cases make
+# every other display mirror the virtual one while they run. Sends no input.
+# A bring-up slower than BRINGUP_LIMIT_MS (default 2500) fails as a stall, and a mode change
+# slower than CHANGE_LIMIT_MS (default 1000) fails as one.
 set -u
 
 usage="usage: $0 <punktfunk-host> <punktfunk-probe> [port]"
@@ -14,6 +15,7 @@ HOST=$(abs "${1:?$usage}")
 PROBE=$(abs "${2:?$usage}")
 PORT=${3:-19877}
 LIMIT=${BRINGUP_LIMIT_MS:-2500}
+CHANGE=${CHANGE_LIMIT_MS:-1000}
 [ "$(uname -s)" = Darwin ] || { echo "macOS only"; exit 2; }
 [ -x "$HOST" ] && [ -x "$PROBE" ] || { echo "both binaries must be executable"; exit 2; }
 
@@ -65,22 +67,26 @@ if [ -n "$(our_displays)" ]; then
     exit 3
 fi
 
-# Start a host for `sessions` sessions of up to `secs` seconds each, logging under $S.
+# Start a host for `sessions` sessions of up to `secs` seconds each, logging under $S. `topo` is
+# `extend`, or `default` for an unconfigured host (exclusive).
 start_host() {
     S="$WORK/$1"
+    TOPO=$4
     for side in host probe; do
         mkdir -p "$S/$side/config/punktfunk" "$S/$side/data" "$S/$side/state" \
             "$S/$side/cache" "$S/$side/tmp"
     done
     # Extend, twice over: the settings file, and the knob an unconfigured host reads.
-    printf '{"version":1,"preset":"custom","topology":"extend"}\n' \
-        >"$S/host/config/punktfunk/display-settings.json"
+    if [ "$TOPO" = extend ]; then
+        printf '{"version":1,"preset":"custom","topology":"extend"}\n' \
+            >"$S/host/config/punktfunk/display-settings.json"
+    fi
     (
         cd "$S/host/tmp" || exit 2
         export PUNKTFUNK_CONFIG_DIR="$S/host/config/punktfunk"
         export XDG_CONFIG_HOME="$S/host/config" XDG_DATA_HOME="$S/host/data"
         export XDG_STATE_HOME="$S/host/state" XDG_CACHE_HOME="$S/host/cache" TMPDIR="$S/host/tmp"
-        export PUNKTFUNK_KWIN_VIRTUAL_PRIMARY=0
+        [ "$TOPO" = extend ] && export PUNKTFUNK_KWIN_VIRTUAL_PRIMARY=0
         export PUNKTFUNK_AUDIO_OUTPUT_MODE=host_and_client
         export RUST_LOG=info
         exec "$HOST" punktfunk1-host --source virtual --port "$PORT" --seconds "$3" \
@@ -136,14 +142,16 @@ trace_ms() {
         sed -nE 's/.*total_ms=([0-9]+).*/\1/p'
 }
 
-# Session `n` was made at `size@hz` under extend, listed, captured and encoded at `size` with
-# no scaling, brought up within the limit, and streamed frames.
+# Session `n` was made at `size@hz` under the case's topology, listed, captured and encoded at
+# `size` with no scaling, brought up within the limit, and streamed frames.
 checks() {
     n=$1 size=$2 hz=$3 w=${2%x*} h=${2#*x}
+    topo=Extend
+    [ "$TOPO" = default ] && topo=Exclusive
     ms=$(trace_ms "$n" bringup)
-    check "display $n created at ${size}@${hz} under extend" \
+    check "display $n created at ${size}@${hz} under $topo" \
         "grep 'virtual display created' '$S/host.txt' | sed -n '${n}p' |
-         grep -q 'mode=${size}@${hz}.*topology=Extend'"
+         grep -q 'mode=${size}@${hz}.*topology=$topo'"
     check "macOS lists display $n at ${size} during the session" \
         "grep -q '^${size}@' '$S/during-$n.txt'"
     check "session $n brought up in ${ms:-?} ms (limit $LIMIT)" \
@@ -154,6 +162,26 @@ checks() {
         "grep 'VideoToolbox encoder open' '$S/host.txt' | grep -q 'width=${w} height=${h}'"
     check "frames arrive at client $n" \
         "grep 'stream complete' '$S/probe-$n.txt' | grep -qE 'frames=[1-9]'"
+}
+
+# Resizes `first` to `last` changed the display in place, each within the limit, and capture
+# and encoder followed to `size`.
+changed() {
+    first=$1 last=$2 size=$3 w=${3%x*} h=${3#*x}
+    count=$((last - first + 1))
+    check "$count mode changes in place, none made again" \
+        "[ \"\$(grep -c 'changed mode in place' '$S/host.txt')\" -eq $count ] &&
+         ! grep -q 'making the virtual display again' '$S/host.txt'"
+    r=$first
+    while [ "$r" -le "$last" ]; do
+        ms=$(trace_ms "$r" resize)
+        check "mode change $r rebuilt in ${ms:-?} ms (limit $CHANGE)" \
+            "[ -n '$ms' ] && [ '${ms:-0}' -le $CHANGE ]"
+        r=$((r + 1))
+    done
+    check "capture and encoder follow to ${size}" \
+        "grep 'screencapturekit first frame' '$S/host.txt' | grep -q 'width=${w} height=${h}' &&
+         grep 'VideoToolbox encoder open' '$S/host.txt' | grep -q 'width=${w} height=${h}'"
 }
 
 # What every case ends on: no fallback, no letterbox, each display removed, none left.
@@ -167,22 +195,37 @@ ends() {
     check "no Punktfunk display is left" "[ ! -s '$S/after.txt' ]"
 }
 
+# Five window resizes inside the first mode; the last is a common panel's own mode.
+RESIZES="--remode 1476x972x60:3 --remode 1558x982x60:5 --remode 1114x984x60:7
+    --remode 1600x900x60:9 --remode 1920x1080x60:11"
+
 echo "1920x1080 at 60 Hz"
-start_host hd 1 20
+start_host hd 1 20 extend
 session 1 1920x1080x60 --seconds 10
 finish_host
 checks 1 1920x1080 60
 ends 1
 
 echo "2560x1440 at 120 Hz"
-start_host qhd 1 20
+start_host qhd 1 20 extend
 session 1 2560x1440x120 --seconds 10
 finish_host
 checks 1 2560x1440 120
 ends 1
 
-echo "1920x1080 at 60 Hz, then 2560x1440 five seconds in"
-start_host remode 1 25
+for topo in default extend; do
+    echo "1920x1080 at 60 Hz, then five resizes two seconds apart, $topo topology"
+    start_host "changes-$topo" 1 25 "$topo"
+    # shellcheck disable=SC2086 # RESIZES is a list of arguments
+    session 1 1920x1080x60 --seconds 14 $RESIZES
+    finish_host
+    checks 1 1920x1080 60
+    changed 1 5 1114x984
+    ends 1
+done
+
+echo "1920x1080 at 60 Hz, then the larger 2560x1440 five seconds in"
+start_host remode 1 25 extend
 session 1 1920x1080x60 --seconds 12 --remode 2560x1440x60:5
 finish_host
 checks 1 1920x1080 60
@@ -195,14 +238,15 @@ check "capture and encoder follow to 2560x1440" \
      grep 'VideoToolbox encoder open' '$S/host.txt' | grep -q 'width=2560 height=1440'"
 ends 2
 
-echo "1920x1080 at 60 Hz, then a reconnect three seconds after the disconnect"
-start_host reconnect 2 20
-session 1 1920x1080x60 --seconds 8
+echo "two sessions in one host, default topology, each with a resize"
+start_host reconnect 2 20 default
+session 1 1920x1080x60 --seconds 8 --remode 1600x900x60:4
 sleep_s 3
-session 2 1920x1080x60 --seconds 8
+session 2 1920x1080x60 --seconds 8 --remode 1280x720x60:4
 finish_host
 checks 1 1920x1080 60
 checks 2 1920x1080 60
+changed 1 2 1280x720
 ends 2
 
 if [ -n "$(our_displays)" ]; then
