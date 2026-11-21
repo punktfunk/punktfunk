@@ -2442,9 +2442,11 @@ fn the_background_rows_follow_the_device() {
         assert_eq!(background_timeout(ctx.settings), 10);
         assert!(adjust(RowId::BackgroundTimeout, 1, false, ctx));
         assert_eq!(background_timeout(ctx.settings), 30);
+        assert!(adjust(RowId::BackgroundTimeout, 1, false, ctx));
+        assert_eq!(background_timeout(ctx.settings), 60);
         assert!(
             !adjust(RowId::BackgroundTimeout, 1, false, ctx),
-            "30 is the top"
+            "60 is the top"
         );
     }
     let android = crate::screens::Device {

@@ -1193,7 +1193,7 @@ val PRESENT_PRIORITY_OPTIONS = listOf(
 )
 
 /** The minutes for the background keep-alive's give-up timer — the Apple client's table. */
-val BACKGROUND_TIMEOUT_OPTIONS = listOf(1, 5, 10, 30)
+val BACKGROUND_TIMEOUT_OPTIONS = listOf(1, 5, 10, 30, 60)
 
 /** (frames, ms) for the smoothness-buffer picker: each buffered frame absorbs one refresh
  * interval of jitter for one interval of added display latency, so the cost is at [hz]. */

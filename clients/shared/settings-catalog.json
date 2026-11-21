@@ -5,7 +5,7 @@
     { "key": "auto_wake", "category": "general", "advanced": false, "default": true, "preset": false, "on": ["desktop", "android", "apple", "webos", "web", "tizen", "ps5"] },
     { "key": "fullscreen_on_stream", "category": "general", "advanced": false, "default": true, "preset": true, "on": ["desktop", "apple"] },
     { "key": "background_keep_alive", "category": "general", "advanced": false, "default": false, "preset": false, "on": ["android", "apple"] },
-    { "key": "background_timeout_minutes", "category": "general", "advanced": false, "options": ["1", "5", "10", "30"], "default": "10", "preset": false, "on": ["android", "apple"] },
+    { "key": "background_timeout_minutes", "category": "general", "advanced": false, "options": ["1", "5", "10", "30", "60"], "default": "10", "preset": false, "on": ["android", "apple"] },
     { "key": "stats_verbosity", "category": "general", "advanced": false, "options": ["off", "compact", "normal", "detailed"], "default": "normal", "preset": true, "on": ["desktop", "android", "apple", "webos", "web", "tizen", "ps5"] },
     { "key": "gamepad_ui_enabled", "category": "general", "advanced": false, "default": true, "preset": false, "on": ["desktop", "android", "apple", "webos"] },
     { "key": "gamepad_ui_mode", "category": "general", "advanced": false, "options": ["connected", "always"], "default": "connected", "preset": false, "on": ["desktop", "android", "apple", "webos"] },
