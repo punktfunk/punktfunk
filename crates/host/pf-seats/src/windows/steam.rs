@@ -702,8 +702,6 @@ fn prepare(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Grid art Steam shows for a shortcut: `<appid><suffix>.<png|jpg>` in an account's `config/grid`.
-const ART: [&str; 4] = ["p", "", "_hero", "_logo"];
 /// A catalog with descriptions runs to tens of megabytes; past this it isn't the box's.
 const MAX_CATALOG_BYTES: u64 = 64 * 1024 * 1024;
 /// A `shortcuts.vdf`, a piece of grid art or the box's shortcut list; past this it isn't one.
@@ -761,18 +759,7 @@ fn share_shortcuts(session: u32, src: &Path, dst: &Path, seat_id: &str) {
 fn owner_shortcuts(src: &Path, config: &Path) -> Vec<Owned> {
     let catalog = read_capped(&config.join("library.json"), MAX_CATALOG_BYTES);
     let scanners = read_capped(&config.join("library-scanners.json"), MAX_STEAM_FILE_BYTES);
-    let off = scanners
-        .ok()
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|json| {
-            let ids = json.get("disabled")?.as_array()?.iter();
-            Some(
-                ids.filter_map(|id| id.as_str().map(str::to_owned))
-                    .collect(),
-            )
-        })
-        .unwrap_or_default();
+    let off = shortcuts::off_sources(&scanners.ok().flatten().unwrap_or_default());
     let listed = shortcuts::listed(&catalog.ok().flatten().unwrap_or_default(), &off);
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
@@ -797,7 +784,7 @@ fn owner_shortcuts(src: &Path, config: &Path) -> Vec<Owned> {
             if !seen.insert(id) {
                 continue;
             }
-            let art = art_names(id)
+            let art = shortcuts::art_names(id)
                 .filter_map(|name| {
                     let path = config.join("grid").join(&name);
                     Some((name, read_capped(&path, MAX_STEAM_FILE_BYTES).ok()??))
@@ -807,11 +794,6 @@ fn owner_shortcuts(src: &Path, config: &Path) -> Vec<Owned> {
         }
     }
     out
-}
-
-fn art_names(id: u32) -> impl Iterator<Item = String> {
-    ART.into_iter()
-        .flat_map(move |suffix| ["png", "jpg"].map(|ext| format!("{id}{suffix}.{ext}")))
 }
 
 /// As the seat's user: the shortcuts of `owned` it can start, merged into each account of the
