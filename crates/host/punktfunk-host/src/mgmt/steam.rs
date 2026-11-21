@@ -112,9 +112,11 @@ pub(crate) async fn set_steam_entries(ApiJson(map): ApiJson<SteamEntries>) -> Re
 }
 
 /// A title a Steam entry of its own may start: one with a recipe, no launcher (the host's Game
-/// Mode tile is one), no Steam title, no seat's own title.
+/// Mode tile is one), no seat's own title, and no title Steam starts itself, whichever source
+/// lists it: its entry would be a double of Steam's own.
 fn syncable(g: &GameEntry) -> bool {
-    g.launch.is_some() && g.role != GameRole::Launcher && !g.own && !g.id.starts_with("steam:")
+    let recipe = g.launch.as_ref().is_some_and(|l| l.kind != "steam_appid");
+    recipe && g.role != GameRole::Launcher && !g.own && !g.id.starts_with("steam:")
 }
 
 /// Where a title comes from: its claimed store, else the plugin that lists it, else `custom`.

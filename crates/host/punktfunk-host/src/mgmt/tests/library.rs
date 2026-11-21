@@ -1043,8 +1043,8 @@ async fn provider_running_report_validation() {
 
 // ------------------------------------------------------------------ Steam entries
 
-/// A box with Steam titles, two of them entries the Decky plugin made, a ROM it can sync and a
-/// launcher it can't.
+/// A box with Steam titles, two of them entries the Decky plugin made, a ROM it can sync, and a
+/// launcher and another source's Steam title it can't.
 pub(super) fn steam_box(dir: &std::path::Path) {
     let steam = |id: &str, title: &str| {
         serde_json::json!({ "id": id, "title": title, "provider": "steam", "store": "steam",
@@ -1061,6 +1061,8 @@ pub(super) fn steam_box(dir: &std::path::Path) {
             { "id": "l1", "title": "Lutris", "provider": "lutris", "store": "lutris",
               "external_id": "ui", "role": "launcher",
               "launch": { "kind": "launcher_ui", "value": "lutris" } },
+            { "id": "l2", "title": "Portal 2", "provider": "lutris", "store": "lutris",
+              "external_id": "portal-2", "launch": { "kind": "steam_appid", "value": "620" } },
         ],
         "claims": { "steam": "steam", "rom-manager": "rom-manager", "lutris": "lutris" },
     });
