@@ -282,7 +282,12 @@ fn probe_capture_modifier(node: &std::path::Path, fourcc: u32, modifier: u64) ->
     if !painted {
         return true;
     }
-    match probe_read_back(node, &bo, fourcc, modifier) {
+    let plane = ExportedPlane {
+        fd: bo.fd.as_raw_fd(),
+        offset: bo.offset,
+        stride: bo.stride,
+    };
+    match probe_read_back(node, fourcc, modifier, &[plane]) {
         Ok(None) => true,
         Ok(Some(OffLevel { x, y, got, want })) => {
             tracing::info!(
@@ -357,12 +362,13 @@ struct OffLevel {
 }
 
 /// Import the painted probe again, convert it to full-range NV12 and return the first cell
-/// off its level; `None` when every cell reads as painted.
+/// off its level; `None` when every cell reads as painted. One plane is packed RGB, two a
+/// producer's own NV12 or P010.
 fn probe_read_back(
     node: &std::path::Path,
-    bo: &GbmBo,
     fourcc: u32,
     modifier: u64,
+    planes: &[ExportedPlane],
 ) -> Result<Option<OffLevel>> {
     use pf_vaapi::drm::VA_FOURCC_NV12;
     use pf_vaapi::vpp::VA_RT_FORMAT_YUV420;
@@ -375,11 +381,7 @@ fn probe_read_back(
             height: PROBE_DIM,
             drm_fourcc: fourcc,
             modifier,
-            planes: &[ExportedPlane {
-                fd: bo.fd.as_raw_fd(),
-                offset: bo.offset,
-                stride: bo.stride,
-            }],
+            planes,
         })?;
         surfaces.push(source);
         let target = display.create_surface(
@@ -393,7 +395,7 @@ fn probe_read_back(
             &display,
             source,
             (PROBE_DIM, PROBE_DIM),
-            true,
+            planes.len() == 1,
             COLOUR_BT709,
             target,
         )?;
@@ -499,6 +501,177 @@ pub(crate) fn vaapi_capture_modifiers(fourcc: u32, candidates: &[u64]) -> Vec<u6
         "VAAPI: encoder-proved tiled capture modifiers (LINEAR is always appended)"
     );
     accepted
+}
+
+/// Intel's layouts a two-plane picture is read from where it lies: 4-tiled, Y-tiled.
+const INTEL_PLANAR_TILED: [u64; 2] = [0x0100_0000_0000_0009, 0x0100_0000_0000_0002];
+
+/// What a producer's own NV12 or P010 may arrive as for the session that opens for `codec`
+/// at this depth: the whole offer, LINEAR (0) included.
+///
+/// Intel's full encode entrypoint reads its source as tiled: the driver copies a LINEAR NV12
+/// first and reads a LINEAR P010 as it lies. There the proved tiled layouts lead and a
+/// ten-bit offer has no LINEAR. The low-power entrypoint reads LINEAR in place, and so does
+/// every other vendor, so those keep LINEAR alone. Cached per (node, codec, depth).
+pub(crate) fn planar_capture_modifiers(codec: Codec, ten_bit: bool) -> Vec<u64> {
+    use std::collections::HashMap;
+    use std::os::unix::fs::MetadataExt;
+    use std::sync::{Mutex, OnceLock};
+    #[allow(clippy::type_complexity)]
+    static CACHE: OnceLock<Mutex<HashMap<(u64, bool, bool), Vec<u64>>>> = OnceLock::new();
+    let node = pf_gpu::linux_render_node();
+    let rdev = std::fs::metadata(&node).map(|m| m.rdev()).unwrap_or(0);
+    let key = (rdev, codec == Codec::H264, ten_bit);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    // The lock guards the map, not the probe, as in `vaapi_capture_modifiers`.
+    let cached = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned();
+    if let Some(offer) = cached {
+        return offer;
+    }
+    let intel = pf_gpu::enumerate()
+        .iter()
+        .find(|g| g.handle.render_node.as_deref() == Some(node.as_path()))
+        .is_some_and(|g| g.vendor_id == pf_gpu::VENDOR_INTEL);
+    let offer = if intel && reads_tiled_only(codec, ten_bit) {
+        let mut offer: Vec<u64> = INTEL_PLANAR_TILED
+            .into_iter()
+            .filter(|&m| probe_planar_modifier(&node, codec, ten_bit, m))
+            .collect();
+        if !ten_bit {
+            offer.push(0);
+        }
+        tracing::info!(
+            ?codec,
+            ten_bit,
+            ?offer,
+            "VAAPI: the full encode entrypoint reads a tiled planar capture in place"
+        );
+        offer
+    } else {
+        vec![0]
+    };
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, offer.clone());
+    offer
+}
+
+/// Whether the session for `codec` at this depth runs on the full entrypoint. A session that
+/// does not open answers `false`: nothing reads the capture then.
+fn reads_tiled_only(codec: Codec, ten_bit: bool) -> bool {
+    probe_session(codec, ten_bit)
+        .ok()
+        .and_then(|enc| enc.session.as_ref().map(|s| !s.low_power()))
+        .unwrap_or(false)
+}
+
+/// A `PROBE_DIM`² session of the codec and depth a real one opens with.
+fn probe_session(codec: Codec, ten_bit: bool) -> Result<NativeVaapiEncoder> {
+    NativeVaapiEncoder::open(
+        codec,
+        PROBE_DIM,
+        PROBE_DIM,
+        60,
+        1_000_000,
+        if ten_bit { 10 } else { 8 },
+        ChromaFormat::Yuv420,
+        false,
+        true,
+        &Knobs::from_env(),
+    )
+}
+
+/// The probe's gray cells as a two-plane picture in tight rows, chroma neutral. A ten-bit
+/// sample is the level in the high byte of a little-endian word.
+fn planar_probe_picture(ten_bit: bool) -> Vec<u8> {
+    let sample = |v: u8| if ten_bit { vec![0, v] } else { vec![v] };
+    let luma = (0..PROBE_DIM)
+        .flat_map(|y| (0..PROBE_DIM).map(move |x| probe_level(x, y)))
+        .flat_map(sample);
+    let chroma = (0..PROBE_DIM * PROBE_DIM / 2).flat_map(|_| sample(128));
+    luma.chain(chroma).collect()
+}
+
+/// [`probe_capture_modifier`] for a producer's own NV12 or P010: the Vulkan device that owns
+/// the node paints the cells into an image of that modifier, the session of the real codec
+/// and depth takes it as its picture, and the import must read back at every level. Any step
+/// that does not run refuses the candidate; LINEAR or packed RGB carries the stream then.
+fn probe_planar_modifier(
+    node: &std::path::Path,
+    codec: Codec,
+    ten_bit: bool,
+    modifier: u64,
+) -> bool {
+    use super::planar_probe;
+    let (format, fourcc) = if ten_bit {
+        (PixelFormat::P010, u32::from_le_bytes(*b"P010"))
+    } else {
+        (PixelFormat::Nv12, u32::from_le_bytes(*b"NV12"))
+    };
+    let dim = (PROBE_DIM, PROBE_DIM);
+    let picture = planar_probe_picture(ten_bit);
+    let Some(buf) = planar_probe::paint(node, modifier, ten_bit, dim, &picture) else {
+        return false;
+    };
+    let (Ok(mut enc), Ok(fd)) = (probe_session(codec, ten_bit), buf.fd.try_clone()) else {
+        return false;
+    };
+    let [luma, chroma] = buf.planes;
+    let frame = CapturedFrame {
+        provenance: Default::default(),
+        width: PROBE_DIM,
+        height: PROBE_DIM,
+        pts_ns: 0,
+        format,
+        payload: FramePayload::Dmabuf(pf_frame::DmabufFrame {
+            fd,
+            fourcc,
+            modifier,
+            offset: luma.0,
+            stride: luma.1,
+            plane1: Some(chroma),
+            hold: None,
+            health: pf_zerocopy::zero_copy_health(modifier ^ u64::from(fourcc)),
+            rebuild: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }),
+        cursor: None,
+    };
+    if enc.submit(&frame).is_err() {
+        return false;
+    }
+    let plane = |(offset, stride)| ExportedPlane {
+        fd: buf.fd.as_raw_fd(),
+        offset,
+        stride,
+    };
+    match probe_read_back(node, fourcc, modifier, &[plane(luma), plane(chroma)]) {
+        Ok(None) => true,
+        Ok(Some(OffLevel { x, y, got, want })) => {
+            tracing::info!(
+                fourcc = format_args!("{fourcc:#010x}"),
+                modifier = format_args!("{modifier:#x}"),
+                x,
+                y,
+                got,
+                want,
+                "VAAPI capture modifier refused: the planar picture reads back wrong"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::info!(
+                modifier = format_args!("{modifier:#x}"),
+                error = %format!("{e:#}"),
+                "VAAPI capture modifier refused: the planar read-back did not run"
+            );
+            false
+        }
+    }
 }
 
 /// Whether the host's render node offers an encode entrypoint for `codec`
@@ -1034,8 +1207,16 @@ mod tests {
         let node = pf_gpu::linux_render_node();
         let bo = alloc_probe_bo(&node, fourcc, painted).expect("allocate the probe");
         assert!(paint_probe(&bo, fourcc).expect("paint the probe"));
-        assert_eq!(probe_read_back(&node, &bo, fourcc, painted).unwrap(), None);
-        let wrong = probe_read_back(&node, &bo, fourcc, declared).unwrap();
+        let plane = [ExportedPlane {
+            fd: bo.fd.as_raw_fd(),
+            offset: bo.offset,
+            stride: bo.stride,
+        }];
+        assert_eq!(
+            probe_read_back(&node, fourcc, painted, &plane).unwrap(),
+            None
+        );
+        let wrong = probe_read_back(&node, fourcc, declared, &plane).unwrap();
         println!("{painted:#x} read as {declared:#x}: {wrong:?}");
         assert!(wrong.is_some(), "a layout read as another passed");
     }
@@ -1407,5 +1588,201 @@ mod tests {
         assert!(probe_can_encode(Codec::H265, true));
         assert!(!probe_can_encode(Codec::Av1, false));
         assert!(!probe_can_encode(Codec::H264, true));
+    }
+
+    /// A producer's planar picture in tight rows: luma, then chroma. Dark left half, bright
+    /// right half, and a coloured band over picture rows `h/4..h/2`.
+    #[cfg(any(feature = "nvenc", feature = "vulkan-encode"))]
+    fn planar_picture(w: u32, h: u32, ten_bit: bool) -> Vec<u8> {
+        let sample = |v: u8| if ten_bit { vec![0, v] } else { vec![v] };
+        let luma = (0..h)
+            .flat_map(|_| (0..w).map(move |x| if x < w / 2 { 60 } else { 200 }))
+            .flat_map(sample);
+        let chroma = (0..h / 2).flat_map(move |cy| {
+            let band = (h / 8..h / 4).contains(&cy);
+            let pair = if band { [90, 180] } else { [128, 128] };
+            (0..w).map(move |i| pair[(i % 2) as usize])
+        });
+        luma.chain(chroma.flat_map(sample)).collect()
+    }
+
+    /// [`planar_picture`] as `modifier` lays it out, through the lane that hands it to the
+    /// encoder as imported: the first decoded picture's Y, U and V planes at 8 bits. LINEAR
+    /// puts chroma on the 16-row boundary gamescope puts it on.
+    #[cfg(any(feature = "nvenc", feature = "vulkan-encode"))]
+    fn direct_planar(
+        codec: Codec,
+        (w, h): (u32, u32),
+        ten_bit: bool,
+        modifier: u64,
+    ) -> [Vec<u8>; 3] {
+        use crate::test_dmabuf::{decode_first, LinearDmabuf};
+        let node = pf_gpu::linux_render_node();
+        let tight = planar_picture(w, h, ten_bit);
+        let (fmt, fourcc, depth) = if ten_bit {
+            (PixelFormat::P010, b"P010", 10u8)
+        } else {
+            (PixelFormat::Nv12, b"NV12", 8)
+        };
+        let stride = w * u32::from(depth.div_ceil(8));
+        let luma_len = (stride * h) as usize;
+        // Held to the end: each frame is a dup of one of these.
+        let (linear, tiled);
+        let frame = if modifier == 0 {
+            let chroma_row = h.next_multiple_of(16);
+            let mut bytes = tight[..luma_len].to_vec();
+            bytes.resize((stride * chroma_row) as usize, 0);
+            bytes.extend_from_slice(&tight[luma_len..]);
+            let vendor = pf_gpu::enumerate()
+                .iter()
+                .find(|g| g.handle.render_node.as_deref() == Some(node.as_path()))
+                .map(|g| g.vendor_id)
+                .expect("the render node's GPU");
+            linear = LinearDmabuf::on(vendor, &bytes);
+            linear.planar_frame(fmt, fourcc, (w, h), stride, chroma_row * stride)
+        } else {
+            tiled = crate::planar_probe::paint(&node, modifier, ten_bit, (w, h), &tight)
+                .expect("the node's Vulkan device has that planar image");
+            let mut frame = linear_frame_shell(fmt, fourcc, (w, h), &tiled.fd);
+            if let FramePayload::Dmabuf(d) = &mut frame.payload {
+                d.modifier = modifier;
+                (d.offset, d.stride) = tiled.planes[0];
+                d.plane1 = Some(tiled.planes[1]);
+            }
+            frame
+        };
+        let mut enc = NativeVaapiEncoder::open(
+            codec,
+            w,
+            h,
+            60,
+            20_000_000,
+            depth,
+            ChromaFormat::Yuv420,
+            false,
+            false,
+            &Knobs::from_env(),
+        )
+        .expect("open");
+        enc.submit(&frame).expect("submit");
+        let stream = enc.poll().expect("poll").expect("an AU").data;
+        let name = format!("pf-direct-{codec:?}-{depth}-{modifier:x}");
+        let raw = decode_first(
+            &stream,
+            &name,
+            if ten_bit { "yuv420p10le" } else { "yuv420p" },
+        );
+        let eight: Vec<u8> = if ten_bit {
+            raw.chunks_exact(2)
+                .map(|p| (u16::from_le_bytes([p[0], p[1]]) >> 2) as u8)
+                .collect()
+        } else {
+            raw
+        };
+        let (luma, chroma) = ((w * h) as usize, (w * h / 4) as usize);
+        assert_eq!(eight.len(), luma + 2 * chroma, "{name}: one 4:2:0 picture");
+        [
+            eight[..luma].to_vec(),
+            eight[luma..luma + chroma].to_vec(),
+            eight[luma + chroma..].to_vec(),
+        ]
+    }
+
+    /// A held dmabuf frame over `fd`, its layout left for the caller to fill.
+    #[cfg(any(feature = "nvenc", feature = "vulkan-encode"))]
+    fn linear_frame_shell(
+        fmt: PixelFormat,
+        fourcc: &[u8; 4],
+        (w, h): (u32, u32),
+        fd: &std::os::fd::OwnedFd,
+    ) -> CapturedFrame {
+        CapturedFrame {
+            provenance: Default::default(),
+            width: w,
+            height: h,
+            pts_ns: 0,
+            format: fmt,
+            payload: FramePayload::Dmabuf(pf_frame::DmabufFrame {
+                fd: fd.try_clone().expect("dup"),
+                fourcc: u32::from_le_bytes(*fourcc),
+                modifier: 0,
+                plane1: None,
+                offset: 0,
+                stride: 0,
+                hold: Some(std::sync::Arc::new(())),
+                health: pf_zerocopy::zero_copy_health(0x5003),
+                rebuild: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }),
+            cursor: None,
+        }
+    }
+
+    /// The decoded [`planar_picture`]: its luma edge in one column on every row, its colour
+    /// on the band's rows and on no others. A misread pitch walks the edge; chroma read from
+    /// another row moves the band.
+    #[cfg(any(feature = "nvenc", feature = "vulkan-encode"))]
+    fn assert_planar_picture(name: &str, [y, u, v]: &[Vec<u8>; 3], w: u32, h: u32) {
+        let (w, h) = (w as usize, h as usize);
+        for row in [8, h / 2, h - 8] {
+            let edge = (0..w).find(|&x| y[row * w + x] > 128);
+            assert_eq!(edge, Some(w / 2), "{name}: luma edge on row {row}");
+        }
+        let (cw, ch) = (w / 2, h / 2);
+        let near = |got: u8, want: i32| (i32::from(got) - want).abs() <= 16;
+        for (row, (want_u, want_v)) in [
+            (ch / 4 - 6, (128, 128)),
+            (ch / 4 + 6, (90, 180)),
+            (ch / 2 - 6, (90, 180)),
+            (ch / 2 + 6, (128, 128)),
+            (ch - 1, (128, 128)),
+        ] {
+            let (got_u, got_v) = (u[row * cw + cw / 4], v[row * cw + cw / 4]);
+            assert!(
+                near(got_u, want_u) && near(got_v, want_v),
+                "{name}: chroma row {row} is ({got_u}, {got_v}), want ({want_u}, {want_v})"
+            );
+        }
+    }
+
+    /// Every layout the host offers a producer's own picture in decodes as the picture: at
+    /// both depths, at a height off the 16-row grid and one on it. On Intel's full entrypoint
+    /// that is the tiled layouts, and a ten-bit offer without LINEAR.
+    #[cfg(any(feature = "nvenc", feature = "vulkan-encode"))]
+    #[test]
+    #[ignore = "needs a real VAAPI device and ffmpeg"]
+    fn every_offered_planar_layout_decodes_as_the_picture() {
+        for (codec, ten_bit) in [
+            (Codec::H264, false),
+            (Codec::H265, false),
+            (Codec::H265, true),
+        ] {
+            let offer = planar_capture_modifiers(codec, ten_bit);
+            eprintln!("{codec:?} ten_bit={ten_bit}: offer {offer:x?}");
+            for modifier in offer {
+                for (w, h) in [(1920, 1080), (1280, 720)] {
+                    let name = format!("{codec:?} ten_bit={ten_bit} {modifier:#x} {w}x{h}");
+                    let planes = direct_planar(codec, (w, h), ten_bit, modifier);
+                    assert_planar_picture(&name, &planes, w, h);
+                }
+            }
+        }
+    }
+
+    /// The full entrypoint reads a LINEAR P010 as if it were tiled, so the offer leaves it
+    /// out there; the picture it would have made is not the picture.
+    #[cfg(any(feature = "nvenc", feature = "vulkan-encode"))]
+    #[test]
+    #[ignore = "needs an Intel VAAPI device on its full entrypoint, and ffmpeg"]
+    fn the_full_entrypoint_misreads_a_linear_p010() {
+        assert!(
+            reads_tiled_only(Codec::H265, true),
+            "not the full entrypoint"
+        );
+        assert!(!planar_capture_modifiers(Codec::H265, true).contains(&0));
+        let (w, h) = (1280, 720);
+        let [y, _, _] = direct_planar(Codec::H265, (w, h), true, 0);
+        let row = (h / 2 * w) as usize;
+        let edge = (0..w as usize).find(|&x| y[row + x] > 128);
+        assert_ne!(edge, Some(w as usize / 2), "the driver reads it right now");
     }
 }

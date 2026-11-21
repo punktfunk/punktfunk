@@ -55,6 +55,10 @@ pub struct ZeroCopyPolicy {
     pub gamescope_tiled: bool,
     /// Per-fourcc modifiers the session's direct encoder import proved. Empty keeps LINEAR.
     pub encoder_modifiers: Vec<(u32, Vec<u64>)>,
+    /// The whole offer for a producer's own NV12/P010, LINEAR (0) included, as the session's
+    /// encoder reads them (`pf_encode` `Resolved::planar_capture_modifiers`). `None` keeps
+    /// LINEAR; an empty list offers no planar format.
+    pub planar_modifiers: Option<Vec<u64>>,
 }
 
 #[cfg(target_os = "linux")]

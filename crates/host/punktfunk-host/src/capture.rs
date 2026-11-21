@@ -117,6 +117,7 @@ fn zero_copy_policy(
         nvenc_raw_dmabuf: encoder.nvenc_raw_dmabuf_ok(),
         gamescope_tiled: false,
         encoder_modifiers,
+        planar_modifiers: None,
     }
 }
 
@@ -278,6 +279,7 @@ pub fn capture_virtual_output(
     // the packed 10-bit fourccs.
     let bit_depth = if want.hdr || want.ten_bit_sdr { 10 } else { 8 };
     let gamescope_tiled = gamescope && pf_vdisplay::gamescope_tiled_capture(None);
+    let planar_tiled = gamescope && pf_vdisplay::gamescope_tiled_planar_capture(None);
     // NVENC copies a producer's planar frame; an older gamescope composites it through system
     // RAM, which costs more than the conversion it saves. VAAPI keeps its own rule.
     let nv12_native = want.nv12_native
@@ -347,16 +349,26 @@ pub fn capture_virtual_output(
             ..Default::default()
         },
         // No route here. A wrong "foreign" only keeps the LINEAR offer.
-        move || pf_capture::ZeroCopyPolicy {
-            gamescope_tiled,
-            ..zero_copy_policy(
-                &encoder,
-                pyrowave,
-                nv12_native,
-                modifier_codec,
-                bit_depth,
-                hdr,
-            )
+        move || {
+            // What the encoder reads a producer's NV12/P010 from. An older gamescope lists
+            // LINEAR alone, so its offer keeps what is LINEAR.
+            let planar = codec.filter(|_| nv12_native).map(|codec| {
+                let mut offer = encoder.planar_capture_modifiers(codec, bit_depth, hdr);
+                offer.retain(|&m| m == 0 || planar_tiled);
+                offer
+            });
+            pf_capture::ZeroCopyPolicy {
+                gamescope_tiled,
+                planar_modifiers: planar,
+                ..zero_copy_policy(
+                    &encoder,
+                    pyrowave,
+                    nv12_native,
+                    modifier_codec,
+                    bit_depth,
+                    hdr,
+                )
+            }
         },
     )
 }

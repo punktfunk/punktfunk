@@ -174,6 +174,10 @@ mod vk_intra_refresh;
 #[cfg(target_os = "linux")]
 #[path = "enc/linux/vk_util.rs"]
 mod vk_util;
+// The tiled planar picture the VAAPI modifier proof reads back.
+#[cfg(target_os = "linux")]
+#[path = "enc/linux/planar_probe.rs"]
+mod planar_probe;
 // The import cache's policy `vk_util` steps. Pure, so its table runs on every target.
 #[cfg_attr(
     not(all(

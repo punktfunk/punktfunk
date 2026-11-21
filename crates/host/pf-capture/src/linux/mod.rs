@@ -263,6 +263,7 @@ fn health_identity(base: u64, policy: &ZeroCopyPolicy) -> u64 {
     policy.pyrowave_session.hash(&mut hash);
     policy.nvenc_raw_dmabuf.hash(&mut hash);
     policy.encoder_modifiers.hash(&mut hash);
+    policy.planar_modifiers.hash(&mut hash);
     hash.finish()
 }
 
