@@ -53,6 +53,10 @@ The patches here add the missing half, and nothing else. See
 | `0040-punktfunk-stamp-pfhdr36.patch` | Stamp `+pfhdr36`, so a banner shows whether the box has `0039` | **No** — ours only, as `0005` |
 | `0041-steamcompmgr-run-a-refresh-that-has-a-fraction-to-th.patch` | `-r` reads a decimal, so 59.94 reaches the vblank timer as 59940 mHz. Under adaptive sync the frame limiter takes the refresh's own cycle for a target that divides it, where it built a whole-hertz cycle: 59.94 fps under a 59.94 Hz display | **Yes** — a client panel at 59.94 Hz drops a frame every 17 s against a 60 Hz session |
 | `0042-punktfunk-stamp-pfhdr37.patch` | Stamp `+pfhdr37`: an older gamescope refuses `-r 59.94` and does not start, so the host passes a fraction only from this level | **No** — ours only, as `0005` |
+| `0043-pipewire-declare-an-exported-LINEAR-capture-image-ex.patch` | On Intel, a capture image exported under no modifier is created as external memory. It was a plain LINEAR image the driver was never told is shared, and since `0024` it lives in device memory. Intel's driver puts such an image in compressed memory from Xe2 (Lunar Lake, Battlemage), while the consumer imports `DRM_FORMAT_MOD_LINEAR` and reads the bytes as they lie: an Arc B580 streamed the NV12 capture as columns of noise | **Yes** — upstream leaves the exported image undeclared too; its host-visible memory hides it |
+| `0044-punktfunk-stamp-pfhdr38.patch` | Stamp `+pfhdr38`, so a banner shows whether the box has `0043` | **No** — ours only, as `0005` |
+| `0045-pipewire-put-a-planar-capture-s-chroma-on-a-16-row-b.patch` | On Intel, an exported NV12/P010 capture image is allocated with its height rounded up to 16, so the driver lays the chroma plane on a 16-row boundary and the export names it there. Intel's encoder reads an imported picture's chroma from such a row whatever row the import names: at 1080 rows it read 8 chroma rows late, so colour sat 16 rows too high over a green bottom edge. The texture keeps the capture's height and the extra rows are never painted | **Yes** — any consumer that hands the capture to Intel's encoder without a copy |
+| `0046-punktfunk-stamp-pfhdr39.patch` | Stamp `+pfhdr39`, so a banner shows whether the box has `0045` | **No** — ours only, as `0005` |
 
 ### Why the headless patch matters
 
@@ -166,10 +170,12 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr35` | …on upstream 3.17.0, which carries 31 itself, with a native Wayland app's popups and subsurfaces in the capture (no new capability) |
 | `+pfhdr36` | …and a DPI-scaled Wine game draws at its window's size instead of 1x1 (no new capability) |
 | `+pfhdr37` | …and a refresh with a fraction runs to the millihertz: `-r 59.94`, and the frame limiter paces off it |
+| `+pfhdr38` | …and Intel is told a LINEAR capture image is exported; `+pfhdr37` hands an Xe2 card's compressed bytes out as LINEAR (no new capability) |
+| `+pfhdr39` | …and on Intel a planar capture's chroma starts on a 16-row boundary; `+pfhdr38` streams 1080 rows with the colour 16 rows too high through Intel's encoder (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.17.0.pfhdr37-1`; its build checks the complete upstream version and capability level.
+`3.17.0.pfhdr39-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 
