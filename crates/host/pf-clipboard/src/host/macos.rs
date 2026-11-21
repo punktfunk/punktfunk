@@ -9,7 +9,8 @@
 //! fetched through [`ClipEvent::Paste`] and written together. A host copy that lands while the
 //! fetch runs is the newer one and wins.
 //!
-//! Carried kinds: text, HTML, RTF, PNG, JPEG, GIF. Files and other types are not offered.
+//! Carried kinds: text, HTML, RTF, PNG, JPEG, GIF. Files and other types are not offered, and
+//! neither is a copy a password manager marked concealed or transient.
 
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -19,7 +20,9 @@ use anyhow::Context as _;
 use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
 use objc2::{msg_send, sel};
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard};
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardAccessBehavior,
+};
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
 
 use punktfunk_core::clipboard::CLIP_FETCH_CAP;
@@ -199,6 +202,11 @@ impl Worker {
             !self.ledger.is_ours(self.pb.changeCount()),
             "clipboard currently held by our own offer"
         );
+        // Only what an offer would carry: a copy that has since turned secret reads as nothing.
+        anyhow::ensure!(
+            self.declared_wires().iter().any(|w| w == wire),
+            "the pasteboard no longer offers this kind"
+        );
         let mut data = self.pb.dataForType(&NSString::from_str(uti));
         if data.is_none() && wire == WIRE_PNG {
             data = self
@@ -319,6 +327,7 @@ fn run(
         current_wire,
         pending: None,
     };
+    log_access_setting(&w.pb);
     // Only later copies are announced; the coordinator asks for the current one on enable.
     *w.current_wire.lock().unwrap() = w.declared_wires();
     let _ = ready_tx.send(());
@@ -344,6 +353,26 @@ fn run(
     // Do not leave our offer on the user's clipboard after the session ends.
     w.clear();
     let _ = w.clip_tx.send(ClipEvent::Closed);
+}
+
+/// macOS 15.4 and later guard a process's reads of another app's clipboard with a per-app
+/// setting. Anything but "allow" can prompt the user or return nothing, so it is logged once.
+fn log_access_setting(pb: &NSPasteboard) {
+    if !pb.respondsToSelector(sel!(accessBehavior)) {
+        return;
+    }
+    let (setting, allowed) = match pb.accessBehavior() {
+        NSPasteboardAccessBehavior::AlwaysAllow => ("allow", true),
+        NSPasteboardAccessBehavior::Ask => ("ask", false),
+        NSPasteboardAccessBehavior::AlwaysDeny => ("deny", false),
+        NSPasteboardAccessBehavior::Default => ("default", false),
+        _ => ("unknown", false),
+    };
+    if allowed {
+        tracing::info!(setting, "pasteboard access setting");
+    } else {
+        tracing::warn!(setting, "pasteboard reads may prompt or return nothing");
+    }
 }
 
 /// AppKit's own `NSImage` writes TIFF alone; a conversion offers it as the PNG the wire carries.
@@ -475,6 +504,55 @@ mod tests {
             assert_eq!(clip.current_wire_mimes(), mimes);
             assert_eq!(clip.read_current(wire).await.unwrap(), bytes, "{wire}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_secret_copy_announces_nothing_and_reads_nothing() {
+        let (clip, mut rx, app) = open_private().await;
+        copy(
+            &app,
+            &[(TEXT, b"hunter2"), ("org.nspasteboard.ConcealedType", b"1")],
+        );
+        assert!(selection(&mut rx).await.is_empty());
+        assert!(clip.current_wire_mimes().is_empty());
+        assert!(
+            clip.read_current(WIRE_TEXT).await.is_err(),
+            "a secret was read"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jpeg_offers_png_by_conversion_beside_itself() {
+        let (clip, mut rx, app) = open_private().await;
+        let mut jpeg = Vec::new();
+        image::DynamicImage::new_rgb8(4, 4)
+            .write_to(
+                &mut std::io::Cursor::new(&mut jpeg),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        copy(&app, &[("public.jpeg", &jpeg)]);
+        // AppKit adds a TIFF beside the JPEG, which is what the PNG is made from.
+        assert_eq!(selection(&mut rx).await, vec![WIRE_PNG, WIRE_JPEG]);
+        assert_eq!(clip.read_current(WIRE_JPEG).await.unwrap(), jpeg);
+        let png = clip.read_current(WIRE_PNG).await.unwrap();
+        assert!(png.starts_with(b"\x89PNG"), "not a PNG: {:02x?}", &png[..8]);
+    }
+
+    #[tokio::test]
+    async fn a_utf16_only_copy_reads_as_utf8_text() {
+        let (clip, mut rx, app) = open_private().await;
+        // "External" UTF-16 carries its byte order as a BOM, as a real app writes it.
+        let utf16: Vec<u8> = "\u{feff}h\u{e9}llo"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        copy(&app, &[("public.utf16-external-plain-text", &utf16)]);
+        assert_eq!(selection(&mut rx).await, vec![WIRE_TEXT]);
+        assert_eq!(
+            clip.read_current(WIRE_TEXT).await.unwrap(),
+            "h\u{e9}llo".as_bytes()
+        );
     }
 
     #[tokio::test]

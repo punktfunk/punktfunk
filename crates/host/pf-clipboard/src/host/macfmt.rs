@@ -15,16 +15,27 @@ pub const KINDS: [(&str, &str); 6] = [
     (WIRE_GIF, "com.compuserve.gif"),
 ];
 
-/// What AppKit's own `NSImage` writes. A source with only this offers PNG by conversion.
+/// What `NSImage` writes, and what AppKit adds beside every image type (JPEG, GIF, HEIC, BMP).
+/// A source with a TIFF offers PNG by conversion.
 pub const TIFF: &str = "public.tiff";
+
+/// Password managers mark a secret copy with these (nspasteboard.org). The Apple client drops
+/// such a copy too, so a secret never crosses the wire from either side.
+const SECRET_MARKERS: [&str; 2] = [
+    "org.nspasteboard.ConcealedType",
+    "org.nspasteboard.TransientType",
+];
 
 pub fn type_for(wire: &str) -> Option<&'static str> {
     KINDS.iter().find(|k| k.0 == wire).map(|k| k.1)
 }
 
-/// The wire kinds `types` offers, in [`KINDS`] order.
+/// The wire kinds `types` offers, in [`KINDS`] order. A secret copy offers none.
 pub fn wires_for(types: &[String]) -> Vec<&'static str> {
     let has = |t: &str| types.iter().any(|x| x == t);
+    if SECRET_MARKERS.iter().any(|m| has(m)) {
+        return Vec::new();
+    }
     KINDS
         .iter()
         .filter(|(wire, uti)| has(uti) || (*wire == WIRE_PNG && has(TIFF)))
@@ -110,6 +121,13 @@ mod tests {
         ]);
         assert_eq!(wires_for(&types), vec![WIRE_TEXT, WIRE_HTML]);
         assert!(wires_for(&s(&["public.file-url"])).is_empty());
+    }
+
+    #[test]
+    fn a_secret_copy_offers_nothing() {
+        for marker in SECRET_MARKERS {
+            assert!(wires_for(&s(&["public.utf8-plain-text", marker])).is_empty());
+        }
     }
 
     #[test]
