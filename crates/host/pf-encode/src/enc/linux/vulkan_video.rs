@@ -448,6 +448,11 @@ unsafe fn query_encode_caps(
     let min_bs_align = caps.min_bitstream_buffer_size_alignment.max(1);
     let max_quality_levels = enc_caps.max_quality_levels;
     let rate_control_modes = enc_caps.rate_control_modes;
+    // DEFAULT and DISABLED need a no-layer shape this backend does not speak.
+    ensure!(
+        rate_controlled(rate_control_modes),
+        "encode without a bitrate mode: the driver has neither CBR nor VBR"
+    );
     let hw_max_bitrate = match enc_caps.max_bitrate {
         0 => u64::MAX, // not filled in — treat as unbounded
         n => n,
@@ -801,10 +806,11 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> Option<VulkanEncodeCaps> {
             Some(Some(pd)) => {
                 let vq_inst = ash::khr::video_queue::Instance::new(&entry, &instance);
                 let eight_bit = depth_supported(&vq_inst, pd, codec_op, av1, false);
+                let ten_bit = depth_supported(&vq_inst, pd, codec_op, av1, true);
                 Some(VulkanEncodeCaps {
-                    supported: true,
+                    supported: eight_bit || ten_bit,
                     eight_bit,
-                    ten_bit: depth_supported(&vq_inst, pd, codec_op, av1, true),
+                    ten_bit,
                     efc: build::probe_efc_pairs(&instance, &vq_inst, pd, codec_op, av1, !eight_bit),
                     vcn: build::vcn_firmware_of(&instance, pd),
                 })
@@ -817,8 +823,9 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> Option<VulkanEncodeCaps> {
     }
 }
 
-/// Whether `pd` accepts an encode profile for `codec_op` at this bit depth. Profile chain is
-/// [`VulkanVideoEncoder::open_inner`]'s, minus the RGB-conversion struct.
+/// Whether `pd` accepts an encode profile for `codec_op` at this bit depth and drives it to a
+/// bitrate. Profile chain is [`VulkanVideoEncoder::open_inner`]'s, minus the RGB-conversion
+/// struct.
 ///
 /// # Safety
 /// `vq_inst` must wrap the live instance `pd` was enumerated from.
@@ -845,6 +852,7 @@ unsafe fn depth_supported(
     }
     (vq_inst.fp().get_physical_device_video_capabilities_khr)(pd, &profile, &mut caps)
         == vk::Result::SUCCESS
+        && rate_controlled(enc_caps.rate_control_modes)
 }
 
 fn codec_op_for(av1: bool) -> vk::VideoCodecOperationFlagsKHR {
@@ -971,6 +979,59 @@ pub(crate) fn vulkan_capture_modifiers(codec: Codec, fourcc: u32, ten_bit: bool)
                 accepted
             })
             .unwrap_or_default();
+        instance.destroy_instance(None);
+        mods
+    }
+}
+
+/// What a producer's own NV12 or P010 may arrive as on this lane. Mesa's Intel driver encodes
+/// only from a Y- or 4-tiled picture, so there the offer is those of
+/// [`super::vaapi_native::INTEL_PLANAR_TILED`] the encode device lists and imports as its
+/// source, and never LINEAR; an empty list withholds the planar format. Its format query also
+/// passes X-tiled, which the image create then refuses. Every other device keeps LINEAR.
+pub(crate) fn vulkan_planar_capture_modifiers(codec: Codec, ten_bit: bool) -> Vec<u64> {
+    const INTEL: u32 = 0x8086;
+    let av1 = codec == Codec::Av1;
+    let codec_op = codec_op_for(av1);
+    // SAFETY: fresh instance, physical-device queries only, destroyed on every path;
+    // nothing derived from it escapes.
+    unsafe {
+        let Ok(entry) = ash::Entry::load() else {
+            return vec![0];
+        };
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let Ok(instance) = entry.create_instance(
+            &vk::InstanceCreateInfo::default().application_info(&app),
+            None,
+        ) else {
+            return vec![0];
+        };
+        // Same pick as `open_inner`.
+        let pd = instance
+            .enumerate_physical_devices()
+            .ok()
+            .and_then(|devices| find_encode_device(&instance, &devices, codec_op))
+            .map(|(pd, _)| pd);
+        let mods = match pd {
+            Some(pd) if instance.get_physical_device_properties(pd).vendor_id == INTEL => {
+                let fmt = if ten_bit { P010 } else { NV12 };
+                let mut ps = ProfileStack::new(codec_op, ten_bit, false);
+                let profile = ps.wire(av1);
+                let src = vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR;
+                // Capture hands one fd with an offset and a stride per format plane.
+                let listed: Vec<u64> = pf_zerocopy::vkdev::format_modifiers(&instance, pd, fmt)
+                    .into_iter()
+                    .filter(|p| p.drm_format_modifier_plane_count == 2)
+                    .map(|p| p.drm_format_modifier)
+                    .collect();
+                super::vaapi_native::INTEL_PLANAR_TILED
+                    .into_iter()
+                    .filter(|m| listed.contains(m))
+                    .filter(|&m| modifier_importable(&instance, pd, fmt, m, src, Some(profile)))
+                    .collect()
+            }
+            _ => vec![0],
+        };
         instance.destroy_instance(None);
         mods
     }
@@ -3061,8 +3122,8 @@ mod record;
 mod build;
 use self::build::{
     align_up, av1_coded_frame, build_parameters_av1, build_parameters_h265, h265_block_log2,
-    make_frame, make_video_image, probe_rgb_direct, probe_yuv_storage_planes, rc_plan,
-    rgb_model_for, rgb_range_for,
+    make_frame, make_video_image, probe_rgb_direct, probe_yuv_storage_planes, rate_controlled,
+    rc_plan, rgb_model_for, rgb_range_for,
 };
 
 #[cfg(test)]
