@@ -668,8 +668,8 @@ fn copy_into(buffer: &CVPixelBuffer, planes: &[(&[u8], usize, usize)]) -> Result
 impl Encoder for VtEncoder {
     fn submit(&mut self, frame: &CapturedFrame) -> Result<()> {
         ensure!(
-            frame.width == self.cfg.width && frame.height == self.cfg.height,
-            "captured frame {}x{} != encoder {}x{}",
+            frame.width >= self.cfg.width && frame.height >= self.cfg.height,
+            "captured frame {}x{} is smaller than the encoder's {}x{}",
             frame.width,
             frame.height,
             self.cfg.width,
@@ -723,6 +723,8 @@ impl Encoder for VtEncoder {
     fn caps(&self) -> EncoderCaps {
         EncoderCaps {
             chroma_444: self.cfg.chroma.is_444(),
+            // VideoToolbox scales a buffer larger than the session to the session's size.
+            downscales_input: true,
             ..EncoderCaps::default()
         }
     }

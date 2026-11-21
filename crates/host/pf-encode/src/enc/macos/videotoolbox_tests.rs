@@ -448,6 +448,35 @@ fn four_four_four_follows_what_videotoolbox_opens() {
 /// Encode time per frame, submit to AU, one frame in flight at 60 Hz, pixel buffers prepared
 /// ahead.
 #[test]
+#[ignore = "needs the media engine"]
+fn a_larger_picture_is_scaled_to_the_session_size() {
+    // A 5120x1440 head fitted into a 1080p client.
+    let (w, h) = (1920, 540);
+    let mut enc = VtEncoder::open(&params(Codec::H265, w, h, 8_000_000)).expect("open");
+    assert!(enc.caps().downscales_input);
+    let frames = (0..4).map(|n| {
+        pixel_frame(
+            5120,
+            1440,
+            n,
+            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+        )
+    });
+    let aus = run(&mut enc, frames, |_, _| {});
+    assert_eq!(aus.len(), 4);
+    let pic = H265Planner::default()
+        .plan_au(&aus[0].data)
+        .expect("HEVC AU plans")
+        .picture;
+    assert_eq!(pic.coded_width, w);
+    assert!(
+        (h..h + 16).contains(&pic.coded_height),
+        "coded height {}",
+        pic.coded_height
+    );
+}
+
+#[test]
 #[ignore = "needs the media engine; prints timings"]
 fn encode_time_per_frame() {
     for codec in CODECS {
