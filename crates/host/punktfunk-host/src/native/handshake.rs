@@ -1806,6 +1806,9 @@ impl FormatFacts {
         // `can_encode_444`. HDR does not cost chroma (HEVC Main 4:4:4 10).
         let ingest_chain_supports_444 = codec == crate::encode::Codec::PyroWave
             || crate::capture::capturer_supports_444(encoder.ingests_rgb_444());
+        // macOS capture has no 10-bit full-chroma format, so a 10-bit session there stays 4:2:0.
+        let mac_ten_bit = cfg!(target_os = "macos") && bit_depth == 10;
+        let ingest_chain_supports_444 = ingest_chain_supports_444 && !mac_ten_bit;
         // Probe opens a tiny encoder, short-circuited. A negative latches until
         // restart — a GPU either supports HEVC 4:4:4 or it does not.
         let gpu_supports_444 = if matches!(
@@ -1826,6 +1829,8 @@ impl FormatFacts {
                 crate::encode::Codec::H265 | crate::encode::Codec::PyroWave
             ) {
                 "the negotiated codec only carries 4:2:0 — 4:4:4 needs HEVC or PyroWave"
+            } else if mac_ten_bit {
+                "a 10-bit session on macOS stays 4:2:0 — capture has no 10-bit full-chroma format"
             } else if !ingest_chain_supports_444 {
                 "this host's encoder backend can't ingest full chroma — 4:4:4 needs direct \
                  NVENC (NVIDIA) or the PyroWave codec"
