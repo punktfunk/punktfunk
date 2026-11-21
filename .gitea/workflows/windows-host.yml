@@ -866,7 +866,7 @@ jobs:
         working-directory: packaging/winget/server
         run: |
           set -euo pipefail
-          npm install --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
           node build-data.mjs --out data/data.json
           # A wrong response SHAPE does not fail loudly — winget just reports "no package found".
           # Gate on the suite before anything reaches the box.
@@ -874,42 +874,30 @@ jobs:
 
       # Content only. server.mjs/handler.mjs/compose land via deploy-services.yml, matching how the
       # flatpak repo's content and config deploy on separate paths.
-      - name: Ship the catalogue to unom-1
-        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: "packaging/winget/server/data/data.json"
-          target: "~/unom-winget/data"
-          strip_components: 4
-          overwrite: true
-
-      # No restart: server.mjs reloads on mtime change. This only proves the new catalogue is the
-      # one actually being served, and fails the release if it is not.
-      - name: Verify the served catalogue
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            set -euo pipefail
-            curl -fsS http://127.0.0.1:3240/healthz
-            echo
-            curl -fsS -X POST http://127.0.0.1:3240/manifestSearch \
-              -H 'content-type: application/json' -d '{"FetchAllManifests":true}' \
-              | grep -q "${GITHUB_REF_NAME#v}" \
-              || { echo "served catalogue does not contain ${GITHUB_REF_NAME#v}"; exit 1; }
-            echo "winget source serving ${GITHUB_REF_NAME#v}"
-          # `env:` below populates the RUNNER's environment; this action runs `script` on the
-          # REMOTE host, which inherits nothing from it. `envs:` is the action's OWN input —
-          # it must live under `with:` (matching docker.yml/deploy-services.yml's REGISTRY_TOKEN
-          # forwarding) — naming the variables to forward into the remote shell. A step-level
-          # sibling of `with:`/`env:` is not part of the step schema, so the action never
-          # receives it as an input.
-          envs: GITHUB_REF_NAME
+      - name: Ship the catalogue to unom-1 and verify it is served
         env:
-          GITHUB_REF_NAME: ${{ gitea.ref_name }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          REF_NAME: ${{ gitea.ref_name }}
+        run: |
+          VERSION="${REF_NAME#v}"
+          # The version is an argument to a remote shell: tag characters only.
+          case "$VERSION" in '' | *[!0-9A-Za-z.+-]*) echo "unexpected tag $REF_NAME" >&2; exit 1 ;; esac
+          . scripts/ci/unom1-ssh.sh
+          $SSH "$DEST" 'mkdir -p ~/unom-winget/data'
+          $SCP packaging/winget/server/data/data.json "$DEST:unom-winget/data/"
+          # No restart: server.mjs reloads on mtime change. Fails the release unless the new
+          # catalogue is the one being served.
+          $SSH "$DEST" "bash -s -- $VERSION" <<'EOF'
+          set -eu
+          curl -fsS http://127.0.0.1:3240/healthz
+          echo
+          curl -fsS -X POST http://127.0.0.1:3240/manifestSearch \
+            -H 'content-type: application/json' -d '{"FetchAllManifests":true}' \
+            | grep -qF "$1" \
+            || { echo "served catalogue does not contain $1"; exit 1; }
+          echo "winget source serving $1"
+          EOF

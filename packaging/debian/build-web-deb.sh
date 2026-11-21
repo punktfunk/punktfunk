@@ -23,7 +23,7 @@ DEB_ARCH="${DEB_ARCH:-$(dpkg --print-architecture)}"
 # Build the console if not already built (.output is gitignored — CI builds it each run).
 if [ ! -f web/.output/server/index.mjs ]; then
   echo "==> building web console"
-  (cd web && bun install --frozen-lockfile && bun run build)
+  (cd web && bun install --frozen-lockfile --ignore-scripts && bun run build)
 fi
 # The build MUST be the bun preset (our Bun.serve TLS entry) — node can't run Bun.serve.
 if ! grep -rq 'Bun\.serve' web/.output/server/index.mjs 2>/dev/null; then

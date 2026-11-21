@@ -66,10 +66,8 @@ jobs:
 
       - name: pnpm
         run: |
+          # package.json's packageManager pins pnpm, version and hash, for every decky lane.
           corepack enable
-          # The repo's pnpm-lock.yaml + package.json devDeps target pnpm 9 (the version the
-          # @decky toolchain and the local build use). Pin it so --frozen-lockfile holds.
-          corepack prepare pnpm@9 --activate
 
       - name: Build frontend
         run: |

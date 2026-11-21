@@ -820,7 +820,6 @@ dependencies = [
 name = "pf-vdisplay"
 version = "0.0.1"
 dependencies = [
- "anyhow",
  "bytemuck",
  "pf-driver-proto",
  "pf-encode-session",

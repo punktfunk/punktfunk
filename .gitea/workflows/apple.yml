@@ -104,7 +104,8 @@ on:
       - 'scripts/build-xcframework.sh'
       - 'tools/gen-headers/**'
       - 'scripts/ci/ensure-sccache.sh'
-      - 'scripts/ci/ensure-metal-toolchain.sh'
+      - 'ci/install-rustup.sh'
+      - 'ci/rustup.env'
       - 'scripts/ci/gitea-release.sh'
       - 'scripts/ci/pf-version.sh'
       - 'Cargo.toml'
@@ -128,7 +129,8 @@ on:
       - 'scripts/build-xcframework.sh'
       - 'tools/gen-headers/**'
       - 'scripts/ci/ensure-sccache.sh'
-      - 'scripts/ci/ensure-metal-toolchain.sh'
+      - 'ci/install-rustup.sh'
+      - 'ci/rustup.env'
       - 'scripts/ci/gitea-release.sh'
       - 'scripts/ci/pf-version.sh'
       - 'Cargo.toml'
@@ -217,8 +219,7 @@ jobs:
       - name: Rust toolchain (self-healing on a fresh runner)
         run: |
           if ! command -v rustup >/dev/null && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal
+            sh ci/install-rustup.sh -y --no-modify-path --profile minimal
           fi
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
@@ -256,9 +257,6 @@ jobs:
         # the whole xcframework and drops any slice not asked for, so this must stay in step with
         # them. The bundle is parked per commit, so distribute and screenshots copy it instead.
         run: sh scripts/ci/mac-xcframework.sh
-
-      - name: Metal toolchain (a separate Xcode component since Xcode 26)
-        run: sh scripts/ci/ensure-metal-toolchain.sh
 
       - name: Build (PunktfunkKit + PunktfunkClient app shell)
         working-directory: clients/apple
@@ -436,9 +434,6 @@ jobs:
         run: |
           printf '%s' "$ASC_P8" > "$RUNNER_TEMP/asc.p8"
           chmod 600 "$RUNNER_TEMP/asc.p8"
-
-      - name: Metal toolchain (a separate Xcode component since Xcode 26)
-        run: sh scripts/ci/ensure-metal-toolchain.sh
 
       - name: macOS — archive, codesign Developer ID, notarize, DMG
         # Stable releases, and a dispatch that asks for it. Skipped on canary main pushes: the
@@ -892,8 +887,7 @@ jobs:
       - name: Rust toolchain + iOS Simulator targets (+ nightly for the tvOS slices)
         run: |
           if ! command -v rustup >/dev/null && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal
+            sh ci/install-rustup.sh -y --no-modify-path --profile minimal
           fi
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
@@ -938,9 +932,6 @@ jobs:
 
       - name: Build PunktfunkCore.xcframework (mac + iOS + tvOS slices)
         run: sh scripts/ci/mac-xcframework.sh
-
-      - name: Metal toolchain (a separate Xcode component since Xcode 26)
-        run: sh scripts/ci/ensure-metal-toolchain.sh
 
       - name: Capture screenshots (iPhone 6.9" + iPad 13" + Apple TV; auto-creates the Simulators)
         working-directory: clients/apple

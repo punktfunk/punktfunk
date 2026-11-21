@@ -46,8 +46,9 @@ RUN yes | sdkmanager --licenses >/dev/null \
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --profile minimal \
+COPY rustup.env install-rustup.sh /tmp/
+RUN sh /tmp/install-rustup.sh -y --no-modify-path --profile minimal \
+    && rm /tmp/rustup.env /tmp/install-rustup.sh \
     && rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android \
     # Version-pinned like every other tool baked in here: unpinned, a rebuild months apart
     # silently bakes a different cargo-ndk, and this one drives the shipped Android .so builds.

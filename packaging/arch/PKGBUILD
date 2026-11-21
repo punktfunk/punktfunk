@@ -142,7 +142,7 @@ build() {
     if [ -f web/.output/server/index.mjs ]; then
       echo "==> reusing the already-built web console at web/.output"
     else
-      ( cd web && bun install --frozen-lockfile && bun run build )
+      ( cd web && bun install --frozen-lockfile --ignore-scripts && bun run build )
     fi
     grep -q 'Bun\.serve' web/.output/server/index.mjs \
       || { echo "ERROR: web build is not a bun bundle — need the 'bun' preset + custom entry" >&2; exit 1; }

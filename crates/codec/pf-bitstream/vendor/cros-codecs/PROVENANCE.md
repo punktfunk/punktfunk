@@ -38,7 +38,7 @@ in the future."
    upstream style otherwise).
 2. `src/codec.rs` — one line removed (`pub mod vp8;`).
 3. `Cargo.toml` — rewritten: `log` is the only dependency the vendored subset needs,
-   plus `env_logger`/`serde_json` dev-dependencies for upstream's in-tree tests.
+   plus the `env_logger` dev-dependency for upstream's in-tree tests.
 4. `cargo fmt` normalization under the workspace's rustfmt config (mechanical only).
 5. **Zero-unsafe, enforced**: `#![forbid(unsafe_code)]` added to lib.rs. Upstream's codec
    module had exactly one production `unsafe` (h264/dpb.rs `build_ref_pic_lists`: ref→index

@@ -163,7 +163,7 @@ hmac = "0.13"
 # (WP19) — a native-only build contains no transpiled C ENet at all. Pinned EXACTLY so a bump is
 # a deliberate, reviewed act rather than a lockfile refresh, and left to the cargo-audit job
 # (audit.yml) to flag advisories against it.
-rusty_enet = { version = "=0.4.0", optional = true }
+rusty_enet = { version = "=0.4.1", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # SHA-256 over the downloaded installer and its signing-leaf DER (update/windows.rs), P-256

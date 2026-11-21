@@ -215,6 +215,10 @@ publishing on. Until those exist the publish no-ops with a warning and `main` st
    Pin **ed25519 only**. Pinning every type `ssh-keyscan` prints lets a host offering just RSA
    satisfy the check on an RSA line, so the weakest pinned key decides.
 
+   flatpak.yml, docker.yml, windows-host.yml and deploy-services.yml pin the same secret, the last
+   three through `scripts/ci/unom1-ssh.sh`. A rebuilt unom-1 has a new key: re-key the secret
+   before the next deploy, or each of them stops at host-key verification.
+
 5. Dispatch `nix.yml` on `main`. The publish also writes the public key to
    `https://nix.unom.io/punktfunk-cache.pub` and creates `nix-canary`. The next `v*` tag creates
    `nix-stable`; before that, create it by hand at a tag the cache holds. `REGISTRY_TOKEN` moves the
