@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sat, 21 Nov 2026 17:13:19 +0100
+Subject: [PATCH 50/50] punktfunk: stamp pfhdr41
+
+A banner shows whether the box writes an HDR P010 capture at full range.
+---
+ src/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index af0cb943..0f32a1d8 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -233,7 +233,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr38 — …and Intel is told a LINEAR capture image is exported (Xe2 compressed it)
+ #   +pfhdr39 — …and a planar capture's chroma starts on a 16-row boundary on Intel
+ #   +pfhdr40 — …and a planar capture dmabuf takes a tiled modifier its consumer accepts, on Intel
+-version_tag = vcs_tag + '+pfhdr40' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr41 — …and an HDR P010 capture writes full range when its consumer names it
++version_tag = vcs_tag + '+pfhdr41' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+-- 
+2.56.0
+
