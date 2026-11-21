@@ -428,7 +428,8 @@ fn plugin_sandbox() -> HostCheck {
 }
 
 /// The controller speaker endpoint takes the host's 4-channel open, or DualSense titles fall
-/// back to rumble and the pad stays silent.
+/// back to rumble and the pad stays silent. Provisioning settles after the startup reading, so
+/// [`push_pad_audio`] re-reads it then.
 #[cfg(windows)]
 fn pad_audio() -> HostCheck {
     use crate::audio::pad_endpoint::PadAudioHealth;
@@ -439,6 +440,11 @@ fn pad_audio() -> HostCheck {
             "Controller audio is turned off on this host.",
         )
         .worded("diag_pad_audio_na_off", None, None),
+        PadAudioHealth::Provisioning => HostCheck::ok(
+            id,
+            "The host is still setting up the controller speaker endpoint.",
+        )
+        .worded("diag_pad_audio_provisioning_summary", None, None),
         PadAudioHealth::NotProvisioned => HostCheck::problem(
             id,
             CheckStatus::Warn,
@@ -496,6 +502,13 @@ fn pad_audio() -> HostCheck {
         "The controller speaker endpoint is a Windows component.",
     )
     .worded("diag_pad_audio_na_windows_only", None, None)
+}
+
+/// Replace the `pad_audio` row with a fresh reading. Pad audio's listener, so a console that
+/// loads after provisioning settles sees the real verdict.
+#[cfg(windows)]
+pub(crate) fn push_pad_audio() {
+    crate::diagnostics::registry().set(pad_audio());
 }
 
 /// Another app on the NVENC engine right now. Only NVIDIA reports its sessions.
