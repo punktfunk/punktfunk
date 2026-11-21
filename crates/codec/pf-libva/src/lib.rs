@@ -339,7 +339,7 @@ unsafe impl Send for Display {}
 
 /// PCI vendor of a render node in Vulkan `vendorID` units. A platform or
 /// virtual GPU with no PCI vendor returns `None` and stays in the fallback set.
-fn node_vendor_id(node: &std::path::Path) -> Option<u32> {
+pub fn node_vendor_id(node: &std::path::Path) -> Option<u32> {
     let name = node.file_name()?.to_str()?;
     let text = std::fs::read_to_string(format!("/sys/class/drm/{name}/device/vendor")).ok()?;
     u32::from_str_radix(text.trim().trim_start_matches("0x"), 16).ok()
