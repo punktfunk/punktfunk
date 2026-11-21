@@ -57,6 +57,8 @@ The patches here add the missing half, and nothing else. See
 | `0044-punktfunk-stamp-pfhdr38.patch` | Stamp `+pfhdr38`, so a banner shows whether the box has `0043` | **No** — ours only, as `0005` |
 | `0045-pipewire-put-a-planar-capture-s-chroma-on-a-16-row-b.patch` | On Intel, an exported NV12/P010 capture image is allocated with its height rounded up to 16, so the driver lays the chroma plane on a 16-row boundary and the export names it there. Intel's encoder reads an imported picture's chroma from such a row whatever row the import names: at 1080 rows it read 8 chroma rows late, so colour sat 16 rows too high over a green bottom edge. The texture keeps the capture's height and the extra rows are never painted | **Yes** — any consumer that hands the capture to Intel's encoder without a copy |
 | `0046-punktfunk-stamp-pfhdr39.patch` | Stamp `+pfhdr39`, so a banner shows whether the box has `0045` | **No** — ours only, as `0005` |
+| `0047-pipewire-let-a-planar-capture-take-a-tiled-modifier-.patch` | On Intel, the NV12/P010 capture formats list the tiled modifiers the Vulkan driver has for them beside LINEAR, and the buffer takes the one the consumer kept, as `0025` does for packed RGB. Each plane is exported where the driver put it. Intel's full encode entrypoint reads its source as tiled: the media driver copies a LINEAR NV12 first and reads a LINEAR P010 as it lies, so a 10-bit capture came out as the picture repeated 32 times across | **Yes** — any consumer that hands a planar capture to Intel's encoder |
+| `0048-punktfunk-stamp-pfhdr40.patch` | Stamp `+pfhdr40`, so the host knows the planar formats list tiled modifiers | **No** — ours only, as `0005` |
 
 ### Why the headless patch matters
 
@@ -172,10 +174,11 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr37` | …and a refresh with a fraction runs to the millihertz: `-r 59.94`, and the frame limiter paces off it |
 | `+pfhdr38` | …and Intel is told a LINEAR capture image is exported; `+pfhdr37` hands an Xe2 card's compressed bytes out as LINEAR (no new capability) |
 | `+pfhdr39` | …and on Intel a planar capture's chroma starts on a 16-row boundary; `+pfhdr38` streams 1080 rows with the colour 16 rows too high through Intel's encoder (no new capability) |
+| `+pfhdr40` | …and on Intel a planar capture dmabuf takes a tiled modifier its consumer accepts; the host offers them from this level |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.17.0.pfhdr39-1`; its build checks the complete upstream version and capability level.
+`3.17.0.pfhdr40-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 

@@ -4,8 +4,8 @@ use super::config::StreamConfig;
 use super::consume::{consume_frame, realtime_minus_monotonic_ns};
 use super::ledger::{pool_ask, PoolCensus, PoolLedger};
 use super::offers::{
-    hdr_modifier_offers, offer_pacing, packed_modifier_offers, probe_producer, DeviceModifiers,
-    ProducerProbe,
+    hdr_modifier_offers, offer_pacing, packed_modifier_offers, planar_modifier_offer,
+    probe_producer, DeviceModifiers, ProducerProbe,
 };
 use super::pacer::{wire_interval, Pacer, RawTimer, RequestListener, HEARTBEAT};
 use super::plan::{
@@ -335,6 +335,8 @@ struct Offer {
     modifiers_bgra: Vec<u64>,
     /// Per-format 10-bit modifiers, in [`HDR_FORMAT_ORDER`].
     hdr_modifiers: Vec<(VideoFormat, Vec<u64>)>,
+    /// The producer's own NV12/P010 modifiers. Empty withholds that pod.
+    planar: Vec<u64>,
     /// The PyroWave device's Vulkan list joined the packed offer.
     extend_pyrowave: bool,
     /// Ask for dmabufs at all.
@@ -370,8 +372,8 @@ fn open_importer(plan: &NegotiationPlan, full_range: bool) -> Option<pf_zerocopy
             } else {
                 "NV12"
             },
-            "zero-copy: offering the producer's own planar LINEAR DMA-BUF first (no host \
-             RGB CSC; PUNKTFUNK_PIPEWIRE_NV12=0 restores the packed-RGB negotiation)"
+            "zero-copy: offering the producer's own planar DMA-BUF first (no host RGB CSC; \
+             PUNKTFUNK_PIPEWIRE_NV12=0 restores the packed-RGB negotiation)"
         );
     }
     importer
@@ -384,6 +386,7 @@ fn resolve_offer(cfg: &StreamConfig, ladder: &Ladder, lists: &DeviceModifiers) -
     // and the PyroWave Vulkan list, finalized by `dmabuf_modifiers_for_producer`.
     let (modifiers, modifiers_bgra, extend_pyrowave) = packed_modifier_offers(cfg, ladder, lists);
     let hdr_modifiers = hdr_modifier_offers(cfg, ladder, lists);
+    let planar = planar_modifier_offer(cfg, ladder);
     if extend_pyrowave {
         tracing::info!(
             count = modifiers.len(),
@@ -396,6 +399,7 @@ fn resolve_offer(cfg: &StreamConfig, ladder: &Ladder, lists: &DeviceModifiers) -
         modifiers,
         modifiers_bgra,
         hdr_modifiers,
+        planar,
         extend_pyrowave,
         want_dmabuf,
     }
@@ -546,10 +550,10 @@ fn build_params(
             // downgrade. Order is the fix — see the NVIDIA note on `HDR_FORMAT_ORDER`. First
             // compatible pod wins, so gamescope's P010 pass leads when the encoder takes it.
             let mut pods = Vec::with_capacity(HDR_FORMAT_ORDER.len() + 1);
-            if plan.prefer_native_p010 {
+            if plan.prefer_native_p010 && !offer.planar.is_empty() {
                 pods.push(build_hdr_dmabuf_format(
                     VideoFormat::P010_10LE,
-                    &[0],
+                    &offer.planar,
                     preferred,
                     pacing,
                     range,
@@ -584,10 +588,10 @@ fn build_params(
             // gamescope's own 10-bit SDR, in the HDR set's order: P010 leads when the encoder
             // takes it, then packed 10-bit. The 8-bit pods stay behind as the fallback, so a
             // gamescope whose 10-bit pods are PQ-only still links.
-            if plan.prefer_native_p010 {
+            if plan.prefer_native_p010 && !offer.planar.is_empty() {
                 pods.push(build_sdr10_dmabuf_format(
                     VideoFormat::P010_10LE,
-                    &[0],
+                    &offer.planar,
                     preferred,
                     pacing,
                     range,
@@ -599,12 +603,12 @@ fn build_params(
                 )?);
             }
         }
-        if plan.prefer_native_nv12 {
+        if plan.prefer_native_nv12 && !offer.planar.is_empty() {
             // First compatible consumer pod wins. Pinning BT.709 at the session's range selects
             // gamescope's RGB→NV12 shader with our bitstream colorimetry.
             pods.push(build_dmabuf_format(
                 VideoFormat::NV12,
-                &[0],
+                &offer.planar,
                 preferred,
                 pacing,
                 range,
@@ -1316,6 +1320,7 @@ mod tests {
             modifiers: vec![0],
             modifiers_bgra: vec![0],
             hdr_modifiers: Vec::new(),
+            planar: vec![0],
             extend_pyrowave: false,
             want_dmabuf: true,
         }

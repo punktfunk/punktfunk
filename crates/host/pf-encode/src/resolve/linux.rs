@@ -480,6 +480,23 @@ impl Resolved {
         vaapi_native::vaapi_capture_modifiers(fourcc, &candidates)
     }
 
+    /// What a producer's own NV12 or P010 may arrive as for this session: the whole planar
+    /// offer, LINEAR (0) included, and empty when the encoder reads none of them. Only the
+    /// native libva session takes a tiled one; every other lane keeps LINEAR.
+    pub fn planar_capture_modifiers(&self, codec: Codec, bit_depth: u8, hdr: bool) -> Vec<u64> {
+        let ten_bit = bit_depth >= 10;
+        #[cfg(feature = "vulkan-encode")]
+        if self.amd_intel_opens_vulkan(codec, ten_bit, hdr) {
+            return vec![0];
+        }
+        #[cfg(not(feature = "vulkan-encode"))]
+        let _ = hdr;
+        if !self.zero_copy_is_vaapi() || !matches!(codec, Codec::H264 | Codec::H265) {
+            return vec![0];
+        }
+        vaapi_native::planar_capture_modifiers(codec, ten_bit)
+    }
+
     /// True if the Linux GPU backend is VAAPI rather than NVENC — so capture picks dmabuf
     /// passthrough vs EGL→CUDA. Mirrors [`crate::open_video`].
     pub fn zero_copy_is_vaapi(&self) -> bool {

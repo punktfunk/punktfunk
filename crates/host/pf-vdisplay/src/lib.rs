@@ -937,6 +937,16 @@ pub fn gamescope_tiled_capture(route: Option<&GamescopeRoute>) -> bool {
     )
 }
 
+/// May the capture offer tiled modifiers on this gamescope's NV12/P010? Same two terms as
+/// [`gamescope_hdr_available`]; `false` keeps the planar offer LINEAR.
+pub fn gamescope_tiled_planar_capture(route: Option<&GamescopeRoute>) -> bool {
+    gamescope_ours_and(
+        route,
+        #[cfg(target_os = "linux")]
+        gamescope::gamescope_offers_tiled_planar_capture,
+    )
+}
+
 /// May an NVENC capture take this gamescope's NV12/P010? Same two terms as
 /// [`gamescope_hdr_available`]; `false` keeps packed RGB, which costs NVIDIA less than a
 /// planar capture composited through system RAM.
