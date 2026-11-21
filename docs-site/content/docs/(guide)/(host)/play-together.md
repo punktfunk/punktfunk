@@ -30,6 +30,10 @@ A friend outside your home network needs a way in first, and a PIN instead of **
 - **Controllers.** Every device can bring controllers. Each controller becomes its own player, in
   the order it is first used. The player picker on a device's row under **Now** changes its
   number ([Access levels](/docs/access-levels#couch-co-op-over-join)).
+- **One player, two controllers.** Pick **Shares Player 1** (or another number) on a device's
+  row, and its controllers join that player's: either person's buttons count, and both
+  controllers rumble. Use it to help with a hard part, or to take turns in a game with no co-op.
+  It lasts until that device disconnects.
 - **The pointer and keyboard.** Keyboard, mouse and touch from every device drive the one desktop
   pointer and keyboard, as far as each device's access allows.
 

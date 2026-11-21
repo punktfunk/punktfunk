@@ -156,14 +156,24 @@ function streamFields(stream: StreamInfo, info?: SessionInfo | null) {
 
 /** No pick: the slot is whichever comes free. Not a slot number, so it cannot collide with one. */
 const AUTO_PLAYER = "auto";
+/** Prefix of a share pick's value: `share:0` joins Player 1's controller. */
+const SHARE_PLAYER = "share:";
+
+/** The Player choice's value for a row: a share, a pick, or the first-free claim. */
+function playerValue(row: SessionRow): string {
+	if (row.shared_pad_slot != null)
+		return `${SHARE_PLAYER}${row.shared_pad_slot}`;
+	return row.preferred_pad_slot?.toString() ?? AUTO_PLAYER;
+}
 
 export interface SessionActions {
 	onStop: (row: SessionRow) => void;
 	onIdr: (row: SessionRow) => void;
 	onMute: (row: SessionRow, muted: boolean) => void;
 	onAccess: (row: SessionRow, level: string) => void;
-	/** `null` hands the session back to the host's first-free claim. */
-	onPlayer: (row: SessionRow, slot: number | null) => void;
+	/** `null` hands the session back to the host's first-free claim. `share` joins that
+	 * slot's controller instead of taking it. */
+	onPlayer: (row: SessionRow, slot: number | null, share: boolean) => void;
 	busy: boolean;
 }
 
@@ -332,15 +342,26 @@ export const SessionRowView: FC<
 							nativeLanes && {
 								kind: "choice",
 								label: m.sessions_player(),
-								value: row.preferred_pad_slot?.toString() ?? AUTO_PLAYER,
+								value: playerValue(row),
 								disabled: busy,
-								onChange: (v) =>
-									onPlayer(row, v === AUTO_PLAYER ? null : Number(v)),
+								onChange: (v) => {
+									const share = v.startsWith(SHARE_PLAYER);
+									const slot = share ? v.slice(SHARE_PLAYER.length) : v;
+									onPlayer(
+										row,
+										slot === AUTO_PLAYER ? null : Number(slot),
+										share,
+									);
+								},
 								options: [
 									{ value: AUTO_PLAYER, label: m.sessions_player_auto() },
 									...[0, 1, 2, 3].map((slot) => ({
 										value: slot.toString(),
 										label: m.sessions_player_n({ n: slot + 1 }),
+									})),
+									...[0, 1, 2, 3].map((slot) => ({
+										value: `${SHARE_PLAYER}${slot}`,
+										label: m.sessions_player_share_n({ n: slot + 1 }),
 									})),
 								],
 							},

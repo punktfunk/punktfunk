@@ -1111,6 +1111,7 @@
 	"sessions_player": "Label of a choice in a session row's overflow menu: which controller slot (player number) that device's gamepad takes.",
 	"sessions_player_auto": "Option of the 'Player' choice: the host assigns the controller slot itself.",
 	"sessions_player_n": "Badge with a gamepad icon in a session row's title, and an option of the 'Player' choice. n: slot number from 1 to 4.",
+	"sessions_player_share_n": "Option of the 'Player' choice: this device's controller joins the controller of whoever plays as player n, and both people's buttons count. n: slot number from 1 to 4.",
 	"action_player_failed": "Error toast on the Home page when assigning a session's controller to a player number fails. 'Place' means put it in a slot.",
 	"nav_controllers": "Tab on the Diagnostics page that shows the game controllers as the host receives them. Short, sits in a tab bar.",
 	"controllers_intro": "Line at the top of the Controllers tab: the page shows the host's copy of the controller input, not the client's.",
