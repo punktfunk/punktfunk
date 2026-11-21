@@ -737,7 +737,8 @@ fn probe_vulkan_encode_caps(codec: Codec) -> Option<VulkanFacts> {
         } else {
             tracing::info!(
                 ?codec,
-                "Vulkan Video encode unavailable (no encode queue for this codec) — keeping the \
+                "Vulkan Video encode unavailable (no encode queue or no bitrate mode for this \
+                 codec) — keeping the \
                  packed-RGB capture negotiation (the native-NV12 path has no VAAPI fallback)"
             );
         }
