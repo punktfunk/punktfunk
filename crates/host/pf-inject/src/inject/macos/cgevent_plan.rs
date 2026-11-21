@@ -7,8 +7,9 @@
 //! - Keys: the wire's US-positional VK → the ANSI-positional macOS key code ([`mac_key`]).
 //!   Every event carries the flags of the modifiers held, with the side bits a keyboard sets.
 //!   A modifier is a flags-changed event; the client's auto-repeat is posted as auto-repeat.
-//! - Pointer: every location lands on [`Desk::bounds`]. A press close to the last one in time
-//!   and place counts up the click state; a move with a button held is that button's drag.
+//! - Pointer: every location lands on [`Desk::bounds`], relative motion from where the planner
+//!   last put the pointer while the cursor read back still lags it. A press close to the last
+//!   one in time and place counts up the click state; a move with a button held is a drag.
 //! - Scroll: the shared mapper's libei plan (point distance, v120 clicks, stops) as pixel
 //!   and line events; a phased wire gesture also carries the scroll phase.
 
@@ -17,6 +18,7 @@ use crate::plan::Abs;
 use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp, WheelAxis};
 use punktfunk_core::input::scroll::{ScrollEvent, ScrollPhase};
 use punktfunk_core::input::{InputEvent, InputKind};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// `CGEventType` values.
@@ -70,6 +72,10 @@ const KVK_CAPS_LOCK: u16 = 0x39;
 /// double-click rectangle.
 const CLICK_SLOP: f64 = 4.0;
 
+/// Known pointer locations kept: more than a back-to-back burst of moves leaves unapplied when
+/// the cursor is read back.
+const RECENT: usize = 64;
+
 /// Wire buttons 1..=5 (left, middle, right, X1, X2) → `CGMouseButton`.
 const BUTTONS: [u32; 5] = [0, 2, 1, 3, 4];
 
@@ -79,7 +85,7 @@ pub(crate) type Rect = (f64, f64, f64, f64);
 /// What a pointer event reads off the desktop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Desk {
-    /// Where the cursor is now.
+    /// Where the window server has the cursor now. It lags the events it has not applied.
     pub cursor: (f64, f64),
     /// The display absolute input maps into, and every posted location stays on.
     pub bounds: Rect,
@@ -138,6 +144,8 @@ pub(crate) struct Planner {
     press: Option<Press>,
     /// The host's double-click interval.
     double_click: Duration,
+    /// The latest pointer locations known: posted, or read back and followed. Newest last.
+    recent: VecDeque<(f64, f64)>,
     /// Libei's plan is the one in CGEvent's terms: point distance, v120 clicks, stops.
     scroll: ScrollMapper,
     /// The fraction of a point each precise axis owes.
@@ -156,6 +164,7 @@ impl Planner {
             buttons: 0,
             press: None,
             double_click,
+            recent: VecDeque::with_capacity(RECENT),
             scroll: ScrollMapper::new(ScrollBackend::Libei),
             px: [0.0; 2],
             wheel: Default::default(),
@@ -170,8 +179,8 @@ impl Planner {
             InputKind::TextInput => text(ev.code),
             InputKind::MouseMove => {
                 let d = desk();
-                let (dx, dy) = (f64::from(ev.x), f64::from(ev.y));
-                let at = clamp_to(d.bounds, (d.cursor.0 + dx, d.cursor.1 + dy));
+                let (x, y) = self.pointer(d.cursor);
+                let at = clamp_to(d.bounds, (x + f64::from(ev.x), y + f64::from(ev.y)));
                 vec![self.motion(at, (ev.x, ev.y))]
             }
             InputKind::MouseMoveAbs => {
@@ -181,8 +190,9 @@ impl Planner {
                 let d = desk();
                 let ((fx, fy), b) = (abs.normalized(), d.bounds);
                 let at = clamp_to(b, (b.0 + fx * b.2, b.1 + fy * b.3));
-                let delta = (at.0 - d.cursor.0, at.1 - d.cursor.1);
-                vec![self.motion(at, (delta.0.round() as i32, delta.1.round() as i32))]
+                let (x, y) = self.pointer(d.cursor);
+                let delta = ((at.0 - x).round() as i32, (at.1 - y).round() as i32);
+                vec![self.motion(at, delta)]
             }
             InputKind::MouseButtonDown | InputKind::MouseButtonUp => {
                 self.button(ev, now, desk).into_iter().collect()
@@ -280,7 +290,8 @@ impl Planner {
         }
         let down = ev.kind == InputKind::MouseButtonDown;
         let d = desk();
-        let at = clamp_to(d.bounds, d.cursor);
+        let at = clamp_to(d.bounds, self.pointer(d.cursor));
+        self.moved_to(at);
         let (press, release, _) = button_types(button);
         let clicks = if down {
             let count = match self.press {
@@ -316,9 +327,30 @@ impl Planner {
         })
     }
 
+    /// Where the pointer is: the newest known location when `cursor` is an older one the window
+    /// server has not caught up from, else `cursor`, someone else's move, which becomes known.
+    fn pointer(&mut self, cursor: (f64, f64)) -> (f64, f64) {
+        let near = |p: &(f64, f64)| (p.0 - cursor.0).abs() <= 0.5 && (p.1 - cursor.1).abs() <= 0.5;
+        match self.recent.back() {
+            Some(&newest) if self.recent.iter().any(near) => newest,
+            _ => {
+                self.moved_to(cursor);
+                cursor
+            }
+        }
+    }
+
+    fn moved_to(&mut self, at: (f64, f64)) {
+        if self.recent.len() == RECENT {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(at);
+    }
+
     /// A move to `at`: a drag of the lowest held button (left, then right, then the others),
     /// else a plain move.
-    fn motion(&self, at: (f64, f64), delta: (i32, i32)) -> Post {
+    fn motion(&mut self, at: (f64, f64), delta: (i32, i32)) -> Post {
+        self.moved_to(at);
         let held = (self.buttons != 0).then(|| self.buttons.trailing_zeros());
         let (ty, button, clicks) = match held {
             Some(b) => (button_types(b).2, b, self.clicks_of(b)),
@@ -809,6 +841,45 @@ mod tests {
             panic!("{posts:?}")
         };
         assert_eq!((ty, at, delta), (ty::MOVED, (1920.0, 0.0), (10, -500)));
+    }
+
+    /// Moves posted faster than the window server applies them read back a cursor that lags:
+    /// each still lands its full delta from the last one, and a click lands where they ended.
+    /// A cursor this planner never put anywhere is someone else's move, and is followed.
+    #[test]
+    fn a_burst_read_back_stale_keeps_every_delta() {
+        let mut p = planner();
+        let now = Instant::now();
+        let at = |p: &mut Planner, e: InputEvent, cursor: (f64, f64)| {
+            let desk = Desk { cursor, ..DESK };
+            match p.plan(&e, now, &|| desk)[..] {
+                [Post::Mouse { at, delta, .. }] => (at, delta),
+                ref other => panic!("{other:?}"),
+            }
+        };
+        let start = (2000.0, 100.0);
+        assert_eq!(at(&mut p, moved(10, 0), start), ((2010.0, 100.0), (10, 0)));
+        assert_eq!(
+            at(&mut p, moved(10, 5), start).0,
+            (2020.0, 105.0),
+            "stale read"
+        );
+        assert_eq!(
+            at(&mut p, moved(10, 0), (2010.0, 100.0)).0,
+            (2030.0, 105.0),
+            "half caught up"
+        );
+        let click = at(&mut p, ev(InputKind::MouseButtonDown, 1), start);
+        assert_eq!(
+            click.0,
+            (2030.0, 105.0),
+            "a click lands where the moves ended"
+        );
+        assert_eq!(
+            at(&mut p, moved(1, 1), (2500.0, 300.0)).0,
+            (2501.0, 301.0),
+            "followed"
+        );
     }
 
     #[test]
