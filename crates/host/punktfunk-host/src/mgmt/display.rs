@@ -166,9 +166,13 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if edid_lock_available() {
         enforced.push("edid_lock".into());
     }
-    // A monitor `screen` needs the mirror backend (`vdisplay::open_for`): Linux and Windows.
+    // A monitor `screen` needs the mirror backend (`vdisplay::open_for`): Linux, Windows, macOS.
     // Do not advertise it elsewhere — a stored monitor would never take effect.
-    let mirrors = cfg!(any(target_os = "linux", target_os = "windows"));
+    let mirrors = cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    ));
     if mirrors {
         enforced.push("screen".into());
         enforced.push("capture_monitor".into());
@@ -329,7 +333,7 @@ fn write(body: serde_json::Map<String, serde_json::Value>) -> Option<Response> {
     let stored = crate::vdisplay::policy::prefs().update(|p| match merged(p, body) {
         Ok(next) => {
             *p = next.sanitized();
-            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
             if let Some(dropped) = p.screen.take().and_then(DisplayTarget::into_monitor) {
                 p.capture_monitor = None;
                 tracing::warn!(
@@ -737,7 +741,11 @@ pub(crate) struct MonitorsResponse {
     )
 )]
 pub(crate) async fn get_display_monitors() -> Result<Json<MonitorsResponse>, Response> {
-    let pin_supported = cfg!(any(target_os = "linux", target_os = "windows"));
+    let pin_supported = cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    ));
     // Effective pin (env override, else stored policy): highlight what sessions will mirror.
     // With no mirror backend report `None` even if a pin is stored — highlighting a head
     // nothing will capture is the false signal this field exists to avoid.
@@ -944,7 +952,11 @@ pub(crate) async fn get_display_targets(
         enabled: None,
         in_use_by: None,
     };
-    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+    if !cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    )) {
         return Ok(Json(DisplayTargets {
             locked: false,
             host_default: DisplayTarget::Own,

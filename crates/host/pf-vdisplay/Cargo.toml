@@ -76,6 +76,10 @@ x11rb = { version = "0.14", default-features = false }
 # `connect`, which std cannot make. Already in the host's closure through tokio and the host.
 socket2 = "0.6"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The online displays a macOS mirror streams (`vdisplay/macos.rs`).
+objc2-core-graphics = { workspace = true }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 pf-paths-win = { path = "../pf-paths-win" }
 # The render-adapter LUID (manager.rs).

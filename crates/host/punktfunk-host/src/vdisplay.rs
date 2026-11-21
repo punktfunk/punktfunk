@@ -62,16 +62,21 @@ pub(crate) fn session_topology(
 
 /// Whether a session on `compositor` plays on the desk, the desktop that holds the box's
 /// monitors, where a device's own screen takes a role: not a contract `seat`, not gamescope,
-/// and heads that read (`physical`) list a physical monitor. Heads that cannot be read keep it.
+/// not macOS (its own screen is the main display), and heads that read (`physical`) list a
+/// physical monitor. Heads that cannot be read keep it.
 pub(crate) fn on_the_desk(
     seat: bool,
     compositor: Option<Compositor>,
     physical: Option<bool>,
 ) -> bool {
+    #[cfg(target_os = "macos")]
+    if compositor == Some(Compositor::MacOs) {
+        return false;
+    }
     !seat && compositor != Some(Compositor::Gamescope) && physical != Some(false)
 }
 
-/// [`on_the_desk`] for a session on `compositor` now. Never on a host with no mirror backend.
+/// [`on_the_desk`] for a session on `compositor` now. Only on Linux and Windows hosts.
 /// With `read_heads` it asks the compositor for its monitors: blocking, one read. Without, a
 /// desktop that may have none still counts, as one whose heads cannot be read does.
 pub(crate) fn desk(compositor: Option<Compositor>, read_heads: bool) -> bool {
@@ -131,8 +136,26 @@ pub(crate) fn device_label(fp: &str) -> String {
         .unwrap_or_else(|| fp.chars().take(12).collect())
 }
 
-/// [`resolve_screen`] for the device `fp`, against the heads of `compositor`.
+/// [`resolve_screen`] for the device `fp`, against the heads of `compositor`. On macOS a
+/// session's own screen is the main display, so the pick names that monitor.
 fn pick(
+    compositor: Option<Compositor>,
+    fp: Option<&str>,
+    wanted: Option<DisplayTarget>,
+) -> ScreenPick {
+    let picked = pick_target(compositor, fp, wanted);
+    #[cfg(target_os = "macos")]
+    if matches!(picked.target, DisplayTarget::Own) {
+        return ScreenPick {
+            target: DisplayTarget::Monitor(monitors::main_display()),
+            ..picked
+        };
+    }
+    picked
+}
+
+/// [`pick`] before macOS names its main display.
+fn pick_target(
     compositor: Option<Compositor>,
     fp: Option<&str>,
     wanted: Option<DisplayTarget>,
@@ -148,7 +171,11 @@ fn pick(
             reason: None,
         };
     };
-    let listed = if cfg!(any(target_os = "linux", target_os = "windows")) {
+    let listed = if cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    )) {
         heads(compositor).ok()
     } else {
         Some(Vec::new())
@@ -256,5 +283,16 @@ mod tests {
             unavailable("DP-1", Some(&heads), &unnamed, Some("aa")),
             None
         );
+    }
+
+    /// A macOS session's own screen is the main display, which it mirrors.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_macos_own_screen_is_the_main_display() {
+        let pick = resolve_screen(None, Some(DisplayTarget::Own));
+        let main = DisplayTarget::Monitor(monitors::main_display());
+        assert_eq!(pick.target, main);
+        assert!(mirrors(&pick.target) && mirrors(&DisplayTarget::Own));
+        assert!(!on_the_desk(false, Some(Compositor::MacOs), Some(true)));
     }
 }

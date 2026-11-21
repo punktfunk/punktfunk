@@ -14,7 +14,9 @@
 /// normal-priority thread submits late and the GPU priority never bites.
 /// `critical` is highest non-realtime (capture+encode); otherwise above-normal
 /// (send/relay, input). On Linux the thread's timer slack also drops to 1 ns, so a timed
-/// wait ends on time rather than up to 50 µs late; its children inherit that.
+/// wait ends on time rather than up to 50 µs late; its children inherit that. macOS takes the
+/// user-interactive QoS class for `critical`, user-initiated otherwise; threads it spawns
+/// inherit the class.
 pub fn boost_thread_priority(critical: bool) {
     crate::session_tuning::on_hot_thread();
     #[cfg(target_os = "windows")]
@@ -45,7 +47,23 @@ pub fn boost_thread_priority(critical: bool) {
         tighten_timer_slack();
         let _ = renice(if critical { -10 } else { -5 }, || true);
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        use libc::qos_class_t::{QOS_CLASS_USER_INITIATED, QOS_CLASS_USER_INTERACTIVE};
+        let class = if critical {
+            QOS_CLASS_USER_INTERACTIVE
+        } else {
+            QOS_CLASS_USER_INITIATED
+        };
+        // SAFETY: by-value arguments only, and it changes only the calling thread's class.
+        let rc = unsafe { libc::pthread_set_qos_class_self_np(class, 0) };
+        if rc == 0 {
+            tracing::debug!(critical, "thread QoS class raised");
+        } else {
+            tracing::debug!(critical, rc, "pthread_set_qos_class_self_np refused");
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let _ = critical;
     }
@@ -329,5 +347,32 @@ mod tests {
             "rt priority {rt_priority} outside the kernel's range"
         );
         assert!((-20..=19).contains(&nice), "nice {nice} outside PRIO range");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use libc::qos_class_t::{self, QOS_CLASS_USER_INITIATED, QOS_CLASS_USER_INTERACTIVE};
+
+    fn boosted(critical: bool) -> qos_class_t {
+        std::thread::spawn(move || {
+            super::boost_thread_priority(critical);
+            let mut class = qos_class_t::QOS_CLASS_UNSPECIFIED;
+            let mut relative = 0;
+            // SAFETY: `pthread_self` names this live thread; both out-pointers are live locals.
+            let rc = unsafe {
+                libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative)
+            };
+            assert_eq!(rc, 0);
+            class
+        })
+        .join()
+        .expect("boosted thread")
+    }
+
+    #[test]
+    fn a_boosted_thread_takes_the_class_of_its_role() {
+        assert_eq!(boosted(true) as u32, QOS_CLASS_USER_INTERACTIVE as u32);
+        assert_eq!(boosted(false) as u32, QOS_CLASS_USER_INITIATED as u32);
     }
 }

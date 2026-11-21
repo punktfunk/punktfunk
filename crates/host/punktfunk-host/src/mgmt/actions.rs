@@ -217,7 +217,11 @@ fn plan_display_next(
 
 /// [`plan_display_next`] on this host. Blocking: one monitor-list IPC when a pin is stored.
 fn next_monitor_target() -> Result<(String, String), Said> {
-    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+    if !cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    )) {
         return Err(NO_MIRROR);
     }
     plan_display_next(
@@ -506,7 +510,11 @@ async fn invoke_display_next(
     if !display_permitted(st, lane, fp) {
         return super::display::screen_choice_refused();
     }
-    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+    if !cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    )) {
         let (code, text) = NO_MIRROR;
         return api_error_coded(StatusCode::NOT_IMPLEMENTED, code, text);
     }

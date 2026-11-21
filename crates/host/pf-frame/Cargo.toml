@@ -47,6 +47,8 @@ windows = { version = "0.62", features = [
 # `FramePayload::PixelBuffer` owns a retained `CVPixelBuffer`.
 objc2-core-foundation = { workspace = true }
 objc2-core-video = { workspace = true }
+# `pthread_set_qos_class_self_np` for the thread QoS.
+libc = "0.2"
 
 [lints]
 workspace = true

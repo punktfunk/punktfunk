@@ -578,7 +578,7 @@ fn real_main() -> Result<()> {
         // console user, because a SYSTEM caller writes SYSTEM's app preferences, not the user's.
         #[cfg(target_os = "windows")]
         Some("voice-route") => audio::voice_route::cli(&args[1..]),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         Some("list-monitors") => devtest::list_monitors(),
         #[cfg(target_os = "linux")]
         Some("mirror-test") => devtest::mirror_test(&args),
@@ -750,7 +750,7 @@ USAGE:
                                               every cover the host fetched and cached on disk
     punktfunk-host punktfunk1-host [OPTIONS]  native punktfunk host alone (tests and benches)
     punktfunk-host probe-compositor           exit 0 iff the compositor is up + ready (bringup gate)
-    punktfunk-host list-monitors              list the host's physical monitors (Linux) — the
+    punktfunk-host list-monitors              list the host's physical monitors (Linux, macOS) — the
                                               connector names PUNKTFUNK_CAPTURE_MONITOR takes
     punktfunk-host spike [OPTIONS]            capture→encode→file pipeline spike (dev tool)
 

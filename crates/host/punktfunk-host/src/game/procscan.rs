@@ -9,13 +9,19 @@
 //! 2. **Never trust a bare pid.** Every remembered process carries its start time
 //!    and is re-verified ([`Scanner::alive`]) before it is counted running or signalled.
 //!
-//! `/proc` on Linux, Toolhelp on Windows; same [`Scanner`] surface.
+//! `/proc` on Linux, Toolhelp on Windows; same [`Scanner`] surface. `libproc` on macOS pins,
+//! re-verifies and walks processes, with no spec match: no lease watcher runs there.
 //! [`crate::gamelease`] is platform-neutral.
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::Scanner;
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::Scanner;
 
 #[cfg(windows)]
 mod windows;
@@ -27,7 +33,8 @@ pub(crate) use windows::{process_image, processes, under_dir};
 /// Adopted process: pid plus a start stamp that pins that pid to *this* process.
 ///
 /// `start` is compared only for equality against a later read of the same pid.
-/// Units differ: clock ticks since boot on Linux, a creation `FILETIME` on Windows.
+/// Units differ: clock ticks since boot on Linux, a creation `FILETIME` on Windows,
+/// microseconds since the Unix epoch on macOS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProcRef {
     pub pid: u32,
@@ -39,7 +46,10 @@ pub struct ProcRef {
 /// Start times are quantized (~10 ms on Linux) and a launcher can race the host,
 /// so an exact comparison would reject the real game. Two seconds is far below
 /// any launcher's bring-up, so a pre-existing instance still fails the filter.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no scan on macOS"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "no lease watcher on macOS")
+)]
 pub const START_SLACK_SECS: f64 = 2.0;
 
 /// Reference instant for adopting a launch's processes, in seconds on the
@@ -64,11 +74,11 @@ pub fn launch_stamp() -> Option<f64> {
 /// Platform-neutral so [`crate::gamelease`] stays free of `cfg`s. `None` with
 /// no matcher, or if the pid is gone or unqueryable.
 pub fn resolve(pid: u32) -> Option<ProcRef> {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         Scanner::system().resolve(pid)
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = pid;
         None
@@ -78,11 +88,11 @@ pub fn resolve(pid: u32) -> Option<ProcRef> {
 /// Re-verify remembered processes. Empty with no matcher. Platform-neutral
 /// so [`crate::gamelease`] stays free of `cfg`s.
 pub fn alive(procs: &[ProcRef]) -> Vec<ProcRef> {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         Scanner::system().alive(procs)
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = procs;
         Vec::new()
@@ -105,14 +115,17 @@ pub fn tree(procs: &[ProcRef]) -> Vec<ProcRef> {
 
 /// Diagnostics only: short names in `procs` order. Not part of [`ProcRef`],
 /// which is compared for equality.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no scan on macOS"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "no lease watcher on macOS")
+)]
 pub fn names(procs: &[ProcRef]) -> Vec<String> {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         let scanner = Scanner::system();
         procs.iter().map(|p| scanner.name_of(*p)).collect()
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = procs;
         Vec::new()
@@ -126,7 +139,10 @@ pub fn names(procs: &[ProcRef]) -> Vec<String> {
 ///
 /// Linux has none: Steam's launch reaper is already a process the scan sees.
 /// Windows has no reaper, which is why a second opinion exists.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no scan on macOS"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "no lease watcher on macOS")
+)]
 pub fn running_hint(spec: &crate::library::DetectSpec) -> Option<bool> {
     #[cfg(windows)]
     {
@@ -141,13 +157,16 @@ pub fn running_hint(spec: &crate::library::DetectSpec) -> Option<bool> {
 
 /// `roots` and every live process descended from them. A launch command's shell is the root the
 /// host holds; the game, and its window, belong to a child of it.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no scan on macOS"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "no lease watcher on macOS")
+)]
 pub fn with_descendants(roots: &[u32]) -> Vec<u32> {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         descend(roots, &Scanner::system().parents())
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         roots.to_vec()
     }
@@ -158,12 +177,18 @@ pub fn with_descendants(roots: &[u32]) -> Vec<u32> {
 /// A nested lease's whole tree descends from its own gamescope. Two seats can run the same
 /// title, and Steam's `SteamLaunch AppId=` reaper looks identical in both, so without this a
 /// seat adopts — and its term ladder kills — the other seat's game.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no scan on macOS"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "no lease watcher on macOS")
+)]
 pub fn under(procs: &[ProcRef], root: u32) -> Vec<ProcRef> {
     under_tree(procs, &with_descendants(&[root]))
 }
 
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no scan on macOS"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "no lease watcher on macOS")
+)]
 fn under_tree(procs: &[ProcRef], tree: &[u32]) -> Vec<ProcRef> {
     procs
         .iter()
@@ -173,7 +198,10 @@ fn under_tree(procs: &[ProcRef], tree: &[u32]) -> Vec<ProcRef> {
 }
 
 /// `roots` first, then each descendant once, from `(pid, parent)` rows.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no scan on macOS"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "no lease watcher on macOS")
+)]
 fn descend(roots: &[u32], parents: &[(u32, u32)]) -> Vec<u32> {
     let mut out: Vec<u32> = Vec::new();
     for &r in roots {

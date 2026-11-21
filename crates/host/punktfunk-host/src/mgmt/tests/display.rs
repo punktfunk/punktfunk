@@ -253,7 +253,11 @@ async fn display_settings_surface() {
     );
     assert!(
         !enforced.contains(&"capture_monitor")
-            || cfg!(any(target_os = "linux", target_os = "windows")),
+            || cfg!(any(
+                target_os = "linux",
+                target_os = "windows",
+                target_os = "macos"
+            )),
         "pinning a real monitor needs a mirror backend"
     );
     assert!(

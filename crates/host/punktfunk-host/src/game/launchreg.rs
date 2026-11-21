@@ -171,13 +171,13 @@ fn liveness(rec: &Record) -> Liveness {
 }
 
 /// How many of `procs` are still the same live processes. `None` on a
-/// platform with no matcher (macOS) is "no opinion" — never "gone".
+/// platform with no matcher is "no opinion" — never "gone".
 fn alive_count(procs: &[crate::procscan::ProcRef]) -> Option<usize> {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         Some(crate::procscan::Scanner::system().alive(procs).len())
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = procs;
         None
