@@ -66,10 +66,11 @@ input: a denial shows as black frames and dropped input, not as an error.
 | Intel | VAAPI (H.264, HEVC), Vulkan Video (AV1) | Current Mesa with its Vulkan driver, and Intel's VAAPI driver (`intel-media-driver`) |
 | None | Software H.264 | `PUNKTFUNK_ENCODER=software`, a fallback rather than a daily driver |
 
-Your distro's install page installs the right driver packages. On Intel Gen12 (Tiger Lake) and
-newer, including Arc, encoding needs the HuC firmware loaded: check `dmesg | grep -i huc` if encoding
-fails. GeForce cards cap how many NVENC sessions run at once, which matters only when many devices
-stream together.
+Your distro's install page installs the right driver packages. Intel encodes on its video engine
+only with the HuC firmware loaded; without it, encoding borrows the GPU your game renders on. Tiger
+Lake, Rocket Lake and older don't load it by default: add `i915.enable_guc=2` to the kernel command
+line, and `dmesg | grep -i huc` then reports it authenticated. GeForce cards cap how many NVENC
+sessions run at once, which matters only when many devices stream together.
 
 HDR on Linux needs gamescope with `punktfunk-gamescope`, Hyprland, or GNOME 50 mirroring a real HDR
 monitor: [HDR](/docs/hdr).
