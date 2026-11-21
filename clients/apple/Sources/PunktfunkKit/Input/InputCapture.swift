@@ -99,6 +99,9 @@ public final class InputCapture {
     #if os(iOS) || os(visionOS)
     /// GameController's keys against UIKit's presses (see `pressKey`).
     private var keyFeed = KeyFeed()
+    /// The keyboard is being reposted (true: presses carried a whole key with GameController
+    /// silent) or is not (false: GameController delivered one). Main queue.
+    public var onKeyboardReposted: ((Bool) -> Void)?
     #endif
 
     /// The keyboard's shortcuts, fed every physical key in both capture states. Built at
@@ -424,6 +427,9 @@ public final class InputCapture {
         mice.removeAll()
         keyboards.removeAll()
         stopAutoRepeat()
+        #endif
+        #if os(iOS) || os(visionOS)
+        FullKeyboardAccess.watchGameController() // the handler slot is free again
         #endif
     }
 
@@ -896,8 +902,10 @@ public final class InputCapture {
         keyboard.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
             guard let self else { return }
             #if os(iOS) || os(visionOS)
-            guard self.keyFeed.takeGameController(usage: keyCode.rawValue, down: pressed)
-            else { return }
+            let first = !self.keyFeed.gameControllerSpoke
+            let taken = self.keyFeed.takeGameController(usage: keyCode.rawValue, down: pressed)
+            if first { self.onKeyboardReposted?(false) }
+            guard taken else { return }
             #endif
             self.keyChanged(usage: keyCode.rawValue, pressed: pressed)
         }
@@ -908,20 +916,56 @@ public final class InputCapture {
     /// carries the keys: Full Keyboard Access silences GameController and presses still arrive
     /// (`KeyFeed`). The hop lets a GameController key already on the main queue speak first.
     public func pressKey(usage: Int, down: Bool) -> Bool {
-        guard Self.activeCapture === self, !keyFeed.gameControllerSpoke else { return false }
+        guard Self.activeCapture === self else { return false }
+        let carries = !keyFeed.gameControllerSpoke
         DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, Self.activeCapture === self,
-                      self.keyFeed.takePress(usage: usage, down: down)
-                else { return }
-                if inputDebug {
-                    inputLog.debug(
-                        "key usage \(usage, privacy: .public) \(down ? "down" : "up", privacy: .public) from presses")
-                }
-                self.keyChanged(usage: usage, pressed: down)
-            }
+            MainActor.assumeIsolated { self?.takePress(usage: usage, down: down) }
         }
-        return true
+        return carries
+    }
+
+    private func takePress(usage: Int, down: Bool) {
+        guard Self.activeCapture === self else { return }
+        let modelled = keyboards.contains {
+            $0.keyboardInput?.button(forKeyCode: GCKeyCode(rawValue: usage)) != nil
+        }
+        switch keyFeed.takePress(usage: usage, down: down, modelled: modelled) {
+        case .ignore:
+            return
+        case .take:
+            if inputDebug {
+                inputLog.debug(
+                    "key usage \(usage, privacy: .public) \(down ? "down" : "up", privacy: .public) from presses")
+            }
+            keyChanged(usage: usage, pressed: down)
+        case .missed:
+            if inputDebug {
+                inputLog.debug("key usage \(usage, privacy: .public) passed GameController by")
+            }
+            gameControllerFellSilent()
+            keyChanged(usage: usage, pressed: true)
+            keyChanged(usage: usage, pressed: false)
+            onKeyboardReposted?(true)
+            return
+        }
+        if keyFeed.pressesCarriedKey { onKeyboardReposted?(true) }
+    }
+
+    /// GameController is silent from here: Full Keyboard Access proved itself by a request, or
+    /// keys passed GameController by. The keys it put down are released, and both the feed
+    /// and the shortcut keys start over.
+    public func gameControllerFellSilent() {
+        releaseKeys()
+        forgetShortcutKeys()
+    }
+
+    /// Release every key the host holds and stop the repeat: no feed will report their release.
+    private func releaseKeys() {
+        stopAutoRepeat()
+        for vk in pressedVKs {
+            emitKey(vk, down: false)
+        }
+        pressedVKs.removeAll()
     }
     #endif
 

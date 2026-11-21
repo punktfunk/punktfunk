@@ -20,6 +20,7 @@
 
 #if os(iOS) || os(visionOS) || os(tvOS)
 import AVFoundation
+import Accessibility
 import GameController
 import PunktfunkCore
 import PunktfunkShared
@@ -371,7 +372,7 @@ public final class StreamViewController: StreamViewControllerBase {
         updatePointerLockChain() // chain shape changed — re-anchor (or no-op if not yet in a window)
     }
 
-    /// Put this controller on the responder chain, and key focus on its view, for hardware key
+    /// Put the stream on the responder chain, and key focus on its view, for hardware key
     /// presses.
     ///
     /// Keys arrive on GameController (`GCKeyboard`), a parallel feed that does not consume the
@@ -380,14 +381,16 @@ public final class StreamViewController: StreamViewControllerBase {
     /// to the focused item, which is an overlay control unless the view holds focus.
     ///
     /// A controller is not `UIKeyInput`, so being first responder raises no keyboard. The view
-    /// is, and keeps the chain while its soft keyboard is up.
+    /// is, and keeps the chain while its soft keyboard is up. With Full Keyboard Access proven
+    /// the view takes the chain itself and focus follows it (`StreamLayerUIView.takeKeyChain`).
     ///
     /// Only while captured. `start()` engages capture before SwiftUI puts the view in a window,
     /// where neither call succeeds, so `viewDidAppear` calls this again.
     private func anchorKeyResponder() {
         guard captured else { return }
-        if !streamView.isFirstResponder, !isFirstResponder { becomeFirstResponder() }
         streamView.holdsKeyFocus = true
+        if streamView.takeKeyChain() { return }
+        if !streamView.isFirstResponder, !isFirstResponder { becomeFirstResponder() }
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -477,6 +480,22 @@ public final class StreamViewController: StreamViewControllerBase {
         capture.onPreempted = { [weak self] in
             self?.setCaptured(false)
         }
+        capture.onKeyboardReposted = { on in FullKeyboardAccess.proven = on }
+        streamView.onFullKeyboardAccess = { [weak self] in
+            self?.inputCapture?.gameControllerFellSilent()
+            FullKeyboardAccess.proven = true
+        }
+        streamView.onActivate = { [weak self] in self?.setCaptured(true) }
+        // Proven on, the view takes the responder chain. Off, the controller takes it back.
+        // The proof also changes outside this stream.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: FullKeyboardAccess.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if !FullKeyboardAccess.proven { self?.streamView.dropKeyChain() }
+                self?.anchorKeyResponder()
+            }
+        })
         capture.start()
         inputCapture = capture
         // Match window: follow the picture's own pixel size, so a resized scene, a fold or the
@@ -1356,12 +1375,94 @@ final class StreamLayerUIView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
     #if os(iOS) || os(visionOS)
     /// The stream owns the keyboard (`anchorKeyResponder`). UIKit sends key presses to the
-    /// focused item, so the view is one then, and Tab or an arrow does not move focus off it.
-    /// An update with no heading still does, so an alert takes focus.
-    var holdsKeyFocus = false
-    override var canBecomeFocused: Bool { holdsKeyFocus }
+    /// focused item, so the view is one then.
+    var holdsKeyFocus = false {
+        didSet { if !holdsKeyFocus { dropKeyChain() } }
+    }
+    /// Activation is the click: the controller captures.
+    var onActivate: (() -> Void)?
+    /// Full Keyboard Access sent a request for the view: the controller records the proof.
+    var onFullKeyboardAccess: (() -> Void)?
+    /// First responder for Full Keyboard Access's Input mode, not for the soft keyboard.
+    private var inInputMode = false
+
+    /// Under Full Keyboard Access the view stays focusable when released: moving onto it and
+    /// activating is the way back in.
+    override var canBecomeFocused: Bool { holdsKeyFocus || FullKeyboardAccess.proven }
+
+    /// Tab or an arrow does not move focus off a view that owns the keyboard. An update with
+    /// no heading still does, so an alert takes focus. Full Keyboard Access moves it freely:
+    /// Ctrl-Tab is its way out of Input mode.
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
-        !holdsKeyFocus || context.nextFocusedItem === self || context.focusHeading.isEmpty
+        FullKeyboardAccess.proven || !holdsKeyFocus || context.nextFocusedItem === self
+            || context.focusHeading.isEmpty
+    }
+
+    override func didUpdateFocus(
+        in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator
+    ) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        if context.nextFocusedItem === self {
+            takeKeyChain()
+        } else if context.previouslyFocusedItem === self {
+            dropKeyChain()
+        }
+    }
+
+    /// Under Full Keyboard Access the view is first responder while it owns the keyboard, as a
+    /// text field is while edited: a text input in that place starts its Input mode, where
+    /// every key reaches the app, and focus follows a change of first responder. False where
+    /// that does not apply: unproven, or no hardware keyboard, where the soft one would rise.
+    @discardableResult
+    func takeKeyChain() -> Bool {
+        guard FullKeyboardAccess.proven, holdsKeyFocus, GCKeyboard.coalesced != nil
+        else { return false }
+        // Asked before the view is in a window, UIKit takes it up once it is: the screen's
+        // first focus pick then lands here, not on an overlay button.
+        if !isFirstResponder { becomeFirstResponder() }
+        inInputMode = true
+        return true
+    }
+
+    /// Focus left the view, or the stream let the keyboard go: Input mode ends with the chain.
+    func dropKeyChain() {
+        guard inInputMode else { return }
+        inInputMode = false
+        if isFirstResponder { resignFirstResponder() }
+    }
+
+    /// Full Keyboard Access reads these before it acts on the view, and no API says it is on.
+    override var accessibilityTraits: UIAccessibilityTraits {
+        get {
+            noteFullKeyboardAccess()
+            return super.accessibilityTraits
+        }
+        set { super.accessibilityTraits = newValue }
+    }
+
+    override var isAccessibilityElement: Bool {
+        get {
+            noteFullKeyboardAccess()
+            return super.isAccessibilityElement
+        }
+        set { super.isAccessibilityElement = newValue }
+    }
+
+    /// Activation is the click: Space under Full Keyboard Access captures a released stream.
+    override func accessibilityActivate() -> Bool {
+        noteFullKeyboardAccess()
+        guard let onActivate else { return super.accessibilityActivate() }
+        onActivate()
+        return true
+    }
+
+    /// The request being answered comes from Full Keyboard Access (iOS 18): tell the
+    /// controller, outside the accessibility callback.
+    private func noteFullKeyboardAccess() {
+        guard #available(iOS 18.0, *), !FullKeyboardAccess.proven,
+              AccessibilityRequest.current?.technology == .fullKeyboardAccess
+        else { return }
+        DispatchQueue.main.async { [weak self] in self?.onFullKeyboardAccess?() }
     }
     #endif
     var displayLayer: AVSampleBufferDisplayLayer {
