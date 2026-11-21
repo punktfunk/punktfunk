@@ -17,7 +17,8 @@ use anyhow::Result;
 pub struct DisplayCaptureOpts {
     /// The `CGDirectDisplayID` to capture.
     pub display_id: u32,
-    /// The session's size in pixels. The capture scales the display to it.
+    /// The size frames arrive at. The display's own pixel size captures it unscaled; any
+    /// other size scales the whole display into it, with bars where the shape differs.
     pub width: u32,
     pub height: u32,
     /// The wire rate. The capture delivers no faster.
