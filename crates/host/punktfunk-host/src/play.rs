@@ -6,6 +6,7 @@
 //! does: the host's token, sent only once the certificate pin holds.
 
 use crate::ctl::client::{read_capped, Client, Failure, EXIT_UNREACHABLE};
+use crate::mgmt::owner::Forwarded;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
@@ -48,7 +49,7 @@ fn run(client: &Client, launch: &Launch) -> i32 {
         "sdl_ignore": launch.sdl_ignore,
         "sdl_ignore_except": launch.sdl_ignore_except,
     });
-    let handed = match call(client, "/api/v1/game/handoff", &ask) {
+    let handed = match call(client, "game/handoff", &ask) {
         Ok(v) => v,
         Err(code) => return code,
     };
@@ -62,7 +63,7 @@ fn run(client: &Client, launch: &Launch) -> i32 {
         return 0;
     };
     let report = format!(
-        "/api/v1/game/handoff/{}",
+        "game/handoff/{}",
         handed["token"].as_str().unwrap_or_default()
     );
     let mut child = match game(command, &handed, launch).spawn() {
@@ -121,13 +122,16 @@ fn game(command: &str, handed: &Value, launch: &Launch) -> std::process::Command
     c
 }
 
-/// POSTs `body` to `path`: the answer's JSON, or the exit code once the failure is on stderr.
+/// POSTs `body` to `path` (under `/api/v1/`): the answer's JSON, or the exit code once the
+/// failure is on stderr.
 fn call(client: &Client, path: &str, body: &Value) -> Result<Value, i32> {
-    let body = body.to_string().into_bytes();
-    let json = Some("application/json");
-    let (status, _, reader) = client
-        .send("POST", path, json, None, None, body)
-        .map_err(|f| failed(&f))?;
+    let req = Forwarded {
+        method: "POST".into(),
+        content_type: Some("application/json".into()),
+        body: body.to_string().into_bytes(),
+        ..Forwarded::get(path.to_string())
+    };
+    let (status, _, reader) = client.send(req).map_err(|f| failed(&f))?;
     let bytes = read_capped(reader, 1 << 20).unwrap_or_default();
     let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     if (200..300).contains(&status) {

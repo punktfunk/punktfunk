@@ -492,21 +492,13 @@ pub(crate) fn forward_within(
     timeout: Duration,
 ) -> Option<crate::mgmt::owner::Answer> {
     use crate::mgmt::owner::Answer;
-    let timeout = (!call.stream).then_some(timeout);
+    let stream = call.stream;
+    let timeout = (!stream).then_some(timeout);
     let client =
         crate::ctl::client::Client::seat(seat_pin(seat)?, &host_dir(seat), seat.mgmt_port, timeout)
             .ok()?;
-    let path = format!("/api/v1/{}", call.target);
-    let sent = client.send(
-        &call.method,
-        &path,
-        call.content_type.as_deref(),
-        call.device.as_deref(),
-        call.person.as_deref(),
-        call.body,
-    );
-    let (status, content_type, body) = sent.ok()?;
-    if call.stream {
+    let (status, content_type, body) = client.send(call).ok()?;
+    if stream {
         return Some(Answer::Stream(status, content_type, tail_body(body)));
     }
     let bytes = crate::ctl::client::read_capped(body, crate::ctl::client::RAW_BODY_LIMIT).ok()?;
@@ -520,14 +512,7 @@ pub(crate) fn tail(seat: &pf_seats::Seat, path: &str) -> Option<Box<dyn std::io:
         crate::ctl::client::Client::seat(seat_pin(seat)?, &host_dir(seat), seat.mgmt_port, None)
             .ok()?;
     let (status, _, body) = client
-        .send(
-            "GET",
-            &format!("/api/v1/{path}"),
-            None,
-            None,
-            None,
-            Vec::new(),
-        )
+        .send(crate::mgmt::owner::Forwarded::get(path.to_string()))
         .ok()?;
     (status == 200).then_some(body)
 }

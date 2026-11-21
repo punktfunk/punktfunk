@@ -264,12 +264,13 @@ fn steam(args: &[&str], json: bool) -> Result<()> {
             Ok(())
         }
         ["art", id, kind] => {
-            let path = format!(
-                "/api/v1/library/art/{}/{}",
+            let target = format!(
+                "library/art/{}/{}",
                 crate::mgmt::path_segment(id),
                 crate::mgmt::path_segment(kind)
             );
-            let (status, _, body) = c.send("GET", &path, None, None, None, Vec::new())?;
+            let path = format!("/api/v1/{target}");
+            let (status, _, body) = c.send(crate::mgmt::owner::Forwarded::get(target))?;
             if status != 200 {
                 return Err(Failure::api(format!("{path}: no such art ({status})")));
             }

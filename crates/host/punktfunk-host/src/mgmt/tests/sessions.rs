@@ -593,9 +593,27 @@ fn desk_launch(peer: &str, fp: Option<&str>) -> axum::http::Request<Body> {
     req
 }
 
+/// `req` with the door's two headers: the device it vouches for, and its word that the device
+/// called from this machine.
+fn door_says(
+    mut req: axum::http::Request<Body>,
+    fp: &str,
+    loopback: bool,
+) -> axum::http::Request<Body> {
+    use axum::http::HeaderValue;
+    let headers = req.headers_mut();
+    headers.insert(auth::VOUCH_HEADER, HeaderValue::from_str(fp).unwrap());
+    if loopback {
+        headers.insert(auth::LOOPBACK_HEADER, HeaderValue::from_static("1"));
+    }
+    req
+}
+
 /// A device needs the launch grant and a call from this machine; the operator needs neither.
-/// A LAN peer with the grant, a relayed call and a device the door vouches for are not this
-/// device. Past the gate, a title the library lacks is the route's own 404.
+/// A LAN peer with the grant, a relayed call and a device the door vouches for without its word
+/// on loopback are not this device. The door's word counts on its own lane alone: this host's
+/// token, from loopback, for a device this host admits. Past the gate, a title the library lacks
+/// is the route's own 404.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn a_desk_launch_takes_the_launch_grant_and_this_machine() {
@@ -612,8 +630,16 @@ async fn a_desk_launch_takes_the_launch_grant_and_this_machine() {
     let (status, body) = send(&app, desk_launch(lan, Some(&player))).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(code(&body), "local_not_this_device");
+    // The certificate lane from the LAN, carrying the door's headers itself.
+    let (status, body) = send(
+        &app,
+        door_says(desk_launch(lan, Some(&player)), &player, true),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a device's own header");
+    assert_eq!(code(&body), "local_not_this_device");
 
-    let mut relayed = desk_launch(here, Some(&player));
+    let mut relayed = door_says(desk_launch(here, Some(&player)), &player, true);
     relayed.headers_mut().insert(
         punktfunk_core::provenance::CLIENT_ADDR_HEADER,
         axum::http::HeaderValue::from_static("192.168.1.20"),
@@ -622,18 +648,72 @@ async fn a_desk_launch_takes_the_launch_grant_and_this_machine() {
     assert_eq!(status, StatusCode::FORBIDDEN, "a page server's call");
     assert_eq!(code(&body), "local_not_this_device");
 
-    // The door's own call, from loopback, for a device it placed here.
-    let mut vouched = desk_launch(here, None);
-    vouched.headers_mut().insert(
-        auth::VOUCH_HEADER,
-        axum::http::HeaderValue::from_str(&player).unwrap(),
+    // The door's own call, from loopback, for a device it placed here: loopback on its word.
+    let (status, body) = send(&app, door_says(desk_launch(here, None), &player, false)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "no word from the door");
+    assert_eq!(code(&body), "local_not_this_device");
+    let (status, body) = send(&app, door_says(desk_launch(here, None), &player, true)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the door's word: {body}");
+    assert_eq!(code(&body), "local_no_such_game");
+    let (status, body) = send(&app, door_says(desk_launch(here, None), &guest, true)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "the word buys no grant");
+    assert_eq!(code(&body), "device_not_allowed_to_start_games");
+
+    // The word on any other lane: no device this host admits, a relayed or LAN admin call, the
+    // plugin token, and a person the door names with no device.
+    let unpaired = "c3".repeat(32);
+    let (status, _) = send(&app, door_says(desk_launch(here, None), &unpaired, true)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "a device not paired here");
+    let mut relayed = door_says(desk_launch(here, None), &player, true);
+    relayed.headers_mut().insert(
+        punktfunk_core::provenance::CLIENT_ADDR_HEADER,
+        axum::http::HeaderValue::from_static("192.168.1.20"),
     );
-    let (status, body) = send(&app, vouched).await;
-    assert_eq!(
-        status,
-        StatusCode::FORBIDDEN,
-        "a device the door vouches for"
+    assert_eq!(send(&app, relayed).await.0, StatusCode::UNAUTHORIZED);
+    let from_lan = door_says(desk_launch(lan, None), &player, true);
+    assert_eq!(send(&app, from_lan).await.0, StatusCode::UNAUTHORIZED);
+    let plugin = with_bearer(
+        door_says(desk_launch(here, None), &player, true),
+        "plugin-secret",
     );
+    assert_eq!(send(&app, plugin).await.0, StatusCode::FORBIDDEN);
+    let mut person = desk_launch(here, None);
+    person.headers_mut().insert(
+        crate::mgmt::person::VOUCH_HEADER,
+        axum::http::HeaderValue::from_static("a1a1a1a1a1a1"),
+    );
+    person.headers_mut().insert(
+        auth::LOOPBACK_HEADER,
+        axum::http::HeaderValue::from_static("1"),
+    );
+    assert_eq!(send(&app, person).await.0, StatusCode::UNAUTHORIZED);
+
+    // The QUIC tunnel passes neither header: a device's certificate from the LAN stays the LAN.
+    let head = crate::webtransport::mgmt::Head {
+        m: "POST".into(),
+        p: "/api/v1/game/launch".into(),
+        h: [
+            ("content-type", "application/json"),
+            (auth::VOUCH_HEADER, player.as_str()),
+            (auth::LOOPBACK_HEADER, "1"),
+        ]
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect(),
+    };
+    let body = br#"{"app_id":"custom:no-such-desk-title"}"#.to_vec();
+    let res = crate::webtransport::mgmt::dispatch(
+        &app,
+        lan.parse().unwrap(),
+        "0.0.0.0:9777".parse().unwrap(),
+        Some(player.clone()),
+        head,
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN, "through the tunnel");
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(code(&body), "local_not_this_device");
 
     for fp in [Some(player.as_str()), None] {

@@ -108,7 +108,8 @@ async fn a_tunnelled_request_is_the_lan_peer_it_came_from() {
 }
 
 /// A device token earned through the tunnel buys the paired-device lane through the tunnel, and
-/// no more — the roster that names every other device stays admin.
+/// no more — the roster that names every other device stays admin. The door's word on loopback
+/// buys nothing on it, through the tunnel or over HTTPS from the LAN.
 #[tokio::test]
 async fn a_tunnelled_device_token_reads_the_library_and_no_more() {
     use crate::webtransport::mgmt::{dispatch, Head};
@@ -192,8 +193,32 @@ async fn a_tunnelled_device_token_reads_the_library_and_no_more() {
         StatusCode::OK,
         "a device token must not reach the admin lane"
     );
-    let (status, _) = call("GET", "/api/v1/clients", bearer, vec![]).await;
+    let (status, _) = call("GET", "/api/v1/clients", bearer.clone(), vec![]).await;
     assert_ne!(status, StatusCode::OK);
+
+    let mut said = bearer;
+    for (name, value) in [
+        ("content-type", "application/json"),
+        (auth::VOUCH_HEADER, fp.as_str()),
+        (auth::LOOPBACK_HEADER, "1"),
+    ] {
+        said.push((name.to_string(), value.to_string()));
+    }
+    let launch = serde_json::json!({ "app_id": "custom:no-such-desk-title" });
+    let bytes = launch.to_string().into_bytes();
+    let (status, body) = call("POST", "/api/v1/game/launch", said.clone(), bytes).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "through the tunnel");
+    assert_eq!(body["code"], "local_not_this_device");
+    let mut req = json_req(Method::POST, "/api/v1/game/launch", launch);
+    req.extensions_mut().insert(PeerAddr(lan));
+    for (name, value) in &said {
+        let name = axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap();
+        let value = axum::http::HeaderValue::from_str(value).unwrap();
+        req.headers_mut().insert(name, value);
+    }
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "over HTTPS");
+    assert_eq!(body["code"], "local_not_this_device");
 }
 
 /// A native management connection's proven certificate is the HTTPS client certificate: a
