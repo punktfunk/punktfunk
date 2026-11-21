@@ -503,8 +503,9 @@ pub(crate) fn vaapi_capture_modifiers(fourcc: u32, candidates: &[u64]) -> Vec<u6
     accepted
 }
 
-/// Intel's layouts a two-plane picture is read from where it lies: 4-tiled, Y-tiled.
-const INTEL_PLANAR_TILED: [u64; 2] = [0x0100_0000_0000_0009, 0x0100_0000_0000_0002];
+/// Intel's layouts a two-plane picture is read from where it lies: 4-tiled, Y-tiled. Mesa's
+/// Intel driver allows a video surface no other tiling.
+pub(crate) const INTEL_PLANAR_TILED: [u64; 2] = [0x0100_0000_0000_0009, 0x0100_0000_0000_0002];
 
 /// What a producer's own NV12 or P010 may arrive as for the session that opens for `codec`
 /// at this depth: the whole offer, LINEAR (0) included.

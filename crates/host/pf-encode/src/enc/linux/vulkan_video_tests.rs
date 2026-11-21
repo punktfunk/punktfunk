@@ -578,6 +578,24 @@ fn vulkan_anchor_soak() {
     });
 }
 
+/// A planar offer on Intel is a video tiling the encode device imports, never LINEAR or
+/// X-tiled, and 8-bit has one; elsewhere it is LINEAR alone. On Intel, run with
+/// `ANV_DEBUG=video-encode`.
+#[test]
+#[ignore = "needs a real VK_KHR_video_encode_h265 device"]
+fn the_planar_offer_is_a_video_tiling_on_intel() {
+    for ten_bit in [false, true] {
+        let offer = super::vulkan_planar_capture_modifiers(Codec::H265, ten_bit);
+        eprintln!("planar offer, ten_bit={ten_bit}: {offer:#x?}");
+        if offer == [0] {
+            continue;
+        }
+        let video = crate::vaapi_native::INTEL_PLANAR_TILED;
+        assert!(offer.iter().all(|m| video.contains(m)), "{offer:#x?}");
+        assert!(ten_bit || !offer.is_empty(), "no 8-bit planar layout");
+    }
+}
+
 /// Packed 2:10:10:10 (`xRGB_210LE` / `PixelFormat::X2Rgb10`) CPU frame. Channels are 10-bit
 /// code values (PQ container units).
 fn cpu_frame_rgb10(w: u32, h: u32, pts_ns: u64, rgb10: [u16; 3]) -> CapturedFrame {

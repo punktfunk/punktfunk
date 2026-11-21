@@ -984,6 +984,59 @@ pub(crate) fn vulkan_capture_modifiers(codec: Codec, fourcc: u32, ten_bit: bool)
     }
 }
 
+/// What a producer's own NV12 or P010 may arrive as on this lane. Mesa's Intel driver encodes
+/// only from a Y- or 4-tiled picture, so there the offer is those of
+/// [`super::vaapi_native::INTEL_PLANAR_TILED`] the encode device lists and imports as its
+/// source, and never LINEAR; an empty list withholds the planar format. Its format query also
+/// passes X-tiled, which the image create then refuses. Every other device keeps LINEAR.
+pub(crate) fn vulkan_planar_capture_modifiers(codec: Codec, ten_bit: bool) -> Vec<u64> {
+    const INTEL: u32 = 0x8086;
+    let av1 = codec == Codec::Av1;
+    let codec_op = codec_op_for(av1);
+    // SAFETY: fresh instance, physical-device queries only, destroyed on every path;
+    // nothing derived from it escapes.
+    unsafe {
+        let Ok(entry) = ash::Entry::load() else {
+            return vec![0];
+        };
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let Ok(instance) = entry.create_instance(
+            &vk::InstanceCreateInfo::default().application_info(&app),
+            None,
+        ) else {
+            return vec![0];
+        };
+        // Same pick as `open_inner`.
+        let pd = instance
+            .enumerate_physical_devices()
+            .ok()
+            .and_then(|devices| find_encode_device(&instance, &devices, codec_op))
+            .map(|(pd, _)| pd);
+        let mods = match pd {
+            Some(pd) if instance.get_physical_device_properties(pd).vendor_id == INTEL => {
+                let fmt = if ten_bit { P010 } else { NV12 };
+                let mut ps = ProfileStack::new(codec_op, ten_bit, false);
+                let profile = ps.wire(av1);
+                let src = vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR;
+                // Capture hands one fd with an offset and a stride per format plane.
+                let listed: Vec<u64> = pf_zerocopy::vkdev::format_modifiers(&instance, pd, fmt)
+                    .into_iter()
+                    .filter(|p| p.drm_format_modifier_plane_count == 2)
+                    .map(|p| p.drm_format_modifier)
+                    .collect();
+                super::vaapi_native::INTEL_PLANAR_TILED
+                    .into_iter()
+                    .filter(|m| listed.contains(m))
+                    .filter(|&m| modifier_importable(&instance, pd, fmt, m, src, Some(profile)))
+                    .collect()
+            }
+            _ => vec![0],
+        };
+        instance.destroy_instance(None);
+        mods
+    }
+}
+
 /// How `begin_encode_cmd` must acquire this frame's encode-source image.
 #[derive(Clone, Copy, PartialEq)]
 enum SrcAcquire {
