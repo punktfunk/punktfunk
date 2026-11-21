@@ -119,6 +119,14 @@ impl Shell {
                     sw.detail.clone().unwrap_or_default(),
                     vec![cancel()],
                 ))
+            } else if let Some(p) = self.connect.playing_here().filter(|p| p.card) {
+                Some((
+                    1.0,
+                    false,
+                    pf_l10n::client::lib_hold_playing_here().into(),
+                    p.hold.title.clone(),
+                    vec![Hint::new(HintKey::Confirm, pf_l10n::client::lib_end_game())],
+                ))
             } else if let Some(wk) = &self.wake {
                 // Service-driven: already settled, no fade-in.
                 if wk.timed_out {
@@ -219,8 +227,9 @@ impl Shell {
                 let rects = self.draw_takeover(
                     canvas, w, h, k, appear, t, fonts, spinner, &title, &body, &hints,
                 );
-                // The seat wait's Cancel takes a click; the other takeovers' legends do not.
-                if self.connect.seat_wait().is_some() {
+                // The seat wait's Cancel and the playing-here card's End game take a click; the
+                // other takeovers' legends do not.
+                if self.connect.seat_wait().is_some() || self.connect.playing_here().is_some() {
                     self.hint_rects = rects;
                 }
             }
@@ -521,7 +530,8 @@ impl Shell {
 
     /// The launch hold: the title's poster on the takeover field, its name, store and what
     /// the host set for it beneath, a spinner for the wait. `appear` lifts the poster group in; the field
-    /// itself is already on screen from the connect, so it never blinks.
+    /// itself is already on screen from the connect, so it never blinks. A hold on this
+    /// device dials nothing: it says the game is starting from the press, and B leaves it.
     #[allow(clippy::too_many_arguments)]
     fn draw_launch_hold(
         &self,
@@ -556,8 +566,8 @@ impl Shell {
         .filter(|(text, _, _)| !text.is_empty())
         .collect();
         // Under the title: the rows, then the spinner line 38 k below the last row, or the
-        // download's bar and two lines, 66 k.
-        let downloading = l.download.as_ref().filter(|_| !l.connected);
+        // download's bar and two lines, 66 k. On this device the download follows the answer.
+        let downloading = l.download.as_ref().filter(|_| !l.connected || l.local);
         let tail = if downloading.is_some() { 66.0 } else { 38.0 };
         let rest = (11.0 + rows.iter().map(|(_, size, _)| size + 7.0).sum::<f64>() + tail) * k;
         let lay = launch_layout(w, h, k, rest, |dw| {
@@ -735,7 +745,7 @@ impl Shell {
                     canvas,
                     if l.window_wait {
                         pf_l10n::client::lib_hold_waiting_window()
-                    } else if l.connected {
+                    } else if l.connected || l.local {
                         pf_l10n::client::lib_hold_starting()
                     } else {
                         pf_l10n::client::lib_hold_connecting()
@@ -750,8 +760,13 @@ impl Shell {
             }
         }
         // Before the dial lands B cancels it, exactly as it does on the connect card;
-        // after, the only thing left to ask for is the picture.
-        let hint = if l.failed.is_some() {
+        // after, the only thing left to ask for is the picture. On this device B only leaves.
+        let hint = if l.local {
+            match l.failed {
+                Some(_) => Hint::new(HintKey::Back, pf_l10n::common::common_close()),
+                None => Hint::new(HintKey::Back, pf_l10n::common::common_back()),
+            }
+        } else if l.failed.is_some() {
             Hint::new(HintKey::Confirm, pf_l10n::client::lib_hold_show_desktop())
         } else if l.connected {
             Hint::new(HintKey::Confirm, pf_l10n::client::lib_hold_show_stream())

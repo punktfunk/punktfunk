@@ -263,6 +263,19 @@ impl Overlay for SkiaOverlay {
     }
 
     fn handle_event(&mut self, event: &sdl3::event::Event) -> bool {
+        // Focus is the shell's to read, never to consume: it brings the console back over a
+        // title playing here.
+        if let sdl3::event::Event::Window { win_event, .. } = event {
+            use sdl3::event::WindowEvent;
+            let gained = match win_event {
+                WindowEvent::FocusGained => Some(true),
+                WindowEvent::FocusLost => Some(false),
+                _ => None,
+            };
+            if let (Some(gained), Some(shell)) = (gained, self.shell.as_mut()) {
+                shell.focus(gained);
+            }
+        }
         // Console keys/text only while visible. Chord-modified keys stay the
         // run loop's. During a stream, only the open ring consumes keys.
         if !self.console_visible() {
@@ -370,6 +383,16 @@ impl Overlay for SkiaOverlay {
 
     fn holds_stream(&self) -> bool {
         self.shell.as_ref().is_some_and(Shell::holds_stream)
+    }
+
+    fn playing_here(&self) -> bool {
+        self.shell.as_ref().is_some_and(Shell::playing_here)
+    }
+
+    fn tick(&mut self) {
+        if let Some(shell) = &mut self.shell {
+            shell.sync();
+        }
     }
 
     fn take_ring_command(&mut self) -> Option<RingCommand> {

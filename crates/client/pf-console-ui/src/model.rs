@@ -119,6 +119,11 @@ pub struct HostRow {
     /// Screen section.
     #[serde(default)]
     pub screens: Option<pf_client_core::display_targets::Targets>,
+    /// This device's own host ([`pf_client_core::trust::local`]): its titles start on this
+    /// screen with no stream, and no stream verb is offered. A producer that never sets it
+    /// streams every host, as before.
+    #[serde(default)]
+    pub local: bool,
 }
 
 #[cfg(test)]
@@ -318,6 +323,8 @@ struct ConsoleState {
     notice: Option<String>,
     /// The host's sentence for the held launch it did not start, taken on the next sync.
     launch_refused: Option<String>,
+    /// The answer to the last [`ConsoleCmd::LaunchLocal`], taken on the next sync.
+    local_launch: Option<pf_client_core::library::LocalLaunch>,
     /// This device's code, from a host whose identity loads after the console is built.
     device_code: Option<String>,
     /// What the host bundles, for the Licences screen. Kept once sent.
@@ -582,6 +589,15 @@ impl ConsoleShared {
         self.0.lock().unwrap().launch_refused.take()
     }
 
+    /// What the host said to [`ConsoleCmd::LaunchLocal`]. With no hold up, a refusal is a toast.
+    pub fn set_local_launch(&self, answer: pf_client_core::library::LocalLaunch) {
+        self.0.lock().unwrap().local_launch = Some(answer);
+    }
+
+    pub(crate) fn take_local_launch(&self) -> Option<pf_client_core::library::LocalLaunch> {
+        self.0.lock().unwrap().local_launch.take()
+    }
+
     /// This device's code ([`crate::shell::ConsoleOptions::device_code`]), for a host that
     /// learns it after the console is built.
     pub fn set_device_code(&self, code: String) {
@@ -829,6 +845,16 @@ pub enum ConsoleCmd {
         fp_hex: String,
         app_id: String,
         title: String,
+    },
+    /// Ask this device's own host to start `app_id` on its own screen
+    /// ([`pf_client_core::library::launch_local`]); no session opens. The answer arrives as
+    /// [`ConsoleShared::set_local_launch`]. Never crosses a bridge: no bridged row is local.
+    #[serde(skip)]
+    LaunchLocal {
+        mgmt: u16,
+        port: u16,
+        fp_hex: String,
+        app_id: String,
     },
     /// Start, resume, pause or remove a title's download (`/api/v1/library/install/{id}`).
     /// The outcome is a notice ([`pf_client_core::library::InstallOutcome::notice`]), then a

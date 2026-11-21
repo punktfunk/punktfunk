@@ -206,7 +206,8 @@ pub(super) fn status_of(k: &KnownHost, online: bool, auto_wake: bool) -> Status 
         true => pf_client_core::library::now_playing(&k.fp_hex),
         false => String::new(),
     };
-    Status::of(k, online, None, &playing, auto_wake)
+    let here = pf_client_core::trust::local::is_this_device(&k.fp_hex);
+    Status::of(k, online, None, &playing, auto_wake, here)
 }
 
 /// The status line: the presence dot, then the sentence. A running game reads in green.

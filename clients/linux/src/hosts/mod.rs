@@ -706,7 +706,14 @@ impl HostsPage {
         };
         let phase = self.sessions.get(&k.card_key()).copied();
         detail::Live {
-            status: Status::of(k, online, phase, &playing, settings.auto_wake),
+            status: Status::of(
+                k,
+                online,
+                phase,
+                &playing,
+                settings.auto_wake,
+                pf_client_core::trust::local::is_this_device(&k.fp_hex),
+            ),
             online,
             presets: self.presets(),
             actions: if k.fp_hex.is_empty() {

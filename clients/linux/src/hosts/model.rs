@@ -158,7 +158,14 @@ pub fn saved_bands(
                 name: k.name.clone(),
                 address: format!("{}:{}", k.addr, k.port),
                 os: k.os.clone(),
-                status: Status::of(k, online, phase, &playing, settings.auto_wake),
+                status: Status::of(
+                    k,
+                    online,
+                    phase,
+                    &playing,
+                    settings.auto_wake,
+                    pf_client_core::trust::local::is_this_device(&k.fp_hex),
+                ),
                 chip: chip.cloned(),
                 screen: targets.as_ref().and_then(|t| t.card_line_under(preset)),
                 kind: CardKind::Saved {

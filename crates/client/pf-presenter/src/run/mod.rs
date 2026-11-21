@@ -204,6 +204,9 @@ pub enum ActionOutcome {
     Handled,
     /// Launch. Boxed because SessionParams is large next to the unit variants.
     Start(Box<SessionParams>),
+    /// The launch was refused before any dial, and the handler said why on its own: the
+    /// console's connect ends.
+    Refused,
     Quit,
 }
 
@@ -335,6 +338,9 @@ struct Shell {
     ring_was_open: bool,
     /// SDL's screen saver hold as last set. SDL holds it from start, so this begins `true`.
     screen_held: bool,
+    /// A title this device's own host started is up: the console draws nothing, holds no
+    /// pad and no screen saver ([`Overlay::playing_here`]), edge-tracked.
+    let_go: bool,
     pump: GamepadPump,
     gamepad: GamepadService,
     overlay: Option<Box<dyn Overlay>>,
