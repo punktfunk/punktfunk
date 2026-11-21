@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Sourced by every step that deploys to unom-1: sets $SSH, $SCP and $DEST.
 #
 # The host key is pinned from DEPLOY_KNOWN_HOSTS (`ssh-keyscan`, packaging/nix/README.md) under
