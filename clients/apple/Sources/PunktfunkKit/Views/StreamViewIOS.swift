@@ -371,68 +371,71 @@ public final class StreamViewController: StreamViewControllerBase {
         updatePointerLockChain() // chain shape changed — re-anchor (or no-op if not yet in a window)
     }
 
-    /// Put THIS controller on the responder chain for hardware key presses.
+    /// Put this controller on the responder chain, and key focus on its view, for hardware key
+    /// presses.
     ///
-    /// Nothing of ours is otherwise a first responder during a normal stream: keys arrive on the
-    /// GameController (`GCKeyboard`) path, which is a parallel HID feed that does not consume the
-    /// UIKit event, and `StreamLayerUIView` only becomes first responder to summon the SOFT
-    /// keyboard (it is `UIKeyInput`, so making it one for any other reason would raise the on-screen
-    /// keyboard mid-game). With no responder of ours in the chain, every hardware key press reaches
-    /// UIKit unclaimed — and an unclaimed press is what lets the system apply its own default for
-    /// that key. `pressesBegan` below is where we claim Escape; this is what gets it delivered.
+    /// Keys arrive on GameController (`GCKeyboard`), a parallel feed that does not consume the
+    /// UIKit event, so each press reaches UIKit too: `pressesBegan` claims the ones the system
+    /// must not act on. Under Full Keyboard Access presses are the only feed. UIKit sends them
+    /// to the focused item, which is an overlay control unless the view holds focus.
     ///
-    /// A controller is not `UIKeyInput`, so being first responder raises no keyboard. Deferred to
-    /// the soft keyboard whenever the view has taken over, so the three-finger-swipe keyboard is
-    /// unaffected.
+    /// A controller is not `UIKeyInput`, so being first responder raises no keyboard. The view
+    /// is, and keeps the chain while its soft keyboard is up.
     ///
-    /// Only while captured — the whole claim is scoped to "the stream owns the keyboard", and
-    /// holding the chain outside that would sit in front of SwiftUI's focus for no reason. Safe to
-    /// call from anywhere: `start()` engages capture BEFORE SwiftUI puts us in a window (where
-    /// `becomeFirstResponder` cannot succeed), so `viewDidAppear` calls it again to catch up.
+    /// Only while captured. `start()` engages capture before SwiftUI puts the view in a window,
+    /// where neither call succeeds, so `viewDidAppear` calls this again.
     private func anchorKeyResponder() {
-        guard captured, !streamView.isFirstResponder, !isFirstResponder else { return }
-        becomeFirstResponder()
+        guard captured else { return }
+        if !streamView.isFirstResponder, !isFirstResponder { becomeFirstResponder() }
+        streamView.holdsKeyFocus = true
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
     }
 
     public override var canBecomeFirstResponder: Bool { true }
 
-    /// Claim Escape while the stream owns the keyboard, so the SYSTEM never gets to act on it.
+    /// Hardware key presses: each key goes to `InputCapture.pressKey`, and the stream claims
+    /// the ones that are its own.
     ///
-    /// The platform releases the scene's pointer lock on an Escape that nothing claimed, and
-    /// refuses a re-lock for a while after it. A claimed press releases nothing.
+    /// While captured it claims the keys the system acts on (`systemKeys`), so they reach the
+    /// host alone. It also claims every key the press feed carries, which is all of them while
+    /// GameController is silent under Full Keyboard Access.
     ///
-    /// Escape is forwarded to the host on the GCKeyboard path, which is untouched by this — that
-    /// path never sees the UIKit responder chain, so the host still receives the keystroke and
-    /// in-game menus still open. Only the system's own interpretation is suppressed.
-    ///
-    /// Strictly scoped: only while `captured` (the stream owns input), and only Escape. Anything
-    /// else — including every key while the pointer is released — goes to `super` untouched, so
-    /// Escape still dismisses sheets, exits full screen and does everything else it should whenever
-    /// we are not holding the keyboard. The deliberate ways out are unaffected: ⌘⎋ and ⌃⌥⇧Q are
-    /// read on the GCKeyboard path, which this leaves alone.
+    /// Everything else goes to `super` untouched, as does every key while capture is released:
+    /// Escape still dismisses sheets and exits full screen then.
     public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let unclaimed = presses.filter { !claimsPress($0) }
+        let unclaimed = presses.filter { !takesPress($0, down: true) }
         if !unclaimed.isEmpty || presses.isEmpty {
             super.pressesBegan(unclaimed, with: event)
         }
     }
 
     public override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let unclaimed = presses.filter { !claimsPress($0) }
+        let unclaimed = presses.filter { !takesPress($0, down: false) }
         if !unclaimed.isEmpty || presses.isEmpty {
             super.pressesEnded(unclaimed, with: event)
         }
     }
 
     public override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        // Never swallowed: a cancelled press is the system taking the key away from us, and
-        // dropping it here would strand UIKit's own bookkeeping for a press we did claim.
+        // A release for the press feed. Never swallowed: UIKit keeps books on a claimed press.
+        for press in presses { _ = takesPress(press, down: false) }
         super.pressesCancelled(presses, with: event)
     }
 
-    /// Is this press one the stream owns outright (Escape while captured)?
-    private func claimsPress(_ press: UIPress) -> Bool {
-        captured && press.key?.keyCode == .keyboardEscape
+    /// Keys the system acts on when nothing claims them: Escape releases the scene's pointer
+    /// lock and refuses a re-lock for a while, Tab and the arrows move focus.
+    private static let systemKeys: Set<UIKeyboardHIDUsage> = [
+        .keyboardEscape, .keyboardTab,
+        .keyboardRightArrow, .keyboardLeftArrow, .keyboardDownArrow, .keyboardUpArrow,
+    ]
+
+    /// Feeds the press's key to `InputCapture`. True when the stream claims it: while captured,
+    /// the `systemKeys` and every key that feed carries.
+    private func takesPress(_ press: UIPress, down: Bool) -> Bool {
+        guard let key = press.key?.keyCode else { return false }
+        let fed = inputCapture?.pressKey(usage: key.rawValue, down: down) ?? false
+        return captured && (fed || Self.systemKeys.contains(key))
     }
     #endif
 
@@ -1246,6 +1249,7 @@ public final class StreamViewController: StreamViewControllerBase {
             // Hand the chain back: released means Escape is the system's again, and staying first
             // responder for a stream that no longer owns input would sit in front of SwiftUI focus.
             if isFirstResponder { resignFirstResponder() }
+            streamView.holdsKeyFocus = false
         }
         setNeedsUpdateOfPrefersPointerLocked()
         updatePointerLockChain() // (re)anchor the SwiftUI ancestors so the lock actually resolves
@@ -1350,6 +1354,16 @@ extension StreamViewController: UIPointerInteractionDelegate {
 /// rescale is the identity); touches outside the video area are clamped onto its edge.
 final class StreamLayerUIView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+    #if os(iOS) || os(visionOS)
+    /// The stream owns the keyboard (`anchorKeyResponder`). UIKit sends key presses to the
+    /// focused item, so the view is one then, and Tab or an arrow does not move focus off it.
+    /// An update with no heading still does, so an alert takes focus.
+    var holdsKeyFocus = false
+    override var canBecomeFocused: Bool { holdsKeyFocus }
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        !holdsKeyFocus || context.nextFocusedItem === self || context.focusHeading.isEmpty
+    }
+    #endif
     var displayLayer: AVSampleBufferDisplayLayer {
         // swiftlint:disable:next force_cast
         layer as! AVSampleBufferDisplayLayer
@@ -1503,6 +1517,7 @@ final class StreamLayerUIView: UIView {
         super.init(frame: frame)
         displayLayer.videoGravity = .resizeAspect
         #if os(iOS) || os(visionOS)
+        focusEffect = nil // the picture is no control: no halo around it
         isMultipleTouchEnabled = true
         // Button-less mouse/trackpad movement (no lock) arrives as hover, not touches —
         // forward it as absolute cursor moves so the host cursor tracks without a click held.
