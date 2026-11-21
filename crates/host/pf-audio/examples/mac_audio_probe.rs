@@ -1,9 +1,10 @@
 //! Opens the macOS desktop-audio capture for three seconds and prints what it delivered:
 //! the backend's own log lines (tap rate and format), then frames and peak level.
 //!
-//! Always unmuted: it forces `host_and_client`, so a listener on this Mac hears nothing
-//! change. The tap needs the System Audio Recording permission for the process that owns
-//! this terminal; without it the tap delivers digital silence.
+//! Never muted: it refuses to run unless `PUNKTFUNK_AUDIO_OUTPUT_MODE=host_and_client`, so a
+//! listener on this Mac hears nothing change. The tap needs the System Audio Recording
+//! permission for the process that owns this terminal; without it the tap delivers digital
+//! silence.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
@@ -14,13 +15,11 @@ fn main() {
 fn main() -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
 
-    // SAFETY: no other thread exists yet.
-    unsafe { std::env::set_var("PUNKTFUNK_AUDIO_OUTPUT_MODE", "host_and_client") };
     anyhow::ensure!(
         pf_host_config::config()
             .audio_output_mode
             .prefers_host_hardware(),
-        "the probe must run with the speakers unmuted"
+        "run the probe with PUNKTFUNK_AUDIO_OUTPUT_MODE=host_and_client: it must not mute"
     );
     tracing_subscriber::fmt().init();
 
