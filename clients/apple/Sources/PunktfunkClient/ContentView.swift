@@ -212,6 +212,10 @@ struct ContentView: View {
     // macOS builds never reveal. Keep new modifiers on whichever half is shorter.
     var body: some View {
         driven
+            #if os(iOS) || os(visionOS)
+            // Full Keyboard Access is noticed here, before any stream (`FullKeyboardAccessProbe`).
+            .background { FullKeyboardAccessProbe() }
+            #endif
             // Fresh pair=required / unknown host: the two ways in. An alert, since iOS 26 draws a
             // confirmation dialog as a narrow popover that squeezes this message. "Request Access"
             // is the no-PIN approval path, "Pair with PIN…" the SPAKE2 ceremony. The follow-on
