@@ -181,6 +181,8 @@ struct Pads {
     backends: PadBackends,
     /// The session's `PUNKTFUNK_STEAM_FORCE`, for every kind [`resolve_pad_kind`] folds.
     steam_force: bool,
+    /// This session in the buddy table: its devices fold buddy posts in and post rumble out.
+    buddy: crate::inject::pad_buddy::BuddyMember,
 }
 
 impl Pads {
@@ -214,6 +216,7 @@ impl Pads {
             xbox360: None,
             backends: PadBackends::default(),
             steam_force,
+            buddy: crate::inject::pad_buddy::BuddyMember::new(crate::inject::pad_buddy::global()),
         }
     }
 
@@ -349,6 +352,8 @@ impl Pads {
         }
     }
 
+    /// One event onto its device, in slot space. A present state carries the slot's buddy
+    /// posts too ([`crate::inject::pad_buddy::merge`]).
     fn handle(&mut self, ev: &punktfunk_core::input::GamepadEvent) {
         use punktfunk_core::input::GamepadEvent;
         // Present = mask bit set (create/update). Cleared bit is the `GamepadRemove` frame.
@@ -390,11 +395,32 @@ impl Pads {
         }
         let (kind, new_owner) = route_decision(self.owner[idx], self.kinds[idx], present);
         self.owner[idx] = new_owner;
-        self.route_handle(kind, &self.re_index(ev, slot));
+        let ev = match self.re_index(ev, slot) {
+            GamepadEvent::State(f) if present => {
+                GamepadEvent::State(self.buddy.hub().merge_into(slot, f))
+            }
+            ev => ev,
+        };
+        self.route_handle(kind, &ev);
         if present {
             self.pending_release[idx] = None;
         } else {
+            self.buddy.stop_leading(slot);
             self.note_removed(idx, had_device, std::time::Instant::now());
+        }
+    }
+
+    /// Unplug every device and slot this session holds: its pads now play another's slot.
+    fn unplug_all(&mut self, wire: &WirePads) {
+        let mut mask = wire.mask;
+        for idx in 0..MAX_WIRE_PADS {
+            if self.owner[idx].is_some() {
+                mask &= !(1 << idx);
+                let gone = wire.state[idx].to_frame(idx as u8, mask);
+                self.handle(&punktfunk_core::input::GamepadEvent::State(gone));
+            } else {
+                self.release_unbuilt(idx);
+            }
         }
     }
 
@@ -477,10 +503,10 @@ impl Pads {
         self.slots.claim_for(wire)
     }
 
-    /// The OS slots this session holds, when they have moved since the last call.
-    /// Bit `n` = slot `n` = player `n + 1`.
-    fn take_slot_change(&mut self) -> Option<u16> {
-        let now = self.slots.held_mask();
+    /// The OS slots this session holds or `shared` names, when they have moved since the last
+    /// call. Bit `n` = slot `n` = player `n + 1`.
+    fn take_slot_change(&mut self, shared: u16) -> Option<u16> {
+        let now = self.slots.held_mask() | shared;
         (now != self.published).then(|| {
             self.published = now;
             now
@@ -550,7 +576,7 @@ impl Pads {
 
     /// Pump every live backend. `rumble` is `(pad, low, high, lt, rt)` on 0xCA;
     /// `hidout` is lightbar / LEDs / adaptive triggers on UHID/UMDF. Closures
-    /// re-borrow to satisfy `FnMut`.
+    /// re-borrow to satisfy `FnMut`. Rumble also goes to the slot's buddies; `hidout` does not.
     ///
     /// Only the Windows HID Xbox managers ever report non-zero trigger levels;
     /// every other backend's source packet has no field for them, so v3 goes
@@ -569,9 +595,12 @@ impl Pads {
         for (slot, wire) in wire_of.iter_mut().enumerate() {
             *wire = self.slots.wire_of(slot as u8);
         }
-        // No wire index = not this session's pad; drop the feedback.
+        // No wire index = not this session's pad; drop the feedback. Buddies on the slot
+        // play the same rumble.
+        let buddy = &mut self.buddy;
         let mut rumble = |pad: u16, low, high, lt, rt| {
             if let Some(wire) = wire_of.get(pad as usize).copied().flatten() {
+                buddy.lead_rumble(pad as u8, (low, high, lt, rt));
                 rumble(wire as u16, low, high, lt, rt);
             }
         };
@@ -1290,9 +1319,100 @@ struct InputLoop {
     held: Held,
     pen: PenSession,
     touchpad: crate::touchpad_sink::TouchpadSink,
+    /// The operator's share pick ([`crate::session_status::SessionControls::shared`]).
+    shared: Arc<std::sync::atomic::AtomicU8>,
+    /// The slot this session's pads post into instead of building devices.
+    joined: Option<u8>,
+    /// Lead side: the buddy-post stamp last written, by OS slot.
+    posts_seen: [u32; MAX_WIRE_PADS],
+    /// Buddy side: the lead rumble stamp last played.
+    rumble_seen: Option<u32>,
 }
 
 impl InputLoop {
+    /// Follow the share pick. Pads post into a slot another session holds; with no one
+    /// there they build their own device on it, so the next buddy has a lead.
+    fn on_shared(&mut self) {
+        let target = match self.shared.load(Ordering::Relaxed) {
+            crate::session_status::NO_PAD_SLOT => None,
+            slot => Some(slot),
+        };
+        let want = target.filter(|&s| self.pads.slots.held_elsewhere(s));
+        if want == self.joined {
+            return;
+        }
+        let attached: Vec<usize> = self.wire.attached().collect();
+        if self.joined.take().is_some() {
+            self.pads.buddy.hub().withdraw(self.pads.buddy.id, None);
+            for &idx in &attached {
+                let stop = self.rumble.on_level(idx as u16, (0, 0, 0, 0));
+                self.conn.send_datagram(stop);
+            }
+            self.rumble_seen = None;
+        }
+        match want {
+            Some(slot) => {
+                tracing::info!(slot, "gamepad: this session's pads share a player");
+                self.pads.unplug_all(&self.wire);
+                self.pad_streams.stop_all();
+                self.joined = Some(slot);
+            }
+            None => {
+                if let Some(slot) = target {
+                    self.pads.slots.reserve(slot);
+                }
+            }
+        }
+        for idx in attached {
+            self.apply(idx);
+        }
+    }
+
+    /// Wire pad `idx`'s state to the device it plays: its own, or the shared slot's.
+    fn apply(&mut self, idx: usize) {
+        let Some(slot) = self.joined else {
+            return self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+        };
+        let (hub, id) = (self.pads.buddy.hub(), self.pads.buddy.id);
+        if self.wire.mask & (1 << idx) != 0 {
+            hub.post(slot, id, idx as u8, self.wire.frame(idx));
+        } else {
+            hub.withdraw(id, Some(idx as u8));
+        }
+        self.pad_feed.publish(|| crate::pad_feed::PadFrame {
+            slot: Some(slot),
+            ..self.pads.feed_frame(idx, &self.wire)
+        });
+    }
+
+    /// Lead side: a buddy moved a slot one of this session's devices is on. Write it again.
+    fn follow_buddies(&mut self) {
+        let hub = self.pads.buddy.hub();
+        for idx in self.wire.attached() {
+            let Some(slot) = self.pads.slots.slot_of(idx) else {
+                continue;
+            };
+            let stamp = hub.posts_gen(slot);
+            if self.pads.owner[idx].is_some() && stamp != self.posts_seen[usize::from(slot)] {
+                self.posts_seen[usize::from(slot)] = stamp;
+                self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+            }
+        }
+    }
+
+    /// Buddy side: the shared slot's rumble plays on every pad of this session.
+    fn play_shared_rumble(&mut self) {
+        let Some(slot) = self.joined else { return };
+        let hub = self.pads.buddy.hub();
+        let Some(lv) = hub.rumble_since(slot, &mut self.rumble_seen) else {
+            return;
+        };
+        for idx in self.wire.attached() {
+            self.conn
+                .send_datagram(self.rumble.on_level(idx as u16, lv));
+        }
+    }
+
     /// A grant withdrawn mid-session filters that class's releases from here on: let go of
     /// what it holds now, or a key, button or stick stays down for the session. A regained
     /// gamepad grant opens the seq gate. The held set first follows a moved route. Runs
@@ -1317,7 +1437,7 @@ impl InputLoop {
             }
             if lost & GRANT_GAMEPAD != 0 {
                 for idx in self.wire.rest_all() {
-                    self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+                    self.apply(idx);
                 }
             }
         }
@@ -1340,9 +1460,13 @@ impl InputLoop {
     }
 
     /// [`Pads::feedback_poll_interval`], at most 100 ms while the pen is in range or a touchpad
-    /// contact is down, so their timeouts meet the 200 ms deadline.
+    /// contact is down, so their timeouts meet the 200 ms deadline. A buddy plays its lead's
+    /// rumble at the 4 ms a device would.
     fn poll_interval(&self) -> std::time::Duration {
-        let poll = self.pads.feedback_poll_interval();
+        let mut poll = self.pads.feedback_poll_interval();
+        if self.joined.is_some() {
+            poll = poll.min(std::time::Duration::from_millis(4));
+        }
         if self.pen.active() || self.touchpad.active() {
             poll.min(std::time::Duration::from_millis(100))
         } else {
@@ -1387,7 +1511,7 @@ impl InputLoop {
     }
 
     /// A raw report builds its Steam Controller ([`Pads::raw_builds`]) before it lands; any
-    /// other rich input only reaches a device that exists.
+    /// other rich input only reaches a device that exists. A buddy's goes nowhere.
     fn on_rich(&mut self, rich: punktfunk_core::quic::RichInput) {
         use punktfunk_core::quic::RichInput;
         match rich {
@@ -1396,6 +1520,7 @@ impl InputLoop {
                 self.counters
                     .note_motion(self.motion_cadence.record(pad, now));
             }
+            _ if self.joined.is_some() => return,
             RichInput::HidReport { pad, .. } if self.pads.raw_builds(usize::from(pad)) => {
                 let idx = usize::from(pad);
                 self.wire.attach_at_rest(idx);
@@ -1412,17 +1537,18 @@ impl InputLoop {
                 // Bad index / unknown axis: nothing to apply, and the tick still runs: the
                 // DualSense GET_REPORT handshake is answered there.
                 if let Some(idx) = self.wire.fold(&ev) {
-                    self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+                    self.apply(idx);
                 }
             }
             InputKind::GamepadState => self.on_snapshot(&ev),
             InputKind::GamepadRemove => self.on_remove(&ev),
+            // A buddy's pad has no device of its own to stream audio to.
             InputKind::GamepadArrival => declare_pad(
                 &mut self.pads,
                 &mut self.pad_streams,
                 &self.conn,
                 &ev,
-                self.pad_audio_on,
+                self.pad_audio_on && self.joined.is_none(),
             ),
             _ => self.inject(ev),
         }
@@ -1456,15 +1582,15 @@ impl InputLoop {
         match self.wire.snapshot(snap, built) {
             Snapshot::Moved(idx) => {
                 self.pad_uplink.note_change(idx);
-                self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+                self.apply(idx);
             }
             Snapshot::Unchanged(idx) => self.pads.heard(idx),
             Snapshot::Stale => {}
         }
     }
 
-    /// A hot-unplug. Its device, rumble lease and streamer go with it; the seq gate keeps a
-    /// stale removal off a re-plugged pad.
+    /// A hot-unplug. Its device or buddy post, rumble lease and streamer go with it; the seq
+    /// gate keeps a stale removal off a re-plugged pad.
     fn on_remove(&mut self, ev: &InputEvent) {
         let (pad, seq) = punktfunk_core::input::decode_gamepad_remove(ev.flags);
         let idx = pad as usize;
@@ -1474,7 +1600,7 @@ impl InputLoop {
         self.pads.raw_armed[idx] = false;
         self.pad_uplink.forget(idx);
         if attached {
-            self.pads.apply_wire(&self.wire, idx, &self.pad_feed);
+            self.apply(idx);
             tracing::info!(pad = idx, "gamepad unplugged (native detach)");
         } else {
             self.pads.release_unbuilt(idx);
@@ -1497,11 +1623,13 @@ impl InputLoop {
         let _ = self.held.route.send(ev);
     }
 
-    /// Every wake, after its input: the pen's and touchpad's timeouts, the feedback pump, the
-    /// heartbeat, the slot report and the rumble leases.
+    /// Every wake, after its input: the pen's and touchpad's timeouts, both sides of buddy
+    /// pads, the feedback pump, the heartbeat, the slot report and the rumble leases.
     fn on_tick(&mut self) {
         self.pen.check_timeout();
         self.touchpad.check_timeout();
+        self.follow_buddies();
+        self.play_shared_rumble();
         self.pump_feedback();
         // Held-steady UHID pads send no wire events; heartbeat re-emits. Xbox is a no-op.
         self.pads.heartbeat();
@@ -1539,9 +1667,13 @@ impl InputLoop {
     }
 
     /// After the pump reaped the unplug grace, so a re-plug inside it is not reported as a pad
-    /// leaving and coming back. Silent while the slots stand.
+    /// leaving and coming back. Silent while the slots stand. A buddy reports the shared slot.
     fn report_slots(&mut self) {
-        if let Some(mask) = self.pads.take_slot_change() {
+        let shared = match self.joined {
+            Some(slot) if self.wire.mask != 0 => 1 << slot,
+            _ => 0,
+        };
+        if let Some(mask) = self.pads.take_slot_change(shared) {
             self.pad_slots.store(mask, Ordering::Relaxed);
             if let Some(tx) = &self.pad_tx {
                 let slots = punktfunk_core::quic::PadSlots { slots: mask };
@@ -1609,6 +1741,8 @@ pub(super) fn input_thread(
     pad_audio_on: bool,
     pad_id: crate::inject::pad_pool::PadIdentity,
     pad_slots: Arc<std::sync::atomic::AtomicU16>,
+    // The slot the operator shares this session's pads into, live.
+    shared: Arc<std::sync::atomic::AtomicU8>,
     pad_tx: Option<tokio::sync::mpsc::UnboundedSender<PadToClient>>,
     // The client reads feature reports off the control stream (`FEATURE_PAD_WRITES`).
     pad_writes: bool,
@@ -1655,11 +1789,16 @@ pub(super) fn input_thread(
         frame_map,
         pad_feed,
         counters,
+        shared,
+        joined: None,
+        posts_seen: [0; MAX_WIRE_PADS],
+        rumble_seen: None,
     };
     // A reconnect or steal sets `stop` while this connection is still open and
     // claims this session's OS slots 1.5 s later; the channel outlives that.
     while !stop.load(Ordering::SeqCst) {
         lp.on_grants();
+        lp.on_shared();
         lp.resync_feed();
         let arrived = rx.recv_timeout(lp.poll_interval());
         lp.log_uplink_window();
@@ -1928,12 +2067,12 @@ mod tests {
     #[test]
     fn the_slot_map_is_reported_only_when_it_moves() {
         let mut pads = Pads::new(GamepadPref::Xbox360, PadIdentity::anonymous(), false);
-        assert_eq!(pads.take_slot_change(), None, "no pad, nothing to say");
+        assert_eq!(pads.take_slot_change(0), None, "no pad, nothing to say");
         let slot = pads.claim_os_slot(0).expect("a free OS slot");
-        assert_eq!(pads.take_slot_change(), Some(1 << slot));
-        assert_eq!(pads.take_slot_change(), None, "the same slots, again");
+        assert_eq!(pads.take_slot_change(0), Some(1 << slot));
+        assert_eq!(pads.take_slot_change(0), None, "the same slots, again");
         pads.slots.release(0);
-        assert_eq!(pads.take_slot_change(), Some(0), "the pad left");
+        assert_eq!(pads.take_slot_change(0), Some(0), "the pad left");
     }
 
     /// A pad-audio streamer starts at the arrival and captures the endpoint / card / sink
@@ -1989,6 +2128,9 @@ mod tests {
                     false,
                     PadIdentity::anonymous(),
                     Arc::new(std::sync::atomic::AtomicU16::new(0)),
+                    Arc::new(std::sync::atomic::AtomicU8::new(
+                        crate::session_status::NO_PAD_SLOT,
+                    )),
                     None,
                     false,
                     false,

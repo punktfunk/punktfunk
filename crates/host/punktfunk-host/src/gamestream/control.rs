@@ -190,6 +190,12 @@ struct SessionPads {
     /// When each wire pad's removal frame came. Its slot goes back after
     /// [`PAD_RELEASE_GRACE`], once the device and its mailbox are gone.
     removed_at: [Option<std::time::Instant>; MAX_PADS],
+    /// Native sessions sharing one of these slots post into it ([`crate::inject::pad_buddy`]).
+    buddy: crate::inject::pad_buddy::BuddyMember,
+    /// Each present wire pad's last frame, written again when a buddy moves.
+    last: [Option<GamepadFrame>; MAX_PADS],
+    /// The buddy-post stamp last written, by OS slot.
+    posts_seen: [u32; MAX_PADS],
 }
 
 /// The managers' 300 ms unplug grace plus one pump, as the native plane waits.
@@ -213,6 +219,9 @@ impl SessionPads {
             dev,
             slots,
             removed_at: [None; MAX_PADS],
+            buddy: crate::inject::pad_buddy::BuddyMember::new(crate::inject::pad_buddy::global()),
+            last: [None; MAX_PADS],
+            posts_seen: [0; MAX_PADS],
         }
     }
 
@@ -228,9 +237,9 @@ impl SessionPads {
         }
     }
 
-    /// The event renumbered to the slot its device is made under, `active_mask` included. A
-    /// present pad claims its slot; a removal never mints one. `None`: out of range, a removal
-    /// of a pad that holds no slot, or every slot on the host held.
+    /// The event renumbered to the slot its device is made under, `active_mask` included, with
+    /// the slot's buddy posts folded in. A present pad claims its slot; a removal never mints
+    /// one. `None`: out of range, a removal of a pad that holds no slot, or every slot held.
     fn in_slot_space(
         &mut self,
         ev: &GamepadEvent,
@@ -250,14 +259,22 @@ impl SessionPads {
         } else {
             let slot = self.slots.slot_of(wire)?;
             self.removed_at[wire] = Some(now);
+            self.buddy.stop_leading(slot);
             slot
         };
+        if let GamepadEvent::State(f) = *ev {
+            self.last[wire] = present.then_some(f);
+        }
+        let hub = self.buddy.hub();
         Some(match *ev {
-            GamepadEvent::State(f) => GamepadEvent::State(GamepadFrame {
-                index: i16::from(slot),
-                active_mask: self.slots.os_mask(f.active_mask),
-                ..f
-            }),
+            GamepadEvent::State(f) => {
+                let f = GamepadFrame {
+                    index: i16::from(slot),
+                    active_mask: self.slots.os_mask(f.active_mask),
+                    ..f
+                };
+                GamepadEvent::State(if present { hub.merge_into(slot, f) } else { f })
+            }
             GamepadEvent::Arrival {
                 kind,
                 capabilities,
@@ -270,6 +287,20 @@ impl SessionPads {
                 audio_caps,
             },
         })
+    }
+
+    /// A buddy moved a slot one of these pads is on: write its last frame again.
+    fn follow_buddies(&mut self) {
+        for wire in 0..MAX_PADS {
+            let (Some(f), Some(slot)) = (self.last[wire], self.slots.slot_of(wire)) else {
+                continue;
+            };
+            let stamp = self.buddy.hub().posts_gen(slot);
+            if stamp != self.posts_seen[usize::from(slot)] {
+                self.posts_seen[usize::from(slot)] = stamp;
+                self.handle(&GamepadEvent::State(f));
+            }
+        }
     }
 
     /// Hand back the slots of pads removed at least [`PAD_RELEASE_GRACE`] ago.
@@ -285,12 +316,15 @@ impl SessionPads {
     /// Pump force-feedback every tick: games block inside the kernel handshake until answered.
     /// HID rich-feedback is discarded — GameStream's rumble (`0x010B`) carries the two handle
     /// motors only, so trigger levels are dropped at the call site. `rumble` gets the client's
-    /// wire index; feedback from a slot this session does not hold is dropped.
+    /// wire index; feedback from a slot this session does not hold is dropped. Buddy posts are
+    /// followed here, and the rumble goes to the slot's buddies too.
     fn pump_rumble(&mut self, mut rumble: impl FnMut(u16, u16, u16, u16, u16)) {
         self.release_removed(std::time::Instant::now());
-        let slots = &self.slots;
+        self.follow_buddies();
+        let (slots, buddy) = (&self.slots, &mut self.buddy);
         let to_wire = |slot: u16, low, high, lt, rt| {
             if let Some(wire) = u8::try_from(slot).ok().and_then(|s| slots.wire_of(s)) {
+                buddy.lead_rumble(slot as u8, (low, high, lt, rt));
                 rumble(wire as u16, low, high, lt, rt);
             }
         };

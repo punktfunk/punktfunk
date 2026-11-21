@@ -1721,6 +1721,9 @@ fn session_lanes(host: &SessionHost, who: &Admitted, n: &handshake::Negotiated) 
         preferred_pad_slot: Arc::new(std::sync::atomic::AtomicU8::new(
             preferred_pad_slot.unwrap_or(crate::session_status::NO_PAD_SLOT),
         )),
+        shared_pad_slot: Arc::new(std::sync::atomic::AtomicU8::new(
+            crate::session_status::NO_PAD_SLOT,
+        )),
         // Written by the input thread, read by `GET /session/{id}/pads`.
         pads: Arc::new(crate::pad_feed::PadFeed::new()),
     };

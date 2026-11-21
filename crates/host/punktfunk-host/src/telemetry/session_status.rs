@@ -152,6 +152,9 @@ pub struct SessionControls {
     pub pad_owner: u64,
     /// Player slot the operator picked, 0-based; [`NO_PAD_SLOT`] = lazy claim.
     pub preferred_pad_slot: Arc<AtomicU8>,
+    /// Player slot this session's pads share with whoever holds it
+    /// ([`crate::inject::pad_buddy`]); [`NO_PAD_SLOT`] = their own. Lasts this session only.
+    pub shared_pad_slot: Arc<AtomicU8>,
     /// Live pad tap this session's input thread publishes to. Idle until a console
     /// opens `GET /session/{id}/pads` ([`crate::pad_feed`]).
     pub pads: Arc<crate::pad_feed::PadFeed>,
@@ -189,6 +192,7 @@ impl SessionControls {
             profile: None,
             pad_owner: crate::inject::pad_pool::owner_key(None),
             preferred_pad_slot: Arc::new(AtomicU8::new(NO_PAD_SLOT)),
+            shared_pad_slot: Arc::new(AtomicU8::new(NO_PAD_SLOT)),
             pads: Arc::new(crate::pad_feed::PadFeed::new()),
         }
     }
@@ -217,6 +221,25 @@ impl SessionControls {
         }
         self.preferred_pad_slot.store(slot, Ordering::Relaxed);
         true
+    }
+
+    /// The player slot this session's pads share, 0-based.
+    pub fn shared(&self) -> Option<u8> {
+        match self.shared_pad_slot.load(Ordering::Relaxed) {
+            NO_PAD_SLOT => None,
+            slot => Some(slot),
+        }
+    }
+
+    /// Share this session's pads into `slot`, or give them their own back with `None`. The
+    /// input thread follows on its next wake. With no one on `slot`, this session takes it:
+    /// the reservation is [`Self::set_player`]'s.
+    pub fn set_shared(&self, slot: Option<u8>) {
+        if let Some(slot) = slot {
+            crate::inject::pad_pool::global().reserve(slot, self.pad_owner);
+        }
+        self.shared_pad_slot
+            .store(slot.unwrap_or(NO_PAD_SLOT), Ordering::Relaxed);
     }
 
     /// OS pad slots this session holds right now, lowest first.
@@ -457,6 +480,8 @@ pub struct SessionSnapshot {
     pub pads: Vec<u8>,
     /// Player slot the operator picked, 0-based. `None` = lazy claim.
     pub preferred_pad_slot: Option<u8>,
+    /// Player slot this session's pads share, 0-based. `None` = their own.
+    pub shared_pad_slot: Option<u8>,
     /// Last closed link-health minute ([`crate::link_health`]). `None` in a session's first
     /// minute, before one has closed.
     pub link: Option<crate::link_health::LinkMinute>,
@@ -829,6 +854,7 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
                 last_resize_ms: s.last_resize_ms.load(Ordering::Relaxed),
                 pads: s.controls.pads(),
                 preferred_pad_slot: s.controls.player(),
+                shared_pad_slot: s.controls.shared(),
                 link: s.counters.link.last(),
                 shared_path_with: shared_path(&reg, s.id, s.peer),
             }

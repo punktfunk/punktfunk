@@ -244,6 +244,48 @@ async fn placing_a_player_touches_only_that_session() {
         .all(|r| r["preferred_pad_slot"].is_null()));
 }
 
+/// A share joins one session's pads to a player for this session only: the stored pick
+/// stays, and a plain pick ends the share.
+#[tokio::test]
+async fn sharing_a_player_leaves_the_stored_pick_alone() {
+    let _serial = crate::session_status::tests::REGISTRY.lock().await;
+    let app = test_app(test_state(), None);
+    let (one, ..) = fake_session_with_flags("aabbccddeeff");
+    let pick = |body: serde_json::Value| {
+        json_req(
+            Method::PUT,
+            &format!("/api/v1/session/{}/player", one.id),
+            body,
+        )
+    };
+    let row = |body: &serde_json::Value| {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == one.id)
+            .cloned()
+            .unwrap()
+    };
+
+    let (status, body) = send(&app, pick(serde_json::json!({ "slot": 2, "share": true }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["share"], true, "{body}");
+    let (_, body) = send(&app, get_req("/api/v1/status")).await;
+    assert_eq!(row(&body)["shared_pad_slot"], 2, "{body}");
+    assert!(row(&body)["preferred_pad_slot"].is_null(), "{body}");
+
+    // Without a slot there is nothing to share: the session goes back to its own pads.
+    let (_, body) = send(
+        &app,
+        pick(serde_json::json!({ "slot": null, "share": true })),
+    )
+    .await;
+    assert_eq!(body["share"], false, "{body}");
+    let (_, body) = send(&app, get_req("/api/v1/status")).await;
+    assert!(row(&body)["shared_pad_slot"].is_null(), "{body}");
+}
+
 /// A live re-point moves the mask the input thread reads, and cannot widen past the
 /// pairing: these sessions are paired controller-only, so `full` comes back clamped.
 #[tokio::test]

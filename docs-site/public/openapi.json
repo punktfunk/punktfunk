@@ -10061,7 +10061,7 @@
           "session"
         ],
         "summary": "Place one session's player slot",
-        "description": "Which controller this session is: slot 0 is Player 1, and a local co-op game\nreads that order. Without a pick the slot is whichever comes free, so the pad\nthat moves first takes Player 1 and the order changes on every reconnect.\n\nThe pick is a reservation, not a seizure. A pad already built keeps the slot it\nwas created under until it re-plugs; a slot another live session asked for first\nstays theirs and this call answers `reserved: false`. It is remembered against\nthe device's pairing, so the same device reconnects as the same player — an\nanonymous session's pick lasts only as long as the session.",
+        "description": "Which controller this session is: slot 0 is Player 1, and a local co-op game\nreads that order. Without a pick the slot is whichever comes free, so the pad\nthat moves first takes Player 1 and the order changes on every reconnect.\n\nThe pick is a reservation, not a seizure. A pad already built keeps the slot it\nwas created under until it re-plugs; a slot another live session asked for first\nstays theirs and this call answers `reserved: false`. It is remembered against\nthe device's pairing, so the same device reconnects as the same player — an\nanonymous session's pick lasts only as long as the session.\n\nWith `share`, this session's pads join the slot's controller instead: buttons\ncombine, each trigger and stick takes the stronger input, and every pad on it\nrumbles. With no one on the slot, the session takes it as a pick would. A share\nlasts this session only and leaves the remembered pick alone.",
         "operationId": "setSessionPlayer",
         "parameters": [
           {
@@ -19698,6 +19698,7 @@
       "SessionPlayer": {
         "type": "object",
         "required": [
+          "share",
           "reserved",
           "pads"
         ],
@@ -19713,7 +19714,11 @@
           },
           "reserved": {
             "type": "boolean",
-            "description": "`false` = another live session asked for that slot first and keeps it; this\nsession stays on the first-free claim."
+            "description": "`false` = another live session asked for that slot first and keeps it; this\nsession stays on the first-free claim. Always `true` for a share."
+          },
+          "share": {
+            "type": "boolean",
+            "description": "The session's pads share `slot`'s controller."
           },
           "slot": {
             "type": "integer",
@@ -19726,6 +19731,10 @@
       "SessionPlayerRequest": {
         "type": "object",
         "properties": {
+          "share": {
+            "type": "boolean",
+            "description": "Join `slot`'s controller with whoever holds it, for this session only. Ignored\nwithout a `slot`."
+          },
           "slot": {
             "type": "integer",
             "format": "int32",
@@ -19909,6 +19918,12 @@
               "null"
             ],
             "description": "On a door, to the operator: the profile whose seat host runs it, whose proxy reaches it."
+          },
+          "shared_pad_slot": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Player slot this session's pads share with whoever holds it, 0-based (`PUT\n/session/{id}/player` with `share`). Their buttons and sticks combine on one controller.",
+            "minimum": 0
           },
           "shared_path_with": {
             "type": "array",
