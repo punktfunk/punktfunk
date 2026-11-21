@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use punktfunk_core::quic::ClipOffer;
 
 /// Per-OS backends and the backend-agnostic [`host::session`] coordinator.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub mod host;
 
 /// The host's clipboard setting as a `CLIP_POLICY_*` bitfield. `Off` is `None`
@@ -37,7 +37,12 @@ pub fn enabled() -> bool {
 /// Linux still advertises when the compositor has no data-control; enable then
 /// returns `BACKEND_UNAVAILABLE` so the client can say why.
 pub fn cap_advertised() -> bool {
-    enabled() && cfg!(any(target_os = "linux", target_os = "windows"))
+    enabled()
+        && cfg!(any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "macos"
+        ))
 }
 
 /// Session-loop → coordinator. Defined here so the control loop compiles on
@@ -99,14 +104,14 @@ pub async fn start(
 ) -> ClipCoord {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (offer_tx, offer_rx) = tokio::sync::mpsc::unbounded_channel();
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     let available = if !matches!(target, ClipTarget::None) && enabled() {
         host::session::start(conn, clip_enabled, target, cmd_rx, offer_tx).await
     } else {
         drop((conn, clip_enabled, cmd_rx, offer_tx));
         false
     };
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     let available = {
         let _ = (conn, clip_enabled, cmd_rx, offer_tx, target);
         false

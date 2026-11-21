@@ -1,10 +1,11 @@
 # Shared clipboard (design/clipboard-and-file-transfer.md §4): the host-side session-clipboard
 # backends — `ext-data-control-v1` (KWin/wlroots/Sway/Hyprland), Mutter's *direct*
 # `org.gnome.Mutter.RemoteDesktop.Session` clipboard and gamescope's Xwayland selections on
-# Linux, the Win32 clipboard (delayed rendering) on Windows — behind one `HostClipboard`, plus the
-# backend-agnostic session coordinator bridging it to the QUIC clipboard plane. The wire protocol
-# and the client half live in `punktfunk-core`; the orchestrator consumes only the portable
-# facade in `src/lib.rs`, so it stays free of platform cfg.
+# Linux, the Win32 clipboard (delayed rendering) on Windows, a polled `NSPasteboard` on macOS —
+# behind one `HostClipboard`, plus the backend-agnostic session coordinator bridging it to the
+# QUIC clipboard plane. The wire protocol and the client half live in `punktfunk-core`; the
+# orchestrator consumes only the portable facade in `src/lib.rs`, so it stays free of platform
+# cfg.
 [package]
 name = "pf-clipboard"
 version.workspace = true

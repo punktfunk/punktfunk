@@ -9,9 +9,16 @@
 //! portal needs an interactive grant a headless host cannot answer. A gamescope
 //! session uses [`gamescope`], text on its Xwayland.
 //! [`windows`] watches `WM_CLIPBOARDUPDATE` and serves via `WM_RENDERFORMAT`.
+//! [`macos`] polls `NSPasteboard`'s change count and writes a client offer once fetched.
 
 #[cfg(target_os = "linux")]
 mod gamescope;
+/// Pasteboard types ↔ wire MIMEs and the change-count ledger. No AppKit, so its tests also
+/// run off macOS; [`macos`] is the only production caller.
+#[cfg(any(target_os = "macos", test))]
+mod macfmt;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "linux")]
 mod mutter;
 #[cfg(target_os = "linux")]
@@ -59,8 +66,9 @@ pub enum PasteResponder {
     /// required `SelectionWriteDone`; gamescope's thread sets the requestor's X property.
     #[cfg(target_os = "linux")]
     Channel(tokio::sync::oneshot::Sender<Vec<u8>>),
-    /// `WM_RENDERFORMAT` handler blocks the message-loop thread; `std::sync::mpsc`.
-    #[cfg(target_os = "windows")]
+    /// `std::sync::mpsc`: the `WM_RENDERFORMAT` handler blocks the Windows message-loop thread on
+    /// it; the macOS backend polls it from its own thread.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     Sync(std::sync::mpsc::Sender<Vec<u8>>),
 }
 
@@ -76,7 +84,7 @@ impl PasteResponder {
             PasteResponder::Channel(tx) => {
                 let _ = tx.send(bytes);
             }
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             PasteResponder::Sync(tx) => {
                 let _ = tx.send(bytes);
             }
@@ -158,6 +166,8 @@ pub enum HostClipboard {
     Gamescope(gamescope::GamescopeClipboard),
     #[cfg(target_os = "windows")]
     Windows(windows::WindowsClipboard),
+    #[cfg(target_os = "macos")]
+    MacOs(macos::MacClipboard),
 }
 
 impl HostClipboard {
@@ -196,6 +206,12 @@ impl HostClipboard {
             let (b, rx) = windows::WindowsClipboard::open().await?;
             Ok((HostClipboard::Windows(b), rx))
         }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = target;
+            let (b, rx) = macos::MacClipboard::open(macos::Board::General).await?;
+            Ok((HostClipboard::MacOs(b), rx))
+        }
     }
 
     /// Empty means nothing to offer.
@@ -209,6 +225,8 @@ impl HostClipboard {
             HostClipboard::Gamescope(g) => g.current_wire_mimes(),
             #[cfg(target_os = "windows")]
             HostClipboard::Windows(w) => w.current_wire_mimes(),
+            #[cfg(target_os = "macos")]
+            HostClipboard::MacOs(m) => m.current_wire_mimes(),
         }
     }
 
@@ -226,6 +244,11 @@ impl HostClipboard {
             #[cfg(target_os = "windows")]
             HostClipboard::Windows(w) => {
                 w.set_offer(wire_mimes);
+                Ok(())
+            }
+            #[cfg(target_os = "macos")]
+            HostClipboard::MacOs(m) => {
+                m.set_offer(wire_mimes);
                 Ok(())
             }
         }
@@ -247,11 +270,16 @@ impl HostClipboard {
                 w.clear_offer();
                 Ok(())
             }
+            #[cfg(target_os = "macos")]
+            HostClipboard::MacOs(m) => {
+                m.clear_offer();
+                Ok(())
+            }
         }
     }
 
     /// Data-control blocks on a pipe (offloaded); Mutter round-trips D-Bus; gamescope
-    /// converts on its Xwayland; Windows reads on a blocking thread.
+    /// converts on its Xwayland; Windows and macOS read on their own backend thread.
     pub async fn read_current(self: &Arc<Self>, wire_mime: &str) -> anyhow::Result<Vec<u8>> {
         match &**self {
             #[cfg(target_os = "linux")]
@@ -271,6 +299,8 @@ impl HostClipboard {
             HostClipboard::Gamescope(g) => g.read_current(wire_mime).await,
             #[cfg(target_os = "windows")]
             HostClipboard::Windows(w) => w.read_current(wire_mime).await,
+            #[cfg(target_os = "macos")]
+            HostClipboard::MacOs(m) => m.read_current(wire_mime).await,
         }
     }
 }
