@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sat, 21 Nov 2026 17:13:19 +0100
+Subject: [PATCH 49/50] pipewire: let an HDR P010 capture write full range
+
+A consumer that encodes HDR at full range found no P010 pod it could take:
+the pass pinned BT.2020 limited, so the capture fell back to packed 10-bit
+and the consumer converted every frame itself.
+
+The HDR P010 pod now offers both ranges, limited first, and a consumer that
+names full gets the BT.2100 full-range matrix: luma over 0..1023, chroma
+about 512. A consumer that names no range still gets limited.
+---
+ src/pipewire.cpp     | 16 ++++++++++++----
+ src/rendervulkan.cpp | 12 ++++++++++--
+ src/rendervulkan.hpp |  4 +++-
+ 3 files changed, 25 insertions(+), 7 deletions(-)
+
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index 49d4f0d1..f8902ad0 100644
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -206,12 +206,16 @@ static void add_format_color_params(struct spa_pod_builder *builder, spa_video_f
+ #if GAMESCOPE_PIPEWIRE_HDR
+ 	else if (is_ten_bit_video_format(format) && bHDR) {
+ 		if (format == SPA_VIDEO_FORMAT_P010_10LE) {
+-			// The 4:2:0 container fixes its matrix as well: BT.2020 limited is what the P010
+-			// pass writes, so a consumer that wants anything else must not land here.
++			// The 4:2:0 container fixes its matrix as well: the P010 pass writes BT.2020, so a
++			// consumer that wants another must not land here. Limited unless it names full.
+ 			spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_colorMatrix, SPA_POD_PROP_FLAG_MANDATORY);
+ 			spa_pod_builder_id(builder, SPA_VIDEO_COLOR_MATRIX_BT2020);
+-			spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_colorRange, SPA_POD_PROP_FLAG_MANDATORY);
+-			spa_pod_builder_id(builder, SPA_VIDEO_COLOR_RANGE_16_235);
++			spa_pod_builder_add(builder,
++				SPA_FORMAT_VIDEO_colorRange, SPA_POD_CHOICE_ENUM_Id(3,
++								SPA_VIDEO_COLOR_RANGE_16_235,
++								SPA_VIDEO_COLOR_RANGE_16_235,
++								SPA_VIDEO_COLOR_RANGE_0_255),
++				0);
+ 		}
+ 		spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_transferFunction, SPA_POD_PROP_FLAG_MANDATORY);
+ 		spa_pod_builder_id(builder, kSpaVideoTransferSmpte2084);
+@@ -787,6 +791,10 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
+ 			break;
+ 		}
+ 		break;
++	case SPA_VIDEO_COLOR_MATRIX_BT2020:
++		if (state->video_info.color_range == SPA_VIDEO_COLOR_RANGE_0_255)
++			colorspace = k_EStreamColorspace_BT2020_Full;
++		break;
+ 	default:
+ 		break;
+ 	}
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index 78c3bcf8..05d77454 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -97,6 +97,13 @@ static constexpr mat3x4 g_rgb2yuv_pq_to_bt2020_limited = {{
+   { 0.4379f, -0.4027f, -0.0352f, 0.5005f },
+ }};
+ 
++// The same at full range: luma over 0..1023, chroma about 512.
++static constexpr mat3x4 g_rgb2yuv_pq_to_bt2020_full = {{
++  { 0.2627f, 0.6780f, 0.0593f, 0.0f },
++  { -0.1396f, -0.3604f, 0.5000f, 0.5005f },
++  { 0.5000f, -0.4598f, -0.0402f, 0.5005f },
++}};
++
+ // P010 SDR capture: BT.709 limited range on the sRGB codes as the composite stored them, with
+ // the 10-bit legal range folded in.
+ static constexpr mat3x4 g_rgb2yuv_srgb_to_bt709_limited10 = {{
+@@ -116,14 +123,15 @@ static const mat3x4& colorspace_to_conversion_from_srgb_matrix(EStreamColorspace
+ }
+ 
+ // The matrix of a 4:2:0 capture pass. P010 takes the composite's codes as stored, never
+-// linearised: PQ into BT.2020 for an HDR stream, sRGB into BT.709 for SDR. NV12 linearises
+-// through the sRGB view and re-encodes gamma in the shader.
++// linearised: PQ into BT.2020 for an HDR stream (limited unless the consumer named full), sRGB
++// into BT.709 for SDR. NV12 linearises through the sRGB view and re-encodes gamma in the shader.
+ static const mat3x4& capture_conversion_matrix( const gamescope::Rc<CVulkanTexture>& pYUV ) {
+ 	if ( !pYUV->isYcbcr10() )
+ 		return colorspace_to_conversion_from_srgb_matrix( pYUV->streamColorspace() );
+ 	switch ( pYUV->streamColorspace() ) {
+ 		case k_EStreamColorspace_BT709:			return g_rgb2yuv_srgb_to_bt709_limited10;
+ 		case k_EStreamColorspace_BT709_Full:	return g_rgb2yuv_srgb_to_bt709_full;
++		case k_EStreamColorspace_BT2020_Full:	return g_rgb2yuv_pq_to_bt2020_full;
+ 		default:								return g_rgb2yuv_pq_to_bt2020_limited;
+ 	}
+ }
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index 1d6150c0..79c6a597 100644
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -62,7 +62,9 @@ enum EStreamColorspace : int
+ 	k_EStreamColorspace_BT601 = 1,
+ 	k_EStreamColorspace_BT601_Full = 2,
+ 	k_EStreamColorspace_BT709 = 3,
+-	k_EStreamColorspace_BT709_Full = 4
++	k_EStreamColorspace_BT709_Full = 4,
++	// An HDR P010 capture at full range; limited is the default every other value takes.
++	k_EStreamColorspace_BT2020_Full = 5,
+ };
+ 
+ #include <memory>
+-- 
+2.56.0
+
