@@ -1304,8 +1304,9 @@ public final class SessionAudio: @unchecked Sendable {
         // Prepared before the capture reads a format: enabling voice processing swaps the IO
         // unit, and until then the input can report 0 Hz, which reads as no input device.
         engine.prepare()
-        guard let uplink = installMicCapture(
-            on: engine, micUID: micUID, micChannel: micChannel)
+        // Channel 1: the processor writes its one processed signal into every input channel, so
+        // the default fold would sum N copies, 20·log10(N) dB too loud, and clip.
+        guard let uplink = installMicCapture(on: engine, micUID: micUID, micChannel: 1)
         else {
             // The mic outranks echo cancellation: fall back to the split path.
             engine.stop()
