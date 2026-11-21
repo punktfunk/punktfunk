@@ -42,13 +42,11 @@ public enum AudioDevices {
         return channelCount(id, scope: kAudioObjectPropertyScopeInput)
     }
 
-    /// 0-based input channels the mic device names as loopback (Focusrite 4th Gen: "Loopback 1",
+    /// 0-based input channels the device names as loopback (Focusrite 4th Gen: "Loopback 1",
     /// "Loopback 2"). They carry what the Mac plays, so a mic mix that took them would send the
-    /// stream back to the host. Resolves the device like `inputChannelCount(forUID:)`.
-    static func loopbackInputChannels(forUID uid: String) -> [Int] {
-        let id = uid.isEmpty ? defaultInputDevice() : deviceID(forUID: uid)
-        guard let id else { return [] }
-        return (0..<channelCount(id, scope: kAudioObjectPropertyScopeInput)).filter { c in
+    /// stream back to the host.
+    static func loopbackInputChannels(of id: AudioDeviceID) -> [Int] {
+        (0..<channelCount(id, scope: kAudioObjectPropertyScopeInput)).filter { c in
             let name = stringProperty(
                 id, kAudioObjectPropertyElementName,
                 scope: kAudioObjectPropertyScopeInput, element: UInt32(c + 1))
