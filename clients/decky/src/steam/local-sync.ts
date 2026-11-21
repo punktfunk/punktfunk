@@ -116,6 +116,10 @@ async function drive(): Promise<void> {
 
 function remove(id: string, appId: number): void {
   try {
+    // Steam keeps a removed entry's art files until each slot is cleared.
+    for (const slot of [0, 1, 2, 3]) {
+      SteamClient.Apps.ClearCustomArtworkForApp?.(appId, slot)?.catch(() => {});
+    }
     if (queryShortcutAlive(appId) !== false) {
       SteamClient.Apps.RemoveShortcut(appId);
     }

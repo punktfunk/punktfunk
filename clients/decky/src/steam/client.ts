@@ -24,6 +24,7 @@ export interface SteamClientGlobal {
       imageType: string,
       assetType: number,
     ): Promise<unknown>;
+    ClearCustomArtworkForApp?(appId: number, assetType: number): Promise<unknown>;
     RunGame(gameId: string, _unused: string, _i: number, _j: number): void;
     TerminateApp(gameId: string, _b: boolean): void;
     RemoveShortcut(appId: number): void;
