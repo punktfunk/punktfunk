@@ -978,6 +978,10 @@ public final class SessionAudio: @unchecked Sendable {
                 try capture.start()
             } catch {
                 log.error("capture engine did not restart on unmute: \(error.localizedDescription)")
+                // Nothing else retries this start, and a mic left stopped stays silent.
+                DispatchQueue.main.async { [weak self] in
+                    self?.scheduleEngineRebuild(reason: "the capture engine did not restart on unmute")
+                }
             }
             // `stop()` may have stopped this engine between the check and the start.
             if flag.isStopped { capture.stop() }
