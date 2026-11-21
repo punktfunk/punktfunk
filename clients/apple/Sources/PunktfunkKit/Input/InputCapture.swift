@@ -5,7 +5,7 @@
 // pointer curve once. Its keys come from NSEvent too. GCMouse there can stay silent and never
 // sees a trackpad, so macOS installs no GameController handlers. iOS, tvOS and visionOS keep
 // GCMouse (raw under pointer lock) and GCKeyboard, whose HID keycodes map to the host's
-// Windows VKs.
+// Windows VKs. UIKit's presses carry the keys while GCKeyboard is silent (`KeyFeed`).
 // Fractional motion carries per axis so slow, sub-pixel moves survive the integer wire.
 //
 // GC delivers only while the app is active, so everything held is released on
@@ -96,6 +96,13 @@ public final class InputCapture {
     private var autoRepeatVK: UInt32?
     private var autoRepeatTimer: Timer?
     #endif
+    #if os(iOS) || os(visionOS)
+    /// GameController's keys against UIKit's presses (see `pressKey`).
+    private var keyFeed = KeyFeed()
+    /// The keyboard is being reposted (true: presses carried a whole key with GameController
+    /// silent) or is not (false: GameController delivered one). Main queue.
+    public var onKeyboardReposted: ((Bool) -> Void)?
+    #endif
 
     /// The keyboard's shortcuts, fed every physical key in both capture states. Built at
     /// `start`, when `onShortcut` is known.
@@ -182,13 +189,16 @@ public final class InputCapture {
         return down ? fired : firedVKs.remove(vk) != nil
     }
 
-    /// The keyboard engine and the ⌘ tracking forget every key: GC delivers nothing while
-    /// inactive, so a key released in another app would otherwise stay down here.
+    /// The keyboard engine, the ⌘ tracking and the key feed forget every key: GC delivers
+    /// nothing while inactive, so a key released in another app would otherwise stay down here.
     private func forgetShortcutKeys() {
         _ = keyEngine.flush()
         shortcutKeys.removeAll()
         firedVKs.removeAll()
         cmdKeysDown.removeAll()
+        #if os(iOS) || os(visionOS)
+        keyFeed.reset()
+        #endif
     }
 
     /// Fired when a newer InputCapture takes the process-global GC handler slots (the
@@ -417,6 +427,9 @@ public final class InputCapture {
         mice.removeAll()
         keyboards.removeAll()
         stopAutoRepeat()
+        #endif
+        #if os(iOS) || os(visionOS)
+        FullKeyboardAccess.watchGameController() // the handler slot is free again
         #endif
     }
 
@@ -887,51 +900,121 @@ public final class InputCapture {
         else { return }
         keyboards.append(keyboard)
         keyboard.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
-            guard let self, let vk = Self.hidToVK[keyCode.rawValue] else { return }
-            if vk == 0x5B || vk == 0x5C { // physical ⌘ state, tracked in both states
-                if pressed {
-                    self.cmdKeysDown.insert(vk)
-                } else {
-                    self.cmdKeysDown.remove(vk)
-                }
-            }
-            // The ⌘⎋ toggle's Esc — checked before the forwarding gate, because in the
-            // engage direction forwarding is already true when this fires.
-            if vk == self.suppressedVK {
-                if !pressed { self.suppressedVK = nil }
-                return
-            }
+            guard let self else { return }
             #if os(iOS) || os(visionOS)
-            // No NSEvent monitor here — the toggle combo is detected from the HID
-            // stream itself.
-            if pressed, vk == 0x1B, !self.cmdKeysDown.isEmpty {
-                self.suppressedVK = 0x1B
-                self.onToggleCapture?()
-                return
-            }
-            // The keyboard shortcuts, in both states: a modifier held before capture engaged
-            // still counts.
-            if self.shortcutTakes(vk, down: pressed) { return }
+            let first = !self.keyFeed.gameControllerSpoke
+            let taken = self.keyFeed.takeGameController(usage: keyCode.rawValue, down: pressed)
+            if first { self.onKeyboardReposted?(false) }
+            guard taken else { return }
             #endif
-            guard self.forwarding else { return }
-            // Never type Esc into the host while ⌘ is held (⌘⎋ is reserved).
-            if vk == 0x1B, !self.cmdKeysDown.isEmpty {
-                return
+            self.keyChanged(usage: keyCode.rawValue, pressed: pressed)
+        }
+    }
+
+    #if os(iOS) || os(visionOS)
+    /// A hardware key from the UIKit responder chain, as its HID usage. True while this feed
+    /// carries the keys: Full Keyboard Access silences GameController and presses still arrive
+    /// (`KeyFeed`). The hop lets a GameController key already on the main queue speak first.
+    public func pressKey(usage: Int, down: Bool) -> Bool {
+        guard Self.activeCapture === self else { return false }
+        let carries = !keyFeed.gameControllerSpoke
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.takePress(usage: usage, down: down) }
+        }
+        return carries
+    }
+
+    private func takePress(usage: Int, down: Bool) {
+        guard Self.activeCapture === self else { return }
+        let modelled = keyboards.contains {
+            $0.keyboardInput?.button(forKeyCode: GCKeyCode(rawValue: usage)) != nil
+        }
+        switch keyFeed.takePress(usage: usage, down: down, modelled: modelled) {
+        case .ignore:
+            return
+        case .take:
+            if inputDebug {
+                inputLog.debug(
+                    "key usage \(usage, privacy: .public) \(down ? "down" : "up", privacy: .public) from presses")
             }
+            keyChanged(usage: usage, pressed: down)
+        case .missed:
+            if inputDebug {
+                inputLog.debug("key usage \(usage, privacy: .public) passed GameController by")
+            }
+            gameControllerFellSilent()
+            keyChanged(usage: usage, pressed: true)
+            keyChanged(usage: usage, pressed: false)
+            onKeyboardReposted?(true)
+            return
+        }
+        if keyFeed.pressesCarriedKey { onKeyboardReposted?(true) }
+    }
+
+    /// GameController is silent from here: Full Keyboard Access proved itself by a request, or
+    /// keys passed GameController by. The keys it put down are released, and both the feed
+    /// and the shortcut keys start over.
+    public func gameControllerFellSilent() {
+        releaseKeys()
+        forgetShortcutKeys()
+    }
+
+    /// Release every key the host holds and stop the repeat: no feed will report their release.
+    private func releaseKeys() {
+        stopAutoRepeat()
+        for vk in pressedVKs {
+            emitKey(vk, down: false)
+        }
+        pressedVKs.removeAll()
+    }
+    #endif
+
+    /// One edge of a physical key, as its HID usage: the toggle and the shortcuts in both
+    /// capture states, then the host while forwarding.
+    private func keyChanged(usage: Int, pressed: Bool) {
+        guard let vk = Self.hidToVK[usage] else { return }
+        if vk == 0x5B || vk == 0x5C { // physical ⌘ state, tracked in both states
             if pressed {
-                self.pressedVKs.insert(vk)
+                cmdKeysDown.insert(vk)
             } else {
-                self.pressedVKs.remove(vk)
+                cmdKeysDown.remove(vk)
             }
-            self.emitKey(vk, down: pressed)
-            // GC has no repeat channel, so a held key becomes a repeat here (see startAutoRepeat).
-            // A release only cancels the repeat if it is THIS key's — releasing an older key while
-            // a newer one is still held must leave the newer one repeating.
-            if pressed {
-                self.startAutoRepeat(vk)
-            } else if self.autoRepeatVK == vk {
-                self.stopAutoRepeat()
-            }
+        }
+        // The ⌘⎋ toggle's Esc, before the forwarding gate: engaging sets forwarding first.
+        if vk == suppressedVK {
+            if !pressed { suppressedVK = nil }
+            return
+        }
+        #if os(iOS) || os(visionOS)
+        if pressed, vk == 0x1B, !cmdKeysDown.isEmpty { // ⌘⎋
+            suppressedVK = 0x1B
+            onToggleCapture?()
+            return
+        }
+        // A modifier held before capture engaged still counts.
+        if shortcutTakes(vk, down: pressed) { return }
+        #endif
+        guard forwarding else { return }
+        // Never type Esc into the host while ⌘ is held (⌘⎋ is reserved).
+        if vk == 0x1B, !cmdKeysDown.isEmpty {
+            return
+        }
+        if pressed {
+            pressedVKs.insert(vk)
+        } else {
+            pressedVKs.remove(vk)
+        }
+        if inputDebug {
+            inputLog.debug(
+                "key \(vk, privacy: .public) \(pressed ? "down" : "up", privacy: .public) sent")
+        }
+        emitKey(vk, down: pressed)
+        // Neither feed repeats a held key (see startAutoRepeat). Only this key's release
+        // cancels the repeat: an older key released under a newer one leaves it repeating.
+        if pressed {
+            startAutoRepeat(vk)
+        } else if autoRepeatVK == vk {
+            stopAutoRepeat()
         }
     }
     #endif

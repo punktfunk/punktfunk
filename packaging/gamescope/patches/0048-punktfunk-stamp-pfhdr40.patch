@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sat, 21 Nov 2026 13:57:45 +0100
+Subject: [PATCH 48/48] punktfunk: stamp pfhdr40
+
+A host offers a tiled modifier on a planar capture only to a gamescope that
+lists them: an older one lists LINEAR alone, which fixates the consumer's
+default.
+---
+ src/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 395c5482..af0cb943 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -232,7 +232,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr37 — …and a refresh with a fraction (-r 59.94) runs to the millihertz
+ #   +pfhdr38 — …and Intel is told a LINEAR capture image is exported (Xe2 compressed it)
+ #   +pfhdr39 — …and a planar capture's chroma starts on a 16-row boundary on Intel
+-version_tag = vcs_tag + '+pfhdr39' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr40 — …and a planar capture dmabuf takes a tiled modifier its consumer accepts, on Intel
++version_tag = vcs_tag + '+pfhdr40' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+-- 
+2.56.0
+

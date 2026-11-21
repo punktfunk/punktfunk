@@ -758,6 +758,12 @@ pub(crate) fn gamescope_planar_capture_in_vram() -> bool {
     gamescope_patch_level() >= 25 && !flags_lost()
 }
 
+/// A planar capture lists tiled modifiers too. Below this it lists LINEAR alone, which
+/// fixates our default as [`gamescope_offers_tiled_capture`] says.
+pub(crate) fn gamescope_offers_tiled_planar_capture() -> bool {
+    gamescope_patch_level() >= 40 && !flags_lost()
+}
+
 /// The 10-bit capture formats are offered under BT.709 as well as PQ. Below this every 10-bit
 /// negotiation is HDR, so a 10-bit SDR session captures 8-bit and the encoder widens it.
 pub(crate) fn gamescope_captures_sdr10() -> bool {

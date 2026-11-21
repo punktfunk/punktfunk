@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sat, 21 Nov 2026 13:57:45 +0100
+Subject: [PATCH 47/48] pipewire: let a planar capture take a tiled modifier on
+ Intel
+
+Intel's full encode entrypoint reads its source as tiled. The media driver
+copies a LINEAR NV12 before it encodes it, and it reads a LINEAR P010 as it
+lies: a 10-bit capture came out as the picture repeated 32 times across.
+
+A planar capture now lists the tiled layouts Intel's Vulkan driver has for
+it beside LINEAR, and takes the one the consumer keeps, as a packed capture
+does. Each plane goes out where the driver put it. A consumer that lists
+LINEAR alone still gets LINEAR, and so does every other vendor.
+---
+ src/pipewire.cpp     |  7 ++-----
+ src/rendervulkan.cpp | 38 +++++++++++++++++++++++++++-----------
+ src/rendervulkan.hpp |  5 +++--
+ 3 files changed, 32 insertions(+), 18 deletions(-)
+
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index addf9afb..49d4f0d1 100644
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -71,12 +71,9 @@ static bool is_planar_video_format(uint32_t format)
+ 
+ uint32_t spa_format_to_drm(uint32_t spa_format);
+ 
+-// What a packed RGB capture texture can take besides LINEAR. Planar formats stay LINEAR: their
+-// plane layouts come from the LINEAR image's subresource layout.
++// What a capture texture can take besides LINEAR.
+ static std::vector<uint64_t> capture_modifiers(uint32_t format)
+ {
+-	if (is_planar_video_format(format))
+-		return {};
+ 	return vulkan_get_capture_modifiers(spa_format_to_drm(format));
+ }
+ 
+@@ -809,7 +806,7 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
+ 		screenshotImageFlags.bExportable = true;
+ 		const bool bPlanar = is_planar_video_format(state->video_info.format);
+ 		const EPlanarCaptureAlloc ePlanarAlloc = is_dmabuf && bPlanar ? vulkan_get_planar_capture_alloc(drmFormat) : EPlanarCaptureAlloc::PlainLinear;
+-		if (is_dmabuf && !bPlanar && state->modifier != DRM_FORMAT_MOD_LINEAR)
++		if (is_dmabuf && state->modifier != DRM_FORMAT_MOD_LINEAR)
+ 			screenshotImageFlags.ulDrmModifier = state->modifier;
+ 		else if (ePlanarAlloc == EPlanarCaptureAlloc::Buffer)
+ 			screenshotImageFlags.bPlanarBuffer = true;
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index af146911..78c3bcf8 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2302,9 +2302,25 @@ std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat )
+ 	if ( format == VK_FORMAT_UNDEFINED || iter == DRMModifierProps.end() )
+ 		return modifiers;
+ 
+-	// The usage a PipeWire capture texture is created with.
++	// Intel's encoder reads a tiled picture where it lies. Elsewhere a planar capture stays
++	// LINEAR.
++	static constexpr uint32_t k_uIntelVendorID = 0x8086;
++	const bool bPlanar = drmFormat == DRM_FORMAT_NV12 || drmFormat == DRM_FORMAT_P010;
++	if ( bPlanar && g_device.vendorID() != k_uIntelVendorID )
++		return modifiers;
++
++	// What a PipeWire capture texture is created with. A planar one is written through its
++	// plane views.
++	const std::array<VkFormat, 3> planarFormats = planar_capture_formats( drmFormat );
++	const VkImageFormatListCreateInfo formatList = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO,
++		.viewFormatCount = uint32_t( planarFormats.size() ),
++		.pViewFormats = planarFormats.data(),
++	};
+ 	const VkImageCreateInfo imageInfo = {
+ 		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++		.pNext = bPlanar ? &formatList : nullptr,
++		.flags = bPlanar ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT : VkImageCreateFlags( 0 ),
+ 		.imageType = VK_IMAGE_TYPE_2D,
+ 		.format = format,
+ 		.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+@@ -2316,10 +2332,10 @@ std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat )
+ 	{
+ 		if ( modifier == DRM_FORMAT_MOD_LINEAR || modifier == DRM_FORMAT_MOD_INVALID )
+ 			continue;
+-		// The PipeWire dmabuf path exports one plane.
+-		if ( props.drmFormatModifierPlaneCount != 1 )
++		// One memory plane for each plane the buffer names: a compressed layout has more.
++		if ( props.drmFormatModifierPlaneCount != ( bPlanar ? 2u : 1u ) )
+ 			continue;
+-		if ( !( props.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT ) )
++		if ( !bPlanar && !( props.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT ) )
+ 			continue;
+ 
+ 		VkExternalImageFormatProperties externalFormatProps = {
+@@ -2764,13 +2780,13 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+ 		m_unRowPitch = image_layout.rowPitch;
+ 	}
+ 
+-	// A LINEAR two-plane image has one layout per plane, and the driver may pad the first. The
+-	// CPU copy reads through these, and a dmabuf export hands them on to the consumer.
+-	const bool bLinearModifier = tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT && flags.ulDrmModifier == DRM_FORMAT_MOD_LINEAR;
+-	if ( ( tiling == VK_IMAGE_TILING_LINEAR || bLinearModifier ) && isYcbcr() )
++	// A two-plane capture image has one layout per plane, and the driver places the second. The
++	// CPU copy reads a LINEAR one through these, and a dmabuf export hands them on to the consumer.
++	const bool bCaptureModifier = tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT && flags.ulDrmModifier != DRM_FORMAT_MOD_INVALID;
++	if ( ( tiling == VK_IMAGE_TILING_LINEAR || bCaptureModifier ) && isYcbcr() )
+ 	{
+ 		const VkImageSubresource lumaSubresource = {
+-			.aspectMask = bLinearModifier ? VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT : VK_IMAGE_ASPECT_PLANE_0_BIT,
++			.aspectMask = bCaptureModifier ? VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT : VK_IMAGE_ASPECT_PLANE_0_BIT,
+ 		};
+ 		VkSubresourceLayout lumaLayout;
+ 		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &lumaSubresource, &lumaLayout);
+@@ -2779,7 +2795,7 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+ 		m_lumaPitch = lumaLayout.rowPitch;
+ 
+ 		const VkImageSubresource chromaSubresource = {
+-			.aspectMask = bLinearModifier ? VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT : VK_IMAGE_ASPECT_PLANE_1_BIT,
++			.aspectMask = bCaptureModifier ? VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT : VK_IMAGE_ASPECT_PLANE_1_BIT,
+ 		};
+ 		VkSubresourceLayout chromaLayout;
+ 		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &chromaSubresource, &chromaLayout);
+@@ -2915,7 +2931,7 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+ 
+ 		// A planar export is only written, through its plane views below. The whole image has no
+ 		// storage feature for a view to inherit.
+-		if ( !( bLinearModifier && isYcbcr() ) )
++		if ( !( bCaptureModifier && isYcbcr() ) )
+ 		{
+ 			res = g_device.vk.CreateImageView(g_device.device(), &createInfo, nullptr, &m_srgbView);
+ 			if ( res != VK_SUCCESS ) {
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index c1b81ba0..1d6150c0 100644
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -130,8 +130,9 @@ inline GamescopeAppTextureColorspace VkColorSpaceToGamescopeAppTextureColorSpace
+ 	}
+ }
+ 
+-// Modifiers other than LINEAR that a single-plane, exportable storage image of this format can
+-// take. Empty without VK_EXT_image_drm_format_modifier.
++// Modifiers other than LINEAR that an exportable capture image of this format can take: one
++// memory plane per format plane. A planar format has them on Intel only. Empty without
++// VK_EXT_image_drm_format_modifier.
+ std::vector<uint64_t> vulkan_get_capture_modifiers( uint32_t drmFormat );
+ 
+ // How a planar capture dmabuf is allocated; the consumer imports DRM_FORMAT_MOD_LINEAR.
+-- 
+2.56.0
+

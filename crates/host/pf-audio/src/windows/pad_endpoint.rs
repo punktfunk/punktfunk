@@ -1106,7 +1106,7 @@ pub fn validate(mut pe: PadEndpoint, may_remint: bool) -> PadEndpoint {
 }
 
 /// The in-session half of [`validate`], on an endpoint the streamer has already shown: no
-/// re-mint, since the streamer holds this endpoint id for its life.
+/// re-mint, since the streamer holds this endpoint id for its life. Tells the health listener.
 pub fn repair_shown(pad_index: u8, endpoint_id: &str) {
     let Some(pe) = endpoint_for(pad_index).filter(|pe| pe.endpoint_id == endpoint_id) else {
         return;
@@ -1116,6 +1116,7 @@ pub fn repair_shown(pad_index: u8, endpoint_id: &str) {
         outcome = reshape_and_probe(&pe);
     }
     record_verdict(&pe, &outcome);
+    health_changed();
 }
 
 /// Re-mint the devnode by hand and run the ladder on the fresh endpoint: the `pad-endpoint
@@ -1137,6 +1138,8 @@ pub fn remint(pe: &PadEndpoint) -> Result<PadEndpoint> {
 /// What the `pad_audio` diagnostics row reports.
 pub enum PadAudioHealth {
     Off,
+    /// The provisioning worker is still running; no verdict yet.
+    Provisioning,
     NotProvisioned,
     Ok {
         slots: usize,
@@ -1152,6 +1155,9 @@ pub fn health() -> PadAudioHealth {
         return PadAudioHealth::Off;
     }
     let Some(eps) = PROVISIONED.get() else {
+        if PROVISIONING.load(std::sync::atomic::Ordering::SeqCst) {
+            return PadAudioHealth::Provisioning;
+        }
         return PadAudioHealth::NotProvisioned;
     };
     match eps
@@ -1163,10 +1169,27 @@ pub fn health() -> PadAudioHealth {
     }
 }
 
+/// Runs each time [`health`] may have changed: provisioning settled, or a pad's verdict moved.
+static ON_HEALTH_CHANGE: OnceLock<fn()> = OnceLock::new();
+
+/// Register the [`health`] listener, and call it now if no provisioning is in flight: a worker
+/// that settled before this call found no listener to tell.
+pub fn on_health_change(f: fn()) {
+    if ON_HEALTH_CHANGE.set(f).is_ok() && !PROVISIONING.load(std::sync::atomic::Ordering::SeqCst) {
+        f();
+    }
+}
+
+fn health_changed() {
+    if let Some(f) = ON_HEALTH_CHANGE.get() {
+        f();
+    }
+}
+
 /// Host-startup pre-provision: COM worker `ensure()`s slots `0..N`, at most
 /// one AEB+Audiosrv restart if a stamp is stored-but-not-served, then
-/// publishes for [`endpoint_for`]. Failure logs once and leaves the feature
-/// off — the pad still works, without audio.
+/// publishes for [`endpoint_for`] and tells the [`on_health_change`] listener.
+/// Failure logs once and leaves the feature off — the pad still works, without audio.
 ///
 /// `startup` gates that restart. It bounces Audiosrv and AudioEndpointBuilder,
 /// which cuts every stream on the box, so only the pre-session call may do it —
@@ -1241,6 +1264,7 @@ pub fn provision_at_startup(startup: bool) {
                 let _ = PROVISIONED.set(Arc::new(eps));
             }
             PROVISIONING.store(false, std::sync::atomic::Ordering::SeqCst);
+            health_changed();
         });
     if let Err(e) = spawned {
         PROVISIONING.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1378,6 +1402,16 @@ mod tests {
     use super::*;
     // The blobs below encode the pad layout the capturer reads back.
     use super::super::pad_capture::PAD_CHANNEL_MASK;
+
+    /// The startup diagnostics reading lands while the worker runs; it must not say "not set up".
+    #[test]
+    fn an_in_flight_worker_is_not_reported_missing() {
+        use std::sync::atomic::Ordering::SeqCst;
+        PROVISIONING.store(true, SeqCst);
+        let health = health();
+        PROVISIONING.store(false, SeqCst);
+        assert!(!matches!(health, PadAudioHealth::NotProvisioned));
+    }
 
     #[test]
     fn registry_stamp_hive_follows_the_endpoint_direction() {

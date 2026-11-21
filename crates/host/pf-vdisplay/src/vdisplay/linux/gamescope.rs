@@ -42,9 +42,9 @@ pub use discovery::HdrContent;
 pub(crate) use discovery::{
     display_presenting, foreign_gamescope_running, game_session_exited,
     gamescope_can_composite_cursor, gamescope_captures_sdr10, gamescope_hdr_capable,
-    gamescope_offers_tiled_capture, gamescope_planar_capture_in_vram, gamescope_runs_exact_rates,
-    is_available, steam_appid_from_launch, wait_for_steam_game_exit, xwayland_cursor_targets,
-    SteamGameWatch,
+    gamescope_offers_tiled_capture, gamescope_offers_tiled_planar_capture,
+    gamescope_planar_capture_in_vram, gamescope_runs_exact_rates, is_available,
+    steam_appid_from_launch, wait_for_steam_game_exit, xwayland_cursor_targets, SteamGameWatch,
 };
 pub(crate) use heads::list_monitors;
 pub(crate) use splash::run as splash_run;

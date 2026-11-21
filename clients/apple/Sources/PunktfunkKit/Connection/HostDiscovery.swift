@@ -116,6 +116,10 @@ public final class HostDiscovery: ObservableObject {
     /// not gone. nil once settled.
     private var settlesAt: Date?
 
+    /// Browsers start and stop here, in order. `start` opens the mDNS daemon's socket on the
+    /// thread that calls it, and a daemon that does not answer holds that thread.
+    private nonisolated static let browserQueue = DispatchQueue(label: "io.unom.punktfunk.discovery")
+
     /// A LAN resolve answers in milliseconds; this only has to outlast a slow Wi-Fi wake.
     private static let resolveTimeout: TimeInterval = 6
     /// How long `isScanning` holds — and `rescan()` waits — after a manual refresh.
@@ -144,7 +148,7 @@ public final class HostDiscovery: ObservableObject {
         sweep?.cancel()
         sweep = nil
         generation &+= 1
-        browser?.cancel()
+        Self.retire(browser)
         browser = nil
         for conn in connections.values { conn.cancel() }
         connections.removeAll()
@@ -203,7 +207,7 @@ public final class HostDiscovery: ObservableObject {
 
     deinit {
         sweep?.cancel()
-        browser?.cancel()
+        Self.retire(browser)
         for conn in connections.values { conn.cancel() }
     }
 
@@ -242,7 +246,7 @@ public final class HostDiscovery: ObservableObject {
     /// entries — `pump()` restarts them against the new generation.
     private func armBrowser() {
         generation &+= 1
-        browser?.cancel()
+        Self.retire(browser)
         for conn in connections.values { conn.cancel() }
         connections.removeAll()
         deadlines.removeAll()
@@ -268,7 +272,13 @@ public final class HostDiscovery: ObservableObject {
             }
         }
         self.browser = browser
-        browser.start(queue: .main)
+        Self.browserQueue.async { browser.start(queue: .main) }
+    }
+
+    /// Cancels a browser behind its own start, which may still wait in `browserQueue`.
+    private nonisolated static func retire(_ browser: NWBrowser?) {
+        guard let browser else { return }
+        browserQueue.async { browser.cancel() }
     }
 
     /// A browser that stops working never recovers on its own, and it has two ways to stop:

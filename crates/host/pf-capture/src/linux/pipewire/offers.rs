@@ -303,6 +303,21 @@ fn encoder_tiled_offer(cfg: &StreamConfig, ladder: &Ladder) -> bool {
     cfg.plan.vaapi_passthrough && wanted && !ladder.refused(Refusal::Tiled)
 }
 
+/// The modifiers the producer's own NV12/P010 pod lists, LINEAR included; empty withholds the
+/// pod. The encoder's tiled layouts go out on the VA passthrough alone, and a refused tiled
+/// offer leaves what is LINEAR.
+pub(super) fn planar_modifier_offer(cfg: &StreamConfig, ladder: &Ladder) -> Vec<u64> {
+    let tiled = cfg.plan.vaapi_passthrough && !ladder.refused(Refusal::Tiled);
+    planar_offer(cfg.policy.planar_modifiers.as_deref(), tiled)
+}
+
+/// `proved` with its tiled entries only while `tiled` offers stand. No list is LINEAR.
+fn planar_offer(proved: Option<&[u64]>, tiled: bool) -> Vec<u64> {
+    proved.map_or(vec![0], |list| {
+        list.iter().copied().filter(|&m| m == 0 || tiled).collect()
+    })
+}
+
 /// Packed 10-bit offers, PQ or gamescope's SDR ([`StreamConfig::ten_bit`]). Tiled has two
 /// readers: NVENC's raw convert, for the modifiers it samples, and the VA encoder's own import —
 /// the latter only for `encoder_modifiers`-proved modifiers. Every other arm de-tiles into 8
@@ -432,5 +447,19 @@ mod tests {
         );
         assert!(encoder_modifiers_for(&policy, AR24).is_empty());
         assert!(encoder_modifiers_for(&policy, 0xdeadbeef).is_empty());
+    }
+
+    /// A planar offer is the encoder's list, its tiled entries only while tiled offers stand.
+    /// No list is LINEAR, and a list left empty withholds the pod.
+    #[test]
+    fn planar_offer_follows_the_encoder() {
+        const Y_TILED: u64 = 0x100000000000002;
+        assert_eq!(super::planar_offer(None, true), vec![0]);
+        assert_eq!(
+            super::planar_offer(Some(&[Y_TILED, 0]), true),
+            vec![Y_TILED, 0]
+        );
+        assert_eq!(super::planar_offer(Some(&[Y_TILED, 0]), false), vec![0]);
+        assert!(super::planar_offer(Some(&[Y_TILED]), false).is_empty());
     }
 }

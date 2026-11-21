@@ -16,6 +16,9 @@ import Combine
 import PunktfunkKit
 import PunktfunkShared
 import SwiftUI
+#if os(iOS) || os(visionOS)
+import UIKit
+#endif
 
 /// The change signal of `RingState`'s drawing fields, which only the overlay watches.
 final class RingFrame: ObservableObject {
@@ -698,6 +701,11 @@ struct RingOverlay: View {
             }
         }
         #if os(iOS) || os(visionOS)
+        // Keyboard focus moving is a touch for the idle rule: Full Keyboard Access steps through
+        // the discs, and the ring must not close under it.
+        .onReceive(NotificationCenter.default.publisher(for: UIFocusSystem.didUpdateNotification)) { _ in
+            if state.committed { state.touch() }
+        }
         .sensoryFeedback(.selection, trigger: state.armTick)
         .sensoryFeedback(.impact(weight: .medium), trigger: state.commitTick)
         .sensoryFeedback(.impact(weight: .light), trigger: state.pressTick)

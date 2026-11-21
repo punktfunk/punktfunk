@@ -18,7 +18,7 @@
     "crates/host/pf-capture": 73,
     "crates/host/pf-clipboard": 7,
     "crates/host/pf-driver-proto": 3,
-    "crates/host/pf-encode": 46,
+    "crates/host/pf-encode": 47,
     "crates/host/pf-encode-core": 13,
     "crates/host/pf-encode-session": 4,
     "crates/host/pf-encode-win": 89,
