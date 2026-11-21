@@ -1476,12 +1476,13 @@ public final class SessionAudio: @unchecked Sendable {
         #if os(macOS)
         // The device the unit opened, not the one asked for: a pinned mic that is missing or
         // refused falls back to the default, whose loopback inputs must still stay out.
-        let skip = input.audioUnit.flatMap { Self.currentDevice(of: $0) }
+        let loopback = input.audioUnit.flatMap { Self.currentDevice(of: $0) }
             .map(AudioDevices.loopbackInputChannels(of:)) ?? []
         #else
-        let skip: [Int] = []
+        let loopback: [Int] = []
         #endif
-        let uplink = MicUplink(pinned: micChannel >= 1 ? micChannel - 1 : nil, skip: skip)
+        let plan = MicChannelPlan(pick: micChannel, loopback: loopback)
+        let uplink = MicUplink(plan: plan)
         engine.attach(uplink.node)
         // nil follows the bus. A format read a moment ago can be stale by now, and a stale one
         // raises.
@@ -1497,7 +1498,7 @@ public final class SessionAudio: @unchecked Sendable {
         }
 
         let channelPlan = Self.logMicCapture(
-            input: input, format: inFormat, micUID: micUID, micChannel: micChannel, skip: skip)
+            input: input, format: inFormat, micUID: micUID, plan: plan)
 
         // Mono end to end: the resampler takes mono at the input's rate onto the encoder's
         // 48 kHz mono, and the host's decoder upmixes. The PCM buffers are allocated here; in
@@ -1612,22 +1613,15 @@ public final class SessionAudio: @unchecked Sendable {
     /// back to the default, or a wrong channel, reads here and not as silence at the host.
     /// Returns the fold, which the level verdict names too.
     private static func logMicCapture(
-        input: AVAudioInputNode, format inFormat: AVAudioFormat, micUID: String, micChannel: Int,
-        skip: [Int]
+        input: AVAudioInputNode, format inFormat: AVAudioFormat, micUID: String,
+        plan: MicChannelPlan
     ) -> String {
-        // A pro interface has the mic on one of N inputs, and a converter's downmix takes
-        // channels 0 and 1. So the uplink folds to mono itself: 0 sums every channel but the
-        // device's loopback inputs, n ≥ 1 pins 1-based input channel n.
         let inChannels = Int(inFormat.channelCount)
-        if micChannel > inChannels {
+        if plan.pick > inChannels {
             log.warning(
-                "mic channel \(micChannel) out of range (device has \(inChannels)) — mixing all")
+                "mic channel \(plan.pick) out of range (device has \(inChannels)) — mixing all")
         }
-        let skipped = skip.filter { $0 < inChannels }.count
-        let mixed = skipped < inChannels ? inChannels - skipped : inChannels
-        let channelPlan = (1...inChannels).contains(micChannel)
-            ? "channel \(micChannel)/\(inChannels)"
-            : (inChannels > 1 ? "mix \(mixed)/\(inChannels)ch→mono" : "mono")
+        let channelPlan = plan.label(channels: inChannels)
 
         #if os(macOS)
         if let unit = input.audioUnit, let live = Self.currentDevice(of: unit),
@@ -1715,41 +1709,6 @@ public final class SessionAudio: @unchecked Sendable {
             monoFormat: monoFormat, resampler: resampler, mono: mono, staging: staging)
     }
 
-    /// Fold `channels` of input (`floatChannelData` layout: `interleaved` → one buffer strided by
-    /// channel count; else one buffer per channel) down to a single mono bus in `out` (`frames`
-    /// long). `pinned` (0-based, must be `< channels`) copies exactly that channel — the fix for a
-    /// mic on one input of a multi-channel interface. Otherwise every channel not in `skip` is
-    /// summed, clamped to [-1, 1], so a lone hot channel still passes at full level instead of
-    /// the silent 0/1 the default N→stereo downmix would grab. `skip` is the device's loopback
-    /// inputs: a copy of what the Mac plays, which would send the stream back up as the mic. A
-    /// `skip` covering every channel is ignored. Pure + `internal` for unit testing the index math.
-    static func foldToMono(
-        input: UnsafePointer<UnsafeMutablePointer<Float>>, frames: Int, channels: Int,
-        interleaved: Bool, pinned: Int?, skip: [Int] = [], out: UnsafeMutablePointer<Float>
-    ) {
-        if let ch = pinned, ch < channels {
-            if interleaved {
-                let d = input[0]
-                for i in 0..<frames { out[i] = d[i * channels + ch] }
-            } else {
-                let d = input[ch]
-                for i in 0..<frames { out[i] = d[i] }
-            }
-            return
-        }
-        let all = (0..<channels).allSatisfy { skip.contains($0) }
-        out.update(repeating: 0, count: frames)
-        for c in 0..<channels where all || !skip.contains(c) {
-            if interleaved {
-                let d = input[0]
-                for i in 0..<frames { out[i] += d[i * channels + c] }
-            } else {
-                let d = input[c]
-                for i in 0..<frames { out[i] += d[i] }
-            }
-        }
-        if channels > 1 { for i in 0..<frames { out[i] = max(-1, min(1, out[i])) } }
-    }
     #endif
 
     #if os(macOS)

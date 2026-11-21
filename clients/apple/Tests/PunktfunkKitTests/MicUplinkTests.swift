@@ -49,7 +49,7 @@ final class MicUplinkTests: XCTestCase {
         guard hardware.sampleRate > 0, hardware.channelCount > 0 else {
             throw XCTSkip("needs an input device")
         }
-        let uplink = MicUplink(pinned: nil)
+        let uplink = MicUplink(plan: MicChannelPlan(pick: 0, loopback: []))
         engine.attach(uplink.node)
         engine.connect(input, to: uplink.node, format: nil)
         engine.prepare()
