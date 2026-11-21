@@ -94,8 +94,15 @@ pub enum Backend {
     SendInput,
 }
 
+/// Preferred injection backend. macOS has only CoreGraphics events.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    CgEvent,
+}
+
 /// Preferred injection backend. [`open`] rejects it.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     /// Placeholder so the host still builds.
@@ -140,7 +147,14 @@ pub fn open(backend: Backend) -> Result<Box<dyn InputInjector>> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+pub fn open(backend: Backend) -> Result<Box<dyn InputInjector>> {
+    match backend {
+        Backend::CgEvent => Ok(Box::new(cgevent::CgEventInjector::open()?)),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn open(_backend: Backend) -> Result<Box<dyn InputInjector>> {
     anyhow::bail!("no input-injection backend on this platform")
 }
@@ -444,7 +458,12 @@ pub fn default_backend() -> Backend {
     Backend::SendInput
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+pub fn default_backend() -> Backend {
+    Backend::CgEvent
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn default_backend() -> Backend {
     Backend::Unsupported
 }
@@ -468,7 +487,13 @@ pub fn text_input_supported() -> bool {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS types any scalar as the Unicode string of a key event.
+#[cfg(target_os = "macos")]
+pub fn text_input_supported() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn text_input_supported() -> bool {
     false
 }
@@ -497,12 +522,12 @@ pub fn touch_supported() -> bool {
 /// `HOST_CAP2_SCROLL`). Every shipped backend does — the mapper lowers it onto
 /// each one's own primitives. Welcome-time; a host without the bit only sees
 /// the legacy `MouseScroll` wire.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub fn scroll_supported() -> bool {
     true
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn scroll_supported() -> bool {
     false
 }
@@ -1200,12 +1225,14 @@ pub use stream_target::{set_screen_target, set_stream_target};
 pub mod stream_output;
 #[cfg(target_os = "linux")]
 pub use stream_output::{set_stream_output, stream_output};
-/// The display absolute coordinates map into, as a `CGDirectDisplayID`: counterpart of
-/// Windows `stream_target`. Published at capture bring-up.
 #[cfg(target_os = "macos")]
-pub fn set_stream_display(display: Option<u32>) {
-    let _ = display;
-}
+#[path = "inject/macos/cgevent.rs"]
+mod cgevent;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/cgevent_plan.rs"]
+mod cgevent_plan;
+#[cfg(target_os = "macos")]
+pub use cgevent::{post_event_access, request_post_event_access, set_stream_display};
 /// Stub — pen injection needs the Linux uinput tablet or Windows synthetic pointers.
 /// `pen_supported()` is false here, so no host advertises the cap and no batches arrive.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
