@@ -448,6 +448,11 @@ unsafe fn query_encode_caps(
     let min_bs_align = caps.min_bitstream_buffer_size_alignment.max(1);
     let max_quality_levels = enc_caps.max_quality_levels;
     let rate_control_modes = enc_caps.rate_control_modes;
+    // DEFAULT and DISABLED need a no-layer shape this backend does not speak.
+    ensure!(
+        rate_controlled(rate_control_modes),
+        "encode without a bitrate mode: the driver has neither CBR nor VBR"
+    );
     let hw_max_bitrate = match enc_caps.max_bitrate {
         0 => u64::MAX, // not filled in — treat as unbounded
         n => n,
@@ -801,10 +806,11 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> Option<VulkanEncodeCaps> {
             Some(Some(pd)) => {
                 let vq_inst = ash::khr::video_queue::Instance::new(&entry, &instance);
                 let eight_bit = depth_supported(&vq_inst, pd, codec_op, av1, false);
+                let ten_bit = depth_supported(&vq_inst, pd, codec_op, av1, true);
                 Some(VulkanEncodeCaps {
-                    supported: true,
+                    supported: eight_bit || ten_bit,
                     eight_bit,
-                    ten_bit: depth_supported(&vq_inst, pd, codec_op, av1, true),
+                    ten_bit,
                     efc: build::probe_efc_pairs(&instance, &vq_inst, pd, codec_op, av1, !eight_bit),
                     vcn: build::vcn_firmware_of(&instance, pd),
                 })
@@ -817,8 +823,9 @@ pub(crate) fn probe_encode_caps(codec: Codec) -> Option<VulkanEncodeCaps> {
     }
 }
 
-/// Whether `pd` accepts an encode profile for `codec_op` at this bit depth. Profile chain is
-/// [`VulkanVideoEncoder::open_inner`]'s, minus the RGB-conversion struct.
+/// Whether `pd` accepts an encode profile for `codec_op` at this bit depth and drives it to a
+/// bitrate. Profile chain is [`VulkanVideoEncoder::open_inner`]'s, minus the RGB-conversion
+/// struct.
 ///
 /// # Safety
 /// `vq_inst` must wrap the live instance `pd` was enumerated from.
@@ -845,6 +852,7 @@ unsafe fn depth_supported(
     }
     (vq_inst.fp().get_physical_device_video_capabilities_khr)(pd, &profile, &mut caps)
         == vk::Result::SUCCESS
+        && rate_controlled(enc_caps.rate_control_modes)
 }
 
 fn codec_op_for(av1: bool) -> vk::VideoCodecOperationFlagsKHR {
@@ -3061,8 +3069,8 @@ mod record;
 mod build;
 use self::build::{
     align_up, av1_coded_frame, build_parameters_av1, build_parameters_h265, h265_block_log2,
-    make_frame, make_video_image, probe_rgb_direct, probe_yuv_storage_planes, rc_plan,
-    rgb_model_for, rgb_range_for,
+    make_frame, make_video_image, probe_rgb_direct, probe_yuv_storage_planes, rate_controlled,
+    rc_plan, rgb_model_for, rgb_range_for,
 };
 
 #[cfg(test)]
