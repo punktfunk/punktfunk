@@ -1124,7 +1124,8 @@ mod tests {
     }
 
     /// A `vulkan` pin the GPU can't open falls back to VAAPI rather than failing the session.
-    /// GPU-free: without a device the error must be VAAPI's, not Vulkan's.
+    /// Where Vulkan can't encode, the error must be VAAPI's (libva names its calls `va…`), not
+    /// Vulkan's.
     #[cfg(feature = "vulkan-encode")]
     #[test]
     fn a_vulkan_pin_falls_back_to_vaapi() {
@@ -1136,7 +1137,8 @@ mod tests {
             Ok((_, label)) => assert!(matches!(label, "vulkan" | "vaapi-native"), "{label}"),
             Err(e) => {
                 let msg = format!("{e:#}");
-                assert!(msg.contains("libva") || msg.contains("VAAPI"), "{msg}");
+                let vaapi = msg.contains("libva") || msg.contains("VAAPI") || msg.starts_with("va");
+                assert!(vaapi, "{msg}");
             }
         }
     }

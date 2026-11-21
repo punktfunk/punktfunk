@@ -68,7 +68,8 @@ fn add_bare_gamescope_args(
         .args(["--backend", "headless"])
         .args(["-W", &mode.width.to_string()])
         .args(["-H", &mode.height.to_string()])
-        .args(["-r", &rate]);
+        .args(["-r", &rate])
+        .args(device_args(pf_gpu::linux_named_gpu().as_ref()));
     if steam_mode {
         command.arg("--steam");
     }
@@ -79,6 +80,21 @@ fn add_bare_gamescope_args(
     // `-r` is already the reported refresh. This adds the rest of the advertised set.
     command.args(refresh_rate_args(hz));
     command.args(["--xwayland-count", "1", "--"]);
+}
+
+/// `--prefer-vk-device` for a GPU the operator named, so the capture is composited where the
+/// encoder reads it and the game inside renders there too. On auto gamescope keeps Mesa's first
+/// device, the boot-VGA GPU [`pf_gpu::linux_render_node`] falls back to. Twin cards share
+/// vendor:device, so gamescope takes the first of them.
+fn device_args(named: Option<&pf_gpu::GpuInfo>) -> Vec<String> {
+    named
+        .map(|g| {
+            vec![
+                "--prefer-vk-device".to_string(),
+                format!("{:04x}:{:04x}", g.vendor_id, g.device_id),
+            ]
+        })
+        .unwrap_or_default()
 }
 
 /// Our compositor flags, the set [`verify_managed_spawn_flags`] checks. Every spawn path passes
@@ -576,6 +592,21 @@ fn exe_for_children(exe: std::path::PathBuf) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_gpu_pins_the_compositor_and_auto_leaves_it() {
+        let arc = pf_gpu::GpuInfo {
+            id: String::new(),
+            name: String::new(),
+            vendor_id: pf_gpu::VENDOR_INTEL,
+            device_id: 0xe20b,
+            occurrence: 0,
+            vram_bytes: 0,
+            handle: Default::default(),
+        };
+        assert_eq!(device_args(Some(&arc)), ["--prefer-vk-device", "8086:e20b"]);
+        assert!(device_args(None).is_empty());
+    }
 
     /// After an in-place upgrade the running host's exe link reads `… (deleted)`; the
     /// wrapper must still find a splash binary to exec.
