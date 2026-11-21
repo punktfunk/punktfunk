@@ -43,6 +43,7 @@ mod reach;
 mod safe_open;
 mod session;
 mod shared;
+mod shortcuts;
 pub mod socket;
 pub mod stage;
 #[cfg(test)]
@@ -1538,15 +1539,22 @@ impl LinuxBackend {
         Ok(written)
     }
 
-    /// The owner's libraries a made seat is shown, listed in its Steam's library list.
+    /// The owner's libraries a made seat is shown, listed in its Steam's library list, and the
+    /// owner's shortcuts put into that Steam ([`shortcuts`]).
     fn share_libraries(&self, seat: &Seat, passwd: &accounts::Passwd) -> Option<libraries::Shares> {
         let (box_dir, state) = (&self.inner.box_dir, &self.inner.state);
         let source = self.steam_source();
         let root = source.as_ref().map(|s| s.root.as_path());
         let owner = self.owner();
-        let shares = libraries::share(box_dir, state, &seat.id, passwd, root, owner.as_ref());
+        let mut shares = libraries::share(box_dir, state, &seat.id, passwd, root, owner.as_ref());
         let shown = shares.as_ref().map_or(&[][..], |s| s.libraries.as_slice());
         libraries::register(state, &seat.id, passwd, shown);
+        if let Some(shares) = shares.as_mut() {
+            let door = door_reader(&self.inner);
+            let (owner, libraries) = (owner.as_ref(), &shares.libraries);
+            shares.overlays =
+                shortcuts::share(state, &seat.id, passwd, owner, root, libraries, door);
+        }
         shares
     }
 
