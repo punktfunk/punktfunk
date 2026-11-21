@@ -1470,7 +1470,10 @@ public final class SessionAudio: @unchecked Sendable {
             return nil
         }
         #if os(macOS)
-        let skip = AudioDevices.loopbackInputChannels(forUID: micUID)
+        // The device the unit opened, not the one asked for: a pinned mic that is missing or
+        // refused falls back to the default, whose loopback inputs must still stay out.
+        let skip = input.audioUnit.flatMap { Self.currentDevice(of: $0) }
+            .map(AudioDevices.loopbackInputChannels(of:)) ?? []
         #else
         let skip: [Int] = []
         #endif
