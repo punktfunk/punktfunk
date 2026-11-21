@@ -135,6 +135,8 @@ public final class SessionAudio: @unchecked Sendable {
     /// `CombinedTopologyGate` and the note on `installDeviceChangeRecovery`).
     /// `engineQueue`-confined, like the start paths that consult and feed it.
     private var combinedGate = CombinedTopologyGate()
+    /// The default input and output the combined engine started on. `engineQueue`-confined.
+    private var combinedDevices: [AudioDeviceID?] = []
     #endif
     /// How many times `rebuildFailed` retries a rebuild whose playback did not come back.
     private static let rebuildAttempts = 3
@@ -607,8 +609,8 @@ public final class SessionAudio: @unchecked Sendable {
     ///
     /// A rebuild's own HAL churn can retrigger it. Three defenses keep the recovery from answering
     /// itself: a configuration change from a RUNNING engine is a rebuild's echo (`hardwareMoved`);
-    /// a voice-processing failure is latched per input device (`CombinedTopologyGate`); rebuilds
-    /// that chain anyway back off exponentially (`RebuildBackoff`).
+    /// voice processing that fails to start, or stops again after a rebuild, is latched per input
+    /// device (`CombinedTopologyGate`); rebuilds that chain anyway back off (`RebuildBackoff`).
     ///
     /// `micEnabled` picks the session category the iOS and tvOS observers reactivate with.
     @MainActor
@@ -741,7 +743,8 @@ public final class SessionAudio: @unchecked Sendable {
     /// actual engine work to `engineQueue` — the teardown + start can block on the audio server
     /// for seconds, and the main thread is where macOS captures and sends the stream's input.
     /// A trigger arriving while the work is in flight schedules a fresh rebuild rather than
-    /// being swallowed; `engineQueue` is serial, so the two never interleave.
+    /// being swallowed; `engineQueue` is serial, so the two never interleave. The chain count
+    /// travels with the work: it decides whether a dead voice processor gets another try.
     @MainActor
     private func rebuildFire(attempt: Int) {
         rebuildQueued = false
@@ -751,8 +754,9 @@ public final class SessionAudio: @unchecked Sendable {
         stateLock.unlock()
         guard let config else { return }
         rebuildBackoff.noteRebuild(at: ProcessInfo.processInfo.systemUptime)
+        let chain = rebuildBackoff.chain
         engineQueue.async { [weak self] in
-            self?.performRebuild(config: config, attempt: attempt)
+            self?.performRebuild(config: config, attempt: attempt, chain: chain)
         }
     }
 
@@ -765,8 +769,23 @@ public final class SessionAudio: @unchecked Sendable {
     /// across (`makePlaybackChain` reuses it, `startDrain` is idempotent), so the drain thread
     /// keeps decoding right through the switch and its overflow policy has already dropped
     /// everything that went stale while the engine was down.
-    private func performRebuild(config: StartConfig, attempt: Int) {
+    ///
+    /// A voice-processing engine that started and then stopped itself again is latched as a
+    /// failure first (`CombinedTopologyGate.stoppedEngineFailed`), so this rebuild comes up on
+    /// separate engines instead of re-engaging the processor that keeps dying.
+    private func performRebuild(config: StartConfig, attempt: Int, chain: Int) {
         guard !flag.isStopped else { return }
+        #if os(macOS)
+        stateLock.lock()
+        let combined = combinedEngine
+        stateLock.unlock()
+        if CombinedTopologyGate.stoppedEngineFailed(
+            stopped: combined.map { !$0.isRunning } ?? false,
+            devicesMoved: combinedDevices != Self.defaultDevices(), attempt: attempt, chain: chain) {
+            log.warning("voice processing stopped the audio again after a restart")
+            noteCombinedFailure()
+        }
+        #endif
         tearDownEngines()
         startEngines(
             speakerUID: config.speakerUID, micUID: config.micUID, micChannel: config.micChannel,
@@ -1242,14 +1261,14 @@ public final class SessionAudio: @unchecked Sendable {
             self.stateLock.unlock()
             guard let config else { return }
             _ = self.drainDone.wait(timeout: .now() + .milliseconds(400))
-            self.performRebuild(config: config, attempt: 0)
+            self.performRebuild(config: config, attempt: 0, chain: 0)
         }
     }
 
     // MARK: - Mic (mic → host)
 
     #if !os(tvOS)
-    /// The combined topology failed to come up. On macOS, latch the input device it failed on so
+    /// The combined topology failed to come up or to stay up. On macOS, latch the input device so
     /// a rebuild goes straight to the split topology instead of re-running the failure — the
     /// failed attempt is what churns the HAL and retriggers the recovery (see
     /// `CombinedTopologyGate`). On iOS routes are session-managed and a VPIO failure is the
@@ -1259,6 +1278,13 @@ public final class SessionAudio: @unchecked Sendable {
         combinedGate.noteFailure(input: AudioDevices.defaultInputDevice())
         #endif
     }
+
+    #if os(macOS)
+    /// The system default input and output, in that order.
+    private static func defaultDevices() -> [AudioDeviceID?] {
+        [AudioDevices.defaultInputDevice(), AudioDevices.defaultOutputDevice()]
+    }
+    #endif
 
     /// One engine, both directions: engage the system voice processor on the shared IO unit
     /// (AEC + noise suppression + AGC), hang the playback source off its render side and the
@@ -1340,6 +1366,9 @@ public final class SessionAudio: @unchecked Sendable {
         micUplink = uplink
         let muted = micMuted // latched before this engine existed (a mute during the prompt)
         stateLock.unlock()
+        #if os(macOS)
+        combinedDevices = Self.defaultDevices()
+        #endif
         apply(micMuted: muted, capture: nil, combined: engine)
         // Read on this path too: the voice processor picks its own formats, and a VPIO unit
         // is the least likely thing in the graph to have honoured a 96 kHz request.
