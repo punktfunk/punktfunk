@@ -1325,7 +1325,13 @@ public final class SessionAudio: @unchecked Sendable {
         }
         engine.attach(source)
         engine.connect(source, to: engine.mainMixerNode, format: format)
+        #if os(macOS)
+        // macOS renders at the capture rate, or the processor refuses to initialize (see
+        // `connectMixerAtOutputWidth`). iOS sessions run one shared rate already.
         connectMixerAtOutputWidth(engine, captureRate: input.outputFormat(forBus: 0).sampleRate)
+        #else
+        connectMixerAtOutputWidth(engine)
+        #endif
 
         // Prepared before the capture reads a format: enabling voice processing swaps the IO
         // unit, and until then the input can report 0 Hz, which reads as no input device.
@@ -1341,6 +1347,13 @@ public final class SessionAudio: @unchecked Sendable {
             startCapture(micUID: micUID, micChannel: micChannel)
             return
         }
+        #if os(macOS)
+        // The rate read above came before prepare(); the capture can settle on another one.
+        let captureRate = input.outputFormat(forBus: 0).sampleRate
+        if captureRate > 0, engine.mainMixerNode.outputFormat(forBus: 0).sampleRate != captureRate {
+            connectMixerAtOutputWidth(engine, captureRate: captureRate)
+        }
+        #endif
         // Mute before the IO unit opens: applied after start, the first quantum is room audio.
         engine.inputNode.isVoiceProcessingInputMuted = latchedMicMute
         do {
