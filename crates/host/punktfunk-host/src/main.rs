@@ -157,6 +157,9 @@ mod ctl;
 mod native;
 #[forbid(unsafe_code)]
 mod native_pairing;
+// A title in Steam's tree: `ctl`'s client, and the child it starts for Steam.
+#[cfg(target_os = "linux")]
+mod play;
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the handshake and the management routes read it")
@@ -397,6 +400,8 @@ fn is_management_cli(args: &[String]) -> bool {
         | Some("tray")
         // Loopback API client; `watch` is long-lived — do not take GPU clocks or the DXGI hook.
         | Some("ctl")
+        // A loopback client in Steam's tree: its child is the game, which owns the GPU.
+        | Some("play")
         | Some("settings")
         | Some("openapi")
         | Some("library")
@@ -475,14 +480,17 @@ fn startup(args: &[String]) {
 
 fn real_main() -> Result<()> {
     take_env_credentials();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `play`'s environment is the game's: no encoder opt-in of the host's in it.
     #[cfg(target_os = "linux")]
-    if let Some(value) = encode::anv_video_encode_flag() {
+    let play = args.first().is_some_and(|a| a == "play");
+    #[cfg(target_os = "linux")]
+    if let Some(value) = encode::anv_video_encode_flag().filter(|_| !play) {
         // SAFETY: right after `take_env_credentials`, so still single-threaded, and no Vulkan
         // instance exists yet (Mesa reads the variable when its ICD loads).
         unsafe { std::env::set_var("ANV_DEBUG", &value) };
         tracing::debug!(value, "ANV_DEBUG opted into Mesa Vulkan Video encode");
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
 
     if matches!(
         args.first().map(String::as_str),
@@ -527,6 +535,8 @@ fn real_main() -> Result<()> {
             Ok(())
         }
         Some("ctl") => ctl::main(&args[1..]),
+        #[cfg(target_os = "linux")]
+        Some("play") => play::main(),
         Some("settings") => settings_cli(&args[1..]),
         Some("plugins") => plugins::main(&args[1..], library::delete_provider),
         Some("openapi") => {

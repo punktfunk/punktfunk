@@ -1040,3 +1040,91 @@ async fn provider_running_report_validation() {
     assert!(!crate::runstate::speaks_for(Some("playnite:no-such-title")));
     crate::runstate::forget("playnite");
 }
+
+// ------------------------------------------------------------------ Steam entries
+
+/// A box with Steam titles, two of them entries the Decky plugin made, a ROM it can sync and a
+/// launcher it can't.
+pub(super) fn steam_box(dir: &std::path::Path) {
+    let steam = |id: &str, title: &str| {
+        serde_json::json!({ "id": id, "title": title, "provider": "steam", "store": "steam",
+            "external_id": id, "launch": { "kind": "steam_appid", "value": id } })
+    };
+    let catalog = serde_json::json!({
+        "entries": [
+            steam("400", "Portal"),
+            steam("2890012345", "Chrono Trigger"),
+            steam("2764001122", "Punktfunk"),
+            { "id": "r1", "title": "Chrono Trigger", "provider": "rom-manager",
+              "store": "rom-manager", "external_id": "snes/chrono", "platform": "SNES",
+              "launch": { "kind": "command", "value": "sleep 30" } },
+            { "id": "l1", "title": "Lutris", "provider": "lutris", "store": "lutris",
+              "external_id": "ui", "role": "launcher",
+              "launch": { "kind": "launcher_ui", "value": "lutris" } },
+        ],
+        "claims": { "steam": "steam", "rom-manager": "rom-manager", "lutris": "lutris" },
+    });
+    std::fs::write(dir.join("library.json"), catalog.to_string()).unwrap();
+}
+
+/// The ids `GET /library` lists.
+async fn library_ids(app: &Router) -> Vec<String> {
+    let (status, body) = send(app, get_req("/api/v1/library")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ids = body.as_array().expect("entries").iter();
+    ids.map(|g| g["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// The list offers the games a Steam entry may start, no Steam title and no launcher. The map
+/// comes back as it was sent, a map off the shape is refused whole, and the library leaves out
+/// each `steam:<n>` the map names, synced or the plugin's own.
+#[tokio::test]
+async fn the_steam_map_round_trips_and_hides_what_was_synced() {
+    let tmp = ConfigDirOverride::new();
+    steam_box(tmp.path());
+    let app = test_app(test_state(), None);
+
+    let (status, list) = send(&app, get_req("/api/v1/steam/entries")).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["steam_owns_desk"], false);
+    assert_eq!(
+        list["entries"],
+        serde_json::json!([{ "id": "rom-manager:snes/chrono", "title": "Chrono Trigger",
+            "source": "rom-manager", "platform": "SNES", "art": [] }])
+    );
+    assert_eq!(
+        list["sources"],
+        serde_json::json!([{ "id": "rom-manager", "name": "rom-manager", "games": 1 }])
+    );
+    let all = ["steam:2764001122", "steam:2890012345", "steam:400"];
+    let before = library_ids(&app).await;
+    let listed = |id: &&str| before.iter().any(|b| b == id);
+    assert!(all.iter().all(listed), "{before:?}");
+
+    let map = serde_json::json!({ "version": 1,
+        "entries": { "rom-manager:snes/chrono": 2_890_012_345u32 }, "own": [2_764_001_122u32] });
+    let put = |body| json_req(Method::PUT, "/api/v1/steam/entries", body);
+    let (status, body) = send(&app, put(map.clone())).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let stored = std::fs::read_to_string(tmp.path().join("library-steam-entries.json")).unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(stored, map, "the map as it was sent");
+
+    for bad in [
+        serde_json::json!({ "version": 2, "entries": {}, "own": [] }),
+        serde_json::json!({ "version": 1, "entries": { "steam:400": 7 }, "own": [] }),
+        serde_json::json!({ "version": 1, "entries": { "a:1": 7, "a:2": 7 }, "own": [] }),
+        serde_json::json!({ "version": 1, "entries": { "a:1": 4_294_967_296u64 }, "own": [] }),
+    ] {
+        let (status, _) = send(&app, put(bad.clone())).await;
+        assert!(status.is_client_error(), "{bad}: {status}");
+    }
+    let kept = serde_json::to_value(crate::library::SteamEntries::load()).unwrap();
+    assert_eq!(kept, map, "a refused map changes nothing");
+
+    let after = library_ids(&app).await;
+    assert!(after.iter().any(|id| id == "steam:400"), "{after:?}");
+    for synced in &all[..2] {
+        assert!(!after.iter().any(|id| id == synced), "{synced} is left out");
+    }
+}

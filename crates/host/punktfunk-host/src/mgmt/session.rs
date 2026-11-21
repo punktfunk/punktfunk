@@ -619,23 +619,13 @@ pub(crate) async fn launch_game(
         _ => return not_allowed_to_start_games(),
     }
     if !crate::desk::has_desk(pf_paths::seat::role()) {
-        return api_error_coded(
-            StatusCode::CONFLICT,
-            "local_no_desk",
-            "This host has no screen of its own to play on.",
-        );
+        return no_desk();
     }
     let (owner, opens) = desk_owner(&st, fp);
     if !opens {
         return not_allowed_to_start_games();
     }
-    let view = owner
-        .as_ref()
-        .map_or_else(crate::library::View::here, crate::library::View::session);
-    let profile = owner.map(|o| crate::events::ProfileRef {
-        id: o.id,
-        display_name: o.display_name,
-    });
+    let (view, profile) = desk_view(owner);
     let app = req.app_id.clone();
     let started =
         tokio::task::spawn_blocking(move || crate::desk::start(&view, &app, profile)).await;
@@ -658,6 +648,11 @@ pub(crate) async fn launch_game(
             );
         }
     };
+    refusal(refused)
+}
+
+/// The coded answer for a desk launch the host refused.
+fn refusal(refused: crate::desk::Refused) -> Response {
     use crate::desk::Refused;
     match refused {
         Refused::NoSuchGame => api_error_coded(
@@ -683,6 +678,15 @@ pub(crate) async fn launch_game(
     }
 }
 
+/// A seat, the owner's headless row or the door: no screen of its own.
+fn no_desk() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "local_no_desk",
+        "This host has no screen of its own to play on.",
+    )
+}
+
 /// A device without the launch grant, or one a locked owner profile doesn't let in.
 fn not_allowed_to_start_games() -> Response {
     api_error_coded(
@@ -690,6 +694,27 @@ fn not_allowed_to_start_games() -> Response {
         "device_not_allowed_to_start_games",
         "This device isn't allowed to start games on this host.",
     )
+}
+
+/// What `owner` plays at the desk: its library view, and the profile its play time goes to.
+fn desk_view(
+    owner: Option<crate::profiles::Resolved>,
+) -> (crate::library::View, Option<crate::events::ProfileRef>) {
+    let view = owner
+        .as_ref()
+        .map_or_else(crate::library::View::here, crate::library::View::session);
+    let profile = owner.map(|o| crate::events::ProfileRef {
+        id: o.id,
+        display_name: o.display_name,
+    });
+    (view, profile)
+}
+
+/// [`desk_view`] of the owner's profile, for the operator's lane.
+pub(super) fn desk_library(
+    st: &MgmtState,
+) -> (crate::library::View, Option<crate::events::ProfileRef>) {
+    desk_view(desk_owner(st, None).0)
 }
 
 /// The owner's profile, which plays the desk, and whether device `fp` opens it as a connect
@@ -745,6 +770,175 @@ pub(crate) async fn release_game_hold(Path(token): Path<String>) -> Response {
     } else {
         api_error(StatusCode::NOT_FOUND, "no launch waits on that hold")
     }
+}
+
+/// Hand a launch to Steam's tree
+///
+/// `punktfunk-host play` calls this from inside the Steam entry a title was synced as, with
+/// Steam's game id for that entry and the pad filter Steam set for it. The host finds the title
+/// in its Steam map and claims it for its own screen, then runs the download wait, the launch
+/// hold and emulator prepare with the pads that filter leaves, and answers the command to run
+/// and a token to report on. A title the host already runs answers `running`: start nothing, and
+/// wait until `GET /status` no longer lists it. Admin lane only.
+#[utoipa::path(
+    post,
+    path = "/game/handoff",
+    tag = "session",
+    operation_id = "handOffGame",
+    request_body = HandoffRequest,
+    responses(
+        (status = OK, description = "What to run, or that the title already runs", body = HandoffAnswer),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "The title the entry names is no longer in the library", body = ApiError),
+        (status = CONFLICT, description = "No screen of its own, no synced title for that entry, or the launch ended before it started", body = ApiError),
+    )
+)]
+pub(crate) async fn hand_off_game(
+    State(st): State<Arc<MgmtState>>,
+    ApiJson(req): ApiJson<HandoffRequest>,
+) -> Response {
+    use crate::desk::{Handoff, NoHandoff};
+    if !crate::desk::has_desk(pf_paths::seat::role()) {
+        return no_desk();
+    }
+    let (view, profile) = desk_library(&st);
+    let handed = tokio::task::spawn_blocking(move || {
+        let (ignore, except) = (&req.sdl_ignore, &req.sdl_ignore_except);
+        crate::desk::handoff(&view, &req.steam_gameid, ignore, except, profile)
+    })
+    .await;
+    let answer = |token, game: crate::gamelease::GameRef| HandoffAnswer {
+        token,
+        app_id: game.id.unwrap_or_default(),
+        title: game.title,
+        command: None,
+        env: None,
+        cwd: None,
+        running: false,
+    };
+    match handed {
+        Ok(Ok(Handoff::Start {
+            token,
+            game,
+            command,
+            env,
+        })) => {
+            tracing::info!(title = %game.title, "management API: launch handed to Steam's tree");
+            let env = env.into_iter().map(|(k, v)| (k.into(), v.into()));
+            Json(HandoffAnswer {
+                command: Some(command),
+                env: Some(env.collect()),
+                ..answer(token, game)
+            })
+            .into_response()
+        }
+        Ok(Ok(Handoff::Running { token, game })) => Json(HandoffAnswer {
+            running: true,
+            ..answer(token, game)
+        })
+        .into_response(),
+        Ok(Err(NoHandoff::Refused(refused))) => refusal(refused),
+        Ok(Err(NoHandoff::Declined(why))) if !why.message.is_empty() => {
+            api_error(StatusCode::CONFLICT, &why.message)
+        }
+        Ok(Err(NoHandoff::Declined(_) | NoHandoff::CalledOff)) => {
+            api_error(StatusCode::CONFLICT, "the launch ended before it started")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "handoff worker did not finish");
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "handoff worker did not finish",
+            )
+        }
+    }
+}
+
+/// Report on a handed-over launch
+///
+/// `play` reports `started` once, with the process id of the game; the host watches that
+/// process only if it is its own user's and started after the handoff. Then `exited` once, with
+/// the exit code. Sent without `started`, `exited` says nothing started. A token nobody reported
+/// a start on within 10 minutes is dropped. Admin lane only.
+#[utoipa::path(
+    post,
+    path = "/game/handoff/{token}",
+    tag = "session",
+    operation_id = "reportHandoff",
+    params(("token" = String, Path, description = "The `token` of the handoff's answer")),
+    request_body = HandoffEvent,
+    responses(
+        (status = NO_CONTENT, description = "Taken"),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "No handoff waits on that token: never issued, spent or dropped", body = ApiError),
+        (status = CONFLICT, description = "Reported already, or the process is not one this launch started", body = ApiError),
+    )
+)]
+pub(crate) async fn report_handoff(
+    Path(token): Path<String>,
+    ApiJson(event): ApiJson<HandoffEvent>,
+) -> Response {
+    use crate::desk::{Report, ReportRefused};
+    let report = match event {
+        HandoffEvent::Started { pid } => Report::Started(pid),
+        HandoffEvent::Exited { code } => Report::Exited(code),
+    };
+    match crate::desk::report(&token, report) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(ReportRefused::Unknown) => {
+            api_error(StatusCode::NOT_FOUND, "no launch waits on that token")
+        }
+        Err(ReportRefused::OutOfTurn) => {
+            api_error(StatusCode::CONFLICT, "that launch reported this already")
+        }
+        Err(ReportRefused::NotOurs) => api_error(
+            StatusCode::CONFLICT,
+            "that process is not one this launch started",
+        ),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct HandoffRequest {
+    /// Steam's 64-bit game id of the entry (`SteamGameId`), in decimal.
+    #[schema(example = "12412508506844823552")]
+    steam_gameid: String,
+    /// `SDL_GAMECONTROLLER_IGNORE_DEVICES` as Steam set it for the entry; empty when unset.
+    sdl_ignore: String,
+    /// `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT` as Steam set it; empty when unset.
+    sdl_ignore_except: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct HandoffAnswer {
+    /// What the reports name: `POST /game/handoff/{token}`. 64 hex. A `running` answer's
+    /// names nothing.
+    token: String,
+    /// The title's library id, as `GET /status` lists it.
+    app_id: String,
+    title: String,
+    /// What `sh -c` runs. Absent when the title already runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    /// Set on top of Steam's environment for the game. Absent when the title already runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    env: Option<std::collections::BTreeMap<String, String>>,
+    /// Always null: the command changes into its own directory.
+    cwd: Option<String>,
+    /// Present and true when this host already runs the title.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    running: bool,
+}
+
+/// What `play` reports on a handoff.
+#[derive(Deserialize, ToSchema)]
+#[serde(tag = "event", rename_all = "lowercase")]
+pub(crate) enum HandoffEvent {
+    /// The game's process, which `play` started.
+    Started { pid: u32 },
+    /// That process exited with `code`. Before `started`: nothing started.
+    Exited { code: i32 },
 }
 
 #[derive(Deserialize, ToSchema)]

@@ -613,10 +613,7 @@ pub(crate) struct SdlFilter {
 impl SdlFilter {
     /// Each list as SDL scans it: every `0x` number in turn, vendor then product, cut to 16
     /// bits. `None` when a list names a file (`@path`), which the host does not read.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "no launch passes Steam's lists to the host")
-    )]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
     pub(crate) fn parse(ignore: &str, except: &str) -> Option<SdlFilter> {
         fn ids(list: &str) -> Option<Vec<(u16, u16)>> {
             if list.starts_with('@') {

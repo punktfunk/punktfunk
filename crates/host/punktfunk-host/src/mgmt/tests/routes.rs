@@ -197,6 +197,13 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("POST", "/api/v1/game/launch", false, true),
         // A seat's held launch: only the host with the plugins lets it go.
         ("POST", "/api/v1/game/holds/{token}/release", false, false),
+        // `punktfunk-host play` in Steam's tree, on the host's own token: never a plugin or a
+        // device, since a handoff hands out a command line.
+        ("POST", "/api/v1/game/handoff", false, false),
+        ("POST", "/api/v1/game/handoff/{token}", false, false),
+        // The Decky plugin syncs the desk's Steam through `ctl steam`, on the host's own token.
+        ("GET", "/api/v1/steam/entries", false, false),
+        ("PUT", "/api/v1/steam/entries", false, false),
         // Library writes are plugin-lane (scanner job); privileged fields inside the payload
         // are refused in the handler — see `plugin_lane_cannot_set_command_execution_fields`.
         ("GET", "/api/v1/library", true, true),
@@ -747,6 +754,10 @@ fn every_route_has_a_side_on_the_door() {
         ("POST", "/api/v1/game/end", false),
         ("POST", "/api/v1/game/holds/{token}/release", false),
         ("POST", "/api/v1/game/launch", false),
+        ("POST", "/api/v1/game/handoff", false),
+        ("POST", "/api/v1/game/handoff/{token}", false),
+        ("GET", "/api/v1/steam/entries", false),
+        ("PUT", "/api/v1/steam/entries", false),
         // Moonlight is the owner's row's: the door never serves it.
         ("GET", "/api/v1/pair", false),
         ("POST", "/api/v1/pair/pin", false),

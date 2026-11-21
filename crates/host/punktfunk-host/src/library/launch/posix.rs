@@ -245,10 +245,31 @@ pub fn adopt_launch_workspace(
     focus_and_claim(compositor, true, Some(want))
 }
 
-/// Host-resolved command into the live Linux session, after capture is up, or onto the desk
-/// with no stream ([`Place::Desk`]), which aims at no head. Shared by native, GameStream and
-/// the desk. Best-effort: failure leaves the user on the streamed desktop rather than tearing
-/// the stream down.
+/// What a launch runs on top of the session it lands in: the `sh -c` line and the variables it
+/// sets. [`launch_session_command`] spawns it; `punktfunk-host play` runs it in Steam's tree.
+#[cfg(target_os = "linux")]
+pub struct DeskCommand {
+    pub command: String,
+    pub env: Vec<(&'static str, &'static str)>,
+}
+
+/// `cmd` as a launch runs it. Errors on an empty command.
+#[cfg(target_os = "linux")]
+pub fn desk_command(cmd: &str) -> Result<DeskCommand> {
+    let command = cmd.trim();
+    anyhow::ensure!(!command.is_empty(), "empty command");
+    Ok(DeskCommand {
+        command: command.to_string(),
+        // AppImageLauncher's binfmt hook would swap an .AppImage for its integration dialog on
+        // the host's own screen; this makes it exec the image directly.
+        env: vec![("APPIMAGELAUNCHER_DISABLE", "1")],
+    })
+}
+
+/// Host-resolved command ([`desk_command`]) into the live Linux session, after capture is up,
+/// or onto the desk with no stream ([`Place::Desk`]), which aims at no head. Shared by native,
+/// GameStream and the desk. Best-effort: failure leaves the user on the streamed desktop rather
+/// than tearing the stream down.
 ///
 /// * **KWin / Mutter** — session env already retargeted, virtual output is
 ///   primary; a plain spawn lands on the stream.
@@ -275,8 +296,8 @@ pub fn launch_session_command(
     place: Place,
 ) -> Result<SpawnedLaunch> {
     use std::os::unix::process::CommandExt;
-    let cmd = cmd.trim();
-    anyhow::ensure!(!cmd.is_empty(), "empty command");
+    let DeskCommand { command, env } = desk_command(cmd)?;
+    let cmd = command.as_str();
     // Before the spawn, so the game's first window maps where it belongs. Same
     // head as the absolute-input pointer, so focus and cursor share one.
     let workspace = match place {
@@ -312,10 +333,8 @@ pub fn launch_session_command(
             c.arg(cmd)
                 // Own process group: later teardown signals the shell and its
                 // children, and not the host's group.
-                .process_group(0);
-            // AppImageLauncher's binfmt hook would swap an .AppImage for its integration
-            // dialog on the host's own screen; this makes it exec the image directly.
-            c.env("APPIMAGELAUNCHER_DISABLE", "1");
+                .process_group(0)
+                .envs(env.iter().copied());
             // Wayland apps take the live session's socket from the host, not its environment.
             pf_host_config::session::export_to(&mut c);
             // X11 apps (Steam, Lutris, most native games) need a display of their own. A systemd

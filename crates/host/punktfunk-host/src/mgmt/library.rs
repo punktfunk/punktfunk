@@ -1969,7 +1969,7 @@ fn owner_art(id: &str, kind: crate::library::ArtKind) -> Option<(Vec<u8>, String
 
 /// `s` as one path segment: unreserved characters, `:` and `@` stay, every other byte is
 /// percent-encoded.
-pub(super) fn path_segment(s: &str) -> String {
+pub(crate) fn path_segment(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' | b'@' => {

@@ -513,6 +513,8 @@ fn the_table_refuses_what_the_groups_did_and_the_rest_of_what_runs_code() {
     const NEWLY_REFUSED: &[(&str, &str)] = &[
         ("DELETE", "/api/v1/library/provider/{provider}"),
         ("DELETE", "/api/v1/plugins/{id}"),
+        ("POST", "/api/v1/game/handoff"),
+        ("POST", "/api/v1/game/handoff/{token}"),
         ("POST", "/api/v1/game/holds/{token}/release"),
         ("POST", "/api/v1/plugins/logs"),
         ("PUT", "/api/v1/library/provider/{provider}"),

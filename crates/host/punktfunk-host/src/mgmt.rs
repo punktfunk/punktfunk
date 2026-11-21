@@ -22,6 +22,7 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::{middleware, routing::get, Json, Router};
+pub(crate) use library::path_segment;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use utoipa::{Modify, OpenApi};
@@ -63,6 +64,7 @@ mod session;
 mod settings;
 pub(crate) mod shared;
 mod stats;
+mod steam;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -544,6 +546,9 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(session::end_game))
         .routes(routes!(session::launch_game))
         .routes(routes!(session::release_game_hold))
+        .routes(routes!(session::hand_off_game))
+        .routes(routes!(session::report_handoff))
+        .routes(routes!(steam::list_steam_entries, steam::set_steam_entries))
         .routes(routes!(library::get_library))
         .routes(routes!(library::get_library_page))
         .routes(routes!(library::list_library_scanners))

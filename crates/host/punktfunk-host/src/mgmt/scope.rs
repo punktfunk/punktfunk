@@ -122,6 +122,9 @@ pub(crate) const SCOPES: &[(&str, &str, Scope)] = &[
     ),
     // The desk host's own switch: no profile in it, so no person's.
     ("POST", "/api/v1/game/launch", Scope::Host),
+    // What runs in Steam's tree: the command a handoff hands out, and the reports on it.
+    ("POST", "/api/v1/game/handoff", Scope::ProfileExec),
+    ("POST", "/api/v1/game/handoff/{token}", Scope::ProfileExec),
     ("GET", "/api/v1/gpus", Scope::Host),
     ("PUT", "/api/v1/gpus/preference", Scope::Box),
     ("GET", "/api/v1/health", Scope::Host),
@@ -315,6 +318,9 @@ pub(crate) const SCOPES: &[(&str, &str, Scope)] = &[
     ("GET", "/api/v1/stats/recordings/{id}", Scope::Host),
     ("DELETE", "/api/v1/stats/recordings/{id}", Scope::Host),
     ("GET", "/api/v1/status", Scope::Host),
+    // The desk host's own Steam: what may be synced into it, and the map of what was.
+    ("GET", "/api/v1/steam/entries", Scope::Host),
+    ("PUT", "/api/v1/steam/entries", Scope::Host),
     ("GET", "/api/v1/store/catalog", Scope::ProfileExec),
     ("POST", "/api/v1/store/install", Scope::ProfileExec),
     ("GET", "/api/v1/store/installed", Scope::ProfileExec),

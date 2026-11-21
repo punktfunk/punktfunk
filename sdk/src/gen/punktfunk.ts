@@ -141,6 +141,12 @@ export type EndGameRequest = { readonly "app_id"?: string | null, readonly "stre
 export const EndGameRequest = Schema.StructWithRest(Schema.Struct({ "app_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Store-qualified id (`steam:570`); omit to reach every title." })), "streaming": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Also end games on a live session, not only games nobody is streaming." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "EndGameRequest" })
 export type EndGameResult = { readonly "ended": number } & { readonly [x: string]: Schema.Json }
 export const EndGameResult = Schema.StructWithRest(Schema.Struct({ "ended": Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "EndGameResult" })
+export type HandoffRequest = { readonly "sdl_ignore": string, readonly "sdl_ignore_except": string, readonly "steam_gameid": string } & { readonly [x: string]: Schema.Json }
+export const HandoffRequest = Schema.StructWithRest(Schema.Struct({ "sdl_ignore": Schema.String.annotate({ "description": "`SDL_GAMECONTROLLER_IGNORE_DEVICES` as Steam set it for the entry; empty when unset." }), "sdl_ignore_except": Schema.String.annotate({ "description": "`SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT` as Steam set it; empty when unset." }), "steam_gameid": Schema.String.annotate({ "description": "Steam's 64-bit game id of the entry (`SteamGameId`), in decimal.", "examples": ["12412508506844823552"] }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "HandoffRequest" })
+export type HandoffAnswer = { readonly "app_id": string, readonly "command"?: string | null, readonly "cwd"?: string | null, readonly "env"?: { readonly [x: string]: string } | null, readonly "running"?: boolean, readonly "title": string, readonly "token": string } & { readonly [x: string]: Schema.Json }
+export const HandoffAnswer = Schema.StructWithRest(Schema.Struct({ "app_id": Schema.String.annotate({ "description": "The title's library id, as `GET /status` lists it." }), "command": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "What `sh -c` runs. Absent when the title already runs." })), "cwd": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Always null: the command changes into its own directory." })), "env": Schema.optionalKey(Schema.Union([Schema.Record(Schema.String, Schema.String).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" })), Schema.Null]).annotate({ "description": "Set on top of Steam's environment for the game. Absent when the title already runs." })), "running": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Present and true when this host already runs the title." })), "title": Schema.String, "token": Schema.String.annotate({ "description": "What the reports name: `POST /game/handoff/{token}`. 64 hex. A `running` answer's\nnames nothing." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "HandoffAnswer" })
+export type HandoffEvent = { readonly "event": "started", readonly "pid": number } & { readonly [x: string]: Schema.Json } | { readonly "code": number, readonly "event": "exited" } & { readonly [x: string]: Schema.Json }
+export const HandoffEvent = Schema.Union([Schema.StructWithRest(Schema.Struct({ "event": Schema.Literal("started"), "pid": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The game's process, which `play` started." }), Schema.StructWithRest(Schema.Struct({ "code": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "event": Schema.Literal("exited") }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "That process exited with `code`. Before `started`: nothing started." })], { mode: "oneOf" }).annotate({ "description": "What `play` reports on a handoff.", "identifier": "HandoffEvent" })
 export type LaunchGameRequest = { readonly "app_id": string } & { readonly [x: string]: Schema.Json }
 export const LaunchGameRequest = Schema.StructWithRest(Schema.Struct({ "app_id": Schema.String.annotate({ "description": "Store-qualified library id (`steam:570`), as `GET /library` lists it." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "LaunchGameRequest" })
 export type LaunchVia = "host" | "steam"
@@ -343,6 +349,12 @@ export type GameOutcome = { readonly "code": string, readonly "params": { readon
 export const GameOutcome = Schema.StructWithRest(Schema.Struct({ "code": Schema.String.annotate({ "description": "The host message's id (`launch_*`).", "examples": ["launch_download_failed"] }), "params": Schema.Record(Schema.String, Schema.String).annotate({ "description": "The values of that message's placeholders, by name." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Why a launch did not start, as a host message the client words.", "identifier": "GameOutcome" })
 export type Phase = "admitted" | "negotiating" | "bring_up" | "streaming" | "ending" | "done"
 export const Phase = Schema.Literals(["admitted", "negotiating", "bring_up", "streaming", "ending", "done"]).annotate({ "description": "Where a session is. It only moves forward; `/status` reports it per row.", "identifier": "Phase" })
+export type SteamEntry = { readonly "art": ReadonlyArray<string>, readonly "id": string, readonly "platform"?: string | null, readonly "source": string, readonly "title": string } & { readonly [x: string]: Schema.Json }
+export const SteamEntry = Schema.StructWithRest(Schema.Struct({ "art": Schema.Array(Schema.String).annotate({ "description": "The art the host has for it: `portrait`, `hero`, `logo`, `header`." }), "id": Schema.String, "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The platform as the library has it." })), "source": Schema.String, "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "SteamEntry" })
+export type SteamSource = { readonly "games": number, readonly "id": string, readonly "name": string } & { readonly [x: string]: Schema.Json }
+export const SteamSource = Schema.StructWithRest(Schema.Struct({ "games": Schema.Number.annotate({ "description": "Its titles in `entries`." }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "id": Schema.String.annotate({ "description": "The source's id, as each entry's `source` names it.", "examples": ["rom-manager"] }), "name": Schema.String.annotate({ "examples": ["ROM Manager"] }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "SteamSource" })
+export type SteamEntries = { readonly "entries"?: { readonly [x: string]: number }, readonly "own"?: ReadonlyArray<number>, readonly "version": number } & { readonly [x: string]: Schema.Json }
+export const SteamEntries = Schema.StructWithRest(Schema.Struct({ "entries": Schema.optionalKey(Schema.Record(Schema.String, Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))).annotate({ "description": "Library id → the 32-bit app id of that title's own Steam entry." }).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" }))), "own": Schema.optionalKey(Schema.Array(Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))).annotate({ "description": "Every other entry the plugin made: the Punktfunk ones and the per-game stream ones." })), "version": Schema.Number.annotate({ "description": "Always 1.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The map, as stored and as `PUT /steam/entries` takes it.", "identifier": "SteamEntries" })
 export type HostFacts = { readonly "platform": string, readonly "version": string } & { readonly [x: string]: Schema.Json }
 export const HostFacts = Schema.StructWithRest(Schema.Struct({ "platform": Schema.String.annotate({ "description": "`linux` / `windows` / `macos`." }), "version": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The console greys out rows this host cannot install.", "identifier": "HostFacts" })
 export type CatalogEntry = { readonly "author": string, readonly "blocked"?: string | null, readonly "categories": ReadonlyArray<string>, readonly "compatible": boolean, readonly "description": string, readonly "detected"?: boolean | null, readonly "homepage"?: string | null, readonly "icon"?: string | null, readonly "id": string, readonly "incompatible_reason"?: string | null, readonly "installed_version"?: string | null, readonly "license"?: string | null, readonly "min_host"?: string | null, readonly "pkg": string, readonly "platforms": ReadonlyArray<string>, readonly "reviewed_at"?: string | null, readonly "source": string, readonly "tier": string, readonly "title": string, readonly "update_available": boolean, readonly "version": string } & { readonly [x: string]: Schema.Json }
@@ -497,6 +509,8 @@ export type DisplayHealth = { readonly "driver_protocol"?: number | null, readon
 export const DisplayHealth = Schema.StructWithRest(Schema.Struct({ "driver_protocol": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Protocol the installed pf-vdisplay driver answered at the last handshake; absent until a session ran one." })), "host_protocol": Schema.Number.annotate({ "description": "Protocol this host drives; a driver answering less fails every session.", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "last_transaction": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<TopologyTransaction> => TopologyTransaction).annotate({ "description": "The most recent topology transaction, if any." })], { mode: "oneOf" })), "pnp_leases": Schema.Number.annotate({ "description": "Monitor devnodes disabled for a stream and not yet re-enabled (a leftover here after a\ncrash is what the next host start replays).", "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), "topology_generation": Schema.Number.annotate({ "description": "Count of topology transactions that observed a change since the host started.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Host-wide Windows display health: the topology transaction log and the leases the stream holds.", "identifier": "DisplayHealth" })
 export type ActiveGame = { readonly "app_id"?: string | null, readonly "awaiting_window"?: boolean, readonly "client": string, readonly "endable"?: boolean, readonly "grace_remaining_s"?: number | null, readonly "outcome"?: null | GameOutcome, readonly "plane": Plane, readonly "seat"?: string | null, readonly "session_id"?: number, readonly "state": string, readonly "store"?: string | null, readonly "title": string } & { readonly [x: string]: Schema.Json }
 export const ActiveGame = Schema.StructWithRest(Schema.Struct({ "app_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Store-qualified library id (`steam:570`); matches `GET /library`. Absent for a typed GameStream command." })), "awaiting_window": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Present and true while `running` on a host that will report `window` next. A launch hold\nwaits for that instead of revealing a game that is still loading." })), "client": Schema.String.annotate({ "description": "Client-supplied device name of the session that launched it; may be empty." }), "endable": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Present and true when this caller may end it with `POST /game/end`: the operator any\nlaunched game, a paired device only a game it launched." })), "grace_remaining_s": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "Seconds until this game is ended — only present on a `grace` row." })), "outcome": Schema.optionalKey(Schema.Union([Schema.Null, Schema.suspend((): Schema.Codec<GameOutcome> => GameOutcome).annotate({ "description": "On a `local` row that is `exited` because the launch was refused late or died at the\nstart, for a minute: why, as a host message." })], { mode: "oneOf" })), "plane": Schema.suspend((): Schema.Codec<Plane> => Plane).annotate({ "description": "`native`, `gamestream`, `web`, or `local`: this host started it on its own screen for a\nclient on the same device, with no stream. A `local` row's `client` is `desk`." }), "seat": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "On a door, to the operator: the profile whose seat host runs it, whose proxy reaches it." })), "session_id": Schema.optionalKey(Schema.Number.annotate({ "description": "Streaming session; `null` on the compat plane's game and on a `grace`, `detached` or\nwaiting-launch row. Pass it to `DELETE /session/{id}` to stop that one session.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "state": Schema.String.annotate({ "description": "`launching` | `running` | `window` (its window is on the screen) | `exited` |\n`untracked` (exit will never be seen) | `grace` (reconnect window) | `detached` (still\nrunning, no session holds it).", "examples": ["running"] }), "store": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Which store surfaced it (`steam`, `heroic`, `custom`, …), when known." })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "ActiveGame" })
+export type SteamEntryList = { readonly "entries": ReadonlyArray<SteamEntry>, readonly "sources": ReadonlyArray<SteamSource>, readonly "steam_owns_desk": boolean } & { readonly [x: string]: Schema.Json }
+export const SteamEntryList = Schema.StructWithRest(Schema.Struct({ "entries": Schema.Array(SteamEntry), "sources": Schema.Array(SteamSource), "steam_owns_desk": Schema.Boolean.annotate({ "description": "Steam owns the box's screen (Game Mode): only what Steam starts is shown there." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "The titles a Steam entry may start, and where they come from.", "identifier": "SteamEntryList" })
 export type CatalogResponse = { readonly "busy": boolean, readonly "host": HostFacts, readonly "plugins": ReadonlyArray<CatalogEntry>, readonly "sources": ReadonlyArray<SourceView> } & { readonly [x: string]: Schema.Json }
 export const CatalogResponse = Schema.StructWithRest(Schema.Struct({ "busy": Schema.Boolean, "host": HostFacts, "plugins": Schema.Array(CatalogEntry), "sources": Schema.Array(SourceView) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "identifier": "CatalogResponse" })
 export type Job = { readonly "error"?: string | null, readonly "finished_at"?: number | null, readonly "id": string, readonly "kind": string, readonly "log": ReadonlyArray<string>, readonly "phase": string, readonly "started_at": number, readonly "state": State, readonly "target": string, readonly "walk"?: null | AccessWalk } & { readonly [x: string]: Schema.Json }
@@ -946,6 +960,24 @@ export type EndGame403 = ApiError
 export const EndGame403 = ApiError
 export type EndGame409 = ApiError
 export const EndGame409 = ApiError
+export type HandOffGameRequestJson = HandoffRequest
+export const HandOffGameRequestJson = HandoffRequest
+export type HandOffGame200 = HandoffAnswer
+export const HandOffGame200 = HandoffAnswer
+export type HandOffGame401 = ApiError
+export const HandOffGame401 = ApiError
+export type HandOffGame404 = ApiError
+export const HandOffGame404 = ApiError
+export type HandOffGame409 = ApiError
+export const HandOffGame409 = ApiError
+export type ReportHandoffRequestJson = HandoffEvent
+export const ReportHandoffRequestJson = HandoffEvent
+export type ReportHandoff401 = ApiError
+export const ReportHandoff401 = ApiError
+export type ReportHandoff404 = ApiError
+export const ReportHandoff404 = ApiError
+export type ReportHandoff409 = ApiError
+export const ReportHandoff409 = ApiError
 export type ReleaseGameHold401 = ApiError
 export const ReleaseGameHold401 = ApiError
 export type ReleaseGameHold404 = ApiError
@@ -1978,6 +2010,18 @@ export type GetStatus200 = RuntimeStatus
 export const GetStatus200 = RuntimeStatus
 export type GetStatus401 = ApiError
 export const GetStatus401 = ApiError
+export type ListSteamEntries200 = SteamEntryList
+export const ListSteamEntries200 = SteamEntryList
+export type ListSteamEntries401 = ApiError
+export const ListSteamEntries401 = ApiError
+export type SetSteamEntriesRequestJson = SteamEntries
+export const SetSteamEntriesRequestJson = SteamEntries
+export type SetSteamEntries400 = ApiError
+export const SetSteamEntries400 = ApiError
+export type SetSteamEntries401 = ApiError
+export const SetSteamEntries401 = ApiError
+export type SetSteamEntries500 = ApiError
+export const SetSteamEntries500 = ApiError
 export type GetPluginCatalog200 = CatalogResponse
 export const GetPluginCatalog200 = CatalogResponse
 export type GetPluginCatalog401 = ApiError
@@ -2718,6 +2762,28 @@ export const make = (
       orElse: unexpectedStatus
     }))
     ),
+    "handOffGame": (options: Parameters<Punktfunk["handOffGame"]>[0]) => HttpClientRequest.post("/api/v1/game/handoff").pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(HandOffGame200),
+      "401": decodeError("HandOffGame401", HandOffGame401),
+      "404": decodeError("HandOffGame404", HandOffGame404),
+      "409": decodeError("HandOffGame409", HandOffGame409),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "reportHandoff": (token, options: Parameters<Punktfunk["reportHandoff"]>[1]) => __makePathRequest(HttpClientRequest.post, [token], () => "/api/v1/game/handoff/" + __encodePathParam(token) + "").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "401": decodeError("ReportHandoff401", ReportHandoff401),
+      "404": decodeError("ReportHandoff404", ReportHandoff404),
+      "409": decodeError("ReportHandoff409", ReportHandoff409),
+      "204": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "releaseGameHold": (token, options: Parameters<Punktfunk["releaseGameHold"]>[1]) => __makePathRequest(HttpClientRequest.post, [token], () => "/api/v1/game/holds/" + __encodePathParam(token) + "/release").pipe(
     Effect.flatMap((request) => request.pipe(
       withResponse(options?.config)(HttpClientResponse.matchStatus({
@@ -4002,6 +4068,23 @@ export const make = (
       orElse: unexpectedStatus
     }))
     ),
+    "listSteamEntries": (options: Parameters<Punktfunk["listSteamEntries"]>[0]) => HttpClientRequest.get("/api/v1/steam/entries").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ListSteamEntries200),
+      "401": decodeError("ListSteamEntries401", ListSteamEntries401),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "setSteamEntries": (options: Parameters<Punktfunk["setSteamEntries"]>[0]) => HttpClientRequest.put("/api/v1/steam/entries").pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "400": decodeError("SetSteamEntries400", SetSteamEntries400),
+      "401": decodeError("SetSteamEntries401", SetSteamEntries401),
+      "500": decodeError("SetSteamEntries500", SetSteamEntries500),
+      "204": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+    ),
     "getPluginCatalog": (options: Parameters<Punktfunk["getPluginCatalog"]>[0]) => HttpClientRequest.get("/api/v1/store/catalog").pipe(
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetPluginCatalog200),
@@ -4591,6 +4674,28 @@ readonly "relayEvent": {
 readonly "endGame": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof EndGameRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof EndGame200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EndGame401", typeof EndGame401.Type> | PunktfunkError<"EndGame403", typeof EndGame403.Type> | PunktfunkError<"EndGame409", typeof EndGame409.Type>>;
     <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof EndGameRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof EndGame200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EndGame401", typeof EndGame401.Type> | PunktfunkError<"EndGame403", typeof EndGame403.Type> | PunktfunkError<"EndGame409", typeof EndGame409.Type>>;
+  }
+  /**
+* `punktfunk-host play` calls this from inside the Steam entry a title was synced as, with
+* Steam's game id for that entry and the pad filter Steam set for it. The host finds the title
+* in its Steam map and claims it for its own screen, then runs the download wait, the launch
+* hold and emulator prepare with the pads that filter leaves, and answers the command to run
+* and a token to report on. A title the host already runs answers `running`: start nothing, and
+* wait until `GET /status` no longer lists it. Admin lane only.
+*/
+readonly "handOffGame": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof HandOffGameRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof HandOffGame200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"HandOffGame401", typeof HandOffGame401.Type> | PunktfunkError<"HandOffGame404", typeof HandOffGame404.Type> | PunktfunkError<"HandOffGame409", typeof HandOffGame409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof HandOffGameRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<typeof HandOffGame200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"HandOffGame401", typeof HandOffGame401.Type> | PunktfunkError<"HandOffGame404", typeof HandOffGame404.Type> | PunktfunkError<"HandOffGame409", typeof HandOffGame409.Type>>;
+  }
+  /**
+* `play` reports `started` once, with the process id of the game; the host watches that
+* process only if it is its own user's and started after the handoff. Then `exited` once, with
+* the exit code. Sent without `started`, `exited` says nothing started. A token nobody reported
+* a start on within 10 minutes is dropped. Admin lane only.
+*/
+readonly "reportHandoff": {
+    <Config extends OperationConfig | undefined = undefined>(token: string, options: { readonly payload: typeof ReportHandoffRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ReportHandoff401", typeof ReportHandoff401.Type> | PunktfunkError<"ReportHandoff404", typeof ReportHandoff404.Type> | PunktfunkError<"ReportHandoff409", typeof ReportHandoff409.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(token: string, options: { readonly payload: typeof ReportHandoffRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ReportHandoff401", typeof ReportHandoff401.Type> | PunktfunkError<"ReportHandoff404", typeof ReportHandoff404.Type> | PunktfunkError<"ReportHandoff409", typeof ReportHandoff409.Type>>;
   }
   /**
 * A seat host runs no plugins, so its `game.launching` carries a `hold` token and the launch
@@ -5674,6 +5779,26 @@ readonly "statsRecordingsList": {
 readonly "getStatus": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof GetStatus200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetStatus401", typeof GetStatus401.Type>>;
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof GetStatus200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetStatus401", typeof GetStatus401.Type>>;
+  }
+  /**
+* The titles of the owner profile's library that a Steam entry of their own may start: games
+* with a launch recipe, no launchers and no Steam titles. Each names its source, its platform
+* as the library has it and the art kinds the host serves for it at `GET /library/art`. Admin
+* lane only.
+*/
+readonly "listSteamEntries": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListSteamEntries200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListSteamEntries401", typeof ListSteamEntries401.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<typeof ListSteamEntries200.Type, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListSteamEntries401", typeof ListSteamEntries401.Type>>;
+  }
+  /**
+* The plugin sends the whole map after each sync: version 1, each synced title's library id →
+* the 32-bit app id of its entry, and `own`, every other entry it made. The library leaves out
+* the `steam:<app id>` title of each, and a launch of a synced title in Game Mode asks Steam to
+* run its entry. Admin lane only.
+*/
+readonly "setSteamEntries": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetSteamEntriesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSteamEntries400", typeof SetSteamEntries400.Type> | PunktfunkError<"SetSteamEntries401", typeof SetSteamEntries401.Type> | PunktfunkError<"SetSteamEntries500", typeof SetSteamEntries500.Type>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof SetSteamEntriesRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetSteamEntries400", typeof SetSteamEntries400.Type> | PunktfunkError<"SetSteamEntries401", typeof SetSteamEntries401.Type> | PunktfunkError<"SetSteamEntries500", typeof SetSteamEntries500.Type>>;
   }
   /**
 * Merged view across sources, annotated with what this host has and can run. A source past its

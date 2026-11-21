@@ -114,6 +114,17 @@ impl Scanner {
         Some(ProcRef { pid, start })
     }
 
+    /// `pid`, pinned, when it is this uid's and started no earlier than `stamp` (seconds since
+    /// boot) less [`START_SLACK_SECS`]: a process someone else names is trusted only that far.
+    pub fn launched_since(&self, pid: u32, stamp: f64) -> Option<ProcRef> {
+        use std::os::unix::fs::MetadataExt;
+        let dir = self.root.join(pid.to_string());
+        let owned = std::fs::metadata(&dir).is_ok_and(|m| self.uid.is_none_or(|u| m.uid() == u));
+        let start = self.start_ticks(&dir).filter(|_| owned)?;
+        let started = start as f64 / self.ticks_per_sec;
+        (started + START_SLACK_SECS >= stamp).then_some(ProcRef { pid, start })
+    }
+
     /// Diagnostics only ([`super::names`]). Gone processes yield `?`.
     pub fn name_of(&self, p: ProcRef) -> String {
         std::fs::read_to_string(self.root.join(p.pid.to_string()).join("comm"))
@@ -636,6 +647,29 @@ mod tests {
         assert_eq!(s.alive(&[same]), vec![same]);
         assert!(s.alive(&[recycled]).is_empty());
         assert!(s.alive(&[gone]).is_empty());
+    }
+
+    /// A reported pid counts from the launch on, within the slack, and never a zombie or a gone one.
+    #[test]
+    fn a_reported_pid_must_postdate_the_launch() {
+        let procs = [
+            FakeProc::new(80, 90_000),
+            FakeProc::new(81, 89_950),
+            FakeProc::new(82, 50_000),
+            FakeProc::new(83, 95_000).zombie(),
+        ];
+        let td = fake_proc_root(1000.0, &procs);
+        let s = scanner(td.path());
+        let at = |pid, start| Some(ProcRef { pid, start });
+        assert_eq!(s.launched_since(80, 900.0), at(80, 90_000));
+        assert_eq!(
+            s.launched_since(81, 900.0),
+            at(81, 89_950),
+            "inside the slack"
+        );
+        assert_eq!(s.launched_since(82, 900.0), None, "older than the launch");
+        assert_eq!(s.launched_since(83, 900.0), None, "a zombie");
+        assert_eq!(s.launched_since(84, 900.0), None, "gone");
     }
 
     /// Spawn a real process to cover kernel `/proc` fields, the uid filter, and uptime matching.

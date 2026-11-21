@@ -683,6 +683,86 @@ async fn a_blanket_end_leaves_the_desk_s_game() {
     wait_for(id, None, std::time::Duration::from_secs(15));
 }
 
+/// Steam's launch of a synced entry: the map names the title, the handoff holds it for the desk
+/// from the call on and answers its command; a Steam game's id and an entry the map lacks are
+/// refused, a second handoff starts nothing, and the reports take the token alone.
+#[cfg(target_os = "linux")]
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn a_synced_entry_is_handed_to_steam_s_tree() {
+    use crate::desk::lease_tests::{state, wait_for};
+    use std::time::Duration;
+    let tmp = ConfigDirOverride::new();
+    super::library::steam_box(tmp.path());
+    let app = test_app(test_state(), None);
+    let id = "rom-manager:snes/chrono";
+    let map = serde_json::json!({ "version": 1,
+        "entries": { "rom-manager:snes/chrono": 2_890_012_345u32 }, "own": [] });
+    let put = json_req(Method::PUT, "/api/v1/steam/entries", map);
+    assert_eq!(send(&app, put).await.0, StatusCode::NO_CONTENT);
+    let handoff = |gameid: &str| {
+        let body = serde_json::json!({ "steam_gameid": gameid, "sdl_ignore": "",
+            "sdl_ignore_except": "" });
+        json_req(Method::POST, "/api/v1/game/handoff", body)
+    };
+    let unmapped = crate::library::steam_gameid(7).to_string();
+    for gameid in ["570", unmapped.as_str(), "not a number"] {
+        let (status, body) = send(&app, handoff(gameid)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{gameid}: {body}");
+        assert_eq!(body["code"], "local_not_in_steam", "{gameid}");
+    }
+
+    let (status, handed) = send(&app, handoff("12412508506844823552")).await;
+    assert_eq!(status, StatusCode::OK, "{handed}");
+    assert_eq!(
+        (&handed["app_id"], &handed["command"], &handed["cwd"]),
+        (
+            &serde_json::json!(id),
+            &serde_json::json!("sleep 30"),
+            &serde_json::Value::Null
+        )
+    );
+    assert_eq!(handed["env"]["APPIMAGELAUNCHER_DISABLE"], "1");
+    let token = handed["token"].as_str().expect("a token").to_string();
+    assert!(token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(state(id), Some("launching"), "held from the handoff on");
+    let (_, again) = send(&app, handoff("12412508506844823552")).await;
+    assert_eq!(again["running"], true, "{again}");
+    assert!(again.get("command").is_none());
+
+    let report = |token: &str, body| {
+        let path = format!("/api/v1/game/handoff/{token}");
+        json_req(Method::POST, &path, body)
+    };
+    let stranger = report(
+        &"0".repeat(64),
+        serde_json::json!({ "event": "exited", "code": 0 }),
+    );
+    assert_eq!(send(&app, stranger).await.0, StatusCode::NOT_FOUND);
+    let mut game = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let started = serde_json::json!({ "event": "started", "pid": game.id() });
+    assert_eq!(
+        send(&app, report(&token, started.clone())).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(&app, report(&token, started)).await.0,
+        StatusCode::CONFLICT
+    );
+    wait_for(id, Some("running"), Duration::from_secs(10));
+    let _ = game.kill();
+    let _ = game.wait();
+    let exited = serde_json::json!({ "event": "exited", "code": 137 });
+    assert_eq!(
+        send(&app, report(&token, exited)).await.0,
+        StatusCode::NO_CONTENT
+    );
+    wait_for(id, None, Duration::from_secs(15));
+}
+
 #[tokio::test]
 async fn idr_requires_an_active_stream() {
     // A sibling test's live native session would look like an active stream to this route.
