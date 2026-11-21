@@ -1070,16 +1070,25 @@ public final class SessionAudio: @unchecked Sendable {
 
     /// Connect the main mixer to the output at the output's own width. The connection the engine
     /// makes on first use of `mainMixerNode` is stereo whatever the route carries, so a 5.1 or 7.1
-    /// source folds to 2 channels inside the engine and HDMI gets PCM 2.0 in 8 slots. A stereo
-    /// route keeps the default connection.
-    private func connectMixerAtOutputWidth(_ engine: AVAudioEngine) {
+    /// source folds to 2 channels inside the engine and HDMI gets PCM 2.0 in 8 slots.
+    ///
+    /// A `captureRate` above 0 (the voice processor is engaged) sets the render rate. The
+    /// processor fails to initialize (-10875, "client-side input and output formats do not
+    /// match") unless render and capture share one rate, and its render side otherwise opens at
+    /// 44.1 kHz while its capture follows the device. Without it, a stereo route keeps the
+    /// default connection.
+    private func connectMixerAtOutputWidth(_ engine: AVAudioEngine, captureRate: Double = 0) {
         let hw = engine.outputNode.outputFormat(forBus: 0)
-        guard hw.channelCount > 2, hw.sampleRate > 0,
-              let layout = hw.channelLayout ?? wireChannelLayout(channels: Int(hw.channelCount)),
-              layout.channelCount == hw.channelCount
-        else { return }
-        let format = AVAudioFormat(standardFormatWithSampleRate: hw.sampleRate, channelLayout: layout)
-        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
+        let rate = captureRate > 0 ? captureRate : hw.sampleRate
+        if hw.channelCount > 2, rate > 0,
+           let layout = hw.channelLayout ?? wireChannelLayout(channels: Int(hw.channelCount)),
+           layout.channelCount == hw.channelCount {
+            let format = AVAudioFormat(standardFormatWithSampleRate: rate, channelLayout: layout)
+            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
+        } else if captureRate > 0,
+                  let stereo = AVAudioFormat(standardFormatWithSampleRate: captureRate, channels: 2) {
+            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereo)
+        }
     }
 
     /// Say — out loud, in the log — what rate and channel count this engine is REALLY rendering
@@ -1290,7 +1299,7 @@ public final class SessionAudio: @unchecked Sendable {
         }
         engine.attach(source)
         engine.connect(source, to: engine.mainMixerNode, format: format)
-        connectMixerAtOutputWidth(engine)
+        connectMixerAtOutputWidth(engine, captureRate: input.outputFormat(forBus: 0).sampleRate)
 
         // Prepared before the capture reads a format: enabling voice processing swaps the IO
         // unit, and until then the input can report 0 Hz, which reads as no input device.
