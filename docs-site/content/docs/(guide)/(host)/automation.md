@@ -52,7 +52,7 @@ didn't set.
 | `on` | An [event kind](/docs/host-events#the-events) (`stream.started`) or a domain (`pairing.*`). Required, with `run`, `webhook` or both. |
 | `run` | A shell command. |
 | `webhook` | A URL the event JSON is POSTed to. |
-| `filter` | Optional exact matches, all of which must hold: `fingerprint` (the device), `client` (its name), `plane` (`native`, `gamestream`, `web`), `app`, `preset` (its name or id), `profile` (its id). |
+| `filter` | Optional exact matches, all of which must hold: `fingerprint` (the device), `client` (its name), `plane` (`native`, `gamestream`, `web`, `local`), `app`, `preset` (its name or id), `profile` (its id). |
 | `timeout_s` | Seconds before a command is killed with everything it started. 1–600, default 30. |
 | `debounce_ms` | Minimum gap between firings of this hook. Default 0. |
 | `hold` | Only with `on: game.launching`: the game waits for this hook, up to `timeout_s`. |
@@ -61,6 +61,12 @@ didn't set.
 
 Filter on `fingerprint`, not `client`: names aren't unique and change on rename. The console's
 device picker stores the fingerprint; `GET /api/v1/clients` lists both.
+
+A game the host starts on its own screen ([Play on this device](/docs/play-on-this-device)) has the
+plane `local` and no fingerprint, so a hook that filters on a `fingerprint` never fires for it. A
+hook on `game.*` with no filter does. Add `"plane": "local"` to run a hook only for the desk. To
+keep one off it, filter on the plane your streams use, such as `native`: see
+[A game at the desk](/docs/host-events#a-game-at-the-desk).
 
 ### Commands
 
@@ -127,7 +133,7 @@ A hook on `game.launching` with `hold` set runs before the game starts, and the 
 for it: the command until it exits, the webhook until it answers. Each gets `timeout_s`; past
 it, or on a failure, the game starts anyway and the log says why. The device shows its launch
 screen meanwhile. `debounce_ms` doesn't apply, and a held hook never runs a second time on its
-own.
+own. A launch at the desk is held the same way.
 
 ```json
 { "on": "game.launching", "filter": { "preset": "Docked" }, "hold": true, "timeout_s": 20,
@@ -150,7 +156,8 @@ Attach `prep` steps to a [custom library entry](/docs/game-library#adding-a-game
 `library.json`, or to a GameStream `apps.json` entry. Each `do` runs before the title launches, and
 the launch waits for it (up to 30 s per step). Each `undo` runs when the session ends, in reverse
 order, even when it ends in an error. A `do` that fails is logged and its `undo` skipped. The
-console's Library form keeps prep steps but can't edit them.
+console's Library form keeps prep steps but can't edit them. A game started at the desk runs none:
+prep steps belong to a stream.
 
 Every step gets the session's mode: `PF_STREAM_WIDTH`, `PF_STREAM_HEIGHT`, `PF_STREAM_REFRESH`,
 `PF_STREAM_HDR` (`1` / `0`), plus `PF_APP_ID` (a Punktfunk client's launch) or `PF_APP_TITLE`

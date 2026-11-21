@@ -37,11 +37,13 @@ paste `https://unom.io/pf-decky-canary` instead. To pin a version, see
 ## Use it
 
 Open the **Punktfunk** panel from the Quick Access Menu. From the top, it shows a waiting update,
-the running stream, your hosts, then **Punktfunk**, **Troubleshooting** and **About**.
+the running stream, your hosts, then **Punktfunk**, **Games in Steam**, **Troubleshooting** and
+**About**.
 
 - **Hosts** lists the hosts this Deck can stream, one row each. Tap a host to stream it
   fullscreen. A sleeping host is [woken](/docs/wake-on-lan) first once the client knows its MAC
-  address; its row then reads **Offline · wakes on connect**.
+  address; its row then reads **Offline · wakes on connect**. A host that runs on this Deck opens
+  the console instead: its games [play on the Deck](/docs/play-on-this-device), with no stream.
 - **▾** beside a host opens its options. The **☰** button does the same while the host is
   selected. Pick a profile to stream as it this time only; the check marks the profile this Deck
   plays as. Pick a [preset](/docs/presets-and-links) to stream with it. It also holds **Wake host**
@@ -78,7 +80,8 @@ The host must be advertising on your network. A host you added by address offers
 On a game's page, press **▾** beside **Play**. Hosts with that game in their library are listed
 with a small Punktfunk mark. Pick one and **Play** becomes **Stream**, even when the game isn't
 installed on the Deck. Pick **This device** to hand the button back to Steam. The panel's
-**Punktfunk in Steam's Play menu** switch turns this off.
+**Punktfunk in Steam's Play menu** switch turns this off. A host that runs on this Deck isn't
+listed.
 
 ### Controls while streaming
 
@@ -101,6 +104,30 @@ While a stream runs, the panel opens with a **Streaming** section.
   overlay shows the game's name. A Steam Controller connected to the Deck gets a gamepad-only
   layout too. The Punktfunk layout sends the touchscreen as real touch. A different layout stops
   touch, and any key or mouse binding in it reaches the host on top of the controller.
+
+## Games in Steam
+
+On a Deck that runs its own host, **Games in Steam** puts that host's games into Steam's library,
+so Gaming Mode starts them with their own art and controller layout: see
+[Play on this device](/docs/play-on-this-device#steams-game-mode). The section shows while the host
+runs and Gaming Mode is on screen.
+
+- **One switch per source**, a launcher or ROM Manager, named for it and off until you turn it on.
+  A game in a source that is on gets an entry named for the game, with the host's art.
+- **Collections.** Each entry is filed in a Steam collection named for its platform, or for its
+  source when it has none. A collection of that name you already have is used as it is. The plugin
+  deletes only a collection it made, once it is empty.
+- **A big source takes minutes.** The plugin adds a few games a second and shows **Updating your
+  Steam library**, with the games left. It adds when it loads, when you turn a switch on, and when
+  you open the panel with the last run over ten minutes old.
+- **Taking them out.** Turning a source off removes the entries of its games. A game that leaves
+  the host's library keeps its entry until **Remove**, which shows with the count. Nothing else
+  leaves Steam.
+- **Layouts.** An entry gets no Punktfunk layout. Steam keeps one layout per name, so two games with
+  the same name share one. A game named like one you stream shares that stream's
+  [layout](#controls-while-streaming), and its row in the section says so.
+
+The host's [library](/docs/game-library#hide-games) hides these entries, so each game shows once.
 
 ## Updating
 
@@ -168,25 +195,36 @@ Each game streamed from its page has one. Panel → **Troubleshooting** → **Re
 Panel → **Troubleshooting** → **Force-stop**, then start it again. While the panel shows
 **Streaming**, its **Stop** does the same.
 
+### A game added to Steam stops at once
+
+It starts through the host on this Deck, which must be running:
+`systemctl --user start punktfunk-host`.
+
+### The Games in Steam section is missing
+
+It shows only while the host on this Deck runs and Gaming Mode is on screen. Start the host, then
+reopen the panel.
+
 ### The Punktfunk library entry is gone
 
 Panel → **Troubleshooting** → **Recreate library shortcut**.
 
 ## Uninstalling
 
-1. In the panel, tap **Troubleshooting → Remove game shortcuts**.
-2. Remove the plugin: Quick Access Menu → **plug** icon → **gear** → **Plugins** →
+1. Under **Games in Steam**, turn every source off, and tap **Remove** if it shows.
+2. Tap **Troubleshooting → Remove game shortcuts**.
+3. Remove the plugin: Quick Access Menu → **plug** icon → **gear** → **Plugins** →
    **Punktfunk** → **Uninstall**.
-3. Remove the two non-Steam entries named **Punktfunk** (one is hidden): in your library, **Manage
+4. Remove the two non-Steam entries named **Punktfunk** (one is hidden): in your library, **Manage
    → Remove non-Steam game from your library**.
-4. To remove the client too, in Desktop Mode:
+5. To remove the client too, in Desktop Mode:
 
    ```sh
    flatpak uninstall --user --delete-data io.unom.punktfunk
    ```
 
    Delete `~/.config/punktfunk` as well to forget this Deck's identity and saved hosts.
-5. On the host, [unpair the Deck](/docs/pairing#managing-paired-devices).
+6. On the host, [unpair the Deck](/docs/pairing#managing-paired-devices).
 
 The Steam Input template stays behind at `~/.local/share/Steam/controller_base/templates/punktfunk.vdf`;
 delete it if you like.

@@ -28,6 +28,17 @@ gamepad interface on a screen of its own, at your device's resolution and refres
 [managed or bare-spawn session](#how-the-host-gets-a-gamescope) does. A desktop that only has
 gamescope installed shows no tile.
 
+## Play from a gamescope of your own
+
+Run the Punktfunk app inside a gamescope you started yourself, such as a kiosk session on the box
+that runs the host. The host's card reads **This device**, and a game you start from its library
+opens in that gamescope with no stream. The app lets go of your controllers while the game plays
+and is back on the title when it ends. See [Play on this device](/docs/play-on-this-device).
+
+A gamescope that isn't Steam's Game Mode shows every window, so the game needs no Steam entry. In
+Steam's Game Mode every game starts through Steam:
+[Steam's Game Mode](/docs/play-on-this-device#steams-game-mode).
+
 ## host.env
 
 Nothing is required: the host finds gamescope from your live session. The gamescope settings in

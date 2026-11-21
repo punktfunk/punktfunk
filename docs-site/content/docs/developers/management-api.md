@@ -30,7 +30,7 @@ Send a bearer token as `Authorization: Bearer <token>`. Which token decides what
 | Plugin token | `<config>/plugin-token`, minted while the plugin runner is installed | loopback | the plugin allowlist: status, library, sessions, displays, events, plugin registration. Not hooks, pairing admin, host logs, the plugin store or updates |
 | Per-plugin token | handed to each plugin by the runner | loopback | the plugin allowlist, and only its own registration and library provider |
 | Tray token | `<config>/tray-token`, minted fresh at every start; every local account but a seat's may read it | loopback | `GET /local/summary` and nothing else |
-| Paired device | a paired client certificate over mTLS, or a browser's device-key token | anywhere | `GET` host, status, compositors, actions, display targets and library; the profile list and pictures, waking a profile's seat and a profile's unlock challenge; picking its own screen; installing, pausing and removing a library title; ending its own game; log upload; invoking an action it holds the grant for |
+| Paired device | a paired client certificate over mTLS, or a browser's device-key token | anywhere | `GET` host, status, compositors, actions, display targets and library; the profile list and pictures, waking a profile's seat and a profile's unlock challenge; picking its own screen; installing, pausing and removing a library title; ending its own game; starting a game on the host's own screen, from the host's own machine ([below](#start-a-game-on-the-hosts-own-screen)); log upload; invoking an action it holds the grant for |
 
 The token files hold one `KEY=<hex>` line (`PUNKTFUNK_MGMT_TOKEN=…`, `PUNKTFUNK_TRAY_TOKEN=…`),
 so a shell or a systemd `EnvironmentFile` can source them. Send only the value after `=`. The
@@ -73,6 +73,39 @@ the token and certificate for you.
 `GET /api/v1/events` is a Server-Sent Events stream of host lifecycle events: clients, sessions,
 streams, pairing, displays, library, updates. [Host events](/docs/host-events) has the event
 catalogue, the frame format, resume with `Last-Event-ID`, and the `?kinds=` filter.
+
+## Start a game on the host's own screen
+
+`POST /api/v1/game/launch` with `{ "app_id": "steam:570" }` starts a library title on the host's own
+screen, with no stream, as the owner profile. The admin token may call it. A paired device may with
+the **Launch games** grant, and only from the host's own machine: a call over the network is
+refused. `punktfunk-host ctl launch <ID>` calls it.
+
+| Answer | Means |
+|---|---|
+| `202` `{"via":"host"}` | The host starts the title. |
+| `202` `{"via":"steam"}` | Game Mode: the host asked Steam to run the title or its entry. |
+| `200` `{"via":…,"running":true}` | The host already runs it. |
+| `403` `device_not_allowed_to_start_games` | No launch grant, or a locked owner profile. |
+| `403` `local_not_this_device` | The caller isn't on the host's own machine. |
+| `404` `local_no_such_game` | The id isn't in the library. |
+| `409` `local_no_desk` | A seat, or the owner's session while it runs in the background with nobody signed in at the box. |
+| `409` `local_nobody_signed_in` | Windows: nobody is signed in. |
+| `409` `local_no_session` | Linux: no desktop is running. |
+| `409` `local_not_in_steam` | Game Mode: the title has no Steam entry. |
+
+What follows rides `GET /api/v1/status`, as a `games[]` row with `plane: "local"` and
+`client: "desk"`. Its `state` goes `launching`, `running`, `window`. For a minute after a launch
+that was refused late or died at the start, the row reads `exited` with an `outcome` (`code` and
+`params`, worded by the host message of that code). `POST /api/v1/game/end` with the `app_id` ends
+it; a call with none leaves it. `GET /api/v1/host` says `local_play: true` when the host has a
+screen for this. [Play on this device](/docs/play-on-this-device) covers what the apps do with it.
+
+Game Mode adds routes for the Decky plugin and `punktfunk-host play`, on the admin token only:
+`GET` and `PUT /api/v1/steam/entries` (the games that can become Steam entries, and the map from
+library ids to Steam's app ids) and `POST /api/v1/game/handoff` with
+`POST /api/v1/game/handoff/{token}` (an entry asks what to run, then reports that it started and
+exited). A plugin token can't call them.
 
 ## TypeScript SDK
 
