@@ -293,6 +293,14 @@ fn main() {
     }));
     windows::entry::install_crash_handler();
 
+    #[cfg(target_os = "macos")]
+    if hostsys::app_loop::wanted() {
+        hostsys::app_loop::run_beside(run);
+    }
+    run();
+}
+
+fn run() {
     if let Err(e) = real_main() {
         tracing::error!("{e:#}");
         std::process::exit(1);

@@ -1,6 +1,8 @@
 //! The machine the host runs on: its TLS identity and OS name, the mDNS advert and wake
 //! addresses clients find it by, and its power and sleep controls.
 
+#[cfg(target_os = "macos")]
+pub(crate) mod app_loop;
 // Network-facing; same `forbid` as `mod mgmt`.
 #[forbid(unsafe_code)]
 pub(crate) mod discovery;
