@@ -576,7 +576,8 @@ impl Pads {
 
     /// Pump every live backend. `rumble` is `(pad, low, high, lt, rt)` on 0xCA;
     /// `hidout` is lightbar / LEDs / adaptive triggers on UHID/UMDF. Closures
-    /// re-borrow to satisfy `FnMut`. Rumble also goes to the slot's buddies; `hidout` does not.
+    /// re-borrow to satisfy `FnMut`. Rumble, light bar, player LEDs and trigger effects also
+    /// go to the slot's buddies.
     ///
     /// Only the Windows HID Xbox managers ever report non-zero trigger levels;
     /// every other backend's source packet has no field for them, so v3 goes
@@ -596,8 +597,10 @@ impl Pads {
             *wire = self.slots.wire_of(slot as u8);
         }
         // No wire index = not this session's pad; drop the feedback. Buddies on the slot
-        // play the same rumble.
+        // play the same rumble; shared output is collected and stored after the pump, since
+        // only one closure may hold `buddy`.
         let buddy = &mut self.buddy;
+        let mut shared_out = Vec::new();
         let mut rumble = |pad: u16, low, high, lt, rt| {
             if let Some(wire) = wire_of.get(pad as usize).copied().flatten() {
                 buddy.lead_rumble(pad as u8, (low, high, lt, rt));
@@ -606,6 +609,9 @@ impl Pads {
         };
         let mut hidout = |h: punktfunk_core::quic::HidOutput| {
             if let Some(wire) = wire_of.get(h.pad() as usize).copied().flatten() {
+                if crate::inject::pad_buddy::BuddyHub::shares_output(&h) {
+                    shared_out.push(h.clone());
+                }
                 hidout(h.with_pad(wire as u16));
             }
         };
@@ -613,6 +619,9 @@ impl Pads {
             m.pump_rumble(&mut rumble); // Xbox has no rich-feedback plane
         }
         self.backends.pump(&mut rumble, &mut hidout);
+        for h in shared_out {
+            self.buddy.lead_output(h.pad() as u8, &h);
+        }
     }
 
     /// Re-emit HID reports so kernel/SDL do not drop a held-steady UHID/UMDF pad.
@@ -1327,11 +1336,14 @@ struct InputLoop {
     posts_seen: [u32; MAX_WIRE_PADS],
     /// Buddy side: the lead rumble stamp last played.
     rumble_seen: Option<u32>,
+    /// Buddy side: the lead output stamp last sent.
+    out_seen: Option<u32>,
 }
 
 impl InputLoop {
     /// Follow the share pick. Pads post into a slot another session holds; with no one
-    /// there they build their own device on it, so the next buddy has a lead.
+    /// there they build their own device on it, so the next buddy has a lead. Leaving a
+    /// share stops the pads' rumble and releases their trigger effects.
     fn on_shared(&mut self) {
         let target = match self.shared.load(Ordering::Relaxed) {
             crate::session_status::NO_PAD_SLOT => None,
@@ -1347,8 +1359,12 @@ impl InputLoop {
             for &idx in &attached {
                 let stop = self.rumble.on_level(idx as u16, (0, 0, 0, 0));
                 self.conn.send_datagram(stop);
+                for h in crate::inject::pad_buddy::BuddyHub::release_triggers() {
+                    self.conn.send_datagram(h.with_pad(idx as u16).encode());
+                }
             }
             self.rumble_seen = None;
+            self.out_seen = None;
         }
         match want {
             Some(slot) => {
@@ -1410,6 +1426,22 @@ impl InputLoop {
         for idx in self.wire.attached() {
             self.conn
                 .send_datagram(self.rumble.on_level(idx as u16, lv));
+        }
+    }
+
+    /// Buddy side: the lead's light bar, player LEDs and trigger effects show on every pad
+    /// of this session. A client drops what its pad can't render.
+    fn play_shared_output(&mut self) {
+        let Some(slot) = self.joined else { return };
+        let hub = self.pads.buddy.hub();
+        let Some(out) = hub.outputs_since(slot, &mut self.out_seen) else {
+            return;
+        };
+        for idx in self.wire.attached() {
+            for h in &out {
+                self.conn
+                    .send_datagram(h.clone().with_pad(idx as u16).encode());
+            }
         }
     }
 
@@ -1630,6 +1662,7 @@ impl InputLoop {
         self.touchpad.check_timeout();
         self.follow_buddies();
         self.play_shared_rumble();
+        self.play_shared_output();
         self.pump_feedback();
         // Held-steady UHID pads send no wire events; heartbeat re-emits. Xbox is a no-op.
         self.pads.heartbeat();
@@ -1793,6 +1826,7 @@ pub(super) fn input_thread(
         joined: None,
         posts_seen: [0; MAX_WIRE_PADS],
         rumble_seen: None,
+        out_seen: None,
     };
     // A reconnect or steal sets `stop` while this connection is still open and
     // claims this session's OS slots 1.5 s later; the channel outlives that.

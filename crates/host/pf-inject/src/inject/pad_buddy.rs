@@ -3,14 +3,15 @@
 //! The session whose pad built the slot's device leads it. A session the operator shares
 //! into that slot builds no device: it posts each pad state here, and the lead folds the
 //! posts into its own state before every write ([`merge`]). The lead posts the device's
-//! rumble back, and every buddy plays it.
+//! rumble, light bar, player LEDs and trigger effects back, and every buddy plays them.
 //!
 //! The merge: buttons OR, extra bits (paddles, touchpad click) included; each trigger takes
 //! the larger value; each stick takes the input furthest from centre, x and y together.
-//! Gyro, touchpad contacts, raw reports, HID output and pad audio stay with the lead pad.
+//! Gyro, touchpad contacts, raw reports, other HID output and pad audio stay with the lead.
 //! A buddy that leaves withdraws its posts, so the lead's next write lets go of them.
 
 use punktfunk_core::input::{GamepadFrame, MAX_PADS};
+use punktfunk_core::quic::{HidOutput, TRIGGER_EFFECT_MAX};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -39,18 +40,41 @@ fn further(a: (i16, i16), b: (i16, i16)) -> (i16, i16) {
     }
 }
 
+/// Which stored output `h` replaces: one light bar, one player-LED set, one effect per
+/// trigger. `None` for output buddies don't get.
+fn output_key(h: &HidOutput) -> Option<(u8, u8)> {
+    match h {
+        HidOutput::Led { .. } => Some((0, 0)),
+        HidOutput::PlayerLeds { .. } => Some((1, 0)),
+        HidOutput::Trigger { which, .. } => Some((2, *which)),
+        _ => None,
+    }
+}
+
+/// A full-length zero block: the trigger lets go of its effect (an empty one is malformed).
+fn released(which: u8) -> HidOutput {
+    HidOutput::Trigger {
+        pad: 0,
+        which,
+        effect: vec![0; TRIGGER_EFFECT_MAX],
+    }
+}
+
 struct Share {
     /// Each buddy pad's latest state: member, its wire pad, the state.
     posts: Vec<(u64, u8, GamepadFrame)>,
     rumble: RumbleLevels,
+    /// The lead device's latest output per [`output_key`].
+    out: Vec<HidOutput>,
 }
 
-/// Host-wide buddy posts and lead rumble, one entry per OS slot.
+/// Host-wide buddy posts and lead feedback, one entry per OS slot.
 pub struct BuddyHub {
     shares: Mutex<[Share; MAX_PADS]>,
     /// Bumped on every change to a slot's posts: the lead re-writes its device on a move.
     posts_gen: [AtomicU32; MAX_PADS],
     rumble_gen: [AtomicU32; MAX_PADS],
+    out_gen: [AtomicU32; MAX_PADS],
 }
 
 impl Default for BuddyHub {
@@ -67,12 +91,67 @@ impl BuddyHub {
                     Share {
                         posts: Vec::new(),
                         rumble: (0, 0, 0, 0),
+                        out: Vec::new(),
                     }
                 }; MAX_PADS],
             ),
             posts_gen: [const { AtomicU32::new(0) }; MAX_PADS],
             rumble_gen: [const { AtomicU32::new(0) }; MAX_PADS],
+            out_gen: [const { AtomicU32::new(0) }; MAX_PADS],
         }
+    }
+
+    /// Whether buddies replay `h`: light bar, player LEDs, trigger effects.
+    pub fn shares_output(h: &HidOutput) -> bool {
+        output_key(h).is_some()
+    }
+
+    /// The lead device on `slot` wrote `h`. Output buddies don't get is ignored.
+    pub fn set_output(&self, slot: u8, h: &HidOutput) {
+        let (Some(i), Some(key)) = (index(slot), output_key(h)) else {
+            return;
+        };
+        let mut shares = self.lock();
+        let out = &mut shares[i].out;
+        match out.iter_mut().find(|o| output_key(o) == Some(key)) {
+            Some(o) if o == h => return,
+            Some(o) => *o = h.clone(),
+            None => out.push(h.clone()),
+        }
+        self.out_gen[i].fetch_add(1, Ordering::Release);
+    }
+
+    /// The lead on `slot` is going: its trigger effects release, its lights stay as they are.
+    fn end_outputs(&self, slot: u8) {
+        let Some(i) = index(slot) else { return };
+        let mut shares = self.lock();
+        let out = &mut shares[i].out;
+        let after: Vec<HidOutput> = (out.iter())
+            .filter_map(|o| match o {
+                HidOutput::Trigger { which, .. } => Some(released(*which)),
+                _ => None,
+            })
+            .collect();
+        if *out != after {
+            *out = after;
+            self.out_gen[i].fetch_add(1, Ordering::Release);
+        }
+    }
+
+    /// `slot`'s stored output, when it moved since `seen`. `None` in `seen` takes all of it.
+    pub fn outputs_since(&self, slot: u8, seen: &mut Option<u32>) -> Option<Vec<HidOutput>> {
+        let i = index(slot)?;
+        let stamp = self.out_gen[i].load(Ordering::Acquire);
+        if *seen == Some(stamp) {
+            return None;
+        }
+        *seen = Some(stamp);
+        Some(self.lock()[i].out.clone())
+    }
+
+    /// What a buddy leaving `slot` sends each of its pads, so no effect stays on a trigger.
+    pub fn release_triggers() -> [HidOutput; 2] {
+        [released(0), released(1)]
     }
 
     /// A fresh member id: one per session input thread, never reused.
@@ -185,11 +264,21 @@ impl BuddyMember {
         }
     }
 
-    /// This session's device on `slot` is going: its buddies stop buzzing.
+    /// This session's device on `slot` wrote `h`.
+    pub fn lead_output(&mut self, slot: u8, h: &HidOutput) {
+        if index(slot).is_some() && BuddyHub::shares_output(h) {
+            self.led |= 1 << slot;
+            self.hub.set_output(slot, h);
+        }
+    }
+
+    /// This session's device on `slot` is going: its buddies stop buzzing and their
+    /// triggers let go.
     pub fn stop_leading(&mut self, slot: u8) {
         if index(slot).is_some() && self.led & (1 << slot) != 0 {
             self.led &= !(1 << slot);
             self.hub.set_rumble(slot, (0, 0, 0, 0));
+            self.hub.end_outputs(slot);
         }
     }
 }
@@ -356,5 +445,48 @@ mod tests {
         assert_eq!(HUB.rumble_since(1, &mut seen), None, "once per change");
         drop(lead);
         assert_eq!(HUB.rumble_since(1, &mut seen), Some((0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn buddies_get_the_leads_lights_and_triggers_until_it_leaves() {
+        static HUB: BuddyHub = BuddyHub::new();
+        let mut lead = BuddyMember::new(&HUB);
+        let trigger = |which, first| HidOutput::Trigger {
+            pad: 4,
+            which,
+            effect: vec![first, 0, 9],
+        };
+        let led = HidOutput::Led {
+            pad: 4,
+            r: 1,
+            g: 2,
+            b: 3,
+        };
+        let mut seen = None;
+        assert_eq!(HUB.outputs_since(4, &mut seen), Some(vec![]));
+        lead.lead_output(4, &led);
+        lead.lead_output(4, &trigger(1, 0x21));
+        lead.lead_output(4, &trigger(1, 0x26));
+        lead.lead_output(
+            4,
+            &HidOutput::HidRaw {
+                pad: 4,
+                kind: 0,
+                data: vec![2],
+            },
+        );
+        assert_eq!(
+            HUB.outputs_since(4, &mut seen),
+            Some(vec![led.clone(), trigger(1, 0x26)]),
+            "a trigger's newer effect replaces its last; raw reports stay with the lead"
+        );
+        lead.lead_output(4, &led);
+        assert_eq!(HUB.outputs_since(4, &mut seen), None, "unchanged");
+        drop(lead);
+        assert_eq!(
+            HUB.outputs_since(4, &mut seen),
+            Some(vec![released(1)]),
+            "the trigger lets go; the light stays"
+        );
     }
 }
