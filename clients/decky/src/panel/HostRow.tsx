@@ -26,7 +26,7 @@ import {
   screens as fetchScreens,
   type ScreensResult,
 } from "../backend";
-import { type HostView, trustState } from "../hosts/model";
+import { hostRef, type HostView, trustState } from "../hosts/model";
 import { t } from "../i18n";
 import { toast } from "../lib/toast";
 import { OsMark } from "../os-icon";
@@ -54,7 +54,7 @@ const HostLabel: FC<{ host: HostView; icon: ReactNode; showAddress: boolean }> =
     status === "offline-wakes" ? t("hostcard_status_offline_wakes") : null,
     status === "offline" ? t("hostcard_status_offline") : null,
     trustState(host) === "trusted" ? t("decky_host_trusted") : null,
-    showAddress ? `${host.addr}:${host.port}` : null,
+    showAddress ? hostRef(host.addr, host.port) : null,
   ].filter(Boolean);
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100%", minWidth: 0, textAlign: "left" }}>
