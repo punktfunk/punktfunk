@@ -844,16 +844,16 @@ mod pad_driver_verdict_tests {
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HidDeviceVerdict {
-    /// A neutral probe device was created and removed.
+    /// The host's signature carries the HID virtual device entitlement.
     Ready,
-    /// The system refused it: the host's signature lacks the HID virtual device entitlement.
+    /// It does not, as in an unsigned or ad hoc build: the system refuses every pad.
     Refused,
 }
 
-/// One create of a neutral device, on the first call only; later calls return its answer.
+/// Reads this process's signature; creates no device, so a running game never sees a pad.
 #[cfg(target_os = "macos")]
 pub fn hid_device_probe() -> HidDeviceVerdict {
-    if hid_user_device::probe() {
+    if hid_user_device::entitled() {
         HidDeviceVerdict::Ready
     } else {
         HidDeviceVerdict::Refused
