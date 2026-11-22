@@ -3898,6 +3898,7 @@ name = "pf-gpu"
 version = "0.47.0"
 dependencies = [
  "anyhow",
+ "objc2-metal",
  "pf-host-config",
  "pf-paths",
  "serde",
