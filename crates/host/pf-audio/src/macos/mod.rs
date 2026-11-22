@@ -121,6 +121,8 @@ pub(super) fn playing_apps() -> Result<Vec<String>> {
 /// the tap are destroyed.
 pub struct TapCapturer {
     chunks: Receiver<Vec<f32>>,
+    /// Each chunk's buffer goes back to the IOProc once copied out.
+    spare: SyncSender<Vec<f32>>,
     channels: u32,
     rate_hz: u32,
     /// Shared with the IOProc, so drops count only while a session reads.
@@ -150,10 +152,12 @@ impl TapCapturer {
         let open_hz = convert::settle_rate(tap_hz, rate_hz);
         let aggregate = Aggregate::create(&tap.uid)?;
         let (tx, rx) = sync_channel::<Vec<f32>>(64);
+        let (spare, spare_rx) = sync_channel::<Vec<f32>>(64);
         let active = Arc::new(AtomicBool::new(true));
         let heard = Arc::new(AtomicBool::new(false));
         let state = IoState {
             tx,
+            spare: spare_rx,
             active: active.clone(),
             heard: heard.clone(),
             channels: channels as usize,
@@ -185,6 +189,7 @@ impl TapCapturer {
         }
         Ok(TapCapturer {
             chunks: rx,
+            spare,
             channels,
             rate_hz: open_hz,
             active,
@@ -241,7 +246,12 @@ impl AudioCapturer for TapCapturer {
             }
         }
         match self.chunks.recv_timeout(budget) {
-            Ok(c) => Ok(c),
+            // The copy is made here, off the IO thread, so its buffer can go back.
+            Ok(c) => {
+                let chunk = c.clone();
+                let _ = self.spare.try_send(c);
+                Ok(chunk)
+            }
             // A quiet tap is not a failure.
             Err(RecvTimeoutError::Timeout) => Ok(Vec::new()),
             Err(RecvTimeoutError::Disconnected) => Err(anyhow!("process tap IO ended")),
@@ -257,7 +267,9 @@ impl AudioCapturer for TapCapturer {
     }
 
     fn drain(&mut self) {
-        while self.chunks.try_recv().is_ok() {}
+        while let Ok(c) = self.chunks.try_recv() {
+            let _ = self.spare.try_send(c);
+        }
         self.active.store(true, Ordering::Relaxed);
     }
 
@@ -401,6 +413,8 @@ impl Drop for Aggregate {
 /// What the IOProc owns. Only the HAL's IO thread touches it while IO runs.
 struct IoState {
     tx: SyncSender<Vec<f32>>,
+    /// Chunk buffers the reader hands back, so a cycle fills one instead of allocating.
+    spare: Receiver<Vec<f32>>,
     active: Arc<AtomicBool>,
     heard: Arc<AtomicBool>,
     channels: usize,
@@ -415,10 +429,11 @@ struct IoState {
 }
 
 impl IoState {
+    /// Allocates nothing once the spare buffers have grown to the tap's cycle.
     fn cycle(&mut self, input: &AudioBufferList) {
-        let bufs = buffers(input);
+        let (bufs, n) = buffers(input);
         self.stereo.clear();
-        convert::gather_stereo(&bufs, &mut self.stereo);
+        convert::gather_stereo(&bufs[..n], &mut self.stereo);
         let frames_in = self.stereo.len() / 2;
         let now = Instant::now();
         let quantum = Duration::from_secs_f64(frames_in as f64 / f64::from(self.tap_hz.max(1)));
@@ -430,7 +445,8 @@ impl IoState {
         if self.resampled.is_empty() {
             return;
         }
-        let mut out = Vec::new();
+        let mut out = self.spare.try_recv().unwrap_or_default();
+        out.clear();
         convert::place(&self.resampled, self.channels, &mut out);
         if !self.heard.load(Ordering::Relaxed) && out.iter().any(|&s| s != 0.0) {
             self.heard.store(true, Ordering::Relaxed);
@@ -445,21 +461,29 @@ impl IoState {
     }
 }
 
-/// The tap's buffers as `(samples, channels)`.
-fn buffers(list: &AudioBufferList) -> Vec<(&[f32], usize)> {
+/// The most `AudioBuffer`s a cycle reads: a tap delivers one interleaved buffer or one per
+/// channel, and only the first two channels are read.
+const MAX_BUFFERS: usize = 8;
+
+/// The tap's buffers as `(samples, channels)`, and how many of the slots hold one.
+fn buffers(list: &AudioBufferList) -> ([(&[f32], usize); MAX_BUFFERS], usize) {
     // SAFETY: `mBuffers` is a C flexible array holding `mNumberBuffers` entries.
     let raw =
         unsafe { std::slice::from_raw_parts(list.mBuffers.as_ptr(), list.mNumberBuffers as usize) };
-    raw.iter()
-        .filter(|b| !b.mData.is_null() && b.mNumberChannels > 0)
-        .map(|b| {
-            let len = b.mDataByteSize as usize / size_of::<f32>();
-            // SAFETY: the HAL hands `mDataByteSize` bytes of 32-bit float samples at `mData`,
-            // valid for this IO cycle, which outlives the borrow.
-            let s = unsafe { std::slice::from_raw_parts(b.mData.cast::<f32>(), len) };
-            (s, b.mNumberChannels as usize)
-        })
-        .collect()
+    let mut out = [(&[][..], 0); MAX_BUFFERS];
+    let mut n = 0;
+    let live = raw
+        .iter()
+        .filter(|b| !b.mData.is_null() && b.mNumberChannels > 0);
+    for (slot, b) in out.iter_mut().zip(live) {
+        let len = b.mDataByteSize as usize / size_of::<f32>();
+        // SAFETY: the HAL hands `mDataByteSize` bytes of 32-bit float samples at `mData`,
+        // valid for this IO cycle, which outlives the borrow.
+        let s = unsafe { std::slice::from_raw_parts(b.mData.cast::<f32>(), len) };
+        *slot = (s, b.mNumberChannels as usize);
+        n += 1;
+    }
+    (out, n)
 }
 
 unsafe extern "C-unwind" fn io_proc(
@@ -692,6 +716,46 @@ fn fourcc(v: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A chunk's buffer the reader hands back carries the next cycle: the IO thread fills it
+    /// in place instead of allocating.
+    #[test]
+    fn a_returned_buffer_carries_the_next_cycle() {
+        let (tx, chunks) = sync_channel(4);
+        let (spare, spare_rx) = sync_channel(4);
+        let mut state = IoState {
+            tx,
+            spare: spare_rx,
+            active: Arc::default(),
+            heard: Arc::default(),
+            channels: 2,
+            resampler: convert::Resampler::new(48_000, 48_000, 2).unwrap(),
+            stereo: Vec::new(),
+            resampled: Vec::new(),
+            tap_hz: 48_000,
+            open_hz: 48_000,
+            stats: CaptureStats::default(),
+            last_stats: Instant::now(),
+            last_callback: None,
+        };
+        let mut samples = vec![0.25f32; 512 * 2];
+        let list = AudioBufferList {
+            mNumberBuffers: 1,
+            mBuffers: [objc2_core_audio_types::AudioBuffer {
+                mNumberChannels: 2,
+                mDataByteSize: (samples.len() * size_of::<f32>()) as u32,
+                mData: samples.as_mut_ptr().cast(),
+            }],
+        };
+        state.cycle(&list);
+        let first = chunks.try_recv().expect("a chunk");
+        let at = first.as_ptr();
+        spare.send(first).unwrap();
+        state.cycle(&list);
+        let second = chunks.try_recv().expect("a chunk");
+        assert_eq!(second.as_ptr(), at, "the returned buffer, refilled");
+        assert!(!second.is_empty());
+    }
 
     #[test]
     fn status_codes_read_as_four_characters() {
