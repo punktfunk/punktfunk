@@ -23,7 +23,7 @@
 #   WINDOWS_SHA256       hex sha256 of that installer                      (paired with WINDOWS_URL)
 #   WINDOWS_ARM64_URL    the ARM64 installer's immutable URL               (optional; same pins/subject)
 #   WINDOWS_ARM64_SHA256 hex sha256 of that installer                      (paired with WINDOWS_ARM64_URL)
-#   MACOS_ARM64_URL      the macOS disk image's immutable URL              (optional; …-arm64.dmg)
+#   MACOS_ARM64_URL      the macOS host disk image's immutable URL         (optional)
 #   MACOS_ARM64_SHA256   hex sha256 of that disk image                     (paired with MACOS_ARM64_URL)
 #   AUTHENTICODE_SHA256  comma-separated signing-leaf sha256s              (required for stable)
 #   AUTHENTICODE_SUBJECT expected signing-cert subject CN — the host then  (required for stable)
