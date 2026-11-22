@@ -404,6 +404,7 @@
 	"close_monitor_missing": "The host is set to stream “{monitor}”, which isn't connected. Pick another screen in its web console, under Displays.",
 	"close_monitor_none": "The host is set to capture a monitor called \"{monitor}\", and reports no monitors at all. Clear that in the host's display settings to stream a virtual display instead.",
 	"close_niri_no_outputs": "The host's niri can't create a display for this stream. Its owner can install biri; the web console shows how.",
+	"close_no_screen_recording": "The host isn't allowed to record its screen. Its owner can allow it in the host's System Settings; the web console shows how.",
 	"close_path_changed": "The network path changed and this stream can't be resized.",
 	"close_path_too_small": "This network path can't carry the stream at its packet size.",
 	"close_profile_removed": "Your profile was removed by the host's owner.",

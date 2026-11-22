@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use block2::{DynBlock, RcBlock};
 use dispatch2::{DispatchQoS, DispatchQueue, DispatchQueueAttr, DispatchRetained};
 use objc2::rc::Retained;
@@ -59,11 +59,13 @@ const FIRST_FRAME: Duration = Duration::from_secs(5);
 /// Each ScreenCaptureKit call that answers through a completion handler.
 const ANSWER: Duration = Duration::from_secs(5);
 
-/// ScreenCaptureKit capture of `opts.display_id`, scaled into the session's size.
+/// ScreenCaptureKit capture of `opts.display_id`, scaled into the session's size. Fails as
+/// [`crate::NoScreenRecording`] without the grant.
 pub(crate) fn open(opts: DisplayCaptureOpts) -> Result<Box<dyn Capturer>> {
     let id = opts.display_id;
     if !crate::screen_capture_access() {
-        bail!("capture display {id}: this process has no Screen Recording grant");
+        return Err(anyhow::Error::new(crate::NoScreenRecording))
+            .with_context(|| format!("capture display {id}"));
     }
     let request = plan::request(&opts.output)?;
     let display = find_display(id)?;

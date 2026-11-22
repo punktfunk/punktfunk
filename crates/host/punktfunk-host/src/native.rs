@@ -1024,6 +1024,10 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<Said> {
              can't share it. Set the same video codec on both devices, then join again.",
         ));
     }
+    #[cfg(target_os = "macos")]
+    if let Some(n) = e.downcast_ref::<pf_capture::NoScreenRecording>() {
+        return Some(Said::new("close_no_screen_recording", n.user_message()));
+    }
     e.downcast_ref::<pf_vdisplay::DisplayAsleep>()
         .map(|d| Said::new("close_display_asleep", &d.user_message()))
 }

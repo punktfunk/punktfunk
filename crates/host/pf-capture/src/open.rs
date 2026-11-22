@@ -43,6 +43,31 @@ pub fn screen_capture_access() -> bool {
     objc2_core_graphics::CGPreflightScreenCaptureAccess()
 }
 
+/// [`open_display`] without the Screen Recording grant. A grant takes effect only after the host
+/// restarts, so a retry can't help.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub struct NoScreenRecording;
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Display for NoScreenRecording {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("this process has no Screen Recording grant")
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl std::error::Error for NoScreenRecording {}
+
+#[cfg(target_os = "macos")]
+impl NoScreenRecording {
+    /// The sentence the client shows.
+    pub fn user_message(&self) -> &'static str {
+        "The host isn't allowed to record its screen. Its owner can allow it in the host's System \
+         Settings; the web console shows how."
+    }
+}
+
 /// Ask for the Screen Recording grant. The system prompts at most once per process identity;
 /// `true` only when the grant is already in place.
 #[cfg(target_os = "macos")]
