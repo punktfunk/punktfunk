@@ -84,6 +84,13 @@ pub(crate) fn take(agent: bool) {
     }
 }
 
+/// Ask a running host to show its window, if one holds the lock.
+pub(crate) fn wake_holder() {
+    if let Ok(Lock::Held(pid)) = acquire(&lock_path(), Duration::ZERO) {
+        wake(pid);
+    }
+}
+
 fn wake(pid: Option<i32>) {
     let Some(pid) = pid.filter(|&p| p > 1) else {
         return;
