@@ -87,6 +87,10 @@ pub(crate) struct DetectProbes {
     pub linux: Vec<String>,
     #[serde(default)]
     pub windows: Vec<String>,
+    /// Shaped as `linux`: `/Applications/Steam.app`, or a home as its `*` segment,
+    /// `/Users/*/Library/Application Support/Steam`. An entry without it answers nothing here.
+    #[serde(default)]
+    pub macos: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -213,9 +217,11 @@ impl Entry {
         if let Some(d) = &mut self.detect {
             d.linux.retain(|p| valid_probe(p, false));
             d.windows.retain(|p| valid_probe(p, true));
+            d.macos.retain(|p| valid_probe(p, false));
             d.linux.truncate(MAX_PROBES);
             d.windows.truncate(MAX_PROBES);
-            if d.linux.is_empty() && d.windows.is_empty() {
+            d.macos.truncate(MAX_PROBES);
+            if d.linux.is_empty() && d.windows.is_empty() && d.macos.is_empty() {
                 self.detect = None;
             }
         }
@@ -227,6 +233,8 @@ impl Entry {
         let probes = self.detect.as_ref()?;
         let list = if cfg!(windows) {
             &probes.windows
+        } else if cfg!(target_os = "macos") {
+            &probes.macos
         } else if cfg!(target_os = "linux") {
             &probes.linux
         } else {
@@ -377,7 +385,7 @@ fn is_https(url: &str) -> bool {
 const MAX_PROBES: usize = 8;
 
 /// A local absolute path with at most one `*` segment: `X:\…` or `HKLM\…` on `windows`, `/…`
-/// on Linux. Relative would follow cwd; `//host`, `\\host`, `\\?\` and `\\.\` reach a server or
+/// on Linux and macOS. Relative would follow cwd; `//host`, `\\host`, `\\?\` and `\\.\` reach a server or
 /// a device, so a Windows probe is never `/`-rooted. One `*` bounds fan-out. `HKCU` here is the
 /// host's own hive, not the player's; other hives are not for a remote index.
 fn valid_probe(p: &str, windows: bool) -> bool {
@@ -548,6 +556,44 @@ mod tests {
         assert!(probe_matches(&format!("{d}/SteamLibrary-*/steamapps")));
         assert!(!probe_matches(&format!("{d}/SteamLibrary-*/nope")));
         assert!(!probe_matches(&format!("{d}/Other-*")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Mac reads its own list; an entry written before the field still parses and answers
+    /// nothing there.
+    #[test]
+    fn each_platform_reads_its_own_probes() {
+        let dir = std::env::temp_dir().join(format!("pf-probe-mac-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Steam.app")).unwrap();
+        let path = |name: &str| serde_json::to_string(&dir.join(name)).unwrap();
+        let entry = GOOD.trim_end_matches('}').to_string()
+            + &format!(
+                r#","detect":{{"linux":[{}],"windows":["C:\\Nope\\steam.exe"],
+                    "macos":[{},"~/Applications/Steam.app","Applications/x"]}}}}"#,
+                path("nope"),
+                path("Steam.app"),
+            );
+        let e = &Index::parse(&doc(&entry)).unwrap().plugins[0];
+        let d = e.detect.as_ref().expect("probes kept");
+        assert_eq!(
+            d.macos,
+            [dir.join("Steam.app").to_string_lossy()],
+            "~ and relative dropped"
+        );
+        let here = if cfg!(target_os = "macos") {
+            Some(true)
+        } else {
+            Some(false)
+        };
+        assert_eq!(e.detected(), here);
+
+        let old =
+            GOOD.trim_end_matches('}').to_string() + r#","detect":{"linux":["/usr/bin/steam"]}}"#;
+        let e = &Index::parse(&doc(&old)).unwrap().plugins[0];
+        assert!(e.detect.as_ref().unwrap().macos.is_empty());
+        if cfg!(target_os = "macos") {
+            assert_eq!(e.detected(), None, "no probes for a Mac: unknown");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
