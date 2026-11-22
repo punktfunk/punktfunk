@@ -7,7 +7,7 @@
 #
 # Usage: sh packaging/macos/dmg.sh -a <app> -v <version> -o <output dir> [-i <identity>]
 #   identity  as for bundle.sh; - or none leaves the image unsigned
-# Environment: PF_PYTHON, a Python 3.10 or later (default python3); PF_CACHE, the cache dir
+# Environment: PF_PYTHON, a Python 3.10 or later (default: the newest found); PF_CACHE, the cache dir
 # (default ~/Library/Caches/punktfunk-packaging).
 # Output: <output dir>/Punktfunk-Host-<version>.dmg
 set -eu
@@ -35,9 +35,17 @@ case $version in
     '' | *[!0-9.]* | .* | *. | *..*) die "the version is dotted digits, such as 0.47.0" ;;
 esac
 
-py=${PF_PYTHON:-python3}
-"$py" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null ||
-    die "dmgbuild needs Python 3.10 or later: set PF_PYTHON"
+# macOS's own python3 is 3.9, so look for a newer one, Homebrew's included.
+py=
+for cand in ${PF_PYTHON:-python3.14 python3.13 python3.12 python3.11 python3.10 python3}; do
+    for dir in "" /opt/homebrew/bin/ /usr/local/bin/; do
+        if "$dir$cand" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+            py=$dir$cand
+            break 2
+        fi
+    done
+done
+[ -n "$py" ] || die "dmgbuild needs Python 3.10 or later: set PF_PYTHON"
 venv=${PF_CACHE:-$HOME/Library/Caches/punktfunk-packaging}/dmgbuild-$(shasum -a 256 "$here/dmg-requirements.txt" | cut -c1-12)
 if [ ! -x "$venv/bin/dmgbuild" ]; then
     rm -rf "$venv"
