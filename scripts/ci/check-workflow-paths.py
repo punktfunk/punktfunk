@@ -76,6 +76,7 @@ RECIPES = {
     "arch": ["packaging/arch/PKGBUILD", "packaging/arch/*.sh", "packaging/gamescope/PKGBUILD"],
     "nix": ["packaging/nix/*.nix", "flake.nix"],
     "flatpak": ["packaging/flatpak/*.yml", "packaging/flatpak/*.sh", "packaging/flatpak/*.py"],
+    "macos-host": ["packaging/macos/*.sh"],
 }
 
 
