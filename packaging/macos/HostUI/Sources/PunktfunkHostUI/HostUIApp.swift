@@ -77,9 +77,9 @@ public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate
         button.setAccessibilityLabel(store.state.headline)
     }
 
-    /// The host ignores SIGUSR1 before it loads the UI; a dispatch source still sees it.
+    /// A second launch's SIGUSR1. The host gives it a no-op handler before it loads the UI, never
+    /// SIG_IGN, which every child would inherit; the dispatch source fires either way.
     private func watchSIGUSR1() {
-        signal(SIGUSR1, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {

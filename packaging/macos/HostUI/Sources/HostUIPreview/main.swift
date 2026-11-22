@@ -30,8 +30,11 @@ if let dir = value(after: "--render") {
 } else if let dir = value(after: "--render-one") {
     try MainActor.assumeIsolated { try Preview.render(to: URL(fileURLWithPath: dir)) }
 } else if let name = value(after: "--canned") {
+    // As the host does: SIGUSR1 shows the panel instead of ending the process.
+    signal(SIGUSR1) { _ in }
     MainActor.assumeIsolated { Preview.runCanned(name) }
 } else {
+    signal(SIGUSR1) { _ in }
     MainActor.assumeIsolated {
         Preview.runLive(configDir: HostContext.defaultConfigDir(),
                         hostExecutable: env["PUNKTFUNK_HOST_EXE"].map { URL(fileURLWithPath: $0) })
