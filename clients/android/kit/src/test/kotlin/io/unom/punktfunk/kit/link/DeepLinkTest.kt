@@ -88,6 +88,19 @@ class DeepLinkResolutionTest {
     private fun resolve(url: String) =
         DeepLinks.resolveHost((DeepLinks.parse(url) as DeepLinkResult.Parsed).link, hosts)
 
+    /** A typed address is stored bare: no brackets, and a pasted port wins over the field. */
+    @Test
+    fun aTypedHostIsStoredBare() {
+        assertEquals("200:abcd::1" to 9777, DeepLinks.typedHost("[200:abcd::1]", 9777))
+        assertEquals("200:abcd::1" to 9800, DeepLinks.typedHost("[200:abcd::1]:9800", 9777))
+        assertEquals("200:abcd::1" to 9777, DeepLinks.typedHost("200:abcd::1", 9777))
+        assertEquals("fd00::9777" to 9800, DeepLinks.typedHost("fd00::9777", 9800))
+        assertEquals("desk.lan" to 9800, DeepLinks.typedHost(" desk.lan:9800 ", 9777))
+        assertEquals("192.168.1.9" to 9801, DeepLinks.typedHost("192.168.1.9", 9801))
+        // What reads as no host stays as typed, for the form to refuse.
+        assertEquals("[::1" to 9777, DeepLinks.typedHost("[::1", 9777))
+    }
+
     @Test
     fun idBeatsNameBeatsAddress() {
         assertEquals(desk, (resolve("punktfunk://connect/${desk.id}") as HostResolution.Record).host)
