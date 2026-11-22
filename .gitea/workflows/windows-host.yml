@@ -224,6 +224,8 @@ jobs:
             $probe | Select-Object -First 12 | Write-Output
             Write-Warning "sccache daemon failed to start - building this leg without the cache"
             "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            # The runner ends the step on the last native exit code, and the probe's is handled.
+            $global:LASTEXITCODE = 0
           }
           # Cargo keeps a failed compiler probe in the target dir and replays it on every later
           # run, whatever the daemon does now. Drop it so cargo probes again.
@@ -399,6 +401,8 @@ jobs:
             $probe | Select-Object -First 12 | Write-Output
             Write-Warning "sccache daemon failed to start - building this leg without the cache"
             "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            # The runner ends the step on the last native exit code, and the probe's is handled.
+            $global:LASTEXITCODE = 0
           }
           # Cargo keeps a failed compiler probe in the target dir and replays it on every later
           # run, whatever the daemon does now. Drop it so cargo probes again.
