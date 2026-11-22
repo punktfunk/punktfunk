@@ -95,7 +95,7 @@ pub(crate) fn restart_pending() -> HostCheck {
 
 /// The runner's own refusal, unless it runs again since. Its probe runs inside its unit, which
 /// can refuse what this process may do, so the file it leaves is the only way to hear of it.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn runner_refusal(status: &crate::plugins::RuntimeStatus) -> Option<String> {
     if status.running {
         return None;
@@ -105,7 +105,7 @@ fn runner_refusal(status: &crate::plugins::RuntimeStatus) -> Option<String> {
 
 /// The runner stopped rather than run a plugin unsandboxed. `why` is its reason, `start` the
 /// command that starts it again on this platform.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn runner_stopped(id: &str, why: &str, start: &str) -> HostCheck {
     let (cause, impact_id) = if why.is_empty() {
         (String::new(), "diag_plugin_sandbox_stopped_impact")
@@ -417,8 +417,52 @@ fn plugin_sandbox() -> HostCheck {
     }
 }
 
-/// macOS has no plugin runner.
-#[cfg(not(any(target_os = "linux", windows)))]
+/// The app's runner, which the host supervises, sandboxes each plugin or stops and says why.
+/// host.env turns the sandbox off, as on Windows.
+#[cfg(target_os = "macos")]
+fn plugin_sandbox() -> HostCheck {
+    let id = ids::PLUGIN_SANDBOX;
+    let status = crate::plugins::runtime_status();
+    if !status.installed {
+        return HostCheck::inapplicable(id, "The plugin runner is not installed on this host.")
+            .worded("diag_plugin_sandbox_na_not_installed", None, None);
+    }
+    if crate::plugins::runner_sandbox_off() {
+        return HostCheck::problem(
+            id,
+            CheckStatus::Warn,
+            Severity::Critical,
+            "Plugin sandboxing is turned off",
+            "Every installed plugin runs with your account's access: your files, your session, \
+             and the host's own credentials."
+                .to_string(),
+        )
+        .with_remedy(Remedy {
+            text: "Remove PUNKTFUNK_PLUGIN_SANDBOX from host.env, then restart the host.".into(),
+            command: None,
+            relogin_required: false,
+        })
+        .worded(
+            "diag_plugin_sandbox_off_summary",
+            Some("diag_plugin_sandbox_off_impact"),
+            Some("diag_plugin_sandbox_off_windows_remedy"),
+        );
+    }
+    match runner_refusal(&status) {
+        Some(why) => {
+            let host = std::env::current_exe().unwrap_or_else(|_| "punktfunk-host".into());
+            runner_stopped(id, &why, &format!("\"{}\" plugins enable", host.display()))
+        }
+        None => HostCheck::ok(id, "Each plugin runs in its own sandbox.").worded(
+            "diag_plugin_sandbox_ok_summary",
+            None,
+            None,
+        ),
+    }
+}
+
+/// A host with no plugin runner.
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn plugin_sandbox() -> HostCheck {
     HostCheck::inapplicable(
         ids::PLUGIN_SANDBOX,

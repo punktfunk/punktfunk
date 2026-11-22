@@ -216,6 +216,61 @@ pub(crate) fn stop() {
     }
 }
 
+/// The bundle's runner, which the `plugins` package commands run too.
+pub(crate) fn runner_payload() -> Option<(PathBuf, PathBuf)> {
+    Payload::of(Kind::Runner).map(|p| (p.bun, p.script))
+}
+
+pub(crate) fn runner_installed() -> bool {
+    Payload::of(Kind::Runner).is_some_and(|p| p.present())
+}
+
+pub(crate) fn runner_enabled() -> bool {
+    !pf_paths::config_dir().join(RUNNER_OFF).exists()
+}
+
+/// Whether the runner a serving host started runs now. Any process may ask.
+pub(crate) fn runner_running() -> bool {
+    let Some(payload) = Payload::of(Kind::Runner) else {
+        return false;
+    };
+    std::fs::read_to_string(pid_file(&pf_paths::config_dir(), Kind::Runner))
+        .is_ok_and(|text| ours(&text, &payload.real_bun(), exe_of).is_some())
+}
+
+/// Switch the runner on or off, now and for every later start of the serving host. On also
+/// starts a runner that isn't running, one that refused its sandbox included.
+pub(crate) fn set_runner_enabled(on: bool) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let off = pf_paths::config_dir().join(RUNNER_OFF);
+    if !on {
+        return pf_paths::replace_file(&off, b"")
+            .with_context(|| format!("replace {}", off.display()));
+    }
+    match std::fs::remove_file(&off) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("remove {}", off.display()))
+        }
+        _ if runner_running() => Ok(()),
+        _ => restart_runner(),
+    }
+}
+
+/// Ask the serving host for a fresh start of its runner, which follows within a tick.
+pub(crate) fn restart_runner() -> anyhow::Result<()> {
+    use anyhow::Context;
+    let file = pf_paths::config_dir().join(RUNNER_RESTART);
+    pf_paths::replace_file(&file, b"").with_context(|| format!("replace {}", file.display()))
+}
+
+/// Whether host.env, else this process's environment, turns the per-plugin sandbox off: what
+/// the runner's own environment says at its start ([`child_env`]).
+pub(crate) fn sandbox_off() -> bool {
+    let host_env =
+        std::fs::read_to_string(pf_paths::config_dir().join("host.env")).unwrap_or_default();
+    is_off(setting(SANDBOX_KEY, &host_env))
+}
+
 fn supervise() {
     let Some(config) = lock().as_ref().map(|sup| sup.config.clone()) else {
         return;
