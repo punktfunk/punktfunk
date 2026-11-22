@@ -48,8 +48,8 @@ impl PocWidener {
     }
 
     /// The access unit with a 16-bit POC. `None` for a stream this cannot recode (long-term
-    /// candidates in the SPS, an inter-predicted slice RPS, a header that does not parse):
-    /// drop the widener, feed the stream as it came and ask for a keyframe.
+    /// candidates in the SPS, a header that does not parse): drop the widener, feed the
+    /// stream as it came and ask for a keyframe.
     pub fn widen(&mut self, au: &[u8]) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(au.len() + 16);
         let mut cursor = Cursor::new(au);
@@ -287,10 +287,21 @@ fn widen_slice(
         if sets > 1 {
             b.u(ceil_log2(sets))?; // short_term_ref_pic_set_idx
         }
-    } else {
-        if sets != 0 && b.flag()? {
-            return None; // inter_ref_pic_set_prediction_flag
+    } else if sets != 0 && b.flag()? {
+        // inter_ref_pic_set_prediction_flag: a flag per entry of the SPS set it predicts
+        // from and one for the delta itself, each unused one followed by use_delta_flag.
+        let back = b.ue()? + 1; // delta_idx_minus1
+        b.flag()?; // delta_rps_sign
+        b.ue()?; // abs_delta_rps_minus1
+        let from = sps
+            .short_term_ref_pic_set
+            .get(sets.checked_sub(back)? as usize)?;
+        for _ in 0..=from.num_delta_pocs {
+            if !b.flag()? {
+                b.flag()?;
+            }
         }
+    } else {
         let (neg, pos) = (b.ue()?, b.ue()?);
         for _ in 0..(neg + pos).min(32) {
             b.ue()?; // delta_poc_sX_minus1
@@ -459,6 +470,40 @@ mod tests {
         let hdr = headers(&aus).pop().unwrap();
         assert_eq!(hdr.pic_order_cnt_lsb, 25);
         assert_eq!(hdr.poc_lsb_lt[0], 0);
+    }
+
+    /// A slice whose short-term set is predicted from the SPS's, as QSV codes the pictures
+    /// behind a recovery frame, recodes and keeps its set and its long-term entry.
+    #[test]
+    fn a_slice_set_predicted_from_the_sps_recodes() {
+        let mut sps = SpsOpts::default();
+        sps.long_term = true;
+        sps.chained_inter_rps = Some((2, 0));
+        let mut opening = param_sets(&sps);
+        opening.extend(idr_slice());
+        // The SPS set {-1, -2} one picture earlier: -2 and -3 dropped, the delta -1 used.
+        let predicted = |poc_lsb, lt| {
+            synth_slice(&SliceOpts {
+                poc_lsb,
+                inter_rps: Some(vec![(false, false), (false, false), (true, true)]),
+                lt,
+                sps_long_term: true,
+                num_ref_idx_l0: 1,
+                ..Default::default()
+            })
+        };
+        let aus = vec![
+            opening,
+            predicted(1, vec![]),
+            predicted(2, vec![(0, false, None)]),
+        ];
+        let hdr = headers(&aus).pop().unwrap();
+        assert_eq!(hdr.pic_order_cnt_lsb, 2);
+        let set = &hdr.short_term_ref_pic_set;
+        assert!(set.inter_ref_pic_set_prediction_flag);
+        assert_eq!((set.num_negative_pics, set.delta_poc_s0[0]), (1, -1));
+        assert_eq!((hdr.num_long_term_pics, hdr.poc_lsb_lt[0]), (1, 0));
+        assert!(!hdr.used_by_curr_pic_lt[0]);
     }
 
     /// An end-of-sequence or end-of-bitstream NAL is its two header bytes. One whose second

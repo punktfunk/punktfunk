@@ -1809,7 +1809,7 @@ mod tests {
         /// `(negatives, inter_sets)`: `st_ref_pic_set(0)` is explicit with that many
         /// negative pictures, then each of `inter_sets` sets predicts from the one
         /// before it and keeps every entry, so each holds one picture more.
-        chained_inter_rps: Option<(u32, u32)>,
+        pub(super) chained_inter_rps: Option<(u32, u32)>,
     }
 
     impl Default for SpsOpts {
@@ -2025,6 +2025,10 @@ mod tests {
         /// Short-term RPS: (delta_poc_sX_minus1, used_by_curr_pic) pairs.
         pub(super) neg: Vec<(u32, bool)>,
         pub(super) pos: Vec<(u32, bool)>,
+        /// The set predicted from the SPS's last one, one picture earlier, instead of
+        /// `neg` and `pos`: (used_by_curr_pic_flag, use_delta_flag) per entry of that set,
+        /// then one for the delta itself. Needs an SPS with a set.
+        pub(super) inter_rps: Option<Vec<(bool, bool)>>,
         /// When the SPS set long_term_ref_pics_present_flag:
         /// (poc_lsb_lt, used_by_curr_pic_lt, delta_poc_msb_cycle_lt).
         pub(super) lt: Vec<(u32, bool, Option<u32>)>,
@@ -2045,6 +2049,7 @@ mod tests {
                 poc_lsb: 0,
                 neg: Vec::new(),
                 pos: Vec::new(),
+                inter_rps: None,
                 lt: Vec::new(),
                 sps_long_term: false,
                 num_ref_idx_l0: 1,
@@ -2076,16 +2081,29 @@ mod tests {
             if !is_idr {
                 s.bits(4, o.poc_lsb);
                 s.bit(0); // short_term_ref_pic_set_sps_flag
-                          // st_ref_pic_set(stRpsIdx = 0): no inter-RPS prediction flag.
-                s.ue(o.neg.len() as u32);
-                s.ue(o.pos.len() as u32);
-                for &(delta_minus1, used) in &o.neg {
-                    s.ue(delta_minus1);
-                    s.bit(u32::from(used));
-                }
-                for &(delta_minus1, used) in &o.pos {
-                    s.ue(delta_minus1);
-                    s.bit(u32::from(used));
+                if let Some(flags) = &o.inter_rps {
+                    s.bit(1); // inter_ref_pic_set_prediction_flag
+                    s.ue(0); // delta_idx_minus1
+                    s.bit(1); // delta_rps_sign
+                    s.ue(0); // abs_delta_rps_minus1
+                    for &(used, use_delta) in flags {
+                        s.bit(u32::from(used));
+                        if !used {
+                            s.bit(u32::from(use_delta));
+                        }
+                    }
+                } else {
+                    // st_ref_pic_set(stRpsIdx = 0): no inter-RPS prediction flag.
+                    s.ue(o.neg.len() as u32);
+                    s.ue(o.pos.len() as u32);
+                    for &(delta_minus1, used) in &o.neg {
+                        s.ue(delta_minus1);
+                        s.bit(u32::from(used));
+                    }
+                    for &(delta_minus1, used) in &o.pos {
+                        s.ue(delta_minus1);
+                        s.bit(u32::from(used));
+                    }
                 }
                 if o.sps_long_term {
                     s.ue(o.lt.len() as u32); // num_long_term_pics
