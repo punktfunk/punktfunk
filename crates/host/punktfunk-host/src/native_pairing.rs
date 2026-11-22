@@ -1527,6 +1527,30 @@ mod tests {
         assert!(np.pending().len() <= PENDING_CAP, "global cap still holds");
     }
 
+    /// A public IPv6 peer that rotates through its /64 is still one source. Devices on a
+    /// private network keep an address each.
+    #[test]
+    fn a_public_ipv6_64_is_one_source_for_the_pending_cap() {
+        let (_temp, p) = temp();
+        let np = NativePairing::load_with(Some(p.clone()), None, false).unwrap();
+        for i in 0..(MAX_PENDING_PER_IP as u16 * 3) {
+            let ip = IpAddr::from([0x2a02, 0x8070, 1, 2, 0, 0, 0, i + 1]);
+            np.note_pending(
+                "rotates",
+                &format!("rot{i:03}"),
+                Some(ip),
+                &Via::DIRECT,
+                None,
+            );
+        }
+        assert_eq!(np.pending().len(), MAX_PENDING_PER_IP);
+        for i in 0..(MAX_PENDING_PER_IP as u16 + 2) {
+            let ip = IpAddr::from([0xfd00, 0, 0, 0, 0, 0, 0, i + 1]);
+            np.note_pending("home", &format!("lan{i:03}"), Some(ip), &Via::DIRECT, None);
+        }
+        assert_eq!(np.pending().len(), MAX_PENDING_PER_IP * 2 + 2);
+    }
+
     fn wall_now() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

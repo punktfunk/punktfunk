@@ -93,11 +93,13 @@ pub(crate) fn publish_router(app: Router) {
 
 static SESSIONS: LazyLock<Mutex<HashMap<IpAddr, usize>>> = LazyLock::new(Default::default);
 
-/// One address's share of [`MAX_SESSIONS_PER_IP`], released on drop.
+/// One source's share of [`MAX_SESSIONS_PER_IP`], released on drop. A public IPv6 peer's
+/// source is its /64.
 struct IpSlot(IpAddr);
 
 impl IpSlot {
     fn take(ip: IpAddr) -> Option<IpSlot> {
+        let ip = punktfunk_core::provenance::limit_key(ip);
         let mut m = SESSIONS.lock().expect("tunnel slots");
         let n = m.entry(ip).or_insert(0);
         if *n >= MAX_SESSIONS_PER_IP {
