@@ -89,6 +89,7 @@ use wiring::SessionWiring;
 /// Every `PUNKTFUNK_*` read of the plane.
 mod knobs;
 pub(crate) use knobs::HostKnobs;
+pub use knobs::Ipv6;
 use knobs::SessionKnobs;
 mod scope;
 use scope::SessionScope;
@@ -143,6 +144,8 @@ pub struct Punktfunk1Options {
     pub idle_timeout: Option<std::time::Duration>,
     /// `_punktfunk._udp` advert. `--no-mdns` / `PUNKTFUNK_MDNS=0` skips it.
     pub mdns: bool,
+    /// The IPv6 listener beside the IPv4 one, off unless the operator turned it on.
+    pub ipv6: Ipv6,
 }
 
 use crate::native_pairing::{NativePairing, PairingDecision};
@@ -262,6 +265,7 @@ pub(crate) fn native_serve_opts(cfg: &NativeServe) -> Punktfunk1Options {
         paired_store: None,
         idle_timeout: knobs.idle_timeout,
         mdns: cfg.mdns,
+        ipv6: knobs.ipv6,
     }
 }
 
@@ -295,23 +299,30 @@ pub(crate) async fn serve(
     )
     .map_err(|e| anyhow!("QUIC server endpoint: {e}"))?;
     let media_socket = Arc::new(media_socket);
-    // IPv6 on a socket of its own, so a box without IPv6 still serves IPv4.
-    let ep6 = endpoint::server_shared(
-        (std::net::Ipv6Addr::UNSPECIFIED, opts.port).into(),
-        &identity.cert_pem,
-        &identity.key_pem,
-        opts.idle_timeout.unwrap_or(endpoint::DEFAULT_IDLE_TIMEOUT),
-        alpns,
-    )
-    .map(|(ep, media)| (ep, Arc::new(media)))
-    .map_err(|e| tracing::warn!(error = %e, "IPv6 QUIC endpoint did not bind — serving IPv4 only"))
-    .ok();
+    // IPv6 only when the operator turned it on, on a socket of its own: a box without IPv6
+    // still serves IPv4.
+    let ep6 = (opts.ipv6 != Ipv6::Off)
+        .then(|| {
+            endpoint::server_shared(
+                (std::net::Ipv6Addr::UNSPECIFIED, opts.port).into(),
+                &identity.cert_pem,
+                &identity.key_pem,
+                opts.idle_timeout.unwrap_or(endpoint::DEFAULT_IDLE_TIMEOUT),
+                alpns,
+            )
+            .map(|(ep, media)| (ep, Arc::new(media)))
+            .map_err(|e| {
+                tracing::warn!(error = %e, "IPv6 QUIC endpoint did not bind — serving IPv4 only")
+            })
+            .ok()
+        })
+        .flatten();
     // Bound: a test dials on this, not on a guessed delay.
     #[cfg(test)]
     let _listening = tests::Listening::on(opts.port);
     tracing::info!(
         port = opts.port,
-        ipv6 = ep6.is_some(),
+        ipv6 = ?ep6.as_ref().map(|_| opts.ipv6),
         source = ?opts.source,
         fingerprint = %hex::encode(fingerprint),
         "punktfunk host listening (QUIC) — clients pin this fingerprint"
@@ -446,6 +457,12 @@ pub(crate) async fn serve(
             } => i,
             () = at.done.notified(), if at.max_sessions != 0 => break,
         };
+        // The IPv6 listener answers nobody over the public internet unless the operator opened
+        // it. No reply at all: a scan cannot tell it from a closed port.
+        if opts.ipv6 == Ipv6::Private && crossed_public_internet(&incoming) {
+            incoming.ignore();
+            continue;
+        }
         // A source that has not proved it can receive at the address it claims gets a Retry
         // rather than a task and a TLS handshake, so a spoofed-source flood cannot make this
         // host amplify. Costs the real client one RTT on first contact. A failed retry drops
@@ -463,6 +480,22 @@ pub(crate) async fn serve(
         ep6.wait_idle().await;
     }
     Ok(())
+}
+
+/// Whether an IPv6 `incoming` may have crossed the public internet: either end is a public
+/// address, or the address it was sent to is unread. An IPv4 one is never asked: that listener
+/// answers every source. The first is logged for the operator, the rest at debug.
+fn crossed_public_internet(incoming: &quinn::Incoming) -> bool {
+    let (peer, local) = (incoming.remote_address(), incoming.local_ip());
+    if peer.is_ipv4() || punktfunk_core::provenance::off_internet_v6(peer.ip(), local) {
+        return false;
+    }
+    static TOLD: std::sync::Once = std::sync::Once::new();
+    TOLD.call_once(
+        || tracing::info!(%peer, "public IPv6 peer ignored — PUNKTFUNK_IPV6_PUBLIC=1 answers them"),
+    );
+    tracing::debug!(%peer, ?local, "public IPv6 peer ignored");
+    true
 }
 
 /// The `_punktfunk._udp` advert. None on a seat host, with `--no-mdns`, or when discovery fails:
@@ -1263,6 +1296,7 @@ impl SessionHost {
                 paired_store: None,
                 idle_timeout: None,
                 mdns: false,
+                ipv6: Ipv6::Off,
             }),
             audio_cap: Arc::new(std::sync::Mutex::new(None)),
             inj_tx: std::sync::mpsc::channel().0,

@@ -1603,6 +1603,8 @@
 	"setting_session_watch_hint": "Keeps streaming when the host switches between Game Mode and the desktop.",
 	"setting_mdns": "Local discovery",
 	"setting_mdns_hint": "Announces the host on the local network. Off means adding it by address.",
+	"setting_ipv6": "IPv6",
+	"setting_ipv6_hint": "Lets devices on your network or a VPN connect over IPv6.",
 	"setting_idle_timeout_ms": "Disconnect timeout",
 	"setting_idle_timeout_ms_hint": "How long a silent device keeps its session before the host lets go.",
 	"setting_update_check": "Check for updates",

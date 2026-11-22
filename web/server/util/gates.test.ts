@@ -224,7 +224,7 @@ describe.each(
 	});
 });
 
-test("the five plane settings ask; any other setting does not", async () => {
+test("the six plane settings ask; any other setting does not", async () => {
 	const when = row("PATCH", "host/settings").when;
 	const asks = (body: object) =>
 		when?.({ body: body as Record<string, unknown>, params: {} });
@@ -234,6 +234,7 @@ test("the five plane settings ask; any other setting does not", async () => {
 		"webtransport_origins",
 		"gamestream_encrypt",
 		"clipboard",
+		"ipv6",
 	]) {
 		expect(await asks({ [id]: null }), id).toBe(true);
 		expect(await asks({ max_fps: 60, [id]: "x" }), id).toBe(true);

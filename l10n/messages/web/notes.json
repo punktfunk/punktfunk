@@ -1291,6 +1291,8 @@
 	"setting_session_watch_hint": "Under 'Follow mode switches'. Game Mode is the console-style gamescope session; the desktop is the normal Linux desktop.",
 	"setting_mdns": "Setting label, Network tab (advanced); Off/On buttons. mDNS is the protocol that lets devices find this host without typing an address.",
 	"setting_mdns_hint": "Under 'Local discovery'. 'Off' is that setting's Off button; 'adding it by address' is typing the host's IP in a client.",
+	"setting_ipv6": "Setting label, Network tab (advanced); Off/On buttons. IPv6 is the newer internet address format; on, the host also listens for devices over it. Keep 'IPv6' as written.",
+	"setting_ipv6_hint": "Under 'IPv6'. 'your network' is the home network; a VPN such as Tailscale counts too. Devices on public internet addresses get no answer.",
 	"setting_idle_timeout_ms": "Setting label, Network tab (advanced); number field followed by the unit 'ms'. Time before a silent connection is dropped.",
 	"setting_idle_timeout_ms_hint": "Under 'Disconnect timeout'. A silent device is a client that stopped sending data; the host lets go of its session.",
 	"setting_update_check": "Setting label, System tab; Off/On buttons. Whether the console looks for new Punktfunk versions.",
