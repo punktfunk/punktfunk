@@ -69,6 +69,67 @@ pub fn boost_thread_priority(critical: bool) {
     }
 }
 
+/// macOS: move the calling thread, raised by [`boost_thread_priority`], into the real-time band
+/// for a loop that does one frame's work every `frame`. A timed wait there ends on time; under
+/// the QoS class alone a 1 ms sleep takes 1.5 ms. The thread keeps its QoS class when the
+/// kernel refuses. Set once: a later rate change leaves the numbers of the first. A no-op
+/// elsewhere.
+pub fn raise_to_frame_rate(frame: std::time::Duration) {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            /// `[numer, denom]`: mach time units to nanoseconds.
+            fn mach_timebase_info(info: *mut [u32; 2]) -> libc::c_int;
+        }
+        let (period, computation, constraint) = frame_constraint(frame);
+        let mut tb = [1u32, 1];
+        // SAFETY: `tb` is a live local of the two `u32`s `mach_timebase_info_data_t` holds.
+        unsafe { mach_timebase_info(&mut tb) };
+        let ticks = |ns: u64| (ns * u64::from(tb[1]) / u64::from(tb[0].max(1))) as u32;
+        let mut policy = libc::thread_time_constraint_policy {
+            period: ticks(period),
+            computation: ticks(computation),
+            constraint: ticks(constraint),
+            preemptible: 1,
+        };
+        // SAFETY: `policy` is a live local of the layout THREAD_TIME_CONSTRAINT_POLICY names, and
+        // the count is that layout's in `integer_t`s. The port names the calling thread and is not
+        // released: `pthread_mach_thread_np` hands out the thread's own, unreferenced.
+        let kr = unsafe {
+            libc::thread_policy_set(
+                libc::pthread_mach_thread_np(libc::pthread_self()),
+                libc::THREAD_TIME_CONSTRAINT_POLICY as libc::thread_policy_flavor_t,
+                (&raw mut policy).cast(),
+                libc::THREAD_TIME_CONSTRAINT_POLICY_COUNT,
+            )
+        };
+        if kr == 0 {
+            tracing::debug!(
+                period,
+                computation,
+                constraint,
+                "thread joined the real-time band"
+            );
+        } else {
+            tracing::debug!(kr, "time-constraint policy refused: the QoS class stays");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = frame;
+}
+
+/// `(period, computation, constraint)` in nanoseconds for a frame interval: half the frame to
+/// compute and the whole frame as the deadline. A frame's capture, submit and hand-off take far
+/// less; a thread past its half is preempted, and one that keeps running is demoted. Clamped
+/// to 1–50 ms, inside the kernel's bounds.
+#[cfg(any(target_os = "macos", test))]
+fn frame_constraint(frame: std::time::Duration) -> (u64, u64, u64) {
+    use std::time::Duration;
+    let period = frame.clamp(Duration::from_millis(1), Duration::from_millis(50));
+    let period = period.as_nanos() as u64;
+    (period, period / 2, period)
+}
+
 /// Raise a runtime's pool thread to nice -5, and only that thread (Linux; a no-op elsewhere).
 /// For `on_thread_start` of the runtime that carries QUIC datagrams and control messages.
 ///
@@ -350,6 +411,30 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod frame_tests {
+    use std::time::Duration;
+
+    /// Half the frame to compute and the frame as the deadline, at the usual rates and past
+    /// the clamp at both ends.
+    #[test]
+    fn a_frame_thread_gets_half_its_frame() {
+        let ms = |n: u64| n * 1_000_000;
+        let us = |n: u64| n * 1_000;
+        let c = |f: Duration| super::frame_constraint(f);
+        assert_eq!(
+            c(Duration::from_micros(16_667)),
+            (us(16_667), 8_333_500, us(16_667))
+        );
+        assert_eq!(
+            c(Duration::from_micros(4_167)),
+            (us(4_167), 2_083_500, us(4_167))
+        );
+        assert_eq!(c(Duration::from_micros(100)), (ms(1), ms(1) / 2, ms(1)));
+        assert_eq!(c(Duration::from_secs(1)), (ms(50), ms(25), ms(50)));
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod macos_tests {
     use libc::qos_class_t::{self, QOS_CLASS_USER_INITIATED, QOS_CLASS_USER_INTERACTIVE};
@@ -374,5 +459,42 @@ mod macos_tests {
     fn a_boosted_thread_takes_the_class_of_its_role() {
         assert_eq!(boosted(true) as u32, QOS_CLASS_USER_INTERACTIVE as u32);
         assert_eq!(boosted(false) as u32, QOS_CLASS_USER_INITIATED as u32);
+    }
+
+    /// The kernel takes the policy for a 240 Hz frame and reads it back as set.
+    #[test]
+    fn a_frame_thread_joins_the_real_time_band() {
+        let (kr, policy, default) = std::thread::spawn(|| {
+            super::boost_thread_priority(true);
+            super::raise_to_frame_rate(std::time::Duration::from_micros(4_167));
+            let mut policy = libc::thread_time_constraint_policy {
+                period: 0,
+                computation: 0,
+                constraint: 0,
+                preemptible: 0,
+            };
+            let mut count = libc::THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+            let mut default = 0;
+            // SAFETY: live locals of the layout and count the flavor names, for this thread.
+            let kr = unsafe {
+                libc::thread_policy_get(
+                    libc::pthread_mach_thread_np(libc::pthread_self()),
+                    libc::THREAD_TIME_CONSTRAINT_POLICY as libc::thread_policy_flavor_t,
+                    (&raw mut policy).cast(),
+                    &mut count,
+                    &mut default,
+                )
+            };
+            (kr, policy, default)
+        })
+        .join()
+        .expect("frame thread");
+        assert_eq!((kr, default), (0, 0), "a policy of its own");
+        let (computation, constraint) = (policy.computation, policy.constraint);
+        assert!(
+            constraint.abs_diff(computation * 2) <= 1 && constraint > 0,
+            "computation {computation}, constraint {constraint}"
+        );
+        assert_eq!(policy.preemptible, 1);
     }
 }
