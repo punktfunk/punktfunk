@@ -100,6 +100,37 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(Format.codec("hevc") == "HEVC")
     }
 
+    /// `GET /diagnostics` as the host sends it: the controller row's own words, nothing when
+    /// the row is absent or does not apply.
+    @Test func controllerVerdict() throws {
+        func report(_ row: String) throws -> DiagnosticsReport {
+            try decode(DiagnosticsReport.self, """
+            {"ran_at_unix":1,"checks":[
+              {"id":"screen_recording","status":"ok","severity":"critical","summary":"s","impact":"","params":{},"source":"startup"},
+              \(row)]}
+            """)
+        }
+        let fail = try report("""
+        {"id":"virtual_controllers","status":"fail","severity":"warning","source":"startup","params":{},
+         "summary":"This build can't create virtual controllers","summary_id":"diag_vc_test_summary",
+         "impact":"Games see no controller from clients.","impact_id":"diag_vc_test_impact",
+         "remedy":{"text":"Install it from the disk image.","relogin_required":false},"remedy_id":"diag_vc_test_remedy"}
+        """)
+        #expect(ControllerVerdict.of(fail) == ControllerVerdict(
+            available: false, text: "This build can't create virtual controllers", impact: "Games see no controller from clients."))
+        let ok = try report("""
+        {"id":"virtual_controllers","status":"ok","severity":"warning","source":"startup","params":{},
+         "summary":"This build can create virtual controllers.","summary_id":"diag_vc_test_ok","impact":""}
+        """)
+        #expect(ControllerVerdict.of(ok) == ControllerVerdict(available: true, text: "This build can create virtual controllers."))
+        let na = try report("""
+        {"id":"virtual_controllers","status":"inapplicable","severity":"warning","source":"startup","params":{},
+         "summary":"Not on this system.","impact":""}
+        """)
+        #expect(ControllerVerdict.of(na) == nil)
+        #expect(ControllerVerdict.of(try report(#"{"id":"other","status":"fail","severity":"info","source":"startup","params":{},"summary":"x","impact":"y"}"#)) == nil)
+    }
+
     @Test func access() {
         #expect(Access.standard.fields.isEmpty)
         #expect(Access.guest.fields["expires_in_secs"] as? Int == 14400)

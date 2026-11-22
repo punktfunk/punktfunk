@@ -11,8 +11,16 @@ public enum Preview {
     ]
     public static let setupPages = [
         "setup-welcome", "setup-move", "setup-screen", "setup-screen-asked", "setup-input",
-        "setup-audio", "setup-login", "setup-done",
+        "setup-audio", "setup-login", "setup-done", "setup-done-unsigned",
     ]
+
+    /// The host's controller row, its English left to the host messages the bundle carries.
+    static func controllerRow(ok: Bool) -> DiagnosticsReport {
+        let summary = ok ? "diag_virtual_controllers_ok_summary" : "diag_virtual_controllers_summary"
+        let impact = ok ? "" : "diag_virtual_controllers_impact"
+        return DiagnosticsReport(checks: [.init(id: "virtual_controllers", status: ok ? "ok" : "fail", summary: summary,
+                                                summaryId: summary, impact: impact, impactId: impact)])
+    }
 
     static let lanDevice = PendingDevice(id: 3, name: "kitchen-ipad", fingerprint: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
                                          ageSecs: 40, source: "lan", relayed: false, unfamiliarOrigin: false)
@@ -78,11 +86,12 @@ public enum Preview {
         case "setup-input": .input
         case "setup-audio": .audio
         case "setup-login": .login
-        case "setup-done": .done
+        case "setup-done", "setup-done-unsigned": .done
         default: .welcome
         }
         model.index = model.steps.firstIndex(of: page) ?? 0
         model.screenAsked = name == "setup-screen-asked"
+        if page == .done { model.controllers = ControllerVerdict.of(controllerRow(ok: name == "setup-done")) }
         return model
     }
 
@@ -137,6 +146,7 @@ public enum Preview {
     }
 }
 
+/// Every glyph state at menu bar size, then its 36 px (Retina) and 18 px rasters enlarged
 /// Every glyph state, at menu bar size and four times larger, on the panel's background.
 private struct GlyphSheet: View {
     var body: some View {

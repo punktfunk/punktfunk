@@ -98,6 +98,20 @@ struct OnboardingView: View {
                     GridRow { Text(L10n.setupMacAudioTitle); GrantState(grant: model.grants.audio, asked: model.audioAsked) }
                 }
                 .font(.callout)
+                if let verdict = model.controllers {
+                    VStack(spacing: 2) {
+                        Label {
+                            Text(verdict.text)
+                        } icon: {
+                            Image(systemName: verdict.available ? "gamecontroller.fill" : "gamecontroller")
+                        }
+                        if let impact = verdict.impact { Text(impact).foregroundStyle(.secondary) }
+                    }
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 400)
+                }
                 Button(L10n.trayMacOpenConsole) { model.store.openConsole() }
             }
         }

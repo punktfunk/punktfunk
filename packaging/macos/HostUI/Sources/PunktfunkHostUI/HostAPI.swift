@@ -67,6 +67,44 @@ struct UpdateStatus: Decodable, Equatable, Sendable {
     var manifest: Manifest?
 }
 
+struct DiagnosticsReport: Decodable, Equatable, Sendable {
+    struct Check: Decodable, Equatable, Sendable {
+        var id: String
+        var status: String
+        var summary: String
+        var summaryId: String?
+        var impact: String
+        var impactId: String?
+    }
+
+    var checks: [Check]
+}
+
+/// The host's `virtual_controllers` verdict, worded by the row itself.
+struct ControllerVerdict: Equatable {
+    var available: Bool
+    var text: String
+    var impact: String?
+
+    /// Nil when the row is absent or does not apply.
+    static func of(_ report: DiagnosticsReport) -> ControllerVerdict? {
+        guard let row = report.checks.first(where: { $0.id == "virtual_controllers" }) else { return nil }
+        let text = words(row.summaryId, row.summary)
+        switch row.status {
+        case "ok": return ControllerVerdict(available: true, text: text)
+        case "warn", "fail":
+            return ControllerVerdict(available: false, text: text, impact: row.impact.isEmpty ? nil : words(row.impactId, row.impact))
+        default: return nil
+        }
+    }
+
+    /// The row's `host` message in the person's language, else the host's English.
+    private static func words(_ id: String?, _ english: String) -> String {
+        guard let id else { return english }
+        return Bundle(url: HostUIResources.bundleURL)?.localizedString(forKey: id, value: english, table: nil) ?? english
+    }
+}
+
 /// Why a call did not work, worded for the person: the host's own English sentence when it
 /// sent one.
 struct HostError: Error, Equatable {
@@ -116,6 +154,7 @@ struct HostAPI: Sendable {
     func pairing() async throws -> NativePairStatus { try await call("GET", "/api/v1/native/pair") }
     func pending() async throws -> [PendingDevice] { try await call("GET", "/api/v1/native/pending") }
     func update() async throws -> UpdateStatus { try await call("GET", "/api/v1/update/status") }
+    func diagnostics() async throws -> DiagnosticsReport { try await call("GET", "/api/v1/diagnostics") }
 
     /// A two-minute window, as the web console arms it; `boundTo` limits it to one fingerprint.
     func arm(boundTo fingerprint: String?, access: Access) async throws -> NativePairStatus {

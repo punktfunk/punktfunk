@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 out=packaging/macos/HostUI/Sources/PunktfunkHostUI/Generated
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-cargo run -q -p pf-l10n -- apple --root "$PWD/l10n" --out "$tmp" --parts common,tools
+cargo run -q -p pf-l10n -- apple --root "$PWD/l10n" --out "$tmp" --parts common,host,tools
 rm -rf "$out"
 mkdir -p "$out/Strings"
 xcrun xcstringstool compile "$tmp/Localizable.xcstrings" --output-directory "$out/Strings"

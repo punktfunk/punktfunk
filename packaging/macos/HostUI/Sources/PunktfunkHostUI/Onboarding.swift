@@ -52,6 +52,8 @@ final class Onboarding {
     var audioAsked = false
     var startAtLogin = true
     var moveFailed = false
+    /// The host's controller verdict for the last page; nil shows nothing.
+    var controllers: ControllerVerdict?
     @ObservationIgnored var onClose: (() -> Void)?
     @ObservationIgnored private var polling: Task<Void, Never>?
     @ObservationIgnored private var observer: NSObjectProtocol?
@@ -94,7 +96,14 @@ final class Onboarding {
 
     func next() {
         if index < steps.count - 1 { index += 1 }
-        if step == .done { Notify.requestPermission() }
+        if step == .done { arrive() }
+    }
+
+    /// The last page asks for notifications and reads the host's controller verdict.
+    func arrive() {
+        Notify.requestPermission()
+        guard let api = store.api else { return }
+        Task { controllers = (try? await api.diagnostics()).flatMap(ControllerVerdict.of) }
     }
 
     func back() { if index > 0 { index -= 1 } }

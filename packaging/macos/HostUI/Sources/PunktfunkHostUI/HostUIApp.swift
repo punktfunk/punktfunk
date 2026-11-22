@@ -117,6 +117,7 @@ public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate
         let model = Onboarding(store: store, firstLaunch: firstLaunch)
         if let page = ProcessInfo.processInfo.environment["PUNKTFUNK_HOST_UI_STEP"],
            let i = model.steps.firstIndex(where: { "\($0)" == page }) { model.index = i }
+        if model.step == .done { model.arrive() }
         model.onClose = { [weak self] in self?.setupWindow?.close() }
         let window = NSWindow(contentViewController: NSHostingController(rootView: OnboardingView(model: model)))
         window.styleMask = [.titled, .closable]
