@@ -689,7 +689,9 @@ pub(super) async fn negotiate(
         follows_source(&n.first.features, &tenure),
         mirrored(screen.as_ref()),
     );
-    let (studio_asked, owner_hdr) = (facts.studio_asked, facts.owner_hdr);
+    let studio_asked = facts.studio_asked;
+    // The range a joiner must stream: a shared capture's own, on a display lit either way.
+    let owner_stream = joined.as_ref().map(|d| d.stream_hdr());
     let verdict = negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
     let Verdict {
         bit_depth,
@@ -697,7 +699,9 @@ pub(super) async fn negotiate(
         chroma,
         ..
     } = verdict;
-    if owner_hdr.is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none()) {
+    if owner_stream
+        .is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none())
+    {
         // Out of the table first, as `admit_mode`'s refusal.
         drop(reservation);
         let said = super::Said::new(
@@ -1704,12 +1708,10 @@ impl FormatFacts {
     }
 
     /// gamescope names the HDR state of what it shows; every other source streams what its
-    /// display is lit in. So does a host that shares screens: a shared capture has one format
-    /// for every session on it.
+    /// display is lit in. A capture another session shares stays in its range: the stream asks
+    /// before each move ([`crate::vdisplay::admission::move_format`]).
     pub(super) fn follows_content(&self) -> bool {
-        self.follows
-            && self.compositor == Some(crate::vdisplay::Compositor::Gamescope)
-            && !crate::vdisplay::policy::prefs().get().any_join()
+        self.follows && self.compositor == Some(crate::vdisplay::Compositor::Gamescope)
     }
 
     /// The facts of a session that moved to `compositor` on `route`. `content_hdr` is what the
@@ -1746,6 +1748,7 @@ impl FormatFacts {
                 hdr,
                 bit_depth,
             ),
+            hdr,
         };
         let joined = crate::vdisplay::admission::joined_format(self.owner_format?, can);
         Some(joined.map(|_| ()))
@@ -1753,9 +1756,10 @@ impl FormatFacts {
 
     /// Bit depth, HDR verdict, and chroma for `codec` at `mode`, each gated by host, client,
     /// codec, source, and `encoder`, the session's resolution. A joiner asks HDR only of an HDR
-    /// display. A source showing SDR content streams SDR and keeps its display lit in HDR.
-    /// `mode` is the one the pipeline opens at: the Hello's at the handshake, the live one
-    /// later. Blocks on its probes.
+    /// display, streams the range of a capture it shares, and lights nothing: its display is
+    /// lit as its owner lit it. A source showing SDR content streams SDR and keeps its display
+    /// lit in HDR. `mode` is the one the pipeline opens at: the Hello's at the handshake, the
+    /// live one later. Blocks on its probes.
     pub(super) fn resolve(
         &self,
         codec: crate::encode::Codec,
@@ -1792,7 +1796,7 @@ impl FormatFacts {
             && encoder.carries_sdr10(codec);
         // The display can be lit in HDR; the stream is HDR while its content is.
         let lit_hdr = client_wants_hdr && capture_supports_hdr;
-        let source_hdr = lit_hdr && self.content_hdr != Some(false);
+        let source_hdr = stream_hdr(lit_hdr, self.content_hdr, shared);
         let depth_reachable = source_hdr || sdr10_chain_ok;
         // Probe may open a tiny encoder: short-circuited behind the cheap gates.
         let ten_bit_asked = host_wants_10bit && client_supports_10bit && codec.supports_10bit();
@@ -1800,6 +1804,8 @@ impl FormatFacts {
             ten_bit_gates(ten_bit_asked, depth_reachable, lit_hdr, || {
                 encoder.can_encode_10bit(codec)
             });
+        // A request lit otherwise finds no display to join.
+        let display_hdr = self.owner_hdr.unwrap_or(display_hdr);
         let bit_depth: u8 = if gpu_can_10bit { 10 } else { 8 };
         // The colour label and the capturer mandate read this, never `bit_depth >= 10` (10-bit
         // without it is SDR: BT.709 VUI).
@@ -1942,6 +1948,16 @@ pub(super) fn follows_source(
 /// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
 fn hdr_asked(video_caps: u8, owner_hdr: Option<bool>) -> bool {
     video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0 && owner_hdr != Some(false)
+}
+
+/// Whether the stream off a display that can be lit in HDR (`lit_hdr`) is HDR: not while its
+/// content is SDR, nor for a joiner of a `shared` capture that hands out SDR.
+fn stream_hdr(
+    lit_hdr: bool,
+    content_hdr: Option<bool>,
+    shared: Option<crate::vdisplay::admission::SampleFormat>,
+) -> bool {
+    lit_hdr && content_hdr != Some(false) && shared.is_none_or(|f| f.hdr)
 }
 
 /// The GPU's 10-bit verdict for the stream (`depth_reachable`) and for the lit display
@@ -2555,6 +2571,27 @@ pub(crate) mod tests {
         assert!(hdr_asked(hdr_client, None), "not a joiner: its own ask");
     }
 
+    /// A display lit in HDR streams SDR while its content is SDR, to its owner and to a joiner
+    /// of its capture alike. A display that is not lit streams SDR whatever it shows.
+    #[test]
+    fn a_lit_display_streams_the_range_of_its_content() {
+        use crate::vdisplay::admission::SampleFormat;
+        let shared = |hdr| {
+            Some(SampleFormat {
+                bit_depth: 10,
+                chroma_444: false,
+                full_range: true,
+                hdr,
+            })
+        };
+        assert!(stream_hdr(true, None, None), "no content named: as lit");
+        assert!(stream_hdr(true, Some(true), None));
+        assert!(!stream_hdr(true, Some(false), None), "SDR content");
+        assert!(stream_hdr(true, None, shared(true)), "a joiner of PQ");
+        assert!(!stream_hdr(true, None, shared(false)), "a joiner of SDR");
+        assert!(!stream_hdr(false, Some(true), shared(true)), "not lit");
+    }
+
     /// A joiner of a limited-range capture streams limited range; a full-range one leaves its
     /// ask alone, and a session with no shared capture keeps its own.
     #[test]
@@ -2566,6 +2603,7 @@ pub(crate) mod tests {
                 bit_depth: 8,
                 chroma_444: false,
                 full_range,
+                hdr: false,
             })
         };
         let (none, both) = (

@@ -358,8 +358,10 @@ pub(super) fn spawn_planes(
             .has(punktfunk_core::quic::v2::registry::FEATURE_PCM_PARTS),
     );
     // Also for a stream that starts SDR on a display lit in HDR: a decoder rebuilt when its
-    // content turns HDR is configured before the capture's own metadata arrives.
-    if n.terms.verdict.display_hdr {
+    // content turns HDR is configured before the capture's own metadata arrives. A joiner's
+    // stream never turns, so only its own range counts.
+    let turns_hdr = n.terms.verdict.display_hdr && !n.terms.tenure.join_live();
+    if n.terms.verdict.hdr || turns_hdr {
         send_hdr_baseline(&conn, hello.display_hdr);
     }
     if source == Punktfunk1Source::Synthetic && who.knobs.test_feedback {
@@ -388,7 +390,8 @@ pub(super) fn spawn_planes(
 
 /// Mode-conflict admission: the handshake's reservation goes live at the Welcome's mode. Later
 /// clients see this identity, mode and stop (and may `steal`), and a joiner finds the display,
-/// its route and colour, the planes and the sink `audio_sink` names.
+/// its route, what it is lit in, the range its capture streams, the planes and the sink
+/// `audio_sink` names.
 fn register_live(
     scope: &SessionScope,
     n: &super::handshake::Negotiated,
@@ -413,12 +416,13 @@ fn register_live(
             route: n.terms.gamescope_route.clone(),
             isolation: scope.planes().isolation.clone(),
             audio_sink: audio_sink.clone(),
-            hdr: n.welcome.color.is_hdr(),
+            hdr: n.terms.verdict.display_hdr,
             format: crate::vdisplay::admission::shares_capture(n.terms.compositor).then_some(
                 crate::vdisplay::admission::SampleFormat {
                     bit_depth: n.welcome.bit_depth,
                     chroma_444: n.welcome.chroma_format == punktfunk_core::quic::CHROMA_IDC_444,
                     full_range: n.welcome.color.full_range != 0,
+                    hdr: n.welcome.color.is_hdr(),
                 },
             ),
         },
