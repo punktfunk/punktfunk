@@ -4,8 +4,8 @@
 
 <p align="center"><b>Low-latency desktop and game streaming with first-class Linux and Windows hosts.</b></p>
 
-Run the host on a Linux or Windows PC and stream your desktop or games to a Mac, PC, phone, tablet
-or TV. Each client gets **its own virtual display at its own native resolution and refresh rate**,
+Run the host on a Linux or Windows PC or a Mac and stream your desktop or games to a Mac, PC,
+phone, tablet or TV. Each client gets **its own virtual display at its own native resolution and refresh rate**,
 so a laptop at 1080p60 and a TV at 4K can stream from one box at once without rearranging your real
 monitors.
 
@@ -63,8 +63,12 @@ winget source add -n punktfunk https://winget.punktfunk.unom.io -t Microsoft.Res
 winget install unom.PunktfunkHost
 ```
 
+On a **Mac with Apple silicon** (macOS 15+) it's a disk image from the
+[latest release](https://git.unom.io/unom/punktfunk/releases): drag **Punktfunk Host** to
+Applications and open it.
+
 Prefer to add the repo yourself? Every platform has a one-page guide — apt, dnf, pacman, the Bazzite
-sysext, NixOS, SteamOS on-device build, and the Windows `setup.exe`:
+sysext, NixOS, SteamOS on-device build, the Windows `setup.exe` and the Mac app:
 **[/docs/install](https://docs.punktfunk.unom.io/docs/install)**. Updating, rolling back and
 uninstalling are [/docs/updating](https://docs.punktfunk.unom.io/docs/updating) and
 [/docs/uninstall](https://docs.punktfunk.unom.io/docs/uninstall).
