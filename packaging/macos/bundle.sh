@@ -114,6 +114,34 @@ cp "$here/Info.plist" "$contents/Info.plist"
 "$plistbuddy" -c "Set :CFBundleShortVersionString $version" -c "Set :CFBundleVersion $version" \
     "$contents/Info.plist"
 cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$root/THIRD-PARTY-NOTICES.txt" "$contents/Resources/licenses/"
+
+# The permission prompts are messages: the source language goes into Info.plist, every other
+# shipped language into its lproj. CFBundleLocalizations is the shipped list.
+locales=$root/l10n/locales.json
+source_lang=$(plutil -extract source raw -o - "$locales")
+"$plistbuddy" -c "Add :CFBundleLocalizations array" "$contents/Info.plist"
+i=0
+while lang=$(plutil -extract "shipped.$i" raw -o - "$locales" 2>/dev/null); do
+    "$plistbuddy" -c "Add :CFBundleLocalizations:$i string $lang" "$contents/Info.plist"
+    i=$((i + 1))
+    for prompt in NSAudioCaptureUsageDescription:apple_usage_host_audio_capture \
+        NSLocalNetworkUsageDescription:apple_usage_host_local_network; do
+        msg=${prompt#*:}
+        text=$(plutil -extract "$msg" raw -o - "$root/l10n/messages/apple/$lang.json" 2>/dev/null) || {
+            [ "$lang" != "$source_lang" ] || die "l10n/messages/apple/$lang.json has no $msg"
+            continue
+        }
+        case $text in *[{}\\]*) die "$msg ($lang) holds a placeholder or an escape" ;; esac
+        if [ "$lang" = "$source_lang" ]; then
+            strings=$contents/Info.plist
+        else
+            strings=$contents/Resources/$lang.lproj/InfoPlist.strings
+            mkdir -p "${strings%/*}"
+            [ -f "$strings" ] || plutil -create xml1 "$strings"
+        fi
+        plutil -insert "${prompt%%:*}" -string "$text" "$strings"
+    done
+done
 # Assets.car carries the layered icon for macOS 26, AppIcon.icns the flat one for macOS 15.
 if xcrun -f actool >/dev/null 2>&1; then
     xcrun actool --compile "$contents/Resources" --output-partial-info-plist "$work/icon.plist" \

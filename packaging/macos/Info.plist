@@ -8,6 +8,8 @@
 	<string>punktfunk-host</string>
 	<key>CFBundleName</key>
 	<string>Punktfunk Host</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>Punktfunk Host</string>
 	<key>CFBundleIconFile</key>
@@ -35,9 +37,5 @@
 		<string>_punktfunk._udp</string>
 		<string>_nvstream._tcp</string>
 	</array>
-	<key>NSAudioCaptureUsageDescription</key>
-	<string>Punktfunk Host sends this Mac's sound to the device you stream to.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Punktfunk Host lets devices on your network find this Mac and connect to stream from it.</string>
 </dict>
 </plist>
