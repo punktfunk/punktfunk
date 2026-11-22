@@ -2597,7 +2597,59 @@ mod host_port_tests {
                 dial_addr("192.168.1.9", 9777).await.unwrap(),
                 at("192.168.1.9:9777")
             );
+            assert_eq!(
+                dial_addr("[fd00::1]", 9777).await.unwrap(),
+                at("[fd00::1]:9777")
+            );
+            assert_eq!(
+                dial_addr("::ffff:192.168.1.9", 9777).await.unwrap(),
+                at("192.168.1.9:9777"),
+                "a v4-mapped literal is its IPv4 host"
+            );
+            let zone = |a: std::net::SocketAddr| match a {
+                std::net::SocketAddr::V6(a) => a.scope_id(),
+                std::net::SocketAddr::V4(_) => 0,
+            };
+            assert_eq!(zone(dial_addr("fe80::1%3", 9777).await.unwrap()), 3);
+            // A named zone goes to the OS resolver, which gives its interface's index.
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let lo = if cfg!(target_os = "linux") {
+                    "lo"
+                } else {
+                    "lo0"
+                };
+                let named = dial_addr(&format!("fe80::1%{lo}"), 9777).await.unwrap();
+                assert_ne!(zone(named), 0);
+            }
+            assert!(dial_addr("[fd00::1", 9777).await.is_err());
         });
+    }
+
+    /// A probe reads the certificate of the host answering on IPv6.
+    #[test]
+    fn a_probe_reaches_an_ipv6_host() {
+        use crate::quic::endpoint;
+        let Some(v6) = crate::quic::test_util::loopback_v6("a_probe_reaches_an_ipv6_host") else {
+            return;
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let idle = std::time::Duration::from_secs(8);
+        let alpns = [crate::quic::v2::registry::ALPN];
+        let (host, _media) = {
+            let _in_rt = rt.enter();
+            endpoint::server_shared((v6, 0).into(), &cert, &key, idle, &alpns).unwrap()
+        };
+        let port = host.local_addr().unwrap().port();
+        rt.spawn(async move {
+            while let Some(incoming) = host.accept().await {
+                let _ = incoming.await;
+            }
+        });
+        let fp =
+            super::NativeClient::probe_identity("::1", port, std::time::Duration::from_secs(5));
+        assert_eq!(fp, Some(endpoint::fingerprint_of_pem(&cert).unwrap()));
     }
 
     #[test]

@@ -998,12 +998,17 @@ mod tests {
         pair_with(|host| host).await
     }
 
-    /// A host and a client that dials `dial(host)`: the host itself, or a proxy in front of it.
     async fn pair_with(dial: impl FnOnce(SocketAddr) -> SocketAddr) -> Pair {
+        pair_on(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), dial).await
+    }
+
+    /// A host on `ip` and a client that dials `dial(host)`: the host itself, or a proxy in
+    /// front of it. The client's socket takes the family of the address it dials.
+    async fn pair_on(ip: IpAddr, dial: impl FnOnce(SocketAddr) -> SocketAddr) -> Pair {
         use crate::quic::endpoint;
         let (cert, key) = endpoint::generate_identity().unwrap();
         let (server, socket) = endpoint::server_shared(
-            "127.0.0.1:0".parse().unwrap(),
+            (ip, 0).into(),
             &cert,
             &key,
             Duration::from_secs(8),
@@ -1032,7 +1037,27 @@ mod tests {
     /// Media and QUIC cross one socket at once, and neither lands in the other's queue.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn media_and_quic_share_one_socket() {
-        let (_server, socket, _client, media, host_conn, client_conn) = pair().await;
+        share_one_socket(pair().await).await;
+    }
+
+    /// [`media_and_quic_share_one_socket`] between an IPv6 host and client.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn media_and_quic_share_one_socket_over_ipv6() {
+        let test = "media_and_quic_share_one_socket_over_ipv6";
+        let Some(v6) = crate::quic::test_util::loopback_v6(test) else {
+            return;
+        };
+        let pair = pair_on(v6, |host| host).await;
+        assert!(
+            pair.1.local_addr().unwrap().is_ipv6(),
+            "media sends from IPv6"
+        );
+        assert!(pair.4.remote_address().is_ipv6(), "the client dialed IPv6");
+        share_one_socket(pair).await;
+    }
+
+    async fn share_one_socket(pair: Pair) {
+        let (_server, socket, _client, media, host_conn, client_conn) = pair;
         assert_eq!(
             crate::quic::endpoint::negotiated_alpn(&host_conn).as_deref(),
             Some(crate::quic::v2::registry::ALPN)
@@ -1451,11 +1476,16 @@ mod tests {
         }
 
         impl TosProxy {
+            /// On `host`'s address family.
             fn start(host: SocketAddr) -> TosProxy {
                 let bind = || {
-                    let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+                    let s = UdpSocket::bind((host.ip(), 0)).unwrap();
                     s.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
-                    socket2::SockRef::from(&s).set_recv_tos_v4(true).unwrap();
+                    let opt = socket2::SockRef::from(&s);
+                    match host {
+                        SocketAddr::V4(_) => opt.set_recv_tos_v4(true).unwrap(),
+                        SocketAddr::V6(_) => opt.set_recv_tclass_v6(true).unwrap(),
+                    }
                     Arc::new(s)
                 };
                 let (front, back) = (bind(), bind());
@@ -1517,8 +1547,21 @@ mod tests {
         /// ([`the_kill_switch_unmarks_the_wire`]).
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn marks_reach_the_wire() {
+            marks_on(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)).await;
+        }
+
+        /// [`marks_reach_the_wire`] in traffic classes, between an IPv6 host and client.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn marks_reach_the_wire_over_ipv6() {
+            let test = "marks_reach_the_wire_over_ipv6";
+            if let Some(v6) = crate::quic::test_util::loopback_v6(test) {
+                marks_on(v6).await;
+            }
+        }
+
+        async fn marks_on(ip: IpAddr) {
             let mut proxy = None;
-            let (_server, socket, _client, media, host_conn, client_conn) = pair_with(|host| {
+            let (_server, socket, _client, media, host_conn, client_conn) = pair_on(ip, |host| {
                 let p = TosProxy::start(host);
                 let front = p.front;
                 proxy = Some(p);

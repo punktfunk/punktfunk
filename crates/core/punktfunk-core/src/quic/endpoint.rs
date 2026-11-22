@@ -503,6 +503,39 @@ mod tests {
         assert_ne!(a, endpoint::cert_fingerprint(b"cert-b"));
     }
 
+    /// The host's layout: `0.0.0.0:P` and `[::]:P` bound at once, each hearing its own family.
+    #[test]
+    fn a_host_binds_both_families_on_one_port() {
+        use std::net::{Ipv6Addr, UdpSocket};
+        let test = "a_host_binds_both_families_on_one_port";
+        let Some(v6) = crate::quic::test_util::loopback_v6(test) else {
+            return;
+        };
+        let four = super::bind_host_udp("0.0.0.0:0".parse().unwrap()).unwrap();
+        let port = four.local_addr().unwrap().port();
+        let six = super::bind_host_udp((Ipv6Addr::UNSPECIFIED, port).into()).unwrap();
+        assert!(socket2::SockRef::from(&six).only_v6().unwrap());
+        let wait = Some(std::time::Duration::from_secs(2));
+        four.set_read_timeout(wait).unwrap();
+        six.set_read_timeout(wait).unwrap();
+        // The IPv4 datagram goes first: an IPv6 socket that heard IPv4 would read it first.
+        let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        peer.send_to(b"four", ("127.0.0.1", port)).unwrap();
+        let peer6 = UdpSocket::bind((v6, 0)).unwrap();
+        peer6.send_to(b"six", (v6, port)).unwrap();
+        let mut buf = [0u8; 8];
+        let (n, from) = four.recv_from(&mut buf).unwrap();
+        assert_eq!(
+            (&buf[..n], from),
+            (&b"four"[..], peer.local_addr().unwrap())
+        );
+        let (n, from) = six.recv_from(&mut buf).unwrap();
+        assert_eq!(
+            (&buf[..n], from),
+            (&b"six"[..], peer6.local_addr().unwrap())
+        );
+    }
+
     #[test]
     fn absurd_idle_timeout_is_clamped_not_a_panic() {
         let _ = super::stream_transport_idle(std::time::Duration::MAX, None);
