@@ -1811,6 +1811,8 @@ mod tests {
                 browser: false,
                 browser_origins: Vec::new(),
                 background_input: false,
+                ipv6: false,
+                ipv6_public: false,
             };
             std::fs::write(&path, defaults.to_json().to_string()).unwrap();
             assert_eq!(writable(temp.path()), library_writable);

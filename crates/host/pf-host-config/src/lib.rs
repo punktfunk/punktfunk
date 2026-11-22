@@ -44,6 +44,15 @@ fn is_on(s: &str) -> bool {
     )
 }
 
+/// The opposite grammar, for a knob that widens what the host exposes: only a trimmed,
+/// case-insensitive `1`/`true`/`on`/`yes` is on. Unset, blank and junk are off.
+fn explicit_yes(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "on" | "yes")
+    )
+}
+
 /// Which render endpoint the loopback captures (registry row `audio_output_mode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AudioOutputMode {
@@ -200,6 +209,12 @@ pub struct HostConfig {
     /// Row `webtransport` — the browser plane. **Default OFF**, like GameStream: a new
     /// externally-reachable transport should not appear on a host because it was upgraded.
     pub webtransport: bool,
+    /// Row `ipv6` — the native plane's IPv6 listener. **Default OFF**, for the same reason:
+    /// without NAT a router alone decides who reaches it. Handed on in [`seat_defaults`].
+    pub ipv6: bool,
+    /// `PUNKTFUNK_IPV6_PUBLIC` — that listener answers public addresses too. Only `1`, `true`,
+    /// `on` or `yes` say so: a blank or misspelt value never opens the host.
+    pub ipv6_public: bool,
     /// `PUNKTFUNK_WEBTRANSPORT_ORIGINS` — comma-separated browser origins allowed to open a
     /// session (`https://host:47990`). Empty = any: a host does not know its own origin.
     /// WebTransport is not subject to CORS, so this list and pairing are what keep out the other
@@ -438,6 +453,7 @@ impl HostConfig {
             on_connect_cmd: val("PUNKTFUNK_ON_CONNECT_CMD").filter(|s| !s.trim().is_empty()),
             on_disconnect_cmd: val("PUNKTFUNK_ON_DISCONNECT_CMD").filter(|s| !s.trim().is_empty()),
             gamescope_vrr: row_bool("PUNKTFUNK_GAMESCOPE_VRR"),
+            ipv6_public: explicit_yes(val("PUNKTFUNK_IPV6_PUBLIC").as_deref()),
             ..Self::default()
         }
     }
@@ -455,6 +471,7 @@ impl HostConfig {
         let on = |id: &str| get(id).as_bool().unwrap_or_default();
         self.gamestream = on("gamestream");
         self.webtransport = on("webtransport");
+        self.ipv6 = on("ipv6");
         self.clipboard = ClipboardPolicy::parse(&text("clipboard")).unwrap_or_default();
         self.host_name = Some(text("host_name")).filter(|s| !s.is_empty());
         self.ten_bit = on("ten_bit");
@@ -560,6 +577,18 @@ pub fn config() -> &'static HostConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A knob that widens exposure opens on a plain yes alone.
+    #[test]
+    fn a_widening_knob_needs_an_explicit_yes() {
+        for yes in ["1", "true", "on", "yes", " ON "] {
+            assert!(explicit_yes(Some(yes)), "{yes}");
+        }
+        for not_yes in ["", " ", "0", "off", "no", "false", "2", "public"] {
+            assert!(!explicit_yes(Some(not_yes)), "{not_yes:?}");
+        }
+        assert!(!explicit_yes(None));
+    }
 
     fn cfg(max_fps: Option<u32>) -> HostConfig {
         HostConfig {

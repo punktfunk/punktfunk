@@ -720,6 +720,8 @@ mod tests {
             browser,
             browser_origins: vec!["https://box:47992".into()],
             background_input: true,
+            ipv6: false,
+            ipv6_public: false,
         };
         let own = |on: bool| pf_host_config::HostConfig {
             webtransport: on,
