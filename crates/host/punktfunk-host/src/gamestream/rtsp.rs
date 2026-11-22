@@ -264,7 +264,7 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
                 Some(mut cfg) => {
                     let owner = (state.gs.joined.lock().unwrap_or_else(|e| e.into_inner()))
                         .as_ref()
-                        .map(|(_, d)| (d.hdr, d.format));
+                        .map(|(_, d)| (d.stream_hdr(), d.format));
                     if !follow_joined_hdr(&mut cfg, &map, owner.map(|o| o.0)) {
                         tracing::warn!(
                             "RTSP ANNOUNCE — refused: the shared display is HDR and this stream \
@@ -840,8 +840,8 @@ fn stream_config(
     })
 }
 
-/// A launch that joined a native session streams at the owner display's colour (`owner_hdr`),
-/// not its app's. `false` = that display is HDR and this client asked for no HDR or negotiated
+/// A launch that joined a native session streams at the owner stream's colour (`owner_hdr`),
+/// not its app's. `false` = that stream is HDR and this client asked for no HDR or negotiated
 /// a codec without 10 bits.
 fn follow_joined_hdr(
     cfg: &mut StreamConfig,

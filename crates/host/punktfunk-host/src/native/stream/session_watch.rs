@@ -156,10 +156,9 @@ impl ContentFollow {
         *self.target.lock().unwrap_or_else(|e| e.into_inner()) = seat;
     }
 
-    /// The range the stream moves to: the watcher's newest look, where it is not what is
-    /// `streamed`.
-    pub(super) fn wants(&mut self, streamed: bool) -> Option<bool> {
-        self.rx.try_iter().last().filter(|&hdr| hdr != streamed)
+    /// The watcher's newest look since the last ask: whether the content is HDR.
+    pub(super) fn look(&mut self) -> Option<bool> {
+        self.rx.try_iter().last()
     }
 }
 

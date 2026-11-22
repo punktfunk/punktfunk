@@ -878,8 +878,9 @@ fn open_gs_virtual_source(
         crate::vdisplay::open_for(compositor, device, None).context("open virtual display")?;
     vd.set_hw_cursor(host_composites_metadata_cursor(compositor, cfg));
     // gamescope takes its HDR flags and display-reuse key from this. An HDR plan captures PQ
-    // only, so without it an SDR gamescope streams SDR inside a PQ container.
-    vd.set_hdr(cfg.hdr);
+    // only, so without it an SDR gamescope streams SDR inside a PQ container. A joiner asks
+    // for the display as its owner lit it, which may stream SDR.
+    vd.set_hdr(joined.as_ref().map_or(cfg.hdr, |(_, d)| d.hdr));
     // Per-session, not a process-global env: concurrent sessions must not stomp launch targets.
     vd.set_launch_command(launch.and_then(|t| t.command.clone()));
     // Same reason: a process env let either plane retarget the other's `create`.
@@ -973,6 +974,7 @@ pub(super) fn sample_format(cfg: &StreamConfig) -> crate::vdisplay::admission::S
             cfg.hdr,
             bit_depth,
         ),
+        hdr: cfg.hdr,
     }
 }
 

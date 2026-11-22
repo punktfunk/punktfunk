@@ -36,11 +36,18 @@ pub struct LiveDisplay {
     /// `node.name` of the sink this session captures, published once its capturer is open.
     /// A joiner on the shared path taps it instead of claiming a second default sink.
     pub audio_sink: Arc<Mutex<Option<String>>>,
-    /// The display shows HDR. Its owner republishes it on a codec change ([`publish_hdr`]).
+    /// The display is lit in HDR. Its owner republishes it on a codec change ([`publish_hdr`]).
     pub hdr: bool,
     /// What its capture hands every session, where one stream feeds them all (gamescope).
     /// `None`: each session casts the display itself, at a format of its own.
     pub format: Option<SampleFormat>,
+}
+
+impl LiveDisplay {
+    /// The range a joiner streams it at: a shared capture's own, else what the display is lit in.
+    pub fn stream_hdr(&self) -> bool {
+        self.format.map_or(self.hdr, |f| f.hdr)
+    }
 }
 
 /// What a joiner refused by [`joined_hdr`] reads.
@@ -48,8 +55,9 @@ pub const JOIN_NEEDS_HDR: &str = "Couldn't join the shared screen — it's in HD
      isn't streaming in HDR. Turn on HDR in this app's settings, or ask whoever connected first \
      to turn it off.";
 
-/// The colour a joiner streams the owner's display at: the owner's. `None` when that display
-/// is HDR and the joiner can't carry HDR: its capture would read PQ as SDR, so it is refused.
+/// The colour a joiner streams at: the owner's stream's ([`LiveDisplay::stream_hdr`]). `None`
+/// when that is HDR and the joiner can't carry HDR: its capture would read PQ as SDR, so it is
+/// refused.
 pub fn joined_hdr(owner_hdr: bool, joiner_can_hdr: bool) -> Option<bool> {
     (!owner_hdr || joiner_can_hdr).then_some(owner_hdr)
 }
@@ -60,6 +68,8 @@ pub struct SampleFormat {
     pub bit_depth: u8,
     pub chroma_444: bool,
     pub full_range: bool,
+    /// PQ samples. A display lit in HDR hands out SDR ones while its content is SDR.
+    pub hdr: bool,
 }
 
 /// What a joiner's device can't take of a shared [`SampleFormat`].
@@ -130,6 +140,11 @@ pub struct LiveSession {
     pub resume_id: Option<[u8; 16]>,
     /// Stopped by its own client's reconnect ([`supersede`]).
     superseded: bool,
+    /// Its capture is changing range ([`move_format`]): a join waits for it.
+    moving: bool,
+    /// Its connect has its answer ([`admit_under`] returned) or it streams: it may be on a
+    /// capture by now. A row that is not is still waiting to be told what to read.
+    settled: bool,
 }
 
 #[derive(Debug)]
@@ -237,9 +252,9 @@ pub fn effective_conflict(fp: Option<[u8; 32]>) -> ModeConflict {
 /// This connect's [`Reservation`] in the live set and [`decide`] under `conflict` against it,
 /// under one lock, so a second connect inside this one's bring-up conflicts with it. A row
 /// holding `stop` is the requester's own (GameStream's plane has one flag) and never conflicts
-/// with it. Under `join`, a connect another's bring-up holds up ([`awaited`]) waits up to
-/// [`JOIN_WAIT`] for it, off the lock, then decides: a join once it streams, else as it would
-/// have. Blocks for that long, so an async caller runs it off its workers. No display budget:
+/// with it. Under `join`, a connect another's bring-up holds up ([`awaited`]), or one whose
+/// target changes range ([`move_format`]), waits up to [`JOIN_WAIT`] for it, off the lock,
+/// then decides: a join once it streams, else as it would have. Blocks for that long, so an async caller runs it off its workers. No display budget:
 /// [`admit`] adds that. A refusal still returns the reservation: drop it before answering.
 pub fn admit_under(
     conflict: ModeConflict,
@@ -268,15 +283,33 @@ fn admit_within(
             .collect();
         let left = deadline.saturating_duration_since(Instant::now());
         let waits_on = awaited(conflict, req_identity, &theirs, reservation.id);
-        if left.is_zero() || waits_on.is_none() {
+        let settling = settling(conflict, &theirs);
+        if left.is_zero() || (waits_on.is_none() && !settling) {
+            // Under the lock that decided: from here on this connect may take a capture.
+            if let Some(own) = live.iter_mut().find(|s| s.id == reservation.id) {
+                own.settled = true;
+            }
             return (decide(conflict, req_identity, &theirs), reservation);
         }
         tracing::debug!(
             row = ?waits_on,
-            "mode-conflict: JOIN — waiting for a connect in bring-up to stream"
+            settling,
+            "mode-conflict: JOIN — waiting for a connect in bring-up or a capture changing range"
         );
         live = CHANGED.wait_timeout(live, left).unwrap().0;
     }
+}
+
+/// Whether a join waits for the capture it would share. One changing range reads as the old
+/// one until the change is done. One streaming SDR off a display lit in HDR returns to HDR for
+/// a second device ([`company`]), while its owner is the only session that could be on it.
+fn settling(conflict: ModeConflict, theirs: &[LiveSession]) -> bool {
+    if conflict != ModeConflict::Join {
+        return false;
+    }
+    let off_lit = |s: &LiveSession| (s.display.as_ref()).is_some_and(|d| d.hdr && !d.stream_hdr());
+    let alone = theirs.iter().filter(|s| s.settled).count() == 1;
+    theirs.iter().any(|s| s.moving || (alone && off_lit(s)))
 }
 
 /// [`admit_under`] this client's [`effective_conflict`], so it may wait as that does. When
@@ -429,6 +462,8 @@ fn reserve(
         display: None,
         resume_id: None,
         superseded: false,
+        moving: false,
+        settled: false,
     });
     Reservation { id }
 }
@@ -454,6 +489,48 @@ pub fn publish_hdr(stop: &Arc<AtomicBool>, hdr: bool) {
         if let Some(d) = s.display.as_mut() {
             d.hdr = hdr;
         }
+    }
+}
+
+/// Whether another client is connected or connecting beside the session holding `own`, on a
+/// host that lets one join. A screen with company streams as it is lit, as a joiner reads it.
+pub fn company(own: &Arc<AtomicBool>) -> bool {
+    let others = (table().lock().unwrap().iter()).any(|s| !Arc::ptr_eq(&s.stop, own));
+    others && policy::prefs().get().any_join()
+}
+
+/// The session holding `own` is about to change the range of its capture. `None` while another
+/// client may be on a capture, on a host that lets one join: a joiner takes it as it read it.
+/// A connect still waiting for its answer waits on while the claim is held.
+pub fn move_format(own: &Arc<AtomicBool>) -> Option<FormatMove> {
+    // Read before the table lock, which every connect waits on.
+    let joins = policy::prefs().get().any_join();
+    let mut live = table().lock().unwrap();
+    let on_capture = |s: &LiveSession| s.settled && !Arc::ptr_eq(&s.stop, own);
+    if joins && live.iter().any(on_capture) {
+        return None;
+    }
+    for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, own)) {
+        s.moving = true;
+    }
+    Some(FormatMove {
+        stop: Arc::clone(own),
+    })
+}
+
+/// A [`move_format`] claim. Dropping it wakes the connects that waited on it.
+pub struct FormatMove {
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for FormatMove {
+    fn drop(&mut self) {
+        let mut live = table().lock().unwrap();
+        for s in live.iter_mut().filter(|s| Arc::ptr_eq(&s.stop, &self.stop)) {
+            s.moving = false;
+        }
+        drop(live);
+        CHANGED.notify_all();
     }
 }
 
@@ -536,6 +613,7 @@ impl Reservation {
             s.label = label;
             s.display = Some(display);
             s.resume_id = resume_id;
+            s.settled = true;
         }
         CHANGED.notify_all();
         LiveGuard { _row: self }
@@ -573,16 +651,27 @@ mod tests {
             display: Some(LiveDisplay::default()),
             resume_id: None,
             superseded: false,
+            moving: false,
+            settled: true,
         }
     }
-    /// A connect admitted but not streaming yet.
+    /// A connect admitted but not streaming yet, still waiting for its answer.
     fn pending(identity: Option<u8>, mode: (u32, u32, u32)) -> LiveSession {
         LiveSession {
             label: "a connecting client".into(),
             display: None,
+            settled: false,
             ..sess(identity, mode)
         }
     }
+
+    /// 10-bit SDR samples: what a display lit in HDR hands out while its content is SDR.
+    const SDR10: SampleFormat = SampleFormat {
+        bit_depth: 10,
+        chroma_444: false,
+        full_range: true,
+        hdr: false,
+    };
     fn fp(n: u8) -> Option<[u8; 32]> {
         let mut f = [0u8; 32];
         f[0] = n;
@@ -862,6 +951,7 @@ mod tests {
                 bit_depth: 8,
                 chroma_444: false,
                 full_range: true,
+                hdr: false,
             };
             let managed = crate::GamescopeRoute::Managed {
                 client: "steam".into(),
@@ -889,6 +979,7 @@ mod tests {
             bit_depth,
             chroma_444,
             full_range,
+            hdr: false,
         };
         let shared = fmt(10, true, true);
         assert_eq!(joined_format(shared, shared), Ok(shared));
@@ -909,12 +1000,105 @@ mod tests {
         }
     }
 
+    /// A shared capture names its own range; a display each session casts streams what it is
+    /// lit in.
+    #[test]
+    fn a_joiner_streams_a_shared_captures_range_on_a_lit_display() {
+        let lit = |format| LiveDisplay {
+            hdr: true,
+            format,
+            ..LiveDisplay::default()
+        };
+        assert!(
+            !lit(Some(SDR10)).stream_hdr(),
+            "SDR content on a lit display"
+        );
+        assert!(lit(Some(SampleFormat { hdr: true, ..SDR10 })).stream_hdr());
+        assert!(lit(None).stream_hdr(), "no shared capture: the display's");
+        assert!(!LiveDisplay::default().stream_hdr());
+    }
+
+    /// A join waits for a capture that changes range, and for a lone owner streaming SDR off
+    /// a display lit in HDR. Not where a third session keeps that capture as it is.
+    #[test]
+    fn a_join_waits_for_the_capture_it_would_share_to_settle() {
+        use ModeConflict::{Join, Separate};
+        let off_lit = LiveDisplay {
+            hdr: true,
+            format: Some(SDR10),
+            ..LiveDisplay::default()
+        };
+        let owner = |display: &LiveDisplay, moving| LiveSession {
+            display: Some(display.clone()),
+            moving,
+            ..sess(Some(1), MODE)
+        };
+        let as_lit = LiveDisplay::default();
+        assert!(!settling(Join, &[owner(&as_lit, false)]), "as lit");
+        assert!(settling(Join, &[owner(&as_lit, true)]), "changing range");
+        assert!(settling(Join, &[owner(&off_lit, false)]), "returns to HDR");
+        let waiting = [owner(&off_lit, false), pending(Some(2), MODE)];
+        assert!(settling(Join, &waiting), "beside a connect with no answer");
+        let third = [owner(&off_lit, false), sess(Some(2), MODE)];
+        assert!(!settling(Join, &third), "a third session is on it");
+        assert!(!settling(Separate, &[owner(&off_lit, true)]));
+    }
+
+    /// A session alone streams SDR off a display lit in HDR. A second device waits for it to
+    /// return to HDR, which it may while that connect has no answer, and reads the screen as
+    /// it is lit. Once the second may be on the capture, it stays as it is.
+    #[test]
+    fn a_lone_owner_returns_to_hdr_for_a_join_and_holds_its_range_after() {
+        let name = "a_lone_owner_returns_to_hdr_for_a_join_and_holds_its_range_after";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            configure("join");
+            let owner = Arc::new(AtomicBool::new(false));
+            let (_, row) = admit(fp(1), MODE, owner.clone());
+            let lit = LiveDisplay {
+                hdr: true,
+                format: Some(SDR10),
+                ..LiveDisplay::default()
+            };
+            let _live = row.register(MODE, "owner".into(), lit, None);
+            assert!(!company(&owner), "alone");
+            let second = std::thread::spawn(|| admit(fp(2), MODE, Arc::default()));
+            while rows() < 2 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(company(&owner));
+            let claim = move_format(&owner).expect("the second has no answer yet");
+            assert!(!second.is_finished(), "it waits for the screen as lit");
+            publish_format(&owner, SampleFormat { hdr: true, ..SDR10 });
+            drop(claim);
+            let (joined, _second) = second.join().unwrap();
+            let Admission::Join(_, read) = joined else {
+                panic!("a join, got {}", verdict(joined));
+            };
+            assert!(read.stream_hdr(), "it reads the screen as it is lit");
+            assert!(move_format(&owner).is_none(), "the second may be on it");
+        });
+    }
+
+    /// A host that lets nobody join has no joiner to protect.
+    #[test]
+    fn a_format_move_ignores_other_clients_where_none_may_join() {
+        let name = "a_format_move_ignores_other_clients_where_none_may_join";
+        crate::fake::in_child(module_path!(), name, &[], || {
+            configure("separate");
+            let owner = Arc::new(AtomicBool::new(false));
+            let (_, _row) = admit(fp(1), MODE, owner.clone());
+            let (_, _other) = admit(fp(2), MODE, Arc::default());
+            assert!(move_format(&owner).is_some());
+        });
+    }
+
     #[test]
     fn only_a_shared_captures_row_takes_a_published_format() {
         let fmt = |bit_depth| SampleFormat {
             bit_depth,
             chroma_444: false,
             full_range: true,
+            hdr: false,
         };
         let row = |format| {
             let stop = Arc::new(AtomicBool::new(false));
