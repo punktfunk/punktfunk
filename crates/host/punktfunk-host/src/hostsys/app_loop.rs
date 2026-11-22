@@ -58,10 +58,18 @@ pub(crate) fn start(args: &[String], work: fn()) {
         && objc2_core_graphics::CGSessionCopyCurrentDictionary().is_some();
     let mut ui = None;
     if serves {
-        // SAFETY: SIG_IGN installs no handler code, and the host thread has not started yet.
         // A second launch's SIGUSR1 asks for the window and must not end the host; the UI
-        // watches it with a dispatch source, which sees ignored signals too.
-        unsafe { libc::signal(libc::SIGUSR1, libc::SIG_IGN) };
+        // watches it with a dispatch source. A handler, not SIG_IGN: exec resets a handler,
+        // so games, hooks and the console start with the signal's default.
+        extern "C" fn keep_running(_: libc::c_int) {}
+        // SAFETY: the handler does nothing, which is async-signal-safe, and the host thread
+        // has not started yet.
+        unsafe {
+            libc::signal(
+                libc::SIGUSR1,
+                keep_running as extern "C" fn(libc::c_int) as libc::sighandler_t,
+            )
+        };
         let agent = login_agent();
         ui = looped.then(|| Ui::find(agent)).flatten();
         if let Some(ui) = ui.filter(|_| !agent) {
