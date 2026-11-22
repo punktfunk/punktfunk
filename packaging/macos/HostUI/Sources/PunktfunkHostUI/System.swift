@@ -32,15 +32,39 @@ enum LoginItem {
     /// A manual launch while the agent is registered: start the agent and leave serving to it.
     static func handOffToAgent() -> Bool {
         guard service.status == .enabled else { return false }
+        HandOver.mark()
         let kick = Process()
         kick.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         kick.arguments = ["kickstart", "gui/\(getuid())/\(label)"]
-        guard (try? kick.run()) != nil else { return false }
+        guard (try? kick.run()) != nil else {
+            HandOver.clear()
+            return false
+        }
         kick.waitUntilExit()
+        if kick.terminationStatus != 0 { HandOver.clear() }
         return kick.terminationStatus == 0
     }
 
     static func openSettings() { SMAppService.openSystemSettingsLoginItems() }
+}
+
+/// The note a hand-over leaves for the agent's instance. The host's SIGUSR1 reaches only an
+/// instance that already holds the lock; one that kickstart has just started reads this note
+/// at launch instead, and shows its panel.
+enum HandOver {
+    static let note = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("io.unom.punktfunk.host.handover")
+    /// An agent start this long after the note is a later one, not the hand-over's.
+    static let window: TimeInterval = 30
+
+    static func mark(_ url: URL = note) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+    static func clear(_ url: URL = note) { try? FileManager.default.removeItem(at: url) }
+
+    /// True once for a note left within `window`; the note is gone afterwards either way.
+    static func take(_ url: URL = note, now: Date = .now) -> Bool {
+        defer { clear(url) }
+        let made = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        return made.map { now.timeIntervalSince($0) < window } ?? false
+    }
 }
 
 /// Whether the app runs from an Applications folder, and moving it there.

@@ -163,6 +163,18 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(Finish.of(want: true, isOn: false, available: false, screenAskedThisRun: false) == .close)
     }
 
+    /// A hand-over's note opens the panel once, and only while it is fresh.
+    @Test func handOverNote() {
+        let note = FileManager.default.temporaryDirectory.appendingPathComponent("pf-handover-\(UUID().uuidString)")
+        #expect(!HandOver.take(note))
+        HandOver.mark(note)
+        #expect(HandOver.take(note))
+        #expect(!HandOver.take(note), "the note is used up")
+        HandOver.mark(note)
+        #expect(!HandOver.take(note, now: .now + HandOver.window + 1))
+        #expect(!FileManager.default.fileExists(atPath: note.path))
+    }
+
     @Test func requiredGrants() {
         #expect(!Grants.all.missingRequired)
         #expect(Grants(screen: true, input: true, audio: .denied).missingRequired == false, "audio is not required")

@@ -51,6 +51,7 @@ public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate
         watchSIGUSR1()
 
         let firstLaunch = !UserDefaults.standard.bool(forKey: Self.shownKey)
+        let handedOver = store.context.launchedByLoginAgent && HandOver.take()
         switch ProcessInfo.processInfo.environment["PUNKTFUNK_HOST_UI_OPEN"] {
         // The status item is not on screen until a moment after launch.
         case "panel": DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showPanel() }
@@ -58,6 +59,8 @@ public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate
         default:
             if store.api != nil, firstLaunch || store.grants.missingRequired || !store.inApplications {
                 showSetup(firstLaunch: firstLaunch)
+            } else if handedOver {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showPanel() }
             }
         }
     }
@@ -84,6 +87,7 @@ public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                HandOver.clear()
                 if let window = self.setupWindow, window.isVisible { self.bringToFront(window) } else { self.showPanel() }
             }
         }
