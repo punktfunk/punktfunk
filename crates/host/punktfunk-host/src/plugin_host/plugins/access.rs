@@ -31,6 +31,10 @@ pub const MAX_PORTS: usize = 16;
 /// a caller on loopback, so no plugin is ever let onto one.
 const OWN_PORTS: std::ops::RangeInclusive<u16> = 47980..=48010;
 
+/// Whether a granted port on this computer reaches a network plugin: the Linux runner forwards it
+/// into the plugin's namespace, the macOS profile allows it. Windows has no such grant.
+pub const FORWARDS_PORTS: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
 /// How a port on this computer is spelled in a row and an answer: where the plugin connects.
 /// The address and never `localhost`, which a sandbox may not resolve and which may lead to
 /// `::1`, where the forward only answers if the server listens there too.
@@ -48,8 +52,7 @@ pub fn port_of(path: &str) -> Option<u16> {
 /// way to probe this computer's loopback, which its sandbox hides.
 pub fn with_listeners(mut snap: PluginAccessSnapshot) -> PluginAccessSnapshot {
     for row in &mut snap.pending {
-        if let Some(port) = row.port {
-            let (listening, name) = listener(port);
+        if let Some((listening, name)) = row.port.and_then(listener) {
             row.listening = Some(listening);
             row.listener = name;
         }
@@ -58,15 +61,15 @@ pub fn with_listeners(mut snap: PluginAccessSnapshot) -> PluginAccessSnapshot {
 }
 
 /// Whether a program listens on TCP `port` of this computer, and its name when this host's
-/// account may read it. Linux only: no other OS grants a port.
-fn listener(port: u16) -> (bool, Option<String>) {
+/// account may read it. `None` where the host can't tell: it reads Linux's `/proc` tables.
+fn listener(port: u16) -> Option<(bool, Option<String>)> {
     #[cfg(target_os = "linux")]
     {
         let tables = ["/proc/net/tcp", "/proc/net/tcp6"];
         let inode =
             (tables.iter()).find_map(|t| listening_inode(&std::fs::read_to_string(t).ok()?, port));
         let Some(inode) = inode else {
-            return (false, None);
+            return Some((false, None));
         };
         let socket = format!("socket:[{inode}]");
         let holder = std::fs::read_dir("/proc").ok().and_then(|procs| {
@@ -85,12 +88,12 @@ fn listener(port: u16) -> (bool, Option<String>) {
                 .take(32)
                 .collect::<String>()
         });
-        (true, name.filter(|n| !n.trim().is_empty()))
+        Some((true, name.filter(|n| !n.trim().is_empty())))
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = port;
-        (false, None)
+        None
     }
 }
 
@@ -3949,9 +3952,13 @@ mod tests {
         let rows: Vec<_> = (snap.pending.iter().map(|p| (p.port, p.path.as_str()))).collect();
         assert_eq!(rows, [(Some(8080), "127.0.0.1:8080")]);
         assert_eq!(port_of("127.0.0.1:8080"), Some(8080));
-        // A plugin's own listing never says what listens on a port; the operator's does.
+        // A plugin's own listing never says what listens on a port; the operator's does, where
+        // the host can tell.
         assert_eq!(snap.pending[0].listening, None);
-        assert!(with_listeners(snap.clone()).pending[0].listening.is_some());
+        assert_eq!(
+            with_listeners(snap.clone()).pending[0].listening.is_some(),
+            cfg!(target_os = "linux")
+        );
         let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   \
             0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0 100 0 0 10 0\n   \
             1: 0100007F:1F91 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 4343 1 0 20 4 30 10 -1";

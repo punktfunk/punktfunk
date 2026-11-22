@@ -229,8 +229,8 @@ fn grant(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<()
     // A port on this computer, spelled as its request spells it. The operator's own hand: only
     // Punktfunk's own range is refused, whatever port the API was moved to.
     if let Some(port) = access::port_of(dir) {
-        if !cfg!(target_os = "linux") {
-            bail!("a port on this computer is granted on a Linux host only");
+        if !access::FORWARDS_PORTS {
+            bail!("a port on this computer is granted on a Linux or macOS host only");
         }
         let store = access::AccessStore::open(pf_paths::config_dir());
         let allowed = store

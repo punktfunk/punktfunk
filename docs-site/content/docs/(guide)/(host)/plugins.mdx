@@ -152,11 +152,11 @@ less, like Steam, land at once.
 
 ## Let a plugin reach a server on this computer
 
-On Linux a plugin that uses the network reaches other machines, but not this computer's own
-`localhost`, and this computer's address on your network doesn't lead back to it from inside a
-plugin. A plugin that needs a server you run beside the host, such as RomM in Docker, asks for
-that server's port. The console shows the request with the port number and the program that
-listens there now. Choose **Allow** or **Don't allow**; allowing restarts the plugin, which then
+On Linux and macOS a plugin that uses the network reaches other machines, but not this computer's
+own `localhost`. On Linux this computer's address on your network doesn't lead back to it from
+inside a plugin either. A plugin that needs a server you run beside the host, such as RomM in Docker, asks for
+that server's port. The console shows the request with the port number and, on Linux, the
+program that listens there now. Choose **Allow** or **Don't allow**; allowing restarts the plugin, which then
 reaches the server at `127.0.0.1:<port>`.
 
 A plugin that doesn't ask yet can be given the port by hand: under **Plugins** → **Installed**,
