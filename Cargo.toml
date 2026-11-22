@@ -151,9 +151,10 @@ dispatch2 = "0.3"
 objc2-foundation = "0.3"
 objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
-objc2-core-video = "0.3"
+objc2-core-video = { version = "0.3", features = ["objc2-io-surface"] }
 objc2-core-media = "0.3"
 objc2-io-surface = "0.3"
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
 objc2-video-toolbox = "0.3"
 objc2-screen-capture-kit = "0.3"
 objc2-core-audio = "0.3"

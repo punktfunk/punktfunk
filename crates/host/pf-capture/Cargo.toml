@@ -99,6 +99,8 @@ objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
 objc2-core-video = { workspace = true }
 objc2-core-media = { workspace = true }
+objc2-io-surface = { workspace = true }
+objc2-metal = { workspace = true }
 objc2-screen-capture-kit = { workspace = true }
 objc2-app-kit = { workspace = true }
 

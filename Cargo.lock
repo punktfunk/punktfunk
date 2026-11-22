@@ -3303,8 +3303,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "180788110936d59bab6bd83b6060ffdfffb3b922ba1396b312ae795e1de9d81d"
 dependencies = [
  "bitflags 2.13.2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -3314,8 +3316,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
+ "dispatch2",
  "objc2",
+ "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-io-surface",
 ]
 
 [[package]]
@@ -3632,6 +3638,8 @@ dependencies = [
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation",
+ "objc2-io-surface",
+ "objc2-metal",
  "objc2-screen-capture-kit",
  "pf-dmabuf",
  "pf-driver-proto",

@@ -49,6 +49,7 @@ use crate::{Capturer, ColourFacts, CursorSource, DisplayCaptureOpts, Feed, First
 
 mod cursor;
 mod plan;
+mod white;
 
 /// The surfaces the stream draws into: the mailbox's, the encoder's, the loop's repeat, and one
 /// to draw the next frame in. A surface still held when the pool runs dry costs a frame.
@@ -97,8 +98,10 @@ pub(crate) fn open(opts: DisplayCaptureOpts) -> Result<Box<dyn Capturer>> {
             &NSArray::new(),
         )
     };
+    let lift = (request.lift.map(white::Lift::new).transpose()).context("set up HDR capture")?;
     let shared = Arc::new(Shared {
         tag_601: request.tag_601,
+        lift,
         ..Shared::default()
     });
     let output = Output::new(shared.clone());
@@ -236,6 +239,8 @@ struct Shared {
     changed: Condvar,
     /// [`plan::Request::tag_601`].
     tag_601: bool,
+    /// [`plan::Request::lift`]: an HDR stream's frames pass through it.
+    lift: Option<white::Lift>,
 }
 
 #[derive(Default)]
@@ -280,6 +285,13 @@ impl Shared {
         // SAFETY: `sample` is the valid buffer the stream passed in.
         let Some(image) = (unsafe { sample.image_buffer() }) else {
             return;
+        };
+        let image = match &self.lift {
+            Some(lift) => match lift.convert(&image) {
+                Ok(lifted) => lifted,
+                Err(e) => return self.stop(format!("{e:#}")),
+            },
+            None => image,
         };
         let code = CVPixelBufferGetPixelFormatType(&image);
         let Some(format) = plan::delivered(code) else {
@@ -586,6 +598,8 @@ impl Capturer for ScCapturer {
     }
 
     fn colour(&self) -> ColourFacts {
+        // Generic HDR10 names 1000 nits: the range of an HDR virtual display, whose headroom
+        // of 5 sits over the stream's 203-nit white.
         ColourFacts {
             hdr_meta: self.shared.lock().pq.then(pf_frame::hdr::generic_hdr10),
             sdr_fp16: false,
@@ -638,11 +652,14 @@ impl Drop for ScCapturer {
             }
         }
         let st = self.shared.lock();
+        // What the HDR white pass took per frame, GPU wait included; 0 without one.
+        let lift_us = self.shared.lift.as_ref().map_or(0, white::Lift::mean_us);
         tracing::info!(
             display = self.display_id,
             complete = st.complete,
             idle = st.idle,
             other = st.other,
+            lift_us,
             "screencapturekit capture closed"
         );
     }
