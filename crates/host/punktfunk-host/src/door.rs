@@ -122,12 +122,13 @@ fn missing(kind: InstallKind) -> ApiError {
             "This Deck hasn't set it up yet. Run bash ~/punktfunk/scripts/steamdeck/update.sh \
              in Konsole and enter your password.",
         ),
-        InstallKind::Source | InstallKind::Flatpak | InstallKind::WindowsInstaller => {
-            ApiError::coded(
-                "door_missing_build",
-                "This build doesn't include it. Install Punktfunk from a package to use it.",
-            )
-        }
+        InstallKind::Source
+        | InstallKind::Flatpak
+        | InstallKind::WindowsInstaller
+        | InstallKind::MacApp => ApiError::coded(
+            "door_missing_build",
+            "This build doesn't include it. Install Punktfunk from a package to use it.",
+        ),
     }
 }
 

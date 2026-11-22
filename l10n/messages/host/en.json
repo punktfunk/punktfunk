@@ -320,6 +320,7 @@
 	"apierr_update_apply_disabled": "One-click apply is disabled on this host (PUNKTFUNK_UPDATE_APPLY=0)",
 	"apierr_update_check_too_soon": "An update check just ran — try again in 30 seconds",
 	"apierr_update_checks_disabled": "Update checks are disabled on this host (PUNKTFUNK_UPDATE_CHECK=0)",
+	"apierr_update_disk_image": "Punktfunk Host can't update itself. Download the new disk image, then drag it into Applications.",
 	"apierr_update_no_one_click": "This install kind has no one-click apply — use the update command shown in status",
 	"apierr_update_none_known": "No newer version is known yet — check for updates first",
 	"apierr_vc_runtime": "The Microsoft Visual C++ runtime is missing. Install the Visual C++ 2015–2022 Redistributable (x64) from Microsoft, then try again.",

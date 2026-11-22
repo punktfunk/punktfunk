@@ -82,7 +82,7 @@ pub(crate) struct UpdateResultInfo {
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub(crate) struct UpdateStatus {
-    /// `windows-installer` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |
+    /// `windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |
     /// `steamos-source` | `nix` | `source`.
     pub install_kind: String,
     /// `stable` | `canary`.
@@ -90,7 +90,8 @@ pub(crate) struct UpdateStatus {
     pub current_version: String,
     /// `notify` (show the command) | `full` (one-click) | `staged` (apply + reboot).
     pub apply: String,
-    /// Copy-paste update command for this install kind.
+    /// Copy-paste update command for this install kind; for `mac-app`, the newer disk image's
+    /// download link once a check found one.
     pub channel_hint: String,
     /// `PUNKTFUNK_UPDATE_CHECK=0`.
     pub check_disabled: bool,
@@ -149,7 +150,11 @@ fn status_from(snap: update::Snapshot) -> UpdateStatus {
         channel: channel.as_str().into(),
         current_version: current.into(),
         apply: update::apply_support().into(),
-        channel_hint: detect::channel_hint(kind),
+        channel_hint: snap
+            .checked
+            .as_ref()
+            .and_then(|c| update::download_url(kind, &c.manifest))
+            .unwrap_or_else(|| detect::channel_hint(kind)),
         check_disabled: update::check_disabled(),
         available,
         manifest: snap.checked.as_ref().map(|c| UpdateManifestInfo {
@@ -281,6 +286,12 @@ pub(crate) async fn apply_update(
             StatusCode::CONFLICT,
             "update_no_one_click",
             "This install kind has no one-click apply — use the update command shown in status",
+        ),
+        Err(update::ApplyError::DiskImage) => api_error_coded(
+            StatusCode::CONFLICT,
+            "update_disk_image",
+            "Punktfunk Host can't update itself. Download the new disk image, then drag it into \
+             Applications.",
         ),
         Err(update::ApplyError::Disabled) => api_error_coded(
             StatusCode::CONFLICT,
