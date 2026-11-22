@@ -1503,6 +1503,61 @@ fn pairing_ceremony_and_gate() {
     host.join().unwrap().unwrap();
 }
 
+/// One host serves both families on its port: a client pairs and streams over `::1`, which
+/// only the IPv6 socket's media reaches, then streams over `127.0.0.1`.
+#[test]
+fn one_host_pairs_and_streams_over_ipv6_and_ipv4() {
+    if std::net::UdpSocket::bind("[::1]:0").is_err() {
+        eprintln!("skipped: no IPv6 loopback on this machine");
+        return;
+    }
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use punktfunk_core::client::{ConnectParams, NativeClient};
+
+    let store = crate::test_support::scratch().join("punktfunk-paired-ipv6.json");
+    let paired_store = Some(store.clone());
+    let spawned = std::thread::spawn(move || {
+        run_ephemeral(Punktfunk1Options {
+            port: 19800,
+            source: Punktfunk1Source::Synthetic,
+            seconds: 0,
+            frames: u32::MAX, // until each client leaves
+            max_sessions: 3,  // the pairing, then one session per family
+            max_concurrent: 1,
+            require_pairing: true,
+            allow_pairing: false,
+            pairing_pin: Some("4321".into()),
+            paired_store,
+            idle_timeout: None,
+            mdns: false,
+        })
+    });
+    let host = up(19800, spawned);
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let host_fp = NativeClient::pair("::1", 19800, (&cert, &key), "4321", "ipv6-client", HANG)
+        .expect("pairing over IPv6");
+    let mode = punktfunk_core::Mode {
+        width: 1280,
+        height: 720,
+        refresh_hz: 60,
+        refresh_mhz: 0,
+    };
+    for addr in ["::1", "127.0.0.1"] {
+        let client = NativeClient::connect(ConnectParams {
+            pin: Some(host_fp),
+            identity: Some((cert.clone(), key.clone())),
+            ..ConnectParams::new(addr, 19800, mode, HANG)
+        })
+        .unwrap_or_else(|e| panic!("session over {addr}: {e:?}"));
+        client
+            .next_frame(HANG)
+            .unwrap_or_else(|e| panic!("video over {addr}: {e:?}"));
+    }
+    let _ = std::fs::remove_file(&store);
+    host.join().unwrap().unwrap();
+}
+
 /// A stranger trying a PIN every second holds only the strict clock: an attempt from the home
 /// network is still answered. Both planes charge through [`PairingClocks`].
 #[test]

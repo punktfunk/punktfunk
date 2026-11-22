@@ -118,6 +118,15 @@ struct JumboStart {
     clamped_udp_budget: Option<u16>,
 }
 
+/// The settle that proves `peer`'s path carries full-size video. An IPv6 search stops short
+/// of the IPv4 ceiling on a clean 1500 path, so there it is the default datagram itself.
+fn full_size_settle(peer: IpAddr) -> u16 {
+    match peer.to_canonical() {
+        IpAddr::V4(_) => video_datagram_udp_ceiling() as u16,
+        v6 => sealed_datagram_bytes(mtu1500_shard_payload_for(v6)) as u16,
+    }
+}
+
 /// Jumbo shard for `peer` that seals within `udp_budget`, or `None` when there is nothing to
 /// gain. The budget is a settle above the 1500 wire; `u16::MAX` asks for the target alone. Ends
 /// whose adapters differ settle below the larger one, so the settle, not the target, sizes it.
@@ -441,7 +450,7 @@ impl Watch {
     /// lower one counts only from a connection alive through the window, since a closed one
     /// stops discovering and a high-RTT path can still be mid-search.
     fn learn(&self, peer: IpAddr, settled: u16) {
-        if settled >= video_datagram_udp_ceiling() as u16 {
+        if settled >= full_size_settle(peer) {
             if learned().lock().unwrap().remove(&peer).is_some() {
                 tracing::info!(peer = %peer,
                     "wire MTU: path re-measured at full size — learned clamp cleared");
@@ -457,7 +466,7 @@ impl Watch {
     /// the session is ended.
     async fn fit(&mut self, addr: SocketAddr, settled: u16, moved: bool) -> bool {
         let peer = addr.ip();
-        let ceiling = video_datagram_udp_ceiling() as u16;
+        let ceiling = full_size_settle(peer);
         if sealed_datagram_bytes(self.current) <= settled as usize {
             if settled < ceiling {
                 tracing::info!(peer = %peer, discovered_udp_mtu = settled,
@@ -856,6 +865,19 @@ mod tests {
             None
         );
         assert_eq!(shrink_to(floor, 1200, V4), None);
+    }
+
+    /// On a clean 1500 path an IPv6 search stops at 1438, below the 1452 that fits: quinn
+    /// steps in 20 bytes from 1200 toward the 1472 ceiling. That settle keeps the v6 default
+    /// and reads as full size, so no clamp is learned from it.
+    #[test]
+    fn an_ipv6_settle_on_a_1500_path_keeps_the_default_shard() {
+        let full = mtu1500_shard_payload_for(V6);
+        assert_eq!(shrink_to(full, 1438, V6), None);
+        assert_eq!(shard_payload_for_udp_budget(1438, V6), full);
+        assert!(1438 >= full_size_settle(V6));
+        assert!(1438 < full_size_settle(V4));
+        assert_eq!(full_size_settle(V4) as usize, video_datagram_udp_ceiling());
     }
 
     /// After a move the next settle grows back toward the start shard, never past it, and

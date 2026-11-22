@@ -280,8 +280,8 @@ pub(crate) async fn serve(
     let fingerprint = endpoint::fingerprint_of_pem(&identity.cert_pem)
         .map_err(|e| anyhow!("cert fingerprint: {e}"))?;
     hold_guests_kept_at_start(&np);
-    // Media leaves from this socket. `pkf1` stays listed for [`serve_pkf1`]: an older client
-    // still pairs there, and is told to update for anything else.
+    // Media leaves from the socket a connection arrived on. `pkf1` stays listed for
+    // [`serve_pkf1`]: an older client still pairs there, and is told to update for anything else.
     let alpns: &[&[u8]] = &[
         punktfunk_core::quic::v2::registry::ALPN,
         endpoint::QUIC_ALPN,
@@ -295,11 +295,23 @@ pub(crate) async fn serve(
     )
     .map_err(|e| anyhow!("QUIC server endpoint: {e}"))?;
     let media_socket = Arc::new(media_socket);
+    // IPv6 on a socket of its own, so a box without IPv6 still serves IPv4.
+    let ep6 = endpoint::server_shared(
+        (std::net::Ipv6Addr::UNSPECIFIED, opts.port).into(),
+        &identity.cert_pem,
+        &identity.key_pem,
+        opts.idle_timeout.unwrap_or(endpoint::DEFAULT_IDLE_TIMEOUT),
+        alpns,
+    )
+    .map(|(ep, media)| (ep, Arc::new(media)))
+    .map_err(|e| tracing::warn!(error = %e, "IPv6 QUIC endpoint did not bind — serving IPv4 only"))
+    .ok();
     // Bound: a test dials on this, not on a guessed delay.
     #[cfg(test)]
     let _listening = tests::Listening::on(opts.port);
     tracing::info!(
         port = opts.port,
+        ipv6 = ep6.is_some(),
         source = ?opts.source,
         fingerprint = %hex::encode(fingerprint),
         "punktfunk host listening (QUIC) — clients pin this fingerprint"
@@ -407,7 +419,6 @@ pub(crate) async fn serve(
     let mut sessions = tokio::task::JoinSet::new();
     let at = Arc::new(Accepting {
         fingerprint,
-        media_socket,
         pairing_clocks: PairingClocks::default(),
         sem,
         accepted: std::sync::atomic::AtomicU32::new(0),
@@ -422,11 +433,17 @@ pub(crate) async fn serve(
         // A finished task stays in the set until joined; a serving host never reaches the drain
         // below, and every client probe is a task.
         while sessions.try_join_next().is_some() {}
-        let incoming = tokio::select! {
+        // Each connection keeps its endpoint's socket for media. A closed IPv6 endpoint leaves
+        // IPv4 serving.
+        let (incoming, media) = tokio::select! {
             i = ep.accept() => match i {
-                Some(i) => i,
+                Some(i) => (i, media_socket.clone()),
                 None => break,
             },
+            Some(i) = async {
+                let (ep6, media6) = ep6.as_ref()?;
+                Some((ep6.accept().await?, media6.clone()))
+            } => i,
             () = at.done.notified(), if at.max_sessions != 0 => break,
         };
         // A source that has not proved it can receive at the address it claims gets a Retry
@@ -437,11 +454,14 @@ pub(crate) async fn serve(
             let _ = incoming.retry();
             continue;
         }
-        sessions.spawn(serve_connection(incoming, host(), at.clone()));
+        sessions.spawn(serve_connection(incoming, media, host(), at.clone()));
     }
     // Drain in-flight sessions (max_sessions reached or endpoint closed).
     while sessions.join_next().await.is_some() {}
     ep.wait_idle().await;
+    if let Some((ep6, _)) = &ep6 {
+        ep6.wait_idle().await;
+    }
     Ok(())
 }
 
@@ -484,7 +504,6 @@ fn advertise(
 /// What the accept loop shares with every connection's task.
 struct Accepting {
     fingerprint: [u8; 32],
-    media_socket: Arc<std::net::UdpSocket>,
     pairing_clocks: PairingClocks,
     /// The session slots, shared with the browser plane.
     sem: Arc<tokio::sync::Semaphore>,
@@ -497,8 +516,14 @@ struct Accepting {
 
 /// One connection, off the accept loop: a peer that stalls its handshake holds only its own task,
 /// up to the idle timeout. A pin mismatch ends here, before a session slot is taken; a `pkf1`
-/// client is answered on the pairing path; a session's error closes typed.
-async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<Accepting>) {
+/// client is answered on the pairing path; a session's error closes typed. `media` is the socket
+/// of the endpoint the connection arrived on.
+async fn serve_connection(
+    incoming: quinn::Incoming,
+    media: Arc<std::net::UdpSocket>,
+    host: SessionHost,
+    at: Arc<Accepting>,
+) {
     let conn = match incoming.await {
         Ok(c) => c,
         Err(e) => {
@@ -516,22 +541,12 @@ async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<
     let peer = conn.remote_address();
     if endpoint::negotiated_alpn(&conn).as_deref() != Some(punktfunk_core::quic::v2::registry::ALPN)
     {
-        serve_pkf1(
-            conn,
-            at.media_socket.clone(),
-            &at.fingerprint,
-            &host.np,
-            &at.pairing_clocks,
-        )
-        .await;
+        serve_pkf1(conn, media, &at.fingerprint, &host.np, &at.pairing_clocks).await;
         return;
     }
     tracing::info!(%peer, "client connected");
     let conn_err = conn.clone();
-    let link = link::SessionLink::QuicV2(
-        conn.clone(),
-        Arc::new(link::V2Link::new(conn, at.media_socket.clone())),
-    );
+    let link = link::SessionLink::QuicV2(conn.clone(), Arc::new(link::V2Link::new(conn, media)));
     let SessionHost {
         opts,
         audio_cap,
