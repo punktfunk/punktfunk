@@ -636,21 +636,30 @@ async fn serve_connection(
 #[cfg_attr(windows, allow(dead_code, reason = "the signal handler is Unix only"))]
 const SHUTDOWN_RESTORE_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// A stop asked from inside: `host.restart` on a host its unit or runner starts over.
+/// A stop asked from inside: `host.restart` on a host its unit, runner or login agent starts over.
 static STOP: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// The status a [`STOP`] exits with.
+static STOP_CODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// Stops this host as its stop signal would: the box is given back first.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 pub(crate) fn stop_self() -> Result<(), String> {
+    stop_exiting(0)
+}
+
+/// [`stop_self`], exiting with `code`.
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+pub(crate) fn stop_exiting(code: i32) -> Result<(), String> {
+    STOP_CODE.store(code, Ordering::SeqCst);
     STOP.notify_one();
     Ok(())
 }
 
-/// Catch `SIGTERM`/`SIGINT` or [`stop_self`], end the live sessions, give the box back, then
-/// exit. `exit(0)` runs no destructor, so this is where the audio defaults, every display's
-/// topology restore and output, and a Game Mode takeover are undone. Crash-restore lives in
-/// `$XDG_RUNTIME_DIR`, which logind removes with the user manager. Blocking, under
-/// [`SHUTDOWN_RESTORE_GRACE`].
+/// Catch `SIGTERM`/`SIGINT` or [`stop_exiting`], end the live sessions, give the box back, then
+/// exit: 0 on a signal, the stop's code otherwise. `exit` runs no destructor, so this is where
+/// the audio defaults, every display's topology restore and output, and a Game Mode takeover are
+/// undone. Crash-restore lives in `$XDG_RUNTIME_DIR`, which logind removes with the user manager.
+/// Blocking, under [`SHUTDOWN_RESTORE_GRACE`].
 fn install_shutdown_restore() {
     #[cfg(unix)]
     tokio::spawn(async {
@@ -665,10 +674,10 @@ fn install_shutdown_restore() {
             );
             return;
         };
-        let sig = tokio::select! {
-            _ = term.recv() => "SIGTERM",
-            _ = int.recv() => "SIGINT",
-            _ = STOP.notified() => "host.restart",
+        let (sig, code) = tokio::select! {
+            _ = term.recv() => ("SIGTERM", 0),
+            _ = int.recv() => ("SIGINT", 0),
+            _ = STOP.notified() => ("host.restart", STOP_CODE.load(Ordering::SeqCst)),
         };
         tracing::info!(
             signal = sig,
@@ -694,7 +703,7 @@ fn install_shutdown_restore() {
                 "the session restore did not finish in time — exiting anyway"
             );
         }
-        std::process::exit(0);
+        std::process::exit(code);
     });
 }
 
