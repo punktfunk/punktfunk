@@ -243,6 +243,18 @@ object DeepLinks {
     }
 
     /**
+     * A typed host as it is stored: bare, with a pasted port taken off. [port] is the form's own
+     * field, kept when the address spells none. Text that reads as no host stays as typed.
+     */
+    fun typedHost(text: String, port: Int): Pair<String, Int> {
+        val s = text.trim()
+        val (addr, parsed) = parseAddrPort(s) ?: return s to port
+        // `::1` and `[::1]` spell no port; `host:9800` and `[::1]:9800` end in one.
+        val spelled = s.length > addr.length && s.endsWith(":$parsed")
+        return addr to if (spelled) parsed else port
+    }
+
+    /**
      * `addr`, `addr:port`, `[v6]`, `[v6]:port` — null when the port isn't a number. A bare IPv6
      * literal (`::1`) keeps its colons and takes the default port; anything else splits at the last
      * colon, like every other host-parsing site in the clients.

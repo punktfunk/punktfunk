@@ -1388,12 +1388,7 @@ impl ServiceState {
     /// A manual entry has no pin: it edits the placeholder at its address or files one. A
     /// record pinned there is another identity and keeps its name.
     fn save_host(&mut self, name: String, addr: String, port: u16) {
-        let edit = trust::HostEdit {
-            name: Some(name),
-            addr: Some(addr),
-            port: Some(port),
-            ..Default::default()
-        };
+        let edit = trust::HostEdit::typed(name, addr, port);
         let mut added = Ok(trust::AddOutcome::Unchanged);
         let saved = trust::KnownHosts::update_if(|known| {
             added = known.add(&edit);
@@ -1412,12 +1407,7 @@ impl ServiceState {
     /// Edited in place, never removed and re-added: the pin, the learned MACs, the pinned
     /// cards and the preset binding hang off this record. A blank name is no edit.
     fn update_host(&mut self, key: String, name: String, addr: String, port: u16) {
-        let edit = trust::HostEdit {
-            name: Some(name),
-            addr: Some(addr),
-            port: Some(port),
-            ..Default::default()
-        };
+        let edit = trust::HostEdit::typed(name, addr, port);
         let found = self.edit_host(&key, "edit", |h| {
             h.apply_edit(&edit);
             true

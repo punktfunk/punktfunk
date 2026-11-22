@@ -1034,7 +1034,8 @@ object SkiaConsole {
      * record pinned there is another identity — the other OS of a dual-boot box — and keeps its name.
      */
     private fun saveHost(c: JSONObject) {
-        val addr = c.optString("addr"); val port = c.optInt("port"); val name = c.optString("name")
+        val (addr, port) = DeepLinks.typedHost(c.optString("addr"), c.optInt("port"))
+        val name = c.optString("name")
         val existing = services.store.placeholderAt(addr, port)
         if (existing != null) {
             if (name.isNotEmpty()) services.store.save(existing.copy(name = name))
@@ -1051,7 +1052,8 @@ object SkiaConsole {
 
     private fun updateHost(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
-        val name = c.optString("name").trim(); val addr = c.optString("addr"); val port = c.optInt("port")
+        val name = c.optString("name").trim()
+        val (addr, port) = DeepLinks.typedHost(c.optString("addr"), c.optInt("port"))
         if (addr != kh.address || port != kh.port) services.store.remove(kh)
         services.store.save(kh.copy(name = name.ifEmpty { addr }, address = addr, port = port))
         pushHosts(); pushKnownHosts()

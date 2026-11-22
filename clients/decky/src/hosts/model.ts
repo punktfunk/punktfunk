@@ -116,6 +116,14 @@ function advertMatchesSaved(a: DiscoveredHost, s: SavedHost): boolean {
  * chose, and a live advert must never quietly overwrite that. Compared against the SAVED
  * address, so a host that moved DHCP lease still recognises its old address as a placeholder.
  */
+/**
+ * `addr:port` as the CLI reads it. An IPv6 literal goes in brackets: bare, its last group would
+ * read as the port.
+ */
+export function hostRef(addr: string, port: number): string {
+  return addr.includes(":") && !addr.startsWith("[") ? `[${addr}]:${port}` : `${addr}:${port}`;
+}
+
 function hostLabel(s: SavedHost, advert?: DiscoveredHost): string {
   const placeholder = !s.name || s.name === s.addr || s.name === `${s.addr}:${s.port}`;
   if (!placeholder) return s.name;
@@ -147,7 +155,7 @@ export function mergeHosts(saved: SavedHost[], discovered: DiscoveredHost[]): Ho
       saved: true,
       pairPolicy: advert?.pair ?? "",
       os: advert?.os || s.os || "",
-      ref: s.id || `${advert?.addr ?? s.addr}:${advert?.port ?? s.port}`,
+      ref: s.id || hostRef(advert?.addr ?? s.addr, advert?.port ?? s.port),
       preset: s.preset ?? s.profile ?? null,
       pinnedPresets: s.pinned_presets ?? s.pinned_profiles ?? [],
       lastUsed: s.last_used,
@@ -171,7 +179,7 @@ export function mergeHosts(saved: SavedHost[], discovered: DiscoveredHost[]): Ho
       saved: false,
       pairPolicy: a.pair,
       os: a.os,
-      ref: `${a.addr}:${a.port}`,
+      ref: hostRef(a.addr, a.port),
       preset: null,
       pinnedPresets: [],
       lastUsed: null,

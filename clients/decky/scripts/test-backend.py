@@ -254,6 +254,12 @@ check(
 captured.clear()
 asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck"))
 check("request access: no fingerprint, no --fp", "--fp" not in captured.get("args", []))
+# Bare, an IPv6 address's last group reads as the port: the CLI wants it in brackets.
+captured.clear()
+asyncio.run(main.Plugin().request_access("200:abcd::1", 9777, "Steam Deck"))
+check("request access: an IPv6 address goes in brackets", captured.get("args", [])[1:2] == ["[200:abcd::1]:9777"])
+check("host ref: a bracketed address is left alone", client._host_ref("[200:abcd::1]", 9777) == "[200:abcd::1]:9777")
+check("host ref: a name keeps its plain form", client._host_ref("desk.lan", 9800) == "desk.lan:9800")
 captured.clear()
 got = asyncio.run(main.Plugin().request_access("192.168.1.9", 9777, "Steam Deck", "--exec"))
 check("request access: a flag-shaped fingerprint never reaches the CLI", "args" not in captured)

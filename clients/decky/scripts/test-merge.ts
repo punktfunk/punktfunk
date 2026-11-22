@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { DiscoveredHost, SavedHost } from "../src/backend.ts";
-import { mergeHosts } from "../src/hosts/model.ts";
+import { hostRef, mergeHosts } from "../src/hosts/model.ts";
 
 interface Vectors {
   cases: {
@@ -82,3 +82,13 @@ for (const c of cases) {
   assert.deepEqual(got.sort(byKey), want.sort(byKey), c.name);
 }
 console.log(`host-row-vectors: ${cases.length} cases match`);
+
+// The CLI reads a bare IPv6 address's last group as the port, so the ref brackets it.
+assert.equal(hostRef("200:abcd::1", 9777), "[200:abcd::1]:9777");
+assert.equal(hostRef("[200:abcd::1]", 9777), "[200:abcd::1]:9777");
+assert.equal(hostRef("192.168.1.9", 9777), "192.168.1.9:9777");
+assert.equal(hostRef("desk.lan", 9800), "desk.lan:9800");
+const advert = { name: "Desk", addr: "fd00::9", port: 9777, fp: "", pair: "", id: "", mgmt: 0, os: "" };
+const [unsaved] = mergeHosts([], [{ ...advert, saved: false, paired: false }]);
+assert.equal(unsaved.ref, "[fd00::9]:9777");
+console.log("host refs: an IPv6 address is bracketed");
