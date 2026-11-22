@@ -128,8 +128,8 @@ public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate
         window.title = String(localized: L10n.setupMacWindowTitle)
         window.isReleasedWhenClosed = false
         window.delegate = self
-        // The hosting view sizes the window only at its first layout, after `center` would run.
-        window.layoutIfNeeded()
+        // The hosting view sizes the window only when it first shows, after `center` has run.
+        window.setContentSize(OnboardingView.size)
         window.center()
         onboarding = model
         setupWindow = window

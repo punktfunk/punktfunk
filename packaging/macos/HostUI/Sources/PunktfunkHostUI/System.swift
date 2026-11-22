@@ -20,8 +20,9 @@ enum LoginItem {
         switch service.status {
         case .enabled: .on
         case .requiresApproval: .needsApproval
-        case .notRegistered: .off
-        default: .unavailable
+        // macOS reports an agent that was never registered as not found.
+        case .notRegistered, .notFound: .off
+        @unknown default: .unavailable
         }
     }
 

@@ -4,6 +4,8 @@ import SwiftUI
 
 struct OnboardingView: View {
     @Bindable var model: Onboarding
+    /// Every page has this size, so the window can be placed before it first lays out.
+    static let size = CGSize(width: 540, height: 440)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,7 +30,7 @@ struct OnboardingView: View {
             .controlSize(.large)
             .padding(20)
         }
-        .frame(width: 540, height: 440)
+        .frame(width: Self.size.width, height: Self.size.height)
         .tint(.brand)
     }
 
