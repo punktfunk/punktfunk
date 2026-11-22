@@ -1696,11 +1696,16 @@ impl FormatFacts {
     /// display, so an SDR panel would stream SDR content as HDR. Elsewhere, and for a session's
     /// own screen, the capture's answer already covers it.
     fn mirror_has_hdr(&self) -> bool {
+        let Some(connector) = &self.mirrored else {
+            return true;
+        };
         #[cfg(target_os = "macos")]
-        if let Some(connector) = &self.mirrored {
-            return crate::vdisplay::display_hdr(connector);
+        return crate::vdisplay::display_hdr(connector);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = connector;
+            true
         }
-        true
     }
 
     /// gamescope names the HDR state of what it shows; every other source streams what its
