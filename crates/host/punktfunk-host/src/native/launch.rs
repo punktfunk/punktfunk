@@ -194,8 +194,10 @@ pub(super) async fn launch_session(
         plane: conn.plane(),
         preset: n.preset.clone(),
         profile: Some(who.profile_ref.clone()),
-        pad: n.welcome.gamepad,
-        pad_slots: Some(controls.pad_slots.clone()),
+        pads: crate::session_launch::Pads::Session {
+            kind: n.welcome.gamepad,
+            slots: Some(controls.pad_slots.clone()),
+        },
     };
     #[cfg(test)]
     super::tests::fail_at_launch(&conn, scope.life())?;

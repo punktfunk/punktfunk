@@ -579,6 +579,13 @@ pub fn launch_is_steam(cmd: &str) -> bool {
     gamescope::is_steam_launch(cmd)
 }
 
+/// Steam owns the box's own session (Game Mode): only what Steam starts is shown there.
+/// Blocking: a `/proc` scan and X round trips.
+#[cfg(target_os = "linux")]
+pub fn steam_owns_desk() -> bool {
+    gamescope::steam_owns_desk()
+}
+
 /// Steam appid a dedicated launch targets, for the exit watcher. `None` for a
 /// non-Steam launch — those use [`dedicated_game_exited`]: gamescope's nested
 /// child *is* the game.

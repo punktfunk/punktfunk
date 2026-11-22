@@ -366,10 +366,14 @@ fn host_page(page: &HostPage, props: &HostPageProps, msgs: Callback<PageMsg>) ->
         ..Target::default()
     };
     let presets = CardPreset::catalog();
+    // This device's own host: no presets, no screen, nothing that streams it.
+    let streams = !hosts::is_here(&target.host);
 
     let mut body: Vec<View> = vec![header(svc, k, &status, &target, online)];
-    body.extend(presets_group(svc, k, &props.who, &presets));
-    body.extend(screen_groups(svc, k, &target, &presets, online));
+    if streams {
+        body.extend(presets_group(svc, k, &props.who, &presets));
+        body.extend(screen_groups(svc, k, &target, &presets, online));
+    }
     body.extend(connection_group(page, props, k, &target, &msgs));
     body.extend(pairing_group(svc, k, &known, &settings, &target, &msgs));
     body.extend(power_group(svc, k, &target, online, &msgs));
@@ -415,7 +419,8 @@ fn host_page(page: &HostPage, props: &HostPageProps, msgs: Callback<PageMsg>) ->
         .content_dialog(confirm_dialog(svc, &props.who, k, &target, page, msgs))
 }
 
-/// The page's head: the host's tile, name and state, then what a card's click does.
+/// The page's head: the host's tile, name and state, then what a card's click does. This
+/// device's own host has no Connect: its library is the way in.
 fn header(svc: &Svc, k: &KnownHost, status: &Status, target: &Target, online: bool) -> View {
     let pal = &svc.pal;
     let connect = icon_button(
@@ -430,7 +435,10 @@ fn header(svc: &Svc, k: &KnownHost, status: &Status, target: &Target, online: bo
         let (svc, target) = (svc.clone(), target.clone());
         move || hosts::connect_saved(&svc, target.clone(), online)
     });
-    let mut acts: Vec<View> = vec![connect.into()];
+    let mut acts: Vec<View> = Vec::new();
+    if !hosts::is_here(&target.host) {
+        acts.push(connect.into());
+    }
     // The library needs the paired identity.
     if k.paired {
         acts.push(
@@ -598,7 +606,8 @@ fn screen_groups(
     out
 }
 
-/// How to reach the host, edited in place.
+/// How to reach the host, edited in place. This device's own host shares no clipboard and has
+/// no speed test: nothing streams it.
 fn connection_group(
     page: &HostPage,
     props: &HostPageProps,
@@ -640,8 +649,9 @@ fn connection_group(
         }
     });
     let has_pin = !k.fp_hex.is_empty();
+    let streams = !hosts::is_here(&target.host);
     let link = pf_client_core::deeplink::DeepLink::for_host(k, None, None).to_url();
-    let rows = vec![
+    let mut rows = vec![
         row(
             pal,
             Field::Name.label(),
@@ -682,6 +692,8 @@ fn connection_group(
             None,
             muted(pal, mgmt),
         ),
+    ];
+    let streamed = [
         row(
             pal,
             client::hostcard_share_clipboard(),
@@ -711,6 +723,11 @@ fn connection_group(
                 }
             },
         ),
+    ];
+    if streams {
+        rows.extend(streamed);
+    }
+    rows.extend([
         action_row(
             pal,
             client::hostcard_copy_link(),
@@ -742,7 +759,7 @@ fn connection_group(
                 }
             },
         ),
-    ];
+    ]);
     group(pal, client::hostcard_section_connection(), rows, None)
 }
 
@@ -862,7 +879,8 @@ fn pairing_group(
 }
 
 /// Waking the host, and the host's own actions: sleep, restart, shut down, from what it said
-/// it lets this device do. A device without the grant sees none.
+/// it lets this device do. A device without the grant sees none. This device's own host is
+/// never woken from here.
 fn power_group(
     svc: &Svc,
     k: &KnownHost,
@@ -872,7 +890,7 @@ fn power_group(
 ) -> Vec<View> {
     let pal = &svc.pal;
     let can_wake = !online && !k.mac.is_empty();
-    let mut rows = vec![action_row(
+    let wake = action_row(
         pal,
         client::hostcard_wake(),
         Some(match (online, k.mac.is_empty()) {
@@ -886,7 +904,11 @@ fn power_group(
             let target = target.clone();
             move || crate::wol::wake(&target.host.mac, target.host.addr.parse().ok())
         },
-    )];
+    );
+    let mut rows: Vec<View> = Vec::new();
+    if !hosts::is_here(&target.host) {
+        rows.push(wake);
+    }
     for a in pf_client_core::host_actions::cached(&k.fp_hex) {
         let why = match online {
             false => Some(desktop::desktop_hostcard_offline_hint().to_string()),

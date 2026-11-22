@@ -28,6 +28,8 @@ struct FakeSeats {
     calls: Mutex<Vec<(Target, Forwarded)>>,
     /// The supervisor lists no owner row.
     no_owner: bool,
+    /// The host every call reaches instead of `answers`.
+    relay: Option<Router>,
 }
 
 impl FakeSeats {
@@ -37,11 +39,17 @@ impl FakeSeats {
             answers: BTreeMap::new(),
             calls: Mutex::new(Vec::new()),
             no_owner: false,
+            relay: None,
         })
     }
 
     fn without_owner(mut self: Arc<Self>) -> Arc<Self> {
         Arc::get_mut(&mut self).unwrap().no_owner = true;
+        self
+    }
+
+    fn relaying(mut self: Arc<Self>, host: Router) -> Arc<Self> {
+        Arc::get_mut(&mut self).unwrap().relay = Some(host);
         self
     }
 
@@ -85,7 +93,13 @@ impl Seats for FakeSeats {
     fn call(&self, target: &Target, call: Forwarded) -> Answer {
         let stream = call.stream;
         let path = call.target.clone();
-        self.calls.lock().unwrap().push((target.clone(), call));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((target.clone(), call.clone()));
+        if let Some(host) = &self.relay {
+            return relay(host, call);
+        }
         if self.no_owner && *target == Target::Owner {
             return Answer::NoSeat;
         }
@@ -105,6 +119,29 @@ impl Seats for FakeSeats {
             None => Answer::Reply(404, None, Vec::new()),
         }
     }
+}
+
+/// `call` as a seat host gets it from the door: the request [`Forwarded::request`] builds, with
+/// that host's token, from loopback. Blocking, as [`Seats::call`] is.
+fn relay(host: &Router, call: Forwarded) -> Answer {
+    let uri = format!("/api/v1/{}", call.target);
+    let mut req = call
+        .request(uri, "Bearer test-secret")
+        .unwrap()
+        .map(Body::from);
+    req.extensions_mut()
+        .insert(PeerAddr("127.0.0.1:40001".parse().unwrap()));
+    tokio::runtime::Handle::current().block_on(async {
+        let resp = host.clone().oneshot(req).await.unwrap();
+        let status = resp.status().as_u16();
+        let content_type = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        Answer::Reply(status, content_type, bytes.to_vec())
+    })
 }
 
 /// A box with the owner's row running and one seat of its own, `device` playing on the kid's.
@@ -235,7 +272,8 @@ async fn a_dot_segment_never_leaves_the_door() {
     assert!(seats.calls().is_empty());
 }
 
-/// The device plays on the kid's seat: its End game reaches that host, vouched as the device.
+/// The device plays on the kid's seat: its End game from the LAN reaches that host, vouched as
+/// the device.
 #[tokio::test]
 async fn a_device_s_own_play_reaches_its_seat_as_that_device() {
     let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
@@ -247,6 +285,8 @@ async fn a_device_s_own_play_reaches_its_seat_as_that_device() {
     );
     let app = test_app_door(test_state(), Some(np), seats.clone());
     let mut req = json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+    req.extensions_mut()
+        .insert(PeerAddr("192.168.1.50:40000".parse().unwrap()));
     req.extensions_mut()
         .insert(PeerCertFingerprint(Some(fp.to_string())));
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -370,6 +410,149 @@ async fn a_vouched_install_is_the_device_s_never_the_operator_s() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, _) = send(&app, install(None)).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "the operator");
+}
+
+/// A player with the launch grant and a guest without it, paired on the door and the owner's host
+/// alike, and the owner's host behind a door that passes every call there. `plays`: the player
+/// streams on the kid's seat.
+fn desk_door(store: &str, plays: bool) -> (Router, Arc<FakeSeats>, String, String) {
+    use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_LAUNCH};
+    let (player, guest) = ("a1".repeat(32), "b2".repeat(32));
+    let path = crate::test_support::scratch().join(store);
+    let np = crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap();
+    let access = |grants| {
+        Some(crate::native_pairing::Access {
+            grants,
+            expires_unix: None,
+            until_disconnect: false,
+        })
+    };
+    np.add_with_access("player", &player, access(GRANT_GAMEPAD | GRANT_LAUNCH))
+        .unwrap();
+    np.add_with_access("guest", &guest, access(GRANT_GAMEPAD))
+        .unwrap();
+    let np = Arc::new(np);
+    let owner = test_app_native(test_state(), np.clone());
+    let snapshot = box_snapshot(plays.then_some(player.as_str()));
+    let seats = FakeSeats::new(snapshot).relaying(owner);
+    let door = test_app_door(test_state(), Some(np), seats.clone());
+    (door, seats, player, guest)
+}
+
+/// `method` `path` from `peer`, as device `fp` by its certificate, with no bearer beside it.
+async fn as_device(
+    app: &Router,
+    path: &str,
+    body: serde_json::Value,
+    peer: &str,
+    fp: &str,
+    headers: &[(&'static str, &str)],
+) -> (StatusCode, serde_json::Value) {
+    let mut req = json_req(Method::POST, path, body);
+    req.extensions_mut().insert(PeerAddr(peer.parse().unwrap()));
+    req.extensions_mut()
+        .insert(PeerCertFingerprint(Some(fp.to_string())));
+    for (name, value) in headers {
+        let value = axum::http::HeaderValue::from_str(value).unwrap();
+        req.headers_mut().insert(*name, value);
+    }
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+/// The box's own client starts a title on the box's screen through the door: the owner's host
+/// gets it as that device, with the door's word on loopback, taken from the door's own transport.
+/// A LAN device with the grant is not this device there, though it sent the door's headers
+/// itself; a loopback device without the grant may not start games.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_desk_launch_reaches_the_owner_s_host_with_the_door_s_word_on_loopback() {
+    use crate::mgmt::auth::{LOOPBACK_HEADER, VOUCH_HEADER};
+    let _dir = ConfigDirOverride::new();
+    let (app, seats, player, guest) = desk_door("pf-door-desk-launch.json", false);
+    let (here, lan) = ("127.0.0.1:40000", "192.168.1.50:40000");
+    let body = serde_json::json!({ "app_id": "custom:no-such-door-title" });
+    // The LAN device sends the door's own headers, naming itself and loopback.
+    let spoof = [(VOUCH_HEADER, player.as_str()), (LOOPBACK_HEADER, "1")];
+    let none = &spoof[..0];
+    let cases = [
+        (
+            here,
+            &player,
+            none,
+            StatusCode::NOT_FOUND,
+            "local_no_such_game",
+        ),
+        (
+            lan,
+            &player,
+            &spoof[..],
+            StatusCode::FORBIDDEN,
+            "local_not_this_device",
+        ),
+        (
+            here,
+            &guest,
+            none,
+            StatusCode::FORBIDDEN,
+            "device_not_allowed_to_start_games",
+        ),
+    ];
+    for (peer, fp, headers, want, code) in cases {
+        let path = "/api/v1/game/launch";
+        let (status, got) = as_device(&app, path, body.clone(), peer, fp, headers).await;
+        assert_eq!(status, want, "{peer} {code}: {got}");
+        assert_eq!(got["code"], code, "{peer}");
+    }
+
+    let calls = seats.calls();
+    let seen: Vec<_> = calls
+        .iter()
+        .map(|(to, c)| (to.clone(), c.target.as_str(), c.device.as_deref(), c.local))
+        .collect();
+    let launch = "game/launch";
+    assert_eq!(
+        seen,
+        [
+            (Target::Owner, launch, Some(player.as_str()), true),
+            (Target::Owner, launch, Some(player.as_str()), false),
+            (Target::Owner, launch, Some(guest.as_str()), true),
+        ]
+    );
+}
+
+/// End game from the box's own client reaches the owner's host, where the desk's game plays, and
+/// ends it; the same device from the LAN reaches the seat it plays on, and ends no desk game.
+#[cfg(target_os = "linux")]
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn end_game_from_this_machine_reaches_the_desk_behind_the_door() {
+    use crate::desk::lease_tests::{launch, state, target, wait_for};
+    let _dir = ConfigDirOverride::new();
+    let (app, seats, player, _) = desk_door("pf-door-desk-end.json", true);
+    let id = "custom:door-desk-end";
+    launch(target(id, "sleep 60"));
+    let up = crate::gamelease::SHIM_WINDOW + std::time::Duration::from_secs(5);
+    wait_for(id, Some("running"), up);
+    let (path, body) = ("/api/v1/game/end", serde_json::json!({ "app_id": id }));
+
+    let lan = "192.168.1.50:40000";
+    let (status, got) = as_device(&app, path, body.clone(), lan, &player, &[]).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{got}");
+    assert_eq!(state(id), Some("running"), "a LAN call ends no desk game");
+    let here = "127.0.0.1:40000";
+    let (status, got) = as_device(&app, path, body, here, &player, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{got}");
+    assert_eq!(got["ended"], 1);
+    wait_for(id, None, std::time::Duration::from_secs(15));
+
+    let calls = seats.calls();
+    let seen: Vec<_> = calls.iter().map(|(to, c)| (to.clone(), c.local)).collect();
+    let kid = Target::Seat(KID_SEAT.into());
+    assert_eq!(seen, [(kid, false), (Target::Owner, true)]);
 }
 
 /// The door answers a profile's view of the library from its own copy, for the console and

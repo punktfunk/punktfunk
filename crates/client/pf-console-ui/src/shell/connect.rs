@@ -6,6 +6,7 @@ use crate::anim::Spring;
 use crate::model::{ConsoleCmd, HostRow, ProfilesAnswer};
 use crate::screens::{ConnectIntent, Nav, ProfileAsk, Screen, Seated};
 use pf_client_core::console::OverlayAction;
+use pf_client_core::library::LocalLaunch;
 use pf_client_core::profiles::{seat_gate, ListedProfile, ProfilePick, SeatGate, UnlockNeed};
 use pf_client_core::unlock::{self, Gate, Pending};
 use punktfunk_core::quic::v2::msg::ProfileUnlock;
@@ -24,19 +25,26 @@ pub(super) enum Connect {
     SeatWait(SeatWait),
     /// Dialed, until the stream or a failure.
     Connecting(Connecting),
-    /// Dialed for a title: the hold stays up over the stream until the game is.
+    /// Dialed for a title: the hold stays up over the stream until the game is. On this
+    /// device's own host nothing dials: the host's answer stands in for the dial.
     Launching(Launching),
+    /// A launch on this device whose hold Back took down: still asked after, with nothing on
+    /// screen, until the title is up, refused or gone.
+    Watching(Launching),
+    /// A title this device's own host started is up.
+    PlayingHere(PlayingHere),
 }
 
 impl Connect {
     /// The takeover this phase raises.
     pub(super) fn takeover(&self) -> Option<Takeover> {
         match self {
-            Connect::Idle => None,
+            Connect::Idle | Connect::Watching(_) => None,
             Connect::Asking { .. } => Some(Takeover::Asking),
             Connect::SeatWait(_) => Some(Takeover::SeatWait),
             Connect::Connecting(_) => Some(Takeover::Connecting),
             Connect::Launching(_) => Some(Takeover::Launching),
+            Connect::PlayingHere(_) => Some(Takeover::PlayingHere),
         }
     }
 
@@ -104,6 +112,45 @@ impl Connect {
     pub(super) fn launching_mut(&mut self) -> Option<&mut Launching> {
         match self {
             Connect::Launching(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    pub(super) fn playing_here(&self) -> Option<&PlayingHere> {
+        match self {
+            Connect::PlayingHere(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub(super) fn playing_here_mut(&mut self) -> Option<&mut PlayingHere> {
+        match self {
+            Connect::PlayingHere(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// The launch on this device not yet up: its hold, or the watch Back left.
+    fn here(&self) -> Option<&Launching> {
+        match self {
+            Connect::Launching(l) | Connect::Watching(l) if l.local => Some(l),
+            _ => None,
+        }
+    }
+
+    fn here_mut(&mut self) -> Option<&mut Launching> {
+        match self {
+            Connect::Launching(l) | Connect::Watching(l) if l.local => Some(l),
+            _ => None,
+        }
+    }
+
+    /// The hold that asks the host after its title: up, watched, or behind a title playing here.
+    fn polling(&mut self) -> Option<&mut Launching> {
+        match self {
+            Connect::Launching(l)
+            | Connect::Watching(l)
+            | Connect::PlayingHere(PlayingHere { hold: l, .. }) => Some(l),
             _ => None,
         }
     }
@@ -234,6 +281,47 @@ pub(super) struct Launching {
     /// Why the hold gave up, once it has. Latched: the hold holds the screen and says this
     /// instead of sliding away onto a desktop nobody asked for.
     pub(super) failed: Option<String>,
+    /// The title starts on this device's own host: no stream lies under the hold, and
+    /// `connected` is the host's answer to [`ConsoleCmd::LaunchLocal`].
+    pub(super) local: bool,
+    /// When the host first listed nothing for the title on this device; `None` while it
+    /// lists it. A failed `/status` read lists nothing too, so one alone ends nothing.
+    pub(super) gone_since: Option<f64>,
+    /// The host has listed the title on this device at least once. A title Steam starts has
+    /// no row until Steam hands it over, so an empty list before that is still a start.
+    pub(super) seen: bool,
+}
+
+impl Launching {
+    /// Whether the host has listed nothing for the title for [`LOCAL_GONE`] since it last
+    /// did, or for [`LAUNCH_NO_LEASE`] when it never has; a listing starts the count again.
+    fn gone(&mut self, t: f64, listed: bool) -> bool {
+        self.seen |= listed;
+        self.gone_since = if listed {
+            None
+        } else {
+            self.gone_since.or(Some(t))
+        };
+        let wait = if self.seen {
+            LOCAL_GONE
+        } else {
+            LAUNCH_NO_LEASE
+        };
+        self.gone_since.is_some_and(|since| t - since >= wait)
+    }
+}
+
+/// A title this device's own host started is up. The console draws nothing and holds no pad
+/// until the title ends, or until focus comes back after leaving: then `card` offers End
+/// game, and the next focus loss lets go again. Focus alone decides nothing; under gamescope
+/// it never moves.
+pub(super) struct PlayingHere {
+    /// The hold it came from: the host and title it keeps asking after.
+    pub(super) hold: Launching,
+    /// Focus left the console while the title ran.
+    pub(super) left: bool,
+    /// Focus came back after leaving: the card is up and the pads are the console's.
+    pub(super) card: bool,
 }
 
 /// Why the hold is giving up, in one sentence, or `None` while it should keep waiting.
@@ -266,6 +354,9 @@ pub(super) const LAUNCH_NO_LEASE: f64 = 15.0;
 /// the player wants to see for themselves — a cold Steam boot with shader work
 /// runs to minutes, and the host waits `START_GRACE` (`game::gamelease`) for it.
 pub(super) const LAUNCH_HOLD_MAX: f64 = 120.0;
+/// A title on this device the host lists no more for this long is gone: three polls at
+/// [`LAUNCH_POLL`], so one late answer does not end it.
+pub(super) const LOCAL_GONE: f64 = 3.0;
 
 impl Shell {
     /// The connect card for `title`, over an ask still waiting; `None` takes the card down.
@@ -403,6 +494,9 @@ impl Shell {
             window_wait: false,
             download: None,
             failed: None,
+            local: false,
+            gone_since: None,
+            seen: false,
         })
     }
 
@@ -417,13 +511,29 @@ impl Shell {
     }
 
     /// One frame of the launch hold: the host's own refusal ends it at once; else reveal when
-    /// the host has answered, or when it never will, and keep the poll going meanwhile.
+    /// the host has answered on a row that is not `plane: local`, or when it never will, and
+    /// keep the poll going meanwhile. A launch on this device, held or watched, and a title
+    /// playing here, tick on their own.
     pub(super) fn tick_launch(&mut self) {
         let t = self.t();
         let reads = self.library.status_gen();
         // Taken with no hold up too, so a late one never lands on the next launch.
         let refused = self.console.take_launch_refused();
+        let answer = self.console.take_local_launch();
+        if self.connect.playing_here().is_some() {
+            return self.tick_playing_here(t, reads);
+        }
+        if let Some(l) = self.connect.here() {
+            if l.failed.is_none() {
+                self.tick_local(t, reads, answer);
+            }
+            return;
+        }
         let Some(l) = self.connect.launching() else {
+            // A launch on this device with nothing waiting on it to say why it didn't start.
+            if let Some(why) = answer.and_then(|a| a.refusal()) {
+                self.show_toast_kind(why, ToastKind::Error);
+            }
             return;
         };
         if l.failed.is_some() {
@@ -450,7 +560,7 @@ impl Shell {
             return;
         }
         let state = fresh
-            .then(|| self.library.launch_state(&l.host.id))
+            .then(|| self.library.launch_state(&l.host.id, false))
             .flatten();
         let elapsed = t - l.since;
         let window_wait = matches!(&state, Some((s, true)) if s == "running");
@@ -487,22 +597,142 @@ impl Shell {
         }
     }
 
+    /// One frame of a launch on this device, held or watched, reading the title's
+    /// `plane: local` row. The host's answer stands in for the dial; then `running` or `window`
+    /// lets go of the screen, `exited` or a row gone ([`Launching::gone`]) ends the wait, and
+    /// a refusal or an outcome is said ([`Self::local_failed`]). A live download keeps it
+    /// waiting with no cap.
+    fn tick_local(&mut self, t: f64, reads: u64, answer: Option<LocalLaunch>) {
+        if let Some(answer) = answer {
+            if let Some(why) = answer.refusal() {
+                return self.local_failed(why);
+            }
+            if let Some(l) = self.connect.here_mut() {
+                l.connected = true;
+                l.since = t;
+                l.base_gen = reads;
+                l.last_poll = t - LAUNCH_POLL_STALL;
+            }
+        }
+        let Some(l) = self.connect.here() else {
+            return;
+        };
+        let fresh = reads > l.base_gen;
+        let asked = fresh && l.connected;
+        let id = &l.host.id;
+        let row = asked.then(|| self.library.launch_state(id, true)).flatten();
+        let outcome = asked.then(|| self.library.launch_outcome(id)).flatten();
+        let download = fresh.then(|| self.library.launch_download(id)).flatten();
+        let word = row.as_ref().map(|(s, _)| s.as_str());
+        let window_wait = matches!(&row, Some((s, true)) if s == "running");
+        let live = download.as_ref().is_some_and(|d| d.live());
+        let elapsed = t - l.since;
+        // The host's outcome, else a download that stopped, else a start too slow to wait out.
+        let failed = (outcome.map(|o| o.line(&l.title)))
+            .or_else(|| (download.as_ref()?.stopped(&l.title)).filter(|_| word.is_none()))
+            .or_else(|| {
+                let slow = word.filter(|w| *w == "launching" && !live);
+                slow.and_then(|w| launch_gave_up(&l.title, Some(w), elapsed))
+            });
+        if let Some(why) = failed {
+            return self.local_failed(why);
+        }
+        let listed = word.is_some() || live;
+        let gone = asked && (self.connect.here_mut()).is_some_and(|l| l.gone(t, listed));
+        match word {
+            Some("exited") => return self.back_to_shelf(),
+            None if gone => return self.back_to_shelf(),
+            Some("running") if window_wait && elapsed < LAUNCH_HOLD_MAX => {}
+            Some("launching") | None => {}
+            Some(_) => return self.play_here(),
+        }
+        self.poll_launch(t, reads);
+        if let Some(l) = self.connect.here_mut() {
+            l.window_wait = window_wait;
+            if fresh {
+                l.download = download.filter(|d| d.live());
+            }
+        }
+    }
+
+    /// A launch on this device that did not happen: the hold keeps the screen and says why;
+    /// a watch says it as a toast and ends.
+    fn local_failed(&mut self, why: String) {
+        match &mut self.connect {
+            Connect::Launching(l) => l.failed = Some(why),
+            Connect::Watching(_) => {
+                self.connect = Connect::Idle;
+                self.show_toast_kind(why, ToastKind::Error);
+            }
+            _ => {}
+        }
+    }
+
+    /// The hold or the watch becomes the title playing here: the console lets go.
+    fn play_here(&mut self) {
+        if let Connect::Launching(hold) | Connect::Watching(hold) =
+            std::mem::take(&mut self.connect)
+        {
+            self.connect = Connect::PlayingHere(PlayingHere {
+                hold,
+                left: false,
+                card: false,
+            });
+        }
+    }
+
+    /// The title on this device is gone, or never came: nothing waits on it, and the shelf
+    /// asks the host what it has up now.
+    fn back_to_shelf(&mut self) {
+        let host = match std::mem::take(&mut self.connect) {
+            Connect::Launching(l) | Connect::Watching(l) => l.host,
+            Connect::PlayingHere(p) => p.hold.host,
+            other => return self.connect = other,
+        };
+        self.bus.send(ConsoleCmd::RefreshRunning {
+            addr: host.addr,
+            mgmt: host.mgmt,
+            fp_hex: host.fp_hex,
+        });
+    }
+
+    /// While a title plays here: `exited` on its `plane: local` row, or the row gone for
+    /// [`LOCAL_GONE`], brings the console back on its shelf, saying the outcome when the host
+    /// gave one.
+    fn tick_playing_here(&mut self, t: f64, reads: u64) {
+        let Some(p) = self.connect.playing_here() else {
+            return;
+        };
+        if reads > p.hold.base_gen {
+            let id = &p.hold.host.id;
+            let word = self.library.launch_state(id, true).map(|(s, _)| s);
+            let said = (self.library.launch_outcome(id)).map(|o| o.line(&p.hold.title));
+            let gone =
+                (self.connect.playing_here_mut()).is_some_and(|p| p.hold.gone(t, word.is_some()));
+            if word.as_deref() == Some("exited") || gone {
+                if let Some(said) = said {
+                    self.show_toast_kind(said, ToastKind::Error);
+                }
+                return self.back_to_shelf();
+            }
+        }
+        self.poll_launch(t, reads);
+    }
+
     /// Ask the host again once the last answer landed, or once it is overdue.
     fn poll_launch(&mut self, t: f64, reads: u64) {
-        let Some(l) = self.connect.launching() else {
+        let Some(l) = self.connect.polling() else {
             return;
         };
         let waited = t - l.last_poll;
         if (reads != l.poll_gen && waited >= LAUNCH_POLL) || waited >= LAUNCH_POLL_STALL {
+            l.last_poll = t;
+            l.poll_gen = reads;
             let poll = ConsoleCmd::RefreshRunning {
                 addr: l.host.addr.clone(),
                 mgmt: l.host.mgmt,
                 fp_hex: l.host.fp_hex.clone(),
             };
-            if let Some(l) = self.connect.launching_mut() {
-                l.last_poll = t;
-                l.poll_gen = reads;
-            }
             self.bus.send(poll);
         }
     }
@@ -849,7 +1079,11 @@ impl Shell {
 
     /// The `Launch`, with `unlock` held for the host to take. Only the first dial carries one.
     /// A dial that names a profile is kept for the prompt a `ProfileLocked` close reopens.
+    /// This device's own host is never dialed: its title starts there ([`Self::launch_here`]).
     pub(super) fn dial(&mut self, intent: ConnectIntent, unlock: Option<ProfileUnlock>) {
+        if intent.local {
+            return self.launch_here(intent);
+        }
         if let Some(id) = &intent.profile {
             self.profiles.note_pick(&intent.fp_hex, id);
         }
@@ -862,28 +1096,7 @@ impl Shell {
         if self.prompts_unlock {
             self.console.put_unlock(unlock);
         }
-        // A game launch comes off a shelf, which knows both the host's management
-        // port and where it just drew the tile. A picker or a prompt on top is leaving: its
-        // shelf is under it.
-        let shelf = self
-            .stack
-            .iter()
-            .rev()
-            .find(|s| !matches!(s, Screen::Profiles(_) | Screen::Unlock(_)))
-            .and_then(Screen::shelf);
-        let launch = match (&intent.launch, shelf) {
-            (Some(id), Some(lib)) => Some((
-                LaunchHost {
-                    id: id.clone(),
-                    addr: intent.addr.clone(),
-                    mgmt: lib.host_mgmt_port(),
-                    fp_hex: intent.fp_hex.clone(),
-                },
-                lib.tile_rect(id),
-            )),
-            _ => None,
-        };
-        match launch.and_then(|(host, from)| self.launch_hold(host, from)) {
+        match (self.launch_from(&intent)).and_then(|(host, from)| self.launch_hold(host, from)) {
             Some(hold) => self.connect = Connect::Launching(hold),
             None => {
                 self.set_connecting(Some(intent.title.clone()));
@@ -902,6 +1115,58 @@ impl Shell {
             preset: intent.preset,
             profile: intent.profile,
         });
+    }
+
+    /// Where a title launched off a shelf is asked after, and the tile its cover leaves: the
+    /// shelf knows the host's management port and where it drew the tile. A picker or a
+    /// prompt on top is leaving: its shelf is under it.
+    fn launch_from(&self, intent: &ConnectIntent) -> Option<(LaunchHost, Rect)> {
+        let id = intent.launch.as_ref()?;
+        let lib = (self.stack.iter().rev())
+            .find(|s| !matches!(s, Screen::Profiles(_) | Screen::Unlock(_)))
+            .and_then(Screen::shelf)?;
+        let host = LaunchHost {
+            id: id.clone(),
+            addr: intent.addr.clone(),
+            mgmt: lib.host_mgmt_port(),
+            fp_hex: intent.fp_hex.clone(),
+        };
+        Some((host, lib.tile_rect(id)))
+    }
+
+    /// Ask this device's own host to start `intent`'s title, under the hold. Nothing dials. A
+    /// title off no shelf holds from where it stands; one with no title has nothing to start.
+    /// The launch replaces any watch left by an earlier one.
+    fn launch_here(&mut self, intent: ConnectIntent) {
+        let Some(app_id) = intent.launch.clone() else {
+            let line = pf_l10n::client::error_local_nothing_to_stream();
+            return self.show_toast_kind(line.into(), ToastKind::Error);
+        };
+        let (host, from) = self.launch_from(&intent).unwrap_or_else(|| {
+            let row = (self.hosts.iter()).find(|h| h.fp_hex == intent.fp_hex);
+            let host = LaunchHost {
+                id: app_id.clone(),
+                addr: intent.addr.clone(),
+                mgmt: row.map_or(pf_client_core::library::DEFAULT_MGMT_PORT, |h| h.mgmt_port),
+                fp_hex: intent.fp_hex.clone(),
+            };
+            (host, Rect::default())
+        });
+        // An answer left from an earlier launch is not this one's.
+        self.console.take_local_launch();
+        self.bus.send(ConsoleCmd::LaunchLocal {
+            mgmt: host.mgmt,
+            port: intent.port,
+            fp_hex: intent.fp_hex,
+            app_id,
+        });
+        self.connect = match self.launch_hold(host, from) {
+            Some(hold) => Connect::Launching(Launching {
+                local: true,
+                ..hold
+            }),
+            None => Connect::Idle,
+        };
     }
 }
 

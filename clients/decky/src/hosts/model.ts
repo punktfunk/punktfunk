@@ -63,6 +63,8 @@ export interface HostView {
   /** The cards to render nested under this host; already resolved against the catalog. */
   pinnedPresets: Preset[];
   lastUsed: number | null;
+  /** This device's own host, as the CLI tells: its games play here, never as a stream. */
+  local: boolean;
 }
 
 export function trustState(v: HostView): TrustState {
@@ -149,6 +151,7 @@ export function mergeHosts(saved: SavedHost[], discovered: DiscoveredHost[]): Ho
       preset: s.preset ?? s.profile ?? null,
       pinnedPresets: s.pinned_presets ?? s.pinned_profiles ?? [],
       lastUsed: s.last_used,
+      local: s.local === true,
     };
   });
   for (const a of discovered) {
@@ -172,6 +175,7 @@ export function mergeHosts(saved: SavedHost[], discovered: DiscoveredHost[]): Ho
       preset: null,
       pinnedPresets: [],
       lastUsed: null,
+      local: false, // no record: the CLI says this only of a saved host
     });
   }
   return views.sort(sortRows);

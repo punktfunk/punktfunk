@@ -60,6 +60,7 @@ fn rows_of(
         &discovered,
         &probed,
         seed,
+        |_| false,
     )
 }
 
@@ -175,6 +176,35 @@ fn presence_comes_from_the_sweep_and_waking_needs_a_mac() {
     let up: Vec<&str> = up.iter().map(String::as_str).collect();
     let r = rows_of(vec![with_mac, no_mac], &catalog, adverts, &up, None);
     assert_eq!((r[0].online, r[0].can_wake), (true, false));
+}
+
+/// The host that answered at loopback as itself is this device's own: its row says so, saved
+/// or only advertised, and a sleeping one is never offered a wake from here.
+#[test]
+fn this_devices_own_host_is_marked_and_never_woken() {
+    let asleep = trust::KnownHost {
+        mac: vec!["aa:bb:cc:dd:ee:ff".into()],
+        ..saved("Desk", "10.0.0.2", &fp('a'))
+    };
+    let here = fp('a');
+    let found = fp('c');
+    let r = build_rows(
+        &trust::KnownHosts {
+            hosts: vec![asleep, saved("Den", "10.0.0.3", &fp('b'))],
+        },
+        &PresetsFile::default(),
+        &[advert("Box", "10.0.0.9", &found)]
+            .into_iter()
+            .map(|a| (a.fullname.clone(), a))
+            .collect(),
+        &HashMap::new(),
+        None,
+        |fp_hex| fp_hex == here || fp_hex == found,
+    );
+    assert_eq!(
+        r.iter().map(|r| (r.local, r.can_wake)).collect::<Vec<_>>(),
+        [(true, false), (false, false), (true, false)]
+    );
 }
 
 /// A host's pinned cards follow it, share its live state under their own key, and drop a
@@ -435,6 +465,8 @@ fn open_shelf(library: &LibraryShared, req: &RequestKey) {
         awaiting_window: false,
         session_id: None,
         endable: false,
+        plane: String::new(),
+        outcome: None,
     }]);
 }
 

@@ -270,7 +270,8 @@ pub fn list_scanners(view: &View) -> Vec<ScannerInfo> {
         .collect()
 }
 
-fn store_label(id: &str) -> String {
+/// The console's label for source `id`: a former built-in store's name, else the id.
+pub(crate) fn store_label(id: &str) -> String {
     STORE_LABELS
         .iter()
         .find(|(sid, _)| *sid == id)

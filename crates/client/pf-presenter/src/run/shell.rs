@@ -199,6 +199,7 @@ impl Shell {
             ring_opener: None,
             ring_was_open: false,
             screen_held: true,
+            let_go: false,
             pump,
             gamepad,
             overlay: None,
@@ -343,6 +344,7 @@ impl Shell {
     /// This pass's overlay: expire the session notice, settle an End game, hold or release the
     /// screen saver, gather the console's facts once and render its frame, then tell the
     /// damage tracker what changed. Browse needs the console, so a frame error is fatal there.
+    /// While a title plays here the console only ticks: no frame is asked for.
     pub(super) fn overlay_tick(&mut self, stream: &mut Option<StreamState>) -> Result<()> {
         if let Some(st) = stream.as_mut() {
             if st
@@ -375,6 +377,12 @@ impl Shell {
             }
         }
         self.screen_saver_tick(stream.as_ref());
+        if self.let_go {
+            if let Some(o) = self.overlay.as_mut() {
+                o.tick();
+            }
+            return Ok(());
+        }
         if self.overlay.is_some() {
             let facts = self.overlay_facts(stream.as_ref());
             if let Some(o) = self.overlay.as_mut() {
@@ -405,13 +413,15 @@ impl Shell {
 
     /// SDL holds the screen saver off while the window lives. A stream whose player turned
     /// "Keep screen awake" off gives it back once their input goes quiet, so the desktop's
-    /// own saver runs over a game left alone. No stream holds.
+    /// own saver runs over a game left alone. No stream holds, unless a title plays here:
+    /// the game is what holds the screen then.
     fn screen_saver_tick(&mut self, stream: Option<&StreamState>) {
-        let hold = stream
-            .and_then(|st| Some((st, st.connector.as_ref()?)))
-            .is_none_or(|(st, c)| {
-                punktfunk_core::client::holds_screen_awake(st.params.keep_awake, c.input_idle())
-            });
+        let hold = !self.let_go
+            && stream
+                .and_then(|st| Some((st, st.connector.as_ref()?)))
+                .is_none_or(|(st, c)| {
+                    punktfunk_core::client::holds_screen_awake(st.params.keep_awake, c.input_idle())
+                });
         if hold != self.screen_held {
             self.screen_held = hold;
             let set = if hold {
@@ -430,12 +440,16 @@ impl Shell {
     /// Present the overlay alone when no video frame carried it: every pass across a
     /// resize scrim (the host's rebuild gap), and once per change while browsing or
     /// after a mid-stream picture has gone still. An idle console hands back the same
-    /// image, so browsing presents only what the overlay re-rendered.
+    /// image, so browsing presents only what the overlay re-rendered. Nothing while a title
+    /// plays here: its window is in front.
     pub(super) fn present_overlay_alone(
         &mut self,
         stream: &Option<StreamState>,
         presented_video: bool,
     ) -> Result<()> {
+        if self.let_go {
+            return Ok(());
+        }
         let resize_scrim = stream.as_ref().is_some_and(|s| s.resize_overlay.active());
         let browse_idle = self.browse && stream.as_ref().is_none_or(|s| s.connector.is_none());
         let still_picture = stream.as_ref().is_some_and(|s| s.last_video.is_some())

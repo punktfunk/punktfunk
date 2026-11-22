@@ -361,6 +361,8 @@ pub(crate) struct ConnectIntent {
     /// The picked profile's row, for the seat check before the dial (§9.2). `None` dials as it
     /// stands.
     pub seat: Option<Seated>,
+    /// The host is this device's own ([`HostRow::local`]): `launch` starts there, no dial.
+    pub local: bool,
 }
 
 /// A picked profile as the host last listed it, and where to reach the host's management lane.
@@ -394,9 +396,9 @@ impl ProfileAsk {
 }
 
 impl ConnectIntent {
-    /// Stream `h`: launch `game` (id, title), else its desk. The takeover names the game,
-    /// else what the host has up, else the host. A pinned card's preset rides along and
-    /// adds its name to the title.
+    /// Stream `h`: launch `game` (id, title), else its desk; on this device's own host the
+    /// game starts there instead. The takeover names the game, else what the host has up,
+    /// else the host. A pinned card's preset rides along and adds its name to the title.
     pub(crate) fn to_host(h: &HostRow, game: Option<(&str, &str)>) -> ConnectIntent {
         let subject = match game {
             Some((_, title)) => title,
@@ -417,6 +419,7 @@ impl ConnectIntent {
             profile: h.remembered().map(|p| p.id.clone()),
             ask: ProfileAsk::of(h),
             seat: None,
+            local: h.local,
         }
     }
 

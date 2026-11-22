@@ -37,8 +37,9 @@ pub(crate) fn log_hint() -> String {
 /// carries a library title id for the host to launch during the handshake; `preset` is a
 /// ONE-OFF settings-preset pick. `profile` is the shell's answer for who plays: it replaces
 /// the saved pick the plan read, and `None` names none. `unlock` goes to the child's stdin and
-/// is wiped before this returns. `Err` = the spawn itself failed (binary missing?) —
-/// surfaced as a connect error by the caller.
+/// is wiped before this returns. `Err` = the spawn itself failed (binary missing?), or the
+/// host is this device's own, which is never streamed — surfaced as a connect error by the
+/// caller.
 ///
 /// The argv and the `--resolved-spec` come from [`orchestrate::session_command`], so this
 /// shell's sessions run from the same effective (preset-aware) settings as every other one.
@@ -54,14 +55,35 @@ pub(crate) fn spawn_session(
     on_event: impl FnMut(SpawnEvent) + Send + 'static,
 ) -> Result<(), String> {
     let label = format!("{}:{}", host.addr, host.port);
+    let here = pf_client_core::trust::local::is_this_device;
+    let Some(plan) = plan_for(host, connect_timeout_secs, launch, preset, profile, here) else {
+        tracing::info!(host = %label, "stream to this device's own host refused");
+        return Err(pf_l10n::client::error_local_nothing_to_stream().to_string());
+    };
+    let (cmd, spec_path) = orchestrate::session_command(&plan);
+    spawn(cmd, spec_path, &label, slot, unlock, on_event)
+}
+
+/// The plan a connect to `host` runs. `None` for this device's own host (`here`, by the pin
+/// it dials): it is played on, never streamed.
+fn plan_for(
+    host: HostTarget,
+    connect_timeout_secs: u64,
+    launch: Option<&str>,
+    preset: Option<&str>,
+    profile: Option<&str>,
+    here: impl Fn(&str) -> bool,
+) -> Option<ConnectPlan> {
+    if host.fp_hex.as_deref().is_some_and(here) {
+        return None;
+    }
     let mut plan =
         ConnectPlan::for_target(host, launch.map(str::to_string), preset.map(str::to_string));
     plan.play_as(profile.map(str::to_string));
     plan.connect_timeout_secs = Some(connect_timeout_secs);
     // This shell prompts for a locked profile's password and spawns again with it.
     plan.prompts_unlock = true;
-    let (cmd, spec_path) = orchestrate::session_command(&plan);
-    spawn(cmd, spec_path, &label, slot, unlock, on_event)
+    Some(plan)
 }
 
 /// Spawn the session binary in `--browse` mode: the console home, in the session window —
@@ -127,4 +149,32 @@ fn spawn(
     })?;
     tracing::info!(host = %label, "session binary spawned");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This device's own host never builds a `ConnectPlan`, whatever the click carried: it is
+    /// played on, never streamed.
+    #[test]
+    fn a_local_host_never_builds_a_connect_plan() {
+        let here = "c".repeat(64);
+        let host = HostTarget {
+            name: "Desk".into(),
+            addr: "192.168.1.50".into(),
+            port: 9777,
+            fp_hex: Some(here.clone()),
+            ..HostTarget::default()
+        };
+        let plan = |host: HostTarget| {
+            plan_for(host, 20, Some("steam:570"), Some(""), None, |fp| fp == here)
+        };
+        assert!(plan(host.clone()).is_none());
+        let other = HostTarget {
+            fp_hex: Some("d".repeat(64)),
+            ..host
+        };
+        assert!(plan(other).is_some(), "another host still streams");
+    }
 }

@@ -184,6 +184,9 @@ pub(crate) struct Shared {
     /// Re-renders the settings page when a device probe lands ([`settings::probe_devices`]).
     pub(crate) set_devices: Mutex<Option<AsyncSetState<()>>>,
     pub(crate) pictures: Mutex<profiles::Pictures>,
+    /// Each live advert's stream port and pin, for the probe sweep to ask at loopback whether
+    /// it is this device's own host. Written by `browse_hosts`.
+    pub(crate) advert_pins: Mutex<Vec<(u16, String)>>,
 }
 
 pub struct AppCtx {
@@ -696,12 +699,11 @@ impl Component for Shell {
             Msg::Unlock(u) => self.unlock = u,
             Msg::Devices => self.settings_rev += 1,
             Msg::Link(url) => route_link(
-                &self.ctx,
+                &self.svc(),
                 &url,
                 &self.screen,
-                &self.set(Msg::Screen),
-                &self.set(Msg::Status),
                 &self.set(Msg::LinkConfirm),
+                &self.set(|()| Msg::Reload),
             ),
             Msg::LinkConfirm(p) => self.link_confirm = p,
             Msg::Pads(n) => {
@@ -1010,11 +1012,10 @@ impl Shell {
                 )
             })
             .unwrap_or_default();
-        let (ctx, ss, st, sc) = (
-            self.ctx.clone(),
-            self.set(Msg::Screen),
-            self.set(Msg::Status),
+        let (svc, sc, reload) = (
+            self.svc(),
             self.set(Msg::LinkConfirm),
+            self.set(|()| Msg::Reload),
         );
         ContentDialog::new()
             .title(client::link_confirm_title())
@@ -1027,7 +1028,7 @@ impl Shell {
                 if r == ContentDialogResult::Primary
                     && let Some(plan) = &pending
                 {
-                    dial_link(&ctx, plan, &ss, &st);
+                    dial_link(&svc, plan, &reload);
                 }
             })
     }
@@ -1140,22 +1141,40 @@ fn open_start_screen(svc: &Svc) {
     };
     library::open_library(svc, target.clone());
     // Stream is the library PLUS a connect, never a screen of its own: the session
-    // window is the overlay, so ending it leaves the shelf on screen underneath.
+    // window is the overlay, so ending it leaves the shelf on screen underneath. This device's
+    // own host stays on its shelf; asking that blocks, so off the UI thread.
     if matches!(screen, start::Start::Stream(_)) {
-        connect::initiate_waking(&svc.ctx, target, &svc.set_screen, &svc.set_status);
+        let (ctx, ss, st) = (
+            svc.ctx.clone(),
+            svc.set_screen.clone(),
+            svc.set_status.clone(),
+        );
+        std::thread::Builder::new()
+            .name("pf-start".into())
+            .spawn(move || {
+                let fp = target.host.fp_hex.clone().unwrap_or_default();
+                pf_client_core::trust::local::look_once(target.host.port, &fp);
+                if !pf_client_core::trust::local::is_this_device(&fp) {
+                    connect::initiate_waking(&ctx, target, &ss, &st);
+                }
+            })
+            .ok();
     }
 }
 
 /// The app's single LAN browse: installs its rescan handle and mirrors the live advert list
-/// into `set_hosts` from a worker thread. A saved host stays on the page from the trust store
-/// when its advert goes.
+/// into `set_hosts` from a worker thread, and its pins into `Shared::advert_pins`. A saved
+/// host stays on the page from the trust store when its advert goes.
 fn browse_hosts(ctx: &AppCtx, set_hosts: AsyncSetState<Vec<DiscoveredHost>>) {
     let (rx, rescan) = discovery::browse();
     *ctx.shared.rescan.lock().unwrap() = Some(rescan);
+    let shared = ctx.shared.clone();
     std::thread::spawn(move || {
         let mut acc: Vec<DiscoveredHost> = Vec::new();
         while let Ok(event) = rx.recv_blocking() {
             rules::fold_advert(&mut acc, event);
+            *shared.advert_pins.lock().unwrap() =
+                acc.iter().map(|a| (a.port, a.fp_hex.clone())).collect();
             set_hosts.call(acc.clone());
         }
     });
@@ -1164,12 +1183,14 @@ fn browse_hosts(ctx: &AppCtx, set_hosts: AsyncSetState<Vec<DiscoveredHost>>) {
 /// Periodic reachability sweep: a saved host reached only over a routed network (Tailscale or
 /// VPN) never advertises on mDNS, so presence can't come from the discovery stream alone. Probes
 /// every saved host (bounded, trust-agnostic QUIC handshake) and posts each changed result to
-/// `set_probed`, which is the whole of the Online pip.
+/// `set_probed`, which is the whole of the Online pip. First, saved hosts and adverts are asked
+/// at loopback whether they are this device's own host; a new answer posts too.
 fn probe_saved_hosts(shared: Arc<Shared>, set_probed: AsyncSetState<HashMap<String, bool>>) {
+    use pf_client_core::trust::local;
     std::thread::Builder::new()
         .name("pf-probe".into())
         .spawn(move || {
-            let mut last = HashMap::new();
+            let (mut last, mut last_here) = (HashMap::new(), 0);
             loop {
                 // A spawned session/browse child is running: the shell is hidden
                 // (nobody sees the pips) and one of these hosts is mid-stream —
@@ -1186,11 +1207,18 @@ fn probe_saved_hosts(shared: Arc<Shared>, set_probed: AsyncSetState<HashMap<Stri
                     .into_iter()
                     .filter(|h| !h.addr.is_empty())
                     .collect();
+                let mut pins: Vec<(u16, String)> =
+                    hosts.iter().map(|h| (h.port, h.fp_hex.clone())).collect();
+                pins.extend(shared.advert_pins.lock().unwrap().iter().cloned());
+                local::look(&pins, local::LOOK_TIMEOUT);
+                let here = (hosts.iter())
+                    .filter(|h| local::is_this_device(&h.fp_hex))
+                    .count();
                 let online = crate::trust::probe_known(&hosts, crate::trust::PROBE_TIMEOUT);
                 let map: HashMap<String, bool> =
                     hosts.iter().map(|h| h.card_key()).zip(online).collect();
-                if map != last {
-                    last = map.clone();
+                if map != last || here != last_here {
+                    (last, last_here) = (map.clone(), here);
                     set_probed.call(map);
                 }
                 std::thread::sleep(crate::trust::PROBE_INTERVAL);
@@ -1201,15 +1229,16 @@ fn probe_saved_hosts(shared: Arc<Shared>, set_probed: AsyncSetState<HashMap<Stri
 
 /// Route an arriving link. Parsing, preset resolution and every refusal rule (only a stable
 /// record id dials unattended) live in `plan_from_link`. This end turns the outcome into the
-/// call a tile click makes, so a link gets the tile's wake, trust and error handling.
+/// call a tile click makes, so a link gets the tile's wake, trust and error handling. `reload`
+/// reads the shelf again after a title starts on this device.
 fn route_link(
-    ctx: &Arc<AppCtx>,
+    svc: &Svc,
     url: &str,
     screen_now: &Screen,
-    set_screen: &AsyncSetState<Screen>,
-    set_status: &AsyncSetState<String>,
     set_link_confirm: &AsyncSetState<Option<Box<pf_client_core::orchestrate::ConnectPlan>>>,
+    reload: &AsyncSetState<()>,
 ) {
+    let (ctx, set_screen, set_status) = (&svc.ctx, &svc.set_screen, &svc.set_status);
     let refuse = |msg: String| {
         tracing::info!(%msg, "deep link refused");
         set_status.call(msg);
@@ -1240,7 +1269,7 @@ fn route_link(
             // The plan's profile is the link's `as=`, else the saved pick: only the
             // link's own wins over the picker.
             p.play_as(link.as_profile.clone());
-            dial_link(ctx, &p, set_screen, set_status)
+            dial_link(svc, &p, reload)
         }
         // A pinned host named by its label or address, which any web page could guess: arm
         // the confirmation, whose OK runs `dial_link` on this same plan. Not the PIN
@@ -1285,12 +1314,13 @@ fn route_link(
 /// identical wake, trust and error surfaces rather than a second connect path of its own. Shared
 /// by the two outcomes that dial — `PlanOutcome::Connect` (the link named the stable record id)
 /// and a confirmed `PlanOutcome::ConfirmConnect` — so the confirmation is one click in front of
-/// this, never a second implementation of it.
+/// this, never a second implementation of it. This device's own host is never dialed: its shelf
+/// opens and plays the link's title as a tile click does. Whether the host is this device is
+/// asked once, on a worker.
 fn dial_link(
-    ctx: &Arc<AppCtx>,
+    svc: &Svc,
     plan: &pf_client_core::orchestrate::ConnectPlan,
-    set_screen: &AsyncSetState<Screen>,
-    set_status: &AsyncSetState<String>,
+    reload: &AsyncSetState<()>,
 ) {
     let target = Target {
         host: plan.host.clone(),
@@ -1299,18 +1329,36 @@ fn dial_link(
         link_profile: plan.profile.clone(),
         ..Target::default()
     };
-    // With a MAC it takes the dial first wake path, so a sleeping host wakes instead of
-    // erroring — exactly what clicking its tile would do. The link's `launch=` id must reach
-    // the session (`--launch`), or a game link opens a plain desktop session.
-    match (
-        plan.launch.clone(),
-        plan.wake && !target.host.mac.is_empty(),
-    ) {
-        (Some(id), true) => {
-            connect::initiate_launch_waking(ctx, target, id, set_screen, set_status);
-        }
-        (Some(id), false) => connect::initiate_launch(ctx, target, id, set_screen, set_status),
-        (None, true) => connect::initiate_waking(ctx, target, set_screen, set_status),
-        (None, false) => connect::initiate(ctx, target, set_screen, set_status),
-    }
+    let (svc, reload, launch) = (svc.clone(), reload.clone(), plan.launch.clone());
+    let wake = plan.wake && !target.host.mac.is_empty();
+    let _ = std::thread::Builder::new()
+        .name("pf-link".into())
+        .spawn(move || {
+            let fp = target.host.fp_hex.clone().unwrap_or_default();
+            pf_client_core::trust::local::look_once(target.host.port, &fp);
+            if pf_client_core::trust::local::is_this_device(&fp) {
+                let host = target.host.clone();
+                library::open_library(
+                    &svc,
+                    Target {
+                        host,
+                        ..Target::default()
+                    },
+                );
+                if let Some(id) = launch {
+                    library::launch_here(&svc, &target.host, &id, &reload);
+                }
+                return;
+            }
+            // With a MAC it takes the dial first wake path, so a sleeping host wakes instead
+            // of erroring — exactly what clicking its tile would do. The link's `launch=` id
+            // must reach the session (`--launch`), or a game link opens a plain desktop session.
+            let (ctx, ss, st) = (&svc.ctx, &svc.set_screen, &svc.set_status);
+            match (launch, wake) {
+                (Some(id), true) => connect::initiate_launch_waking(ctx, target, id, ss, st),
+                (Some(id), false) => connect::initiate_launch(ctx, target, id, ss, st),
+                (None, true) => connect::initiate_waking(ctx, target, ss, st),
+                (None, false) => connect::initiate(ctx, target, ss, st),
+            }
+        });
 }

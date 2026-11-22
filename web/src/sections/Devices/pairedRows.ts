@@ -1,5 +1,6 @@
 import type { NativeClient } from "@/api/gen/model/nativeClient";
 import type { PairedClient } from "@/api/gen/model/pairedClient";
+import type { SessionRow } from "@/api/gen/model/sessionRow";
 import type { StoredAccess } from "@/lib/password-gates";
 
 /** The two pairing protocols a device can be paired over. */
@@ -134,6 +135,18 @@ export function storedAccess(
 		}
 	);
 }
+
+/**
+ * Whether the device with this certificate is streaming: a native session's `client` is its
+ * fingerprint's prefix. A `local` row's is the key `desk`, which names no device.
+ */
+export const isStreaming = (sessions: SessionRow[], fingerprint: string) =>
+	sessions.some(
+		(s) =>
+			s.plane !== "gamestream" &&
+			s.plane !== "local" &&
+			fingerprint.startsWith(s.client),
+	);
 
 /** The protocols holding a row; only those have an unpair-all endpoint worth calling. */
 export function planesWithRows(rows: PairedRow[]) {

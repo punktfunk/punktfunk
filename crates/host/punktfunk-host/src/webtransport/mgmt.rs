@@ -611,8 +611,9 @@ mod tests {
         assert!(IpSlot::take(ip).is_some(), "released on drop");
     }
 
-    /// Only the headers a browser's `fetch` could have sent reach the router. `host` and the
-    /// forwarding family never do, whatever a page or a tool wrote in the head.
+    /// Only the headers a browser's `fetch` could have sent reach the router. `host`, the
+    /// forwarding family and the door's vouches never do, whatever a page or a tool wrote in
+    /// the head.
     #[tokio::test]
     async fn only_the_allowlisted_headers_reach_the_router() {
         let router = Router::new().route(
@@ -638,6 +639,9 @@ mod tests {
                 ("accept", "*/*"),
                 ("content-type", "text/plain"),
                 ("if-none-match", "\"etag\""),
+                (crate::mgmt::auth::VOUCH_HEADER, &*"ab".repeat(32)),
+                (crate::mgmt::auth::LOOPBACK_HEADER, "1"),
+                (crate::mgmt::person::VOUCH_HEADER, "a1a1a1a1a1a1"),
             ]
             .iter()
             .map(|(n, v)| (n.to_string(), v.to_string()))

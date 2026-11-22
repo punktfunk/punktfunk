@@ -181,12 +181,18 @@ const representative = (s: RuntimeStatus, row: SessionRow) =>
 const sameSeat = (a: { seat?: string | null }, b: { seat?: string | null }) =>
 	(a.seat ?? null) === (b.seat ?? null);
 
+/**
+ * A game no session streams, and no session ever will: waiting out its client's absence, left
+ * running, or started on the host's own screen (`local`, which has no session at all).
+ */
+export const unstreamed = (g: ActiveGame) =>
+	g.state === "grace" || g.state === "detached" || g.plane === "local";
+
 /** The title a session streams, if the host launched one for it. A waiting game streams nowhere. */
 export const gameOf = (s: RuntimeStatus, row: SessionRow) =>
 	s.games.find(
 		(g) =>
-			g.state !== "grace" &&
-			g.state !== "detached" &&
+			!unstreamed(g) &&
 			sameSeat(g, row) &&
 			(g.session_id != null
 				? g.session_id === row.id
@@ -353,14 +359,12 @@ const OperatorHome: FC = () => {
 	);
 
 	/**
-	 * A game nobody streams ends directly; a running one stops the session it runs in, on the host
-	 * that runs it. `app_id: null` means "every unstreamed game" to the host, so a row without an id
-	 * says so first when there are several.
+	 * A game nobody streams ends directly, a `local` one included; a running one stops the session
+	 * it runs in, on the host that runs it. `app_id: null` means "every unstreamed game" to the
+	 * host, so a row without an id says so first when there are several.
 	 */
 	const onEndGame = async (game: ActiveGame) => {
 		const games = status.data?.games ?? [];
-		const unstreamed = (g: ActiveGame) =>
-			g.state === "grace" || g.state === "detached";
 		if (!unstreamed(game)) {
 			const stopped = { onError: failed(m.action_stop_failed()) };
 			const id = game.session_id ?? null;

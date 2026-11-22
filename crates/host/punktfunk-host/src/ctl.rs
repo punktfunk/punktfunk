@@ -90,6 +90,20 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             out(json, &v, |_| println!("game ended"));
             Ok(())
         }
+        "launch" => {
+            let Some(id) = rest.first().filter(|a| !a.starts_with("--")) else {
+                return Err(Failure::usage(
+                    "launch: give the title's library id (steam:570)",
+                ));
+            };
+            let v = Client::one_shot()?.post("/api/v1/game/launch", &json!({ "app_id": id }))?;
+            out(json, &v, |v| match v["running"].as_bool() {
+                Some(true) => println!("already running"),
+                _ => println!("starting, via {}", v["via"].as_str().unwrap_or("host")),
+            });
+            Ok(())
+        }
+        "steam" => steam(rest, json),
         "pair" => pair(rest, json),
         "pending" => {
             let v = Client::one_shot()?.get("/api/v1/native/pending")?;
@@ -215,6 +229,61 @@ fn pair(args: &[&str], json: bool) -> Result<()> {
         Some(other) => Err(Failure::usage(format!(
             "pair: expected arm | disarm | status, got '{other}'"
         ))),
+    }
+}
+
+/// What the Decky plugin syncs into this box's Steam. `entries --json` prints the host's answer
+/// as it is, with no envelope: the plugin reads it whole. `map` sends the map JSON on stdin.
+/// `art` writes one image's bytes to stdout.
+fn steam(args: &[&str], json: bool) -> Result<()> {
+    let c = Client::one_shot()?;
+    match args {
+        ["entries"] => {
+            let v = c.get("/api/v1/steam/entries")?;
+            if json {
+                println!("{v}");
+                return Ok(());
+            }
+            for s in v["sources"].as_array().into_iter().flatten() {
+                println!(
+                    "{:<20} {:>6}  {}",
+                    trunc(s["id"].as_str().unwrap_or(""), 20),
+                    s["games"].as_u64().unwrap_or(0),
+                    s["name"].as_str().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        ["map"] => {
+            let raw = client::read_capped(std::io::stdin(), client::RAW_BODY_LIMIT)
+                .map_err(|e| Failure::usage(format!("steam map: read stdin: {e}")))?;
+            let map: Value = serde_json::from_slice(&raw)
+                .map_err(|e| Failure::usage(format!("steam map: stdin is not JSON: {e}")))?;
+            let v = c.put("/api/v1/steam/entries", &map)?;
+            out(json, &v, |_| println!("Steam map stored"));
+            Ok(())
+        }
+        ["art", id, kind] => {
+            let target = format!(
+                "library/art/{}/{}",
+                crate::mgmt::path_segment(id),
+                crate::mgmt::path_segment(kind)
+            );
+            let path = format!("/api/v1/{target}");
+            let (status, _, body) = c.send(crate::mgmt::owner::Forwarded::get(target))?;
+            if status != 200 {
+                return Err(Failure::api(format!("{path}: no such art ({status})")));
+            }
+            let bytes = client::read_capped(body, client::RAW_BODY_LIMIT)
+                .map_err(|e| Failure::api(format!("{path}: {e}")))?;
+            use std::io::Write as _;
+            std::io::stdout()
+                .write_all(&bytes)
+                .map_err(|e| Failure::api(format!("write the art to stdout: {e}")))
+        }
+        _ => Err(Failure::usage(
+            "steam: expected entries | map | art <ID> <KIND>",
+        )),
     }
 }
 
@@ -1055,6 +1124,10 @@ USAGE:
 STATE
     status                       host state, session count, paired counts
     sessions                     the active session(s) and any launched game
+    launch <ID>                  start a library title on this host's own screen, with no stream
+    steam entries                the titles a Steam entry of their own may start, by source
+    steam map                    store the map of synced Steam entries, as JSON on stdin
+    steam art <ID> <KIND>        one image of a title (portrait, hero, logo, header) to stdout
     summary                      one call for a status surface: host version, what is streaming,
                                  the streaming client's name, paired counts, and any conflicting
                                  host on this box. The only verb that names a connected device.

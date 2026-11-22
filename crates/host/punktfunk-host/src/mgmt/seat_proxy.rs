@@ -79,6 +79,7 @@ pub(crate) async fn proxy_profile_seat(
         body: body.to_vec(),
         device: None,
         person: None,
+        local: false,
         stream: super::owner::tail(&rest),
         start: false,
     };

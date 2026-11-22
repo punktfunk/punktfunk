@@ -405,9 +405,11 @@ fn set_class(w: &gtk::Widget, class: &str, on: bool) {
 
 /// The title's menu, built from its state now: End Game only while the host can end it, Hide
 /// for its profile only where the box lets this device. A hidden title's menu only brings it
-/// back. The rows name the page's `title.*` actions with the title's id.
+/// back. The rows name the page's `title.*` actions with the title's id. A title up on this
+/// device's own host is played, not resumed.
 fn open_menu(button: &gtk::Button, view: &View, id: &str, at: Option<(f64, f64)>) {
     let running = view.running.borrow().get(id).cloned();
+    let resume = running.is_some() && !view.here.get();
     let favorite = view.favorites.borrow().iter().any(|f| f == id);
     let hides = view.hides.borrow().clone();
     let menu = gio::Menu::new();
@@ -419,7 +421,7 @@ fn open_menu(button: &gtk::Button, view: &View, id: &str, at: Option<(f64, f64)>
     match (&hides, view.hidden.borrow().is_some()) {
         (Some(name), true) => item(&client::lib_show_for(name), "title.show"),
         (None, true) => return,
-        (_, false) => title_items(&item, running.as_ref(), favorite, hides.as_deref()),
+        (_, false) => title_items(&item, running.as_ref(), resume, favorite, hides.as_deref()),
     }
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_parent(button);
@@ -434,15 +436,17 @@ fn open_menu(button: &gtk::Button, view: &View, id: &str, at: Option<(f64, f64)>
     popover.popup();
 }
 
-/// A title's rows on the shelf, `hides` the name of the profile it may hide for.
+/// A title's rows on the shelf, `hides` the name of the profile it may hide for; `resume` when
+/// Play rejoins a stream of it.
 fn title_items(
     item: &impl Fn(&str, &str),
     running: Option<&pf_client_core::library::RunningGame>,
+    resume: bool,
     favorite: bool,
     hides: Option<&str>,
 ) {
     item(
-        if running.is_some() {
+        if resume {
             client::lib_resume()
         } else {
             common::common_play()

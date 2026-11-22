@@ -53,6 +53,19 @@ describe("wire", () => {
 		}
 	});
 
+	test("decodes a game the host started on its own screen", () => {
+		const r = decodeHostEvent(
+			JSON.parse(
+				'{"seq":6,"ts_ms":1700000000000,"schema":1,"kind":"game.running","game":{"app":"steam:570","title":"Dota 2","store":"steam","client":"desk","plane":"local","profile":{"id":"0f0f0f0f0f0f","display_name":"Owner"}}}',
+			),
+		);
+		expect(r._tag).toBe("Success");
+		if (r._tag === "Success" && r.success.kind === "game.running") {
+			expect(r.success.game.plane).toBe("local");
+			expect(r.success.game.fingerprint).toBeUndefined();
+		}
+	});
+
 	test("decodes the launch stage a plugin holds", () => {
 		const r = decodeHostEvent(
 			JSON.parse(
