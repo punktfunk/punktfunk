@@ -467,7 +467,7 @@ pub(crate) use crate::windows::idd::{capture_virtual_output, open_driver_encoder
 
 /// macOS: ScreenCaptureKit on the display the output stands for, at the size it names: a
 /// virtual display's own mode, captured unscaled, or a mirrored display's pixels, which the
-/// session's encoder frames for the client. Absolute input for the first screen aims at that
+/// session's encoder frames for the client. Absolute input for screen `screen` aims at that
 /// display. The client draws the pointer only when the session forwards it.
 #[cfg(target_os = "macos")]
 pub fn capture_virtual_output(
@@ -495,6 +495,8 @@ pub fn capture_virtual_output(
     let (width, height, _) = vout.preferred_mode.context("the display reports no mode")?;
     if screen == 0 {
         crate::inject::set_stream_display(Some(display_id));
+    } else {
+        crate::inject::set_screen_display(screen, Some(display_id));
     }
     pf_capture::open_display(pf_capture::DisplayCaptureOpts {
         display_id,

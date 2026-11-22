@@ -5,7 +5,9 @@
 //! Posting needs the Accessibility grant ([`post_event_access`]); without it
 //! [`CgEventInjector::open`] fails and the injector service retries on its backoff.
 
-use crate::cgevent_plan::{pick_bounds, ty, BoundsCache, Desk, Planner, Post, Rect, KVK_SPACE};
+use crate::cgevent_plan::{
+    pick_bounds, ty, BoundsCache, Desk, Planner, Post, Rect, KVK_SPACE, SCREENS,
+};
 use crate::InputInjector;
 use anyhow::{bail, Context, Result};
 use objc2_core_foundation::{
@@ -24,8 +26,9 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
 
-/// The display [`set_stream_display`] published; 0 (`kCGNullDirectDisplay`) for none.
-static STREAM_DISPLAY: AtomicU32 = AtomicU32::new(0);
+/// Each screen's display, as [`set_stream_display`] and [`set_screen_display`] published it;
+/// 0 (`kCGNullDirectDisplay`) for none.
+static SCREEN_DISPLAYS: [AtomicU32; SCREENS] = [const { AtomicU32::new(0) }; SCREENS];
 
 /// Bumped by every display reconfiguration callback and every published display.
 static DISPLAY_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -40,13 +43,27 @@ static WATCH: Once = Once::new();
 /// same write, so the session's first relative move starts on this display. `None`, or a
 /// display that is gone, maps onto the main display.
 pub fn set_stream_display(display: Option<u32>) {
-    crate::publish_aim(true, |_| {
-        let id = display.unwrap_or(0);
-        if STREAM_DISPLAY.swap(id, Ordering::Relaxed) != id {
-            tracing::info!(display_id = id, "absolute-input stream display set");
-        }
-        DISPLAY_EPOCH.fetch_add(1, Ordering::Release);
-    });
+    crate::publish_aim(true, |_| publish(0, display));
+}
+
+/// [`set_stream_display`] for further screen `screen` (1 or more), with no warp: the pointer
+/// stays where the first screen put it. A screen with no display, or a gone one, maps onto the
+/// first screen's.
+pub fn set_screen_display(screen: u8, display: Option<u32>) {
+    if screen > 0 {
+        publish(screen, display);
+    }
+}
+
+fn publish(screen: u8, display: Option<u32>) {
+    let Some(slot) = SCREEN_DISPLAYS.get(usize::from(screen)) else {
+        return;
+    };
+    let id = display.unwrap_or(0);
+    if slot.swap(id, Ordering::Relaxed) != id {
+        tracing::info!(screen, display_id = id, "absolute-input display set");
+    }
+    DISPLAY_EPOCH.fetch_add(1, Ordering::Release);
 }
 
 /// CoreGraphics calls this on the main thread's run loop, in every mode. A blocked main thread
@@ -193,8 +210,8 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
     Some(event)
 }
 
-/// The cursor, read now, and the stream display's bounds, read once per display epoch.
-fn desk() -> Desk {
+/// The cursor, read now, and each screen's display bounds, read once per display epoch.
+pub(crate) fn desk() -> Desk {
     WATCH.call_once(watch_displays);
     let cursor = CGEvent::new(None).map_or_else(CGPoint::default, |e| CGEvent::location(Some(&e)));
     let rect = |id| {
@@ -203,14 +220,18 @@ fn desk() -> Desk {
     };
     let epoch = DISPLAY_EPOCH.load(Ordering::Acquire);
     let mut cache = BOUNDS.lock().unwrap_or_else(|e| e.into_inner());
-    let stream: Option<Rect> = match STREAM_DISPLAY.load(Ordering::Relaxed) {
-        0 => None,
-        id => Some(cache.get(epoch, id, || rect(id))),
-    };
-    let main = cache.get(epoch, 0, || rect(CGMainDisplayID()));
+    let published: [Option<Rect>; SCREENS] =
+        std::array::from_fn(|s| match SCREEN_DISPLAYS[s].load(Ordering::Relaxed) {
+            0 => None,
+            id => Some(cache.get(epoch, id, || rect(id))),
+        });
+    let first = pick_bounds(
+        published[0],
+        cache.get(epoch, 0, || rect(CGMainDisplayID())),
+    );
     Desk {
         cursor: (cursor.x, cursor.y),
-        bounds: pick_bounds(stream, main),
+        screens: published.map(|r| pick_bounds(r, first)),
     }
 }
 

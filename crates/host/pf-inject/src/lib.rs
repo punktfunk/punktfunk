@@ -1279,7 +1279,9 @@ mod cgevent;
 #[path = "inject/macos/cgevent_plan.rs"]
 mod cgevent_plan;
 #[cfg(target_os = "macos")]
-pub use cgevent::{post_event_access, request_post_event_access, set_stream_display};
+pub use cgevent::{
+    post_event_access, request_post_event_access, set_screen_display, set_stream_display,
+};
 /// Stub — pen injection needs the Linux uinput tablet or Windows synthetic pointers.
 /// `pen_supported()` is false here, so no host advertises the cap and no batches arrive.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]

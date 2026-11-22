@@ -7,9 +7,10 @@
 //! - Keys: the wire's US-positional VK → the ANSI-positional macOS key code ([`mac_key`]).
 //!   Every event carries the flags of the modifiers held, with the side bits a keyboard sets.
 //!   A modifier is a flags-changed event; the client's auto-repeat is posted as auto-repeat.
-//! - Pointer: every location lands on [`Desk::bounds`], relative motion from where the planner
-//!   last put the pointer while the cursor read back still lags it. A press close to the last
-//!   one in time and place counts up the click state; a move with a button held is a drag.
+//! - Pointer: an absolute location lands on its screen's display ([`Desk::screen`]), relative
+//!   motion on the screen display the pointer is on, from where the planner last put it while
+//!   the cursor read back still lags it. A press close to the last one in time and place
+//!   counts up the click state; a move with a button held is a drag.
 //! - Scroll: the shared mapper's libei plan (point distance, v120 clicks, stops) as pixel
 //!   and line events; a phased wire gesture also carries the scroll phase.
 
@@ -82,13 +83,35 @@ const BUTTONS: [u32; 5] = [0, 2, 1, 3, 4];
 /// `(x, y, w, h)` in global display points, y down from the main display's top.
 pub(crate) type Rect = (f64, f64, f64, f64);
 
+/// The screens of a session: the first and [`crate::EXTRA_SCREENS`] more.
+pub(crate) const SCREENS: usize = 1 + crate::EXTRA_SCREENS;
+
 /// What a pointer event reads off the desktop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Desk {
     /// Where the window server has the cursor now. It lags the events it has not applied.
     pub cursor: (f64, f64),
-    /// The display absolute input maps into, and every posted location stays on.
-    pub bounds: Rect,
+    /// The display each screen's absolute input maps into, the first at 0. A screen with no
+    /// display of its own has the first's.
+    pub screens: [Rect; SCREENS],
+}
+
+impl Desk {
+    /// Screen `screen`'s display; the first's for a screen past the last.
+    pub fn screen(&self, screen: u8) -> Rect {
+        let i = usize::from(screen);
+        self.screens.get(i).copied().unwrap_or(self.screens[0])
+    }
+
+    /// The screen display `p` is on, else the first's: every posted location stays on one.
+    fn holding(&self, (x, y): (f64, f64)) -> Rect {
+        let on = |&(bx, by, bw, bh): &Rect| x >= bx && x < bx + bw && y >= by && y < by + bh;
+        self.screens
+            .iter()
+            .copied()
+            .find(on)
+            .unwrap_or(self.screens[0])
+    }
 }
 
 /// One event to post, every field decided.
@@ -180,7 +203,10 @@ impl Planner {
             InputKind::MouseMove => {
                 let d = desk();
                 let (x, y) = self.pointer(d.cursor);
-                let at = clamp_to(d.bounds, (x + f64::from(ev.x), y + f64::from(ev.y)));
+                let at = clamp_to(
+                    d.holding((x, y)),
+                    (x + f64::from(ev.x), y + f64::from(ev.y)),
+                );
                 vec![self.motion(at, (ev.x, ev.y))]
             }
             InputKind::MouseMoveAbs => {
@@ -188,7 +214,7 @@ impl Planner {
                     return Vec::new();
                 };
                 let d = desk();
-                let ((fx, fy), b) = (abs.normalized(), d.bounds);
+                let ((fx, fy), b) = (abs.normalized(), d.screen(abs.screen));
                 let at = clamp_to(b, (b.0 + fx * b.2, b.1 + fy * b.3));
                 let (x, y) = self.pointer(d.cursor);
                 let delta = ((at.0 - x).round() as i32, (at.1 - y).round() as i32);
@@ -290,7 +316,8 @@ impl Planner {
         }
         let down = ev.kind == InputKind::MouseButtonDown;
         let d = desk();
-        let at = clamp_to(d.bounds, self.pointer(d.cursor));
+        let p = self.pointer(d.cursor);
+        let at = clamp_to(d.holding(p), p);
         self.moved_to(at);
         let (press, release, _) = button_types(button);
         let clicks = if down {
@@ -665,10 +692,11 @@ mod tests {
     const KVK_RIGHT_SHIFT: u16 = 0x3C;
     const SHIFTED: u64 = flag::SHIFT | flag::L_SHIFT;
 
-    /// A cursor left of the stream display, which sits right of a 1920-wide main one.
+    /// A cursor left of the stream display, which sits right of a 1920-wide main one. No
+    /// further screen has a display of its own.
     const DESK: Desk = Desk {
         cursor: (100.0, 100.0),
-        bounds: (1920.0, 0.0, 2560.0, 1440.0),
+        screens: [(1920.0, 0.0, 2560.0, 1440.0); SCREENS],
     };
 
     fn ev(kind: InputKind, code: u32) -> InputEvent {
@@ -937,6 +965,36 @@ mod tests {
             ..abs(1, 1)
         };
         assert!(run(&mut planner(), &[zero]).is_empty());
+    }
+
+    /// A further screen's absolute input lands on its own display, and relative motion from
+    /// there stays on it. A screen past the last lands on the first.
+    #[test]
+    fn each_screen_lands_on_its_own_display() {
+        let second = (4480.0, 0.0, 1280.0, 720.0);
+        let mut desk = DESK;
+        desk.screens[1] = second;
+        let mut p = planner();
+        let now = Instant::now();
+        let mut at = |e: InputEvent, desk: Desk| match p.plan(&e, now, &|| desk)[..] {
+            [Post::Mouse { at, .. }] => at,
+            ref other => panic!("{other:?}"),
+        };
+        let abs = |screen| {
+            InputEvent {
+                x: 640,
+                y: 360,
+                flags: (1280 << 16) | 720,
+                ..ev(InputKind::MouseMoveAbs, 0)
+            }
+            .on_screen(screen)
+        };
+        assert_eq!(at(abs(1), desk), (5120.0, 360.0));
+        desk.cursor = (5120.0, 360.0);
+        let far = at(moved(1000, 0), desk);
+        assert_eq!(far, (5759.0, 360.0), "stays on the second");
+        assert_eq!(at(abs(0), desk), (3200.0, 720.0));
+        assert_eq!(at(abs(9), desk), (3200.0, 720.0), "no such screen");
     }
 
     /// A drag is the lowest held button's: left, then right, then the others.
