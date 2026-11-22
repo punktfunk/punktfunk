@@ -84,6 +84,8 @@ dispatch2 = { workspace = true }
 objc2-foundation = { workspace = true }
 objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
+# A screen's HDR headroom (`vdisplay/macos.rs`).
+objc2-app-kit = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 pf-paths-win = { path = "../pf-paths-win" }

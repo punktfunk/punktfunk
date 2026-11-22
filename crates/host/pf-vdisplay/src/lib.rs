@@ -804,7 +804,7 @@ mod mirror;
 #[path = "vdisplay/macos.rs"]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::{creates_displays, hdr_displays};
+pub use macos::{creates_displays, display_hdr, hdr_displays};
 
 // The private CoreGraphics classes behind a macOS virtual display, and nothing else.
 #[cfg(target_os = "macos")]

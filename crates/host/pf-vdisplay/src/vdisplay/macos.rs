@@ -66,11 +66,39 @@ pub fn creates_displays() -> bool {
     crate::macos_virtual::available()
 }
 
-/// Whether a session's screen can be HDR. A virtual display needs an HDR mode; a mirrored
-/// display is captured as it stands.
+/// Whether a session's own screen can be HDR: a virtual display needs an HDR mode. Without
+/// virtual displays the screen is a mirror, which [`display_hdr`] answers.
 pub fn hdr_displays() -> bool {
     !creates_displays() || crate::macos_virtual::hdr_modes()
 }
+
+/// Whether display `connector` has HDR headroom now: an HDR panel with HDR on, or an HDR
+/// virtual display. AppKit answers on the main thread: a process whose main thread runs no
+/// loop reads `false` after [`MAIN_ANSWER`].
+pub fn display_hdr(connector: &str) -> bool {
+    let Ok(id) = connector.parse::<u32>() else {
+        return false;
+    };
+    let (answer, heard) = std::sync::mpsc::channel();
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let number = objc2_foundation::ns_string!("NSScreenNumber");
+        let hdr = objc2_app_kit::NSScreen::screens(mtm).iter().any(|screen| {
+            let named = screen.deviceDescription().objectForKey(number);
+            let named = named.and_then(|n| n.downcast::<objc2_foundation::NSNumber>().ok());
+            named.is_some_and(|n| n.unsignedIntValue() == id)
+                && screen.maximumPotentialExtendedDynamicRangeColorComponentValue() > 1.0
+        });
+        let _ = answer.send(hdr);
+    });
+    heard.recv_timeout(MAIN_ANSWER).unwrap_or(false)
+}
+
+/// How long [`display_hdr`] waits for the main thread: a loop that runs answers in under a
+/// millisecond.
+const MAIN_ANSWER: Duration = Duration::from_millis(250);
 
 fn online() -> Result<Vec<u32>> {
     list(|max, ids, count| {
