@@ -556,7 +556,14 @@ pub fn pen_supported() -> bool {
     pen::synthetic_pen_available()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// CoreGraphics tablet events, posted with the Accessibility grant the mouse needs. Same
+/// `PUNKTFUNK_PEN` kill-switch.
+#[cfg(target_os = "macos")]
+pub fn pen_supported() -> bool {
+    pf_host_config::row_bool("PUNKTFUNK_PEN")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn pen_supported() -> bool {
     false
 }
@@ -1278,13 +1285,21 @@ mod cgevent;
 #[cfg(any(target_os = "macos", test))]
 #[path = "inject/macos/cgevent_plan.rs"]
 mod cgevent_plan;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/pen_plan.rs"]
+mod pen_plan;
 #[cfg(target_os = "macos")]
 pub use cgevent::{
     post_event_access, request_post_event_access, set_screen_display, set_stream_display,
 };
-/// Stub — pen injection needs the Linux uinput tablet or Windows synthetic pointers.
-/// `pen_supported()` is false here, so no host advertises the cap and no batches arrive.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// The session's stylus as CoreGraphics tablet events.
+#[cfg(target_os = "macos")]
+pub mod pen {
+    pub use crate::cgevent::VirtualPen;
+}
+/// Stub — no pen injection backend on this platform. `pen_supported()` is false here, so no
+/// host advertises the cap and no batches arrive.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub mod pen {
     use anyhow::{bail, Result};
     pub struct VirtualPen;

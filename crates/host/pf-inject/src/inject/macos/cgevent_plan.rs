@@ -71,7 +71,7 @@ const KVK_CAPS_LOCK: u16 = 0x39;
 
 /// How far apart two presses land and still count up, in points: Windows' default
 /// double-click rectangle.
-const CLICK_SLOP: f64 = 4.0;
+pub(crate) const CLICK_SLOP: f64 = 4.0;
 
 /// Known pointer locations kept: more than a back-to-back burst of moves leaves unapplied when
 /// the cursor is read back.
@@ -144,6 +144,26 @@ pub(crate) enum Post {
         wheel2: i32,
         phase: u32,
         flags: u64,
+    },
+    /// A pen sample: a mouse event of type `ty` with the tablet-point subtype. `buttons` are
+    /// `NX_TABLET_BUTTON_*` bits, `pressure` 0..1, `tilt` -1..1 on each axis, `rotation` in
+    /// degrees.
+    Tablet {
+        ty: u32,
+        at: (f64, f64),
+        buttons: u32,
+        pressure: f64,
+        tilt: (f64, f64),
+        rotation: f64,
+        clicks: i64,
+    },
+    /// The pen entering or leaving range: its `NX_TABLET_POINTER_*` and the
+    /// `NX_TABLET_CAPABILITY_*` bits it reports.
+    Proximity {
+        enter: bool,
+        pointer: u32,
+        caps: u32,
+        at: (f64, f64),
     },
 }
 
@@ -523,7 +543,7 @@ impl BoundsCache {
 }
 
 /// `p` moved onto `b`. The far edge, `x + w`, is the next display's first column.
-fn clamp_to(b: Rect, (x, y): (f64, f64)) -> (f64, f64) {
+pub(crate) fn clamp_to(b: Rect, (x, y): (f64, f64)) -> (f64, f64) {
     let last = |o: f64, n: f64| o + (n - 1.0).max(0.0);
     (x.clamp(b.0, last(b.0, b.2)), y.clamp(b.1, last(b.1, b.3)))
 }

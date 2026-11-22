@@ -8,6 +8,7 @@
 use crate::cgevent_plan::{
     pick_bounds, ty, BoundsCache, Desk, Planner, Post, Rect, KVK_SPACE, SCREENS,
 };
+use crate::pen_plan::{tablet, PenPlanner};
 use crate::InputInjector;
 use anyhow::{bail, Context, Result};
 use objc2_core_foundation::{
@@ -21,6 +22,7 @@ use objc2_core_graphics::{
     CGRequestPostEventAccess, CGScrollEventUnit,
 };
 use punktfunk_core::input::InputEvent;
+use punktfunk_core::quic::PenTransition;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
@@ -132,6 +134,38 @@ impl Drop for CgEventInjector {
     }
 }
 
+/// The session's stylus: CoreGraphics tablet events, posted from the session's input thread.
+pub struct VirtualPen {
+    plan: PenPlanner,
+}
+
+impl VirtualPen {
+    pub fn create() -> Result<VirtualPen> {
+        if !post_event_access() {
+            bail!("create the pen: this process has no Accessibility grant");
+        }
+        Ok(VirtualPen {
+            plan: PenPlanner::new(double_click_interval()),
+        })
+    }
+
+    pub fn apply_batch(&mut self, transitions: &[PenTransition]) {
+        let posts = self
+            .plan
+            .plan(transitions, desk().screen(0), Instant::now());
+        if let Err(e) = post(posts) {
+            tracing::debug!(error = %format!("{e:#}"), "pen event not posted");
+        }
+    }
+}
+
+impl Drop for VirtualPen {
+    /// Lift the tip and leave range: no device goes with the pen to do it.
+    fn drop(&mut self) {
+        let _ = post(self.plan.release(Instant::now()));
+    }
+}
+
 /// Build and post each event in order. The one call in this crate that injects on macOS.
 fn post(posts: Vec<Post>) -> Result<()> {
     for p in posts {
@@ -146,6 +180,9 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
     let set = |e: &CGEvent, field: CGEventField, v: i64| {
         CGEvent::set_integer_value_field(Some(e), field, v)
     };
+    let set_f = |e: &CGEvent, field: CGEventField, v: f64| {
+        CGEvent::set_double_value_field(Some(e), field, v)
+    };
     let (event, flags) = match p {
         Post::Key {
             ty,
@@ -156,7 +193,7 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
             let e = CGEvent::new_keyboard_event(None, code, ty != ty::KEY_UP)?;
             CGEvent::set_type(Some(&e), CGEventType(ty));
             set(&e, CGEventField::KeyboardEventAutorepeat, i64::from(repeat));
-            (e, flags)
+            (e, Some(flags))
         }
         Post::Text { ch, down } => {
             let e = CGEvent::new_keyboard_event(None, KVK_SPACE, down)?;
@@ -167,7 +204,7 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
             unsafe {
                 CGEvent::keyboard_set_unicode_string(Some(&e), units.len() as _, units.as_ptr())
             };
-            (e, 0)
+            (e, Some(0))
         }
         Post::Mouse {
             ty,
@@ -182,7 +219,7 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
             set(&e, CGEventField::MouseEventDeltaX, delta.0.into());
             set(&e, CGEventField::MouseEventDeltaY, delta.1.into());
             set(&e, CGEventField::MouseEventClickState, clicks);
-            (e, flags)
+            (e, Some(flags))
         }
         Post::Scroll {
             lines,
@@ -203,10 +240,67 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
                 i64::from(!lines),
             );
             set(&e, CGEventField::ScrollWheelEventScrollPhase, phase.into());
-            (e, flags)
+            (e, Some(flags))
+        }
+        Post::Tablet {
+            ty,
+            at,
+            buttons,
+            pressure,
+            tilt,
+            rotation,
+            clicks,
+        } => {
+            let p = CGPoint::new(at.0, at.1);
+            let e = CGEvent::new_mouse_event(None, CGEventType(ty), p, CGMouseButton::Left)?;
+            // The tablet fields share storage with others and stick only once the subtype
+            // names them, so it goes first.
+            set(&e, CGEventField::MouseEventSubtype, tablet::SUBTYPE_POINT);
+            set(&e, CGEventField::MouseEventClickState, clicks);
+            set(&e, CGEventField::TabletEventPointX, at.0.round() as i64);
+            set(&e, CGEventField::TabletEventPointY, at.1.round() as i64);
+            set(&e, CGEventField::TabletEventPointButtons, buttons.into());
+            set(&e, CGEventField::TabletEventDeviceID, tablet::DEVICE_ID);
+            set_f(&e, CGEventField::MouseEventPressure, pressure);
+            set_f(&e, CGEventField::TabletEventPointPressure, pressure);
+            set_f(&e, CGEventField::TabletEventTiltX, tilt.0);
+            set_f(&e, CGEventField::TabletEventTiltY, tilt.1);
+            set_f(&e, CGEventField::TabletEventRotation, rotation);
+            (e, None)
+        }
+        Post::Proximity {
+            enter,
+            pointer,
+            caps,
+            at,
+        } => {
+            let e = CGEvent::new(None)?;
+            CGEvent::set_type(Some(&e), CGEventType::TabletProximity);
+            CGEvent::set_location(Some(&e), CGPoint::new(at.0, at.1));
+            use CGEventField as F;
+            for (field, v) in [
+                (F::TabletProximityEventVendorID, tablet::VENDOR_ID),
+                (F::TabletProximityEventTabletID, tablet::TABLET_ID),
+                (F::TabletProximityEventDeviceID, tablet::DEVICE_ID),
+                (F::TabletProximityEventSystemTabletID, tablet::DEVICE_ID),
+                (
+                    F::TabletProximityEventVendorPointerType,
+                    tablet::VENDOR_POINTER_TYPE,
+                ),
+                (F::TabletProximityEventVendorUniqueID, tablet::UNIQUE_ID),
+                (F::TabletProximityEventCapabilityMask, caps.into()),
+                (F::TabletProximityEventPointerType, pointer.into()),
+                (F::TabletProximityEventEnterProximity, enter.into()),
+            ] {
+                set(&e, field, v);
+            }
+            (e, None)
         }
     };
-    CGEvent::set_flags(Some(&event), CGEventFlags(flags));
+    // A tablet event keeps the modifiers it was made with: the pen knows no keys.
+    if let Some(flags) = flags {
+        CGEvent::set_flags(Some(&event), CGEventFlags(flags));
+    }
     Some(event)
 }
 
@@ -373,6 +467,61 @@ mod tests {
         .unwrap();
         assert_eq!(get(&e, CGEventField::ScrollWheelEventIsContinuous), 0);
         assert_eq!(get(&e, CGEventField::ScrollWheelEventDeltaAxis1), -2);
+    }
+
+    /// A pen sample builds into a mouse event carrying every tablet field, and an entry into a
+    /// proximity event with the pen's ids. Builds only: nothing is posted.
+    #[test]
+    fn a_pen_post_builds_into_a_tablet_event() {
+        use objc2_core_graphics::CGEventMouseSubtype;
+        assert_eq!(
+            tablet::SUBTYPE_POINT,
+            i64::from(CGEventMouseSubtype::TabletPoint.0)
+        );
+        let get = |e: &CGEvent, f| CGEvent::integer_value_field(Some(e), f);
+        let get_f = |e: &CGEvent, f| CGEvent::double_value_field(Some(e), f);
+        let e = build(Post::Tablet {
+            ty: ty::LEFT_DRAGGED,
+            at: (12.0, 34.0),
+            buttons: tablet::TIP | tablet::BARREL1,
+            pressure: 0.5,
+            tilt: (0.25, -0.5),
+            rotation: 90.0,
+            clicks: 1,
+        })
+        .unwrap();
+        assert_eq!(CGEvent::r#type(Some(&e)), CGEventType::LeftMouseDragged);
+        assert_eq!(get(&e, CGEventField::MouseEventSubtype), 1);
+        assert_eq!(get(&e, CGEventField::TabletEventPointX), 12);
+        assert_eq!(get(&e, CGEventField::TabletEventPointButtons), 3);
+        assert_eq!(
+            get(&e, CGEventField::TabletEventDeviceID),
+            tablet::DEVICE_ID
+        );
+        // Each double field keeps a fixed-point step of its own; the mouse pressure has 8 bits.
+        for (field, want) in [
+            (CGEventField::MouseEventPressure, 0.5),
+            (CGEventField::TabletEventPointPressure, 0.5),
+            (CGEventField::TabletEventTiltY, -0.5),
+            (CGEventField::TabletEventRotation, 90.0),
+        ] {
+            let got = get_f(&e, field);
+            assert!((got - want).abs() <= 1.0 / 255.0, "{field:?}: {got}");
+        }
+
+        let e = build(Post::Proximity {
+            enter: true,
+            pointer: tablet::ERASER,
+            caps: tablet::CAPS,
+            at: (12.0, 34.0),
+        })
+        .unwrap();
+        assert_eq!(CGEvent::r#type(Some(&e)), CGEventType::TabletProximity);
+        use CGEventField as F;
+        assert_eq!(get(&e, F::TabletProximityEventPointerType), 3);
+        assert_eq!(get(&e, F::TabletProximityEventCapabilityMask), 0x5C7);
+        assert_eq!(get(&e, F::TabletProximityEventDeviceID), tablet::DEVICE_ID);
+        assert_eq!(get(&e, F::TabletProximityEventEnterProximity), 1);
     }
 
     /// Reading the preference never fails; an unset one is macOS's 0.5 s.
