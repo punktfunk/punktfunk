@@ -392,8 +392,11 @@ pub fn act(verb: PowerVerb) -> Result<(), String> {
         return match mac_restart_here() {
             MacRestart::Agent => crate::native::stop_exiting(RESTART_EXIT_CODE as i32),
             MacRestart::Reopen(app) => {
-                let env = std::env::vars_os()
-                    .filter(|(k, _)| k.to_string_lossy().starts_with("PUNKTFUNK_"));
+                // What the operator set, not what `host.env` gave: the file is read again.
+                let env = std::env::vars_os().filter(|(k, _)| {
+                    k.to_string_lossy().starts_with("PUNKTFUNK_")
+                        && !crate::hostsys::app_loop::from_host_env(k)
+                });
                 reopener(std::process::id(), &app, env, "/usr/bin/open")
                     .spawn()
                     .map_err(|e| format!("start the relauncher: {e}"))?;

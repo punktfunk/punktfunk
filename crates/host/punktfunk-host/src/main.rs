@@ -238,6 +238,8 @@ fn main() {
     punktfunk_core::tls::install_default_provider();
     #[cfg(target_os = "macos")]
     let args = launch_args();
+    #[cfg(target_os = "macos")]
+    hostsys::app_loop::apply_host_env(&args);
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into())

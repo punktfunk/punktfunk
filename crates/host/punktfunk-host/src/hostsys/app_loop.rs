@@ -48,6 +48,70 @@ fn is_agent(service: Option<&OsStr>) -> bool {
     service == Some(OsStr::new(AGENT_LABEL))
 }
 
+/// Set once `host.env` has been applied, so the host starts itself over only once. Its value
+/// lists the variables that came from the file.
+const HOST_ENV_APPLIED: &str = "PUNKTFUNK_HOST_ENV_APPLIED";
+
+/// Whether `key` reached this process from `host.env`. A restart leaves those out, so the new
+/// process reads the file as it is then.
+pub(crate) fn from_host_env(key: &OsStr) -> bool {
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    key == HOST_ENV_APPLIED
+        || std::env::var(HOST_ENV_APPLIED).is_ok_and(|keys| keys.split(',').any(|k| k == key))
+}
+
+/// Give a serving Mac host the settings in `<config_dir>/host.env`: Finder and launchd start
+/// the app with no shell to export them from. The process replaces itself once with the file's
+/// variables added, before any thread or log line. A variable already set wins over the file.
+pub(crate) fn apply_host_env(args: &[String]) {
+    use std::os::unix::process::CommandExt;
+    if args.first().map(String::as_str) != Some("serve")
+        || std::env::var_os(HOST_ENV_APPLIED).is_some()
+    {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(pf_paths::config_dir().join("host.env")) else {
+        return;
+    };
+    let adds = host_env_adds(&text, |key| std::env::var_os(key).is_some());
+    if adds.is_empty() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let error = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env(
+            HOST_ENV_APPLIED,
+            adds.iter()
+                .map(|(key, _)| *key)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+        .envs(adds)
+        .exec();
+    eprintln!("punktfunk-host: apply host.env: {error}");
+}
+
+/// The `host.env` lines a host takes: `PUNKTFUNK_*` and `RUST_LOG`, never a credential (those
+/// live in their own owner-only files, and every child inherits the environment), and never a
+/// variable that `is_set` already.
+fn host_env_adds(text: &str, is_set: impl Fn(&str) -> bool) -> Vec<(&str, &str)> {
+    let mut adds: Vec<(&str, &str)> = Vec::new();
+    for (key, value) in pf_paths::env_file::parse(text) {
+        let secret = key.contains("TOKEN") || key.contains("PASSWORD");
+        if (key.starts_with("PUNKTFUNK_") || key == "RUST_LOG") && !secret && !is_set(key) {
+            // A later line wins, as it does for every other reader of the file.
+            adds.retain(|(k, _)| *k != key);
+            adds.push((key, value));
+        }
+    }
+    adds
+}
+
 /// What a Mac launch does before `work`: a `serve` takes the instance lock and opens its log
 /// file, and the UI library may hand it to the login agent first. Returns only when the loop
 /// is not wanted; the caller then runs `work` on this thread.
@@ -234,6 +298,23 @@ fn context(config_dir: &Path, version: &str, agent: bool) -> &'static UiContext 
 mod tests {
     use super::*;
     use crate::test_support::args;
+
+    /// The file adds settings, never a credential, and never over a variable that is set.
+    #[test]
+    fn host_env_adds_settings_but_no_credentials_or_overrides() {
+        let text = "# comment\nPUNKTFUNK_UI_BIND=127.0.0.1\nRUST_LOG=debug\nPATH=/evil\n\
+                    PUNKTFUNK_MGMT_TOKEN=abc\nPUNKTFUNK_UI_PASSWORD=x\nPUNKTFUNK_NATIVE_PORT=1\n\
+                    PUNKTFUNK_NATIVE_PORT=\"9778\"\nPUNKTFUNK_ENCODER=auto\n";
+        assert_eq!(
+            host_env_adds(text, |key| key == "PUNKTFUNK_ENCODER"),
+            [
+                ("PUNKTFUNK_UI_BIND", "127.0.0.1"),
+                ("RUST_LOG", "debug"),
+                ("PUNKTFUNK_NATIVE_PORT", "9778"),
+            ]
+        );
+        assert!(host_env_adds("", |_| false).is_empty());
+    }
 
     /// Only a bare launch from inside an app bundle serves; every other command line is as given.
     #[test]
