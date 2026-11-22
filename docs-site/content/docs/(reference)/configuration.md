@@ -63,7 +63,7 @@ restart*.
 | Controller speaker (Linux, Windows) | `PUNKTFUNK_PAD_AUDIO` | `on` · `off` | `on` | next session |
 | Audio redundancy | `PUNKTFUNK_AUDIO_REDUNDANCY` | `auto` · `on` · `off` | `auto` | next session |
 | Default gamepad (Linux, Windows) | `PUNKTFUNK_GAMEPAD` | `auto` · `xbox360` · `xboxone` · `xboxelite` · `dualsense` · `dualsenseedge` · `dualshock4` · `steamdeck` · `steamcontroller` · `steamcontroller2` · `steamcontroller2puck` · `switchpro` · `joyconpair` · `switch2pro` · `switch2gamecube` · `8bitdoultimate2` · `8bitdopro2` · `8bitdopro3` · `horipadsteam` | `auto` | next session |
-| Pen input (Linux, Windows) | `PUNKTFUNK_PEN` | `on` · `off` | `on` | next session |
+| Pen input | `PUNKTFUNK_PEN` | `on` · `off` | `on` | next session |
 | Steam USB gadget (Linux) | `PUNKTFUNK_STEAM_GADGET` | `auto` · `on` · `off` | `auto` | next session |
 | DualSense over USB/IP (Linux) | `PUNKTFUNK_DUALSENSE_USBIP` | `on` · `off` | `off` | next session |
 | Game Mode HDR (Linux) | `PUNKTFUNK_GAMESCOPE_HDR` | `on` · `off` | `on` | next session |
