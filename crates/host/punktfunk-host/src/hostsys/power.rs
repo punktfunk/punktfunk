@@ -6,8 +6,9 @@
 //! `packaging/linux/49-punktfunk-power.rules`. A foreign inhibitor or a second
 //! local user makes logind refuse, and that is a `409 blocked`. The door has no
 //! session, so `49-punktfunk-door.rules` grants it the second-user variants.
-//! Windows uses the interactive token's `SeShutdownPrivilege`. Other platforms
-//! have no executor; the mgmt route answers `501`.
+//! Windows uses the interactive token's `SeShutdownPrivilege`. macOS sleeps through IOKit; it
+//! has no unprivileged public reboot or shutdown, and no supervisor restarts its host, so those
+//! verbs are refused. Other platforms have no executor; the mgmt route answers `501`.
 //!
 //! [`probe`] and [`act`] block on a D-Bus round trip or a Win32 call. Call them
 //! from `spawn_blocking`. The dedicated thread matches
@@ -144,7 +145,11 @@ pub fn probe(verb: PowerVerb) -> Availability {
 
 /// The invoke route answers `501` when this is false.
 pub fn supported() -> bool {
-    cfg!(any(target_os = "linux", target_os = "windows"))
+    cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    ))
 }
 
 /// One logind `Manager` call on a dedicated thread (a nested `block_on` panics on a
@@ -302,15 +307,52 @@ pub fn act(verb: PowerVerb) -> Result<(), String> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// Sleep only: the console user may sleep the Mac, as `pmset sleepnow` does.
+#[cfg(target_os = "macos")]
+fn os_probe(verb: PowerVerb) -> Availability {
+    match verb {
+        PowerVerb::Sleep => Availability::yes(),
+        PowerVerb::Reboot | PowerVerb::Shutdown | PowerVerb::Restart => unsupported(),
+    }
+}
+
+/// Asks the power manager to sleep now. Our display-awake assertion is an idle one, which a
+/// deliberate sleep overrides.
+#[cfg(target_os = "macos")]
+pub fn act(verb: PowerVerb) -> Result<(), String> {
+    use objc2_io_kit::{kIOMainPortDefault, kIOReturnSuccess, IOPMFindPowerManagement};
+    use objc2_io_kit::{IOPMSleepSystem, IOServiceClose};
+    if verb != PowerVerb::Sleep {
+        return Err("not supported on this host platform".into());
+    }
+    // SAFETY: `kIOMainPortDefault` is IOKit's constant default main port, read once.
+    let port = IOPMFindPowerManagement(unsafe { kIOMainPortDefault });
+    if port == 0 {
+        return Err("IOPMFindPowerManagement: no power manager connection".into());
+    }
+    let rc = IOPMSleepSystem(port);
+    IOServiceClose(port);
+    if rc == kIOReturnSuccess {
+        Ok(())
+    } else {
+        Err(format!("IOPMSleepSystem: {rc:#x}"))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn os_probe(_verb: PowerVerb) -> Availability {
+    unsupported()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn unsupported() -> Availability {
     Availability::refused(
         "host_power_unsupported",
         "Host power actions are not supported on this host platform",
     )
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn act(_verb: PowerVerb) -> Result<(), String> {
     Err("not supported on this host platform".into())
 }

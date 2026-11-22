@@ -214,6 +214,16 @@ libc = "0.2"
 # `openat` that returns an owned descriptor.
 rustix = { version = "1", features = ["fs"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The power assertion that keeps the display awake under a stream, and `power.sleep`.
+objc2-core-foundation = { workspace = true }
+objc2-io-kit = { workspace = true }
+# The AppKit loop on the main thread (`hostsys/app_loop.rs`).
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-core-graphics = { workspace = true }
+objc2-foundation = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # `screencast` gates the ScreenCast portal module; `remote_desktop` adds the RemoteDesktop one
 # (it anchors portal capture on KWin/GNOME and is libei's source where Mutter's and KWin's

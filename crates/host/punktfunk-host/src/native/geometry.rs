@@ -646,6 +646,7 @@ pub(crate) mod tests {
             &knobs,
             owner.as_ref(),
             follows_source(&features, &tenure),
+            None,
         )
         .follows;
         let cursor = |worker| {

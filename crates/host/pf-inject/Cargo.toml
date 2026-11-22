@@ -105,5 +105,15 @@ serde_json = "1"
 # keyboard or pointer of.
 hidreport = { version = "0.6", default-features = false }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# CGEvent keyboard and mouse, and IOHIDUserDevice virtual pads.
+objc2 = { workspace = true }
+block2 = { workspace = true }
+dispatch2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true }
+objc2-core-graphics = { workspace = true }
+objc2-io-kit = { workspace = true }
+
 [lints]
 workspace = true

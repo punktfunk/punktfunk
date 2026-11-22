@@ -39,6 +39,7 @@ pub(super) fn resolve_pad_kind(kind: GamepadPref, steam_force: bool) -> GamepadP
         None,
         cfg!(target_os = "linux"),
         cfg!(target_os = "windows"),
+        cfg!(target_os = "macos"),
     );
     degrade_missing_driver_identity(degrade_xbox_identity(degrade_steam_on_conflict(
         degrade_if_no_uhid(chosen),
@@ -48,15 +49,23 @@ pub(super) fn resolve_pad_kind(kind: GamepadPref, steam_force: bool) -> GamepadP
 
 /// Session backend from client `pref`, then `PUNKTFUNK_GAMEPAD` under Auto, then Xbox 360.
 ///
-/// `linux`/`windows` are the host OS. Every kind has a Linux and a Windows backend, the two
-/// Switch 2 pads folding to the Switch Pro on Windows; other wishes fold to Xbox 360 (never an
-/// error — a session without rich pads still streams). Steam Controller 2 is Linux usbip (UHID
-/// its fallback) and Windows DEVTYPE_TRITON; the SC2 Puck has a native Linux identity and folds
-/// onto the wired one on Windows.
+/// `linux`/`windows`/`macos` are the host OS. Every kind has a Linux and a Windows backend, the
+/// two Switch 2 pads folding to the Switch Pro on Windows. Steam Controller 2 is Linux usbip
+/// (UHID its fallback) and Windows DEVTYPE_TRITON; the SC2 Puck has a native Linux identity and
+/// folds onto the wired one on Windows. macOS builds only what GameController allows virtual:
+/// the Nintendo pads fold to the Switch Pro, every other kind to DualSense, and its Xbox 360 is
+/// the Xbox Wireless pad. Other wishes fold to Xbox 360 (never an error — a session without rich
+/// pads still streams).
 ///
 /// Compile-time OS flags only. The Windows XUSB backend un-varies Xbox identity at runtime;
 /// that fold is [`degrade_xbox_identity`], not this function.
-fn pick_gamepad(pref: GamepadPref, env: Option<&str>, linux: bool, windows: bool) -> GamepadPref {
+fn pick_gamepad(
+    pref: GamepadPref,
+    env: Option<&str>,
+    linux: bool,
+    windows: bool,
+    macos: bool,
+) -> GamepadPref {
     let want = match pref {
         GamepadPref::Auto => env
             .and_then(GamepadPref::from_name)
@@ -95,6 +104,25 @@ fn pick_gamepad(pref: GamepadPref, env: Option<&str>, linux: bool, windows: bool
         GamepadPref::Switch2Pro if linux => GamepadPref::Switch2Pro,
         GamepadPref::Switch2GameCube if linux => GamepadPref::Switch2GameCube,
         GamepadPref::Switch2Pro | GamepadPref::Switch2GameCube if windows => GamepadPref::SwitchPro,
+        // macOS: `IOHIDUserDevice` identities GameController lists as allowed virtual.
+        GamepadPref::DualSense
+        | GamepadPref::DualSenseEdge
+        | GamepadPref::DualShock4
+        | GamepadPref::XboxOne
+        | GamepadPref::XboxElite
+        | GamepadPref::SwitchPro
+            if macos =>
+        {
+            want
+        }
+        GamepadPref::JoyConPair | GamepadPref::Switch2Pro | GamepadPref::Switch2GameCube
+            if macos =>
+        {
+            GamepadPref::SwitchPro
+        }
+        GamepadPref::Auto | GamepadPref::Xbox360 => GamepadPref::Xbox360,
+        // No other identity is allowed virtual on macOS; DualSense keeps touchpad, motion, lights.
+        _ if macos => GamepadPref::DualSense,
         _ => GamepadPref::Xbox360,
     }
 }
@@ -411,6 +439,7 @@ pub(super) fn resolve_gamepad(pref: GamepadPref, steam_force: bool) -> GamepadPr
         env.as_deref(),
         cfg!(target_os = "linux"),
         cfg!(target_os = "windows"),
+        cfg!(target_os = "macos"),
     );
     let chosen = degrade_if_no_uhid(chosen);
     let chosen = degrade_steam_on_conflict(chosen, steam_force);
@@ -491,36 +520,57 @@ mod tests {
     fn gamepad_resolution_precedence() {
         use GamepadPref::*;
         assert_eq!(
-            pick_gamepad(DualSense, Some("xbox360"), true, false),
+            pick_gamepad(DualSense, Some("xbox360"), true, false, false),
             DualSense
         );
         assert_eq!(
-            pick_gamepad(Xbox360, Some("dualsense"), true, false),
+            pick_gamepad(Xbox360, Some("dualsense"), true, false, false),
             Xbox360
         );
         assert_eq!(
-            pick_gamepad(Auto, Some("dualsense"), true, false),
+            pick_gamepad(Auto, Some("dualsense"), true, false, false),
             DualSense
         );
-        assert_eq!(pick_gamepad(Auto, Some("xbox360"), true, false), Xbox360);
-        assert_eq!(pick_gamepad(Auto, None, true, false), Xbox360);
-        assert_eq!(pick_gamepad(Auto, Some("bogus"), true, false), Xbox360);
-        assert_eq!(pick_gamepad(DualSense, None, false, true), DualSense);
         assert_eq!(
-            pick_gamepad(Auto, Some("dualsense"), false, true),
+            pick_gamepad(Auto, Some("xbox360"), true, false, false),
+            Xbox360
+        );
+        assert_eq!(pick_gamepad(Auto, None, true, false, false), Xbox360);
+        assert_eq!(
+            pick_gamepad(Auto, Some("bogus"), true, false, false),
+            Xbox360
+        );
+        assert_eq!(pick_gamepad(DualSense, None, false, true, false), DualSense);
+        assert_eq!(
+            pick_gamepad(Auto, Some("dualsense"), false, true, false),
             DualSense
         );
-        assert_eq!(pick_gamepad(DualSense, None, false, false), Xbox360);
-        assert_eq!(pick_gamepad(Auto, Some("dualsense"), false, false), Xbox360);
-        assert_eq!(pick_gamepad(DualShock4, None, true, false), DualShock4);
-        assert_eq!(pick_gamepad(Auto, Some("ps4"), true, false), DualShock4);
-        assert_eq!(pick_gamepad(DualShock4, None, false, true), DualShock4);
-        assert_eq!(pick_gamepad(DualShock4, None, false, false), Xbox360);
+        assert_eq!(pick_gamepad(DualSense, None, false, false, false), Xbox360);
+        assert_eq!(
+            pick_gamepad(Auto, Some("dualsense"), false, false, false),
+            Xbox360
+        );
+        assert_eq!(
+            pick_gamepad(DualShock4, None, true, false, false),
+            DualShock4
+        );
+        assert_eq!(
+            pick_gamepad(Auto, Some("ps4"), true, false, false),
+            DualShock4
+        );
+        assert_eq!(
+            pick_gamepad(DualShock4, None, false, true, false),
+            DualShock4
+        );
+        assert_eq!(pick_gamepad(DualShock4, None, false, false, false), Xbox360);
         // Distinct on Linux (uinput) and Windows (UMDF). The xusb fold is [`degrade_xbox_identity`].
-        assert_eq!(pick_gamepad(XboxOne, None, true, false), XboxOne);
-        assert_eq!(pick_gamepad(Auto, Some("series"), true, false), XboxOne);
-        assert_eq!(pick_gamepad(XboxOne, None, false, true), XboxOne);
-        assert_eq!(pick_gamepad(XboxOne, None, false, false), Xbox360);
+        assert_eq!(pick_gamepad(XboxOne, None, true, false, false), XboxOne);
+        assert_eq!(
+            pick_gamepad(Auto, Some("series"), true, false, false),
+            XboxOne
+        );
+        assert_eq!(pick_gamepad(XboxOne, None, false, true, false), XboxOne);
+        assert_eq!(pick_gamepad(XboxOne, None, false, false, false), Xbox360);
         // Linux UHID; Windows UMDF (the driver-store gate is `degrade_missing_driver_identity`).
         for p in [
             EightBitDoUltimate2,
@@ -529,93 +579,152 @@ mod tests {
             HoripadSteam,
             JoyConPair,
         ] {
-            assert_eq!(pick_gamepad(p, None, true, false), p);
-            assert_eq!(pick_gamepad(p, None, false, true), p);
-            assert_eq!(pick_gamepad(p, None, false, false), Xbox360);
+            assert_eq!(pick_gamepad(p, None, true, false, false), p);
+            assert_eq!(pick_gamepad(p, None, false, true, false), p);
+            assert_eq!(pick_gamepad(p, None, false, false, false), Xbox360);
         }
         assert_eq!(
-            pick_gamepad(Auto, Some("ultimate2"), true, false),
+            pick_gamepad(Auto, Some("ultimate2"), true, false, false),
             EightBitDoUltimate2
         );
         // Switch 2 pads are usbip devices: Linux only, the Switch Pro on Windows.
         for p in [Switch2Pro, Switch2GameCube] {
-            assert_eq!(pick_gamepad(p, None, true, false), p);
-            assert_eq!(pick_gamepad(p, None, false, true), SwitchPro);
-            assert_eq!(pick_gamepad(p, None, false, false), Xbox360);
+            assert_eq!(pick_gamepad(p, None, true, false, false), p);
+            assert_eq!(pick_gamepad(p, None, false, true, false), SwitchPro);
+            assert_eq!(pick_gamepad(p, None, false, false, false), Xbox360);
         }
         // Linux uinput 045E:0B00; Windows UMDF.
-        assert_eq!(pick_gamepad(XboxElite, None, false, true), XboxElite);
-        assert_eq!(pick_gamepad(Auto, Some("elite"), false, true), XboxElite);
-        assert_eq!(pick_gamepad(XboxElite, None, true, false), XboxElite);
-        assert_eq!(pick_gamepad(XboxElite, None, false, false), Xbox360);
+        assert_eq!(pick_gamepad(XboxElite, None, false, true, false), XboxElite);
+        assert_eq!(
+            pick_gamepad(Auto, Some("elite"), false, true, false),
+            XboxElite
+        );
+        assert_eq!(pick_gamepad(XboxElite, None, true, false, false), XboxElite);
+        assert_eq!(pick_gamepad(XboxElite, None, false, false, false), Xbox360);
 
-        assert_eq!(pick_gamepad(SteamDeck, None, true, false), SteamDeck);
-        assert_eq!(pick_gamepad(SteamDeck, None, false, true), SteamDeck);
-        assert_eq!(pick_gamepad(Auto, Some("deck"), false, true), SteamDeck);
-        assert_eq!(pick_gamepad(SteamDeck, None, false, false), Xbox360);
+        assert_eq!(pick_gamepad(SteamDeck, None, true, false, false), SteamDeck);
+        assert_eq!(pick_gamepad(SteamDeck, None, false, true, false), SteamDeck);
         assert_eq!(
-            pick_gamepad(SteamController, None, true, false),
+            pick_gamepad(Auto, Some("deck"), false, true, false),
+            SteamDeck
+        );
+        assert_eq!(pick_gamepad(SteamDeck, None, false, false, false), Xbox360);
+        assert_eq!(
+            pick_gamepad(SteamController, None, true, false, false),
             SteamController
         );
         assert_eq!(
-            pick_gamepad(Auto, Some("steamcontroller"), true, false),
+            pick_gamepad(Auto, Some("steamcontroller"), true, false, false),
             SteamController
         );
         assert_eq!(
-            pick_gamepad(SteamController, None, false, true),
+            pick_gamepad(SteamController, None, false, true, false),
             SteamController
         );
-        assert_eq!(pick_gamepad(SteamController, None, false, false), Xbox360);
+        assert_eq!(
+            pick_gamepad(SteamController, None, false, false, false),
+            Xbox360
+        );
 
         assert_eq!(
-            pick_gamepad(DualSenseEdge, None, true, false),
+            pick_gamepad(DualSenseEdge, None, true, false, false),
             DualSenseEdge
         );
         assert_eq!(
-            pick_gamepad(DualSenseEdge, None, false, true),
+            pick_gamepad(DualSenseEdge, None, false, true, false),
             DualSenseEdge
         );
-        assert_eq!(pick_gamepad(Auto, Some("edge"), true, false), DualSenseEdge);
-        assert_eq!(pick_gamepad(DualSenseEdge, None, false, false), Xbox360);
-        assert_eq!(pick_gamepad(SwitchPro, None, true, false), SwitchPro);
         assert_eq!(
-            pick_gamepad(Auto, Some("switchpro"), true, false),
+            pick_gamepad(Auto, Some("edge"), true, false, false),
+            DualSenseEdge
+        );
+        assert_eq!(
+            pick_gamepad(DualSenseEdge, None, false, false, false),
+            Xbox360
+        );
+        assert_eq!(pick_gamepad(SwitchPro, None, true, false, false), SwitchPro);
+        assert_eq!(
+            pick_gamepad(Auto, Some("switchpro"), true, false, false),
             SwitchPro
         );
-        assert_eq!(pick_gamepad(Auto, Some("switch"), true, false), SwitchPro);
-        assert_eq!(pick_gamepad(SwitchPro, None, false, true), SwitchPro);
-        assert_eq!(pick_gamepad(SwitchPro, None, false, false), Xbox360);
         assert_eq!(
-            pick_gamepad(SteamController2, None, true, false),
+            pick_gamepad(Auto, Some("switch"), true, false, false),
+            SwitchPro
+        );
+        assert_eq!(pick_gamepad(SwitchPro, None, false, true, false), SwitchPro);
+        assert_eq!(pick_gamepad(SwitchPro, None, false, false, false), Xbox360);
+        assert_eq!(
+            pick_gamepad(SteamController2, None, true, false, false),
             SteamController2
         );
         assert_eq!(
-            pick_gamepad(Auto, Some("sc2"), true, false),
+            pick_gamepad(Auto, Some("sc2"), true, false, false),
             SteamController2
         );
         assert_eq!(
-            pick_gamepad(Auto, Some("ibex"), true, false),
+            pick_gamepad(Auto, Some("ibex"), true, false, false),
             SteamController2
         );
         assert_eq!(
-            pick_gamepad(SteamController2, None, false, true),
+            pick_gamepad(SteamController2, None, false, true, false),
             SteamController2
         );
-        assert_eq!(pick_gamepad(SteamController2, None, false, false), Xbox360);
         assert_eq!(
-            pick_gamepad(SteamController2Puck, None, true, false),
+            pick_gamepad(SteamController2, None, false, false, false),
+            Xbox360
+        );
+        assert_eq!(
+            pick_gamepad(SteamController2Puck, None, true, false, false),
             SteamController2Puck
         );
         assert_eq!(
-            pick_gamepad(Auto, Some("sc2puck"), true, false),
+            pick_gamepad(Auto, Some("sc2puck"), true, false, false),
             SteamController2Puck
         );
         // Windows has no virtual Puck; the pref folds onto the wired Triton identity, which
         // Steam treats as the canonical controller — NOT to the Xbox 360 degrade.
         assert_eq!(
-            pick_gamepad(SteamController2Puck, None, false, true),
+            pick_gamepad(SteamController2Puck, None, false, true, false),
             SteamController2
         );
+    }
+
+    /// macOS keeps the identities GameController allows virtual, puts the Nintendo pads on the
+    /// Switch Pro and every other kind on DualSense. Its Xbox 360 stays the default.
+    #[test]
+    fn macos_keeps_allowed_identities_and_folds_the_rest() {
+        use GamepadPref::*;
+        let mac = |p, env| pick_gamepad(p, env, false, false, true);
+        for p in [
+            DualSense,
+            DualSenseEdge,
+            DualShock4,
+            XboxOne,
+            XboxElite,
+            SwitchPro,
+        ] {
+            assert_eq!(mac(p, None), p);
+        }
+        for p in [JoyConPair, Switch2Pro, Switch2GameCube] {
+            assert_eq!(mac(p, None), SwitchPro, "{p:?}");
+        }
+        for p in [
+            SteamDeck,
+            SteamController,
+            SteamController2,
+            SteamController2Puck,
+            EightBitDoUltimate2,
+            EightBitDoPro2,
+            EightBitDoPro3,
+            HoripadSteam,
+        ] {
+            assert_eq!(mac(p, None), DualSense, "{p:?}");
+        }
+        assert_eq!(mac(Xbox360, Some("dualsense")), Xbox360);
+        assert_eq!(mac(Auto, None), Xbox360);
+        assert_eq!(mac(Auto, Some("ps4")), DualShock4);
+        assert_eq!(mac(Auto, Some("deck")), DualSense);
+        assert_eq!(mac(Auto, Some("bogus")), Xbox360);
     }
 
     // Only a duplicate Deck folds; a host's own Steam Controller or Puck never does.

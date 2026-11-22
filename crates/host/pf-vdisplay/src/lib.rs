@@ -127,11 +127,20 @@ pub enum Compositor {
     Mango,
     /// The pf-vdisplay IddCx driver — a Windows host's only backend. Never in [`Compositor::all`].
     Windows,
+    /// A macOS host: a session's own screen is a virtual display where macOS offers one, else
+    /// a mirror of the main display (`vdisplay/macos.rs`). Never in [`Compositor::all`].
+    #[cfg(target_os = "macos")]
+    MacOs,
 }
 
 impl Compositor {
-    /// Wire / management id: the [`punktfunk_core::CompositorPref`] spelling.
+    /// Wire / management id: the [`punktfunk_core::CompositorPref`] spelling. macOS has no
+    /// wire byte and is `macos`.
     pub fn id(self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return "macos";
+        }
         self.as_pref().as_str()
     }
 
@@ -144,6 +153,10 @@ impl Compositor {
     /// Keeps a `keep_monitors` head lit under `exclusive`: its exclusive path filters through
     /// `monitors::darkens`. Mutter's sole-monitor config and Windows never read the list.
     pub fn honours_keep_monitors(self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return true;
+        }
         matches!(
             self,
             Compositor::Kwin
@@ -166,6 +179,10 @@ impl Compositor {
     /// Makes the streamed screen the desktop's main one under `primary`. The tiling backends
     /// only focus it, so there `primary` is `extend` (`exclusive_wanted`).
     pub fn has_primary(self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return true;
+        }
         matches!(
             self,
             Compositor::Kwin | Compositor::Mutter | Compositor::Windows
@@ -201,6 +218,8 @@ impl Compositor {
             Compositor::Umbriel => "Umbriel",
             Compositor::Mango => "mango",
             Compositor::Windows => "Windows virtual display",
+            #[cfg(target_os = "macos")]
+            Compositor::MacOs => "macOS display",
         }
     }
 
@@ -216,6 +235,9 @@ impl Compositor {
             Compositor::Umbriel => P::Umbriel,
             Compositor::Mango => P::Mango,
             Compositor::Windows => P::Windows,
+            // No wire byte names macOS: the Welcome echoes `Auto`.
+            #[cfg(target_os = "macos")]
+            Compositor::MacOs => P::Auto,
         }
     }
 
@@ -354,12 +376,16 @@ pub fn with_env_lock<R>(f: impl FnOnce() -> R) -> R {
 ///
 /// A live session is stored as a connect stores it. A unit started before its desktop
 /// inherits no `WAYLAND_DISPLAY`, so the console's reads would otherwise reach no
-/// compositor until a client connects.
+/// compositor until a client connects. A macOS host is always [`Compositor::MacOs`].
 pub fn detect() -> Result<Compositor> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Compositor::MacOs)
+    }
     // Variants are Linux backends. Off Linux, do not fall through to the XDG
     // sniff: `mgmt/display.rs` puts that error verbatim on `/display/monitors`.
     // The operator pin is gated with it — a Wayland name cannot be honoured here.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         anyhow::bail!(
             "compositor detection is Linux-only; on {} the host enumerates displays through the OS \
@@ -503,11 +529,11 @@ pub fn screen_target(fp: Option<&str>, may_choose: bool) -> (policy::DisplayTarg
 /// Heads a live mirror streams now, each with the device (fingerprint hex) it streams to.
 /// `None` is a session that named no device.
 pub fn streamed_monitors() -> Vec<(String, Option<String>)> {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
         mirror::streamed()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     Vec::new()
 }
 
@@ -536,7 +562,8 @@ pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
 }
 
 /// Open the display `target` names on `compositor`: the mirror backend for a monitor
-/// (physical head, no virtual display), else the virtual-display driver.
+/// (physical head, no virtual display), else the virtual-display driver. macOS mirrors the
+/// main display for an own screen when it has no virtual displays ([`creates_displays`]).
 /// `design/per-monitor-portal-capture.md`.
 pub fn open_for(
     compositor: Compositor,
@@ -590,7 +617,18 @@ pub fn open_for(
         )?;
         Ok(Box::new(driver::PfVdisplayDisplay::new()?))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    // Only `MacOs` makes a display: any other name here is a test's stand-in.
+    #[cfg(target_os = "macos")]
+    match target.into_monitor() {
+        None if compositor == Compositor::MacOs && creates_displays() => {
+            Ok(Box::<macos::OwnScreen>::default())
+        }
+        connector => {
+            let connector = connector.unwrap_or_else(macos::main_display);
+            Ok(Box::new(mirror::MirrorDisplay::new(compositor, connector)?))
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = (compositor, target);
         anyhow::bail!("virtual displays require Linux or Windows")
@@ -646,8 +684,8 @@ pub fn open_mirror(compositor: Compositor, connector: &str) -> Result<Box<dyn Vi
 
 /// Is `compositor` up and able to create a virtual output right now?
 /// KWin checks the privileged `zkde_screencast` global; Hyprland, niri and Umbriel check that
-/// their IPC answers. Gamescope, Mutter and wlroots have no pre-flight; `Ok(())` means try
-/// `create`.
+/// their IPC answers. Gamescope, Mutter, wlroots and macOS have no pre-flight;
+/// `Ok(())` means try `create`.
 pub fn probe(compositor: Compositor) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -673,7 +711,12 @@ pub fn probe(compositor: Compositor) -> Result<()> {
         let _ = compositor;
         driver::probe()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = compositor;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = compositor;
         anyhow::bail!("virtual displays require Linux or Windows")
@@ -752,9 +795,21 @@ impl DisplayAsleep {
 // Stream a head the compositor already has. `VirtualDisplay` so session
 // machinery is unchanged; `DisplayOwnership::External` so lifecycle policy
 // is not applied to someone else's monitor.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[path = "vdisplay/mirror.rs"]
 mod mirror;
+
+// The displays a macOS host lists, mirrors and makes.
+#[cfg(target_os = "macos")]
+#[path = "vdisplay/macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{creates_displays, display_hdr, hdr_displays};
+
+// The private CoreGraphics classes behind a macOS virtual display, and nothing else.
+#[cfg(target_os = "macos")]
+#[path = "vdisplay/macos_virtual.rs"]
+mod macos_virtual;
 
 // Pure lifecycle state machine (refcount + linger + pin). Registry executes the transitions.
 #[path = "vdisplay/lifecycle.rs"]

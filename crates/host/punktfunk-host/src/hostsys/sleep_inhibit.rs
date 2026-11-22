@@ -1,4 +1,4 @@
-//! Refcounted, session-scoped Linux suspend inhibition for live streams.
+//! Refcounted, session-scoped suspend inhibition for live streams.
 //!
 //! Every host but the door holds a ScreenSaver inhibit while any session lives
 //! ([`hold_screensaver_inhibit`]). Steam's Game Mode counts it as activity, so its idle sleep
@@ -19,8 +19,8 @@
 //! session may not take a logind block. Its host takes the ScreenSaver inhibit alone. The door
 //! takes a share while anyone plays on a seat, a block on `sleep` alone, so the desk still dims.
 //!
-//! Acquisition is best-effort, shared by native and GameStream sessions, and a no-op off Linux.
-//! The 0↔1 edges also drive the Windows Instant Replay pause ([`crate::windows::instant_replay`]).
+//! Acquisition is best-effort and shared by native and GameStream sessions. The 0↔1 edges also
+//! drive the Windows Instant Replay pause and the macOS display-awake assertion (`mac`).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -60,6 +60,9 @@ struct State {
     /// Logind inhibitor pipe. Inhibition lasts exactly as long as this fd stays open.
     #[cfg(target_os = "linux")]
     fd: Option<ashpd::zbus::zvariant::OwnedFd>,
+    /// The display-awake power assertion, held while `count` is above zero.
+    #[cfg(target_os = "macos")]
+    assertion: Option<objc2_io_kit::IOPMAssertionID>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -73,6 +76,8 @@ fn state() -> &'static Mutex<State> {
             screensaver: false,
             #[cfg(target_os = "linux")]
             fd: None,
+            #[cfg(target_os = "macos")]
+            assertion: None,
         })
     })
 }
@@ -112,9 +117,9 @@ pub fn note_input() {
     }
 }
 
-/// Take a share. Nothing is acquired here: [`watch`] takes the desktop's inhibit or the logind
-/// block, [`hold_screensaver_inhibit`] the ScreenSaver inhibit. A seat's host runs only the
-/// latter, the door only the former.
+/// Take a share. On Linux nothing is acquired here: [`watch`] takes the desktop's inhibit or
+/// the logind block, [`hold_screensaver_inhibit`] the ScreenSaver inhibit. A seat's host runs
+/// only the latter, the door only the former. The first share on macOS takes the assertion.
 pub fn hold() -> StreamHold {
     // Seed the quiet clock so a connect never vetoes and costs no D-Bus round trip.
     LAST_INPUT_MS.store(now_ms(), Ordering::Relaxed);
@@ -123,6 +128,10 @@ pub fn hold() -> StreamHold {
     #[cfg(windows)]
     if st.count == 1 {
         crate::windows::instant_replay::on_stream_start();
+    }
+    #[cfg(target_os = "macos")]
+    if st.count == 1 {
+        st.assertion = mac::keep_display_awake();
     }
     #[cfg(target_os = "linux")]
     {
@@ -170,6 +179,48 @@ impl Drop for StreamHold {
         #[cfg(target_os = "linux")]
         if st.count == 0 {
             release_locked(&mut st, "no live sessions");
+        }
+        #[cfg(target_os = "macos")]
+        if st.count == 0
+            && let Some(id) = st.assertion.take()
+        {
+            mac::release(id);
+        }
+    }
+}
+
+/// The display-awake assertion: `PreventUserIdleDisplaySleep`, which also keeps the Mac from
+/// idle sleep. A mirrored display that sleeps streams nothing; a deliberate Sleep still goes
+/// through. It shows in `pmset -g assertions` under its name.
+#[cfg(target_os = "macos")]
+mod mac {
+    use objc2_core_foundation::CFString;
+    use objc2_io_kit::{
+        kIOPMAssertionLevelOn, kIOReturnSuccess, IOPMAssertionCreateWithName, IOPMAssertionID,
+        IOPMAssertionRelease,
+    };
+
+    pub(super) fn keep_display_awake() -> Option<IOPMAssertionID> {
+        let kind = CFString::from_static_str("PreventUserIdleDisplaySleep");
+        let name = CFString::from_static_str("Punktfunk stream");
+        let mut id: IOPMAssertionID = 0;
+        // SAFETY: both strings are live CFStrings for the call, which copies what it keeps, and
+        // `id` is a live local it writes once.
+        let rc = unsafe {
+            IOPMAssertionCreateWithName(Some(&kind), kIOPMAssertionLevelOn, Some(&name), &mut id)
+        };
+        if rc != kIOReturnSuccess {
+            tracing::warn!(code = rc, "display-awake assertion not taken");
+            return None;
+        }
+        tracing::info!("holding the display awake while a session streams");
+        Some(id)
+    }
+
+    pub(super) fn release(id: IOPMAssertionID) {
+        let rc = IOPMAssertionRelease(id);
+        if rc != kIOReturnSuccess {
+            tracing::warn!(code = rc, "display-awake assertion not released");
         }
     }
 }

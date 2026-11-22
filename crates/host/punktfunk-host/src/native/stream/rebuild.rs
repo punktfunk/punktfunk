@@ -1272,6 +1272,10 @@ pub(crate) mod tests {
     /// plan, display request, rate, mode and epoch. Each column a row names is what the site
     /// tells or keeps.
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "VideoToolbox opens the 16x16 test size, so no rebuild is refused"
+    )]
     fn a_failed_rebuild_keeps_what_runs() {
         for row in KEPT {
             let site = row.site;

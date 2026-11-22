@@ -175,7 +175,13 @@ pub fn snapshot() -> Snapshot {
             displays: linux::snapshot(),
         }
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        Snapshot {
+            displays: crate::macos::snapshot(),
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Snapshot::default()
     }

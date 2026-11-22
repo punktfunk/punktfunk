@@ -1137,6 +1137,10 @@ mod tests {
     /// A downward rate the encoder could not be rebuilt at leaves the session on its old rate,
     /// and the client is told so; the frame on the wire stays open for the encoder it belongs to.
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "VideoToolbox opens the 16x16 test size, so no rebuild is refused"
+    )]
     fn a_failed_rate_rebuild_tells_the_client_the_rate_kept() {
         let mut f = super::super::swap::tests::fake();
         let (tx, rx) = std::sync::mpsc::channel();

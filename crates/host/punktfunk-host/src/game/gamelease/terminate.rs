@@ -305,7 +305,7 @@ fn signal(procs: &[crate::procscan::ProcRef], force: Force) -> usize {
             Force::Kill => crate::game_term::kill(&pids),
         }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let sig = match force {
             Force::Polite => libc::SIGTERM,
@@ -319,7 +319,7 @@ fn signal(procs: &[crate::procscan::ProcRef], force: Force) -> usize {
             .filter(|p| unsafe { libc::kill(p.pid as i32, sig) == 0 })
             .count()
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = (procs, force);
         0

@@ -382,6 +382,8 @@ pub fn capture_virtual_output(
 /// Linux — it depends on the resolved compositor and the installed gamescope.
 ///
 /// Windows: IDD-push enables advanced colour, so the platform answer.
+/// macOS: the capture composes PQ from any display, so the display decides: a virtual one
+/// must take an HDR mode, a mirrored one is captured as it stands.
 /// Linux + gamescope: host knob, `packaging/gamescope` 10-bit BT.2020/PQ, a
 /// spawned (not attached-foreign) sub-mode, and no earlier virtual-output HDR
 /// downgrade latched. Hyprland and wlroots: direct capture of a head lit in
@@ -408,6 +410,10 @@ pub fn capturer_supports_hdr_for(
         }
     }
     let _ = (compositor, gamescope_route, encoder);
+    #[cfg(target_os = "macos")]
+    if !pf_vdisplay::hdr_displays() {
+        return false;
+    }
     pf_capture::capturer_supports_hdr()
 }
 
@@ -459,7 +465,49 @@ pub fn capturer_delivers_sdr10_for(
 #[cfg(target_os = "windows")]
 pub(crate) use crate::windows::idd::{capture_virtual_output, open_driver_encoder};
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS: ScreenCaptureKit on the display the output stands for, at the size it names: a
+/// virtual display's own mode, captured unscaled, or a mirrored display's pixels, which the
+/// session's encoder frames for the client. Absolute input for the first screen aims at that
+/// display. The client draws the pointer only when the session forwards it.
+#[cfg(target_os = "macos")]
+pub fn capture_virtual_output(
+    vout: crate::vdisplay::VirtualOutput,
+    request: VirtualCaptureRequest,
+) -> Result<Box<dyn Capturer>> {
+    use anyhow::Context as _;
+    let VirtualCaptureRequest {
+        output,
+        // Encode resolution and PipeWire producers are other platforms' concerns.
+        codec: _codec,
+        encoder: _encoder,
+        capture: _capture,
+        kwin: _kwin,
+        gamescope: _gamescope,
+        stream_hz,
+        screen,
+        gamescope_cursor: _gamescope_cursor,
+        // A virtual display and a mirror capture alike.
+        mirrored: _mirrored,
+    } = request;
+    let display_id = vout
+        .cg_display
+        .context("the output names no display to capture")?;
+    let (width, height, _) = vout.preferred_mode.context("the display reports no mode")?;
+    if screen == 0 {
+        crate::inject::set_stream_display(Some(display_id));
+    }
+    pf_capture::open_display(pf_capture::DisplayCaptureOpts {
+        display_id,
+        width,
+        height,
+        stream_hz,
+        metadata_cursor: output.hw_cursor,
+        output,
+        keepalive: vout.keepalive,
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn capture_virtual_output(
     _vout: crate::vdisplay::VirtualOutput,
     request: VirtualCaptureRequest,

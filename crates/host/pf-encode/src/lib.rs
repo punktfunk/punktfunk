@@ -3,7 +3,8 @@
 //! encode is one-way: this crate never depends on capture.
 //!
 //! - `open`: `open_video`, `OpenParams`, `TrackedEncoder`.
-//! - `resolve` and its `resolve/{linux,windows}` arms: `ResolveInputs`, `Resolved`, `resolve()`.
+//! - `resolve` and its `resolve/{linux,windows,macos}` arms: `ResolveInputs`, `Resolved`,
+//!   `resolve()`.
 //! - `env_knobs`: `Knobs`, every environment read. `cursor_cache`: when a bitmap uploads again.
 //! - `cpu_ingest`: the stage every CPU frame passes. `enc/sw`: openh264.
 //! - `enc/linux/nvenc_cuda` (shell), `nvenc_lane` (the lane, blend and retrieve model).
@@ -13,6 +14,7 @@
 //!   `vk_av1_encode`, `vk_valve_rgb`, `vk_intra_refresh`.
 //! - `enc/linux/pyrowave` (shell), `pyrowave_open` (open plan), `pyrowave_remote` (host half),
 //!   `worker` (the `punktfunk-encode-worker` half). `enc/linux/vaapi_native`: native VAAPI.
+//! - `enc/macos/videotoolbox`: VideoToolbox, and `vt_au`, its access units as Annex-B.
 //!
 //! Model and shell: enum state, pure `step`, fix-named table rows; a model builds on every target.
 //! Resolve once: `resolve()` per host entry, `open_video(&Resolved, ..)`; ADR 0002 in `docs/adr/`.
@@ -34,7 +36,8 @@ pub use pf_encode_win::*;
     allow(dead_code)
 )]
 mod cursor_cache;
-// The CPU-frame stage every Linux backend uploads through. Pure, so its table runs on every target.
+// The CPU-frame stage the Linux backends and VideoToolbox upload through. Pure, so its table runs
+// on every target.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod cpu_ingest;
 mod env_knobs;
@@ -236,6 +239,14 @@ mod test_frames;
 ))]
 #[path = "enc/linux/test_dmabuf.rs"]
 mod test_dmabuf;
+// VideoToolbox: H.264 and HEVC on the media engine (macOS).
+#[cfg(target_os = "macos")]
+#[path = "enc/macos/videotoolbox.rs"]
+mod videotoolbox;
+// The access unit VideoToolbox returns, as Annex-B. Pure, so its table runs on every target.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[path = "enc/macos/vt_au.rs"]
+mod vt_au;
 // Live tests pairing a `pf_encode_win` backend with the P010 converter's real output.
 #[cfg(all(test, target_os = "windows"))]
 #[path = "enc/windows/live_tests.rs"]

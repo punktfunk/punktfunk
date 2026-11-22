@@ -489,6 +489,7 @@ pub(super) mod tests {
                     studio_asked: crate::session_plan::StudioAsk::default(),
                     owner_hdr: None,
                     owner_format: None,
+                    mirrored: None,
                     follows: false,
                     content_hdr: None,
                 },

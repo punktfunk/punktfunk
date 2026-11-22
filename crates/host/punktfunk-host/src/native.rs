@@ -2166,6 +2166,7 @@ fn display_half(
         &knobs,
         terms.joined.as_ref(),
         handshake::follows_source(&features, &terms.tenure),
+        terms.mirrored(),
     );
     // The content the Welcome was resolved for, not a second look at it.
     format_facts.content_hdr = format_facts

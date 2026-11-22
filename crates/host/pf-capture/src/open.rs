@@ -12,6 +12,44 @@ use crate::{CursorChannelSender, CursorForwardSender, EncodeCtlSender, SetEncode
 #[cfg(target_os = "linux")]
 use anyhow::Result;
 
+/// What [`open_display`] captures and how. Named fields, as [`VirtualOutputOpts`].
+#[cfg(target_os = "macos")]
+pub struct DisplayCaptureOpts {
+    /// The `CGDirectDisplayID` to capture.
+    pub display_id: u32,
+    /// The size frames arrive at. The display's own pixel size captures it unscaled; any
+    /// other size scales the whole display into it, with bars where the shape differs.
+    pub width: u32,
+    pub height: u32,
+    /// The wire rate. The capture delivers no faster.
+    pub stream_hz: u32,
+    /// The session's negotiated format: `hdr`, `ten_bit_sdr`, `chroma_444`, `full_range`.
+    pub output: pf_frame::OutputFormat,
+    /// The client draws the pointer: frames leave it out and [`crate::CursorSource`] reports it.
+    pub metadata_cursor: bool,
+    /// Held for the capture's life: the display's lease.
+    pub keepalive: Box<dyn Send>,
+}
+
+/// ScreenCaptureKit capture of one display. Frames are [`pf_frame::FramePayload::PixelBuffer`].
+#[cfg(target_os = "macos")]
+pub fn open_display(opts: DisplayCaptureOpts) -> anyhow::Result<Box<dyn crate::Capturer>> {
+    crate::macos::open(opts)
+}
+
+/// Whether this process holds the Screen Recording grant. Never prompts.
+#[cfg(target_os = "macos")]
+pub fn screen_capture_access() -> bool {
+    objc2_core_graphics::CGPreflightScreenCaptureAccess()
+}
+
+/// Ask for the Screen Recording grant. The system prompts at most once per process identity;
+/// `true` only when the grant is already in place.
+#[cfg(target_os = "macos")]
+pub fn request_screen_capture_access() -> bool {
+    objc2_core_graphics::CGRequestScreenCaptureAccess()
+}
+
 /// Least zero-copy pool depth asked of a compositor. 2 is what every producer already
 /// serves; the negotiated depth minus the hold reserve is the deferred-requeue budget.
 pub const POOL_MIN: i32 = 2;
@@ -83,7 +121,13 @@ pub fn capturer_supports_hdr() -> bool {
 pub fn capturer_supports_hdr() -> bool {
     true
 }
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS: ScreenCaptureKit composes 10-bit BT.2100 PQ for a canonical HDR10 display; checked on
+/// macOS 27.0.
+#[cfg(target_os = "macos")]
+pub fn capturer_supports_hdr() -> bool {
+    true
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn capturer_supports_hdr() -> bool {
     false
 }
@@ -107,7 +151,12 @@ pub fn capturer_supports_444(encoder_ingests_rgb_444: bool) -> bool {
     // full-chroma, so Welcome chroma is real regardless of HDR.
     encoder_ingests_rgb_444
 }
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS: ScreenCaptureKit delivers `BGRA` for 4:4:4, so the encoder converts RGB itself.
+#[cfg(target_os = "macos")]
+pub fn capturer_supports_444(encoder_ingests_rgb_444: bool) -> bool {
+    encoder_ingests_rgb_444
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn capturer_supports_444(_encoder_ingests_rgb_444: bool) -> bool {
     false
 }

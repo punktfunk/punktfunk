@@ -594,6 +594,11 @@ pub(in crate::native) struct SessionTerms {
 }
 
 impl SessionTerms {
+    /// The connector of the monitor this session mirrors, if it mirrors one.
+    pub(in crate::native) fn mirrored(&self) -> Option<&str> {
+        mirrored(self.screen.as_ref())
+    }
+
     /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
     /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
     pub(in crate::native) fn bitrate_auto(&self) -> bool {
@@ -682,6 +687,7 @@ pub(super) async fn negotiate(
         &n.knobs,
         joined.as_ref(),
         follows_source(&n.first.features, &tenure),
+        mirrored(screen.as_ref()),
     );
     let studio_asked = facts.studio_asked;
     // The range a joiner must stream: a shared capture's own, on a display lit either way.
@@ -1611,6 +1617,14 @@ fn game_mode_pref(launch: Option<&str>) -> Option<CompositorPref> {
     (launch == Some(crate::library::GAME_MODE_ID)).then_some(CompositorPref::Gamescope)
 }
 
+/// The connector a `screen` echo names: the monitor the session mirrors.
+fn mirrored(screen: Option<&ScreenEcho>) -> Option<&str> {
+    match screen {
+        Some(ScreenEcho::Monitor(connector)) => Some(connector.as_str()),
+        _ => None,
+    }
+}
+
 /// What the depth, HDR and chroma rule reads about the client, the source and the operator,
 /// kept for the session so a codec change re-runs the handshake's rule for the new codec.
 #[derive(Clone)]
@@ -1626,6 +1640,9 @@ pub(super) struct FormatFacts {
     pub(super) owner_hdr: Option<bool>,
     /// A joiner's: the format of the capture it shares, the ceiling of its own.
     pub(super) owner_format: Option<crate::vdisplay::admission::SampleFormat>,
+    /// The monitor the session mirrors, by connector. Its own HDR state bounds the stream's
+    /// where the capture composes HDR from any display (macOS).
+    pub(super) mirrored: Option<String>,
     /// The rule runs again when the source moves: the session reaches another compositor, or
     /// its content turns HDR or SDR. Only for a client that rebuilds its decoder at an epoch,
     /// on a capture the session does not share.
@@ -1647,6 +1664,8 @@ pub(super) struct Verdict {
 
 impl FormatFacts {
     /// `owner` is the display a joiner was admitted onto. `follows` is [`follows_source`].
+    /// `mirrored` is the connector of the monitor the session mirrors.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn of(
         hello: &Hello,
         studio_asked: crate::session_plan::StudioAsk,
@@ -1655,6 +1674,7 @@ impl FormatFacts {
         knobs: &SessionKnobs,
         owner: Option<&crate::vdisplay::admission::LiveDisplay>,
         follows: bool,
+        mirrored: Option<&str>,
     ) -> FormatFacts {
         let owner_format = owner.and_then(|d| d.format);
         FormatFacts {
@@ -1665,8 +1685,25 @@ impl FormatFacts {
             studio_asked: asked_under(owner_format, studio_asked),
             owner_hdr: owner.map(|d| d.hdr),
             owner_format,
+            mirrored: mirrored.map(str::to_owned),
             follows,
             content_hdr: None,
+        }
+    }
+
+    /// Whether the monitor this session mirrors can show HDR now. macOS composes PQ from any
+    /// display, so an SDR panel would stream SDR content as HDR. Elsewhere, and for a session's
+    /// own screen, the capture's answer already covers it.
+    fn mirror_has_hdr(&self) -> bool {
+        let Some(connector) = &self.mirrored else {
+            return true;
+        };
+        #[cfg(target_os = "macos")]
+        return crate::vdisplay::display_hdr(connector);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = connector;
+            true
         }
     }
 
@@ -1744,7 +1781,8 @@ impl FormatFacts {
         // capture fold in `hdr_capture_failed(VirtualOutput)`; GameStream's rtsp.rs check has no
         // twin here: that latch is per-source and this gate already used this session's source.
         let capture_supports_hdr =
-            crate::capture::capturer_supports_hdr_for(compositor, gamescope_route, encoder);
+            crate::capture::capturer_supports_hdr_for(compositor, gamescope_route, encoder)
+                && self.mirror_has_hdr();
         // An 8-bit desktop's SDR-10 only widens: a colour pass per frame for no source detail, and
         // the operator opts in (`sdr10_widen`). Our gamescope composites 10-bit SDR, and Windows 11
         // 24H2 composes the virtual display in SDR wide colour unless this host saw it refused
@@ -1807,6 +1845,9 @@ impl FormatFacts {
         // `can_encode_444`. HDR does not cost chroma (HEVC Main 4:4:4 10).
         let ingest_chain_supports_444 = codec == crate::encode::Codec::PyroWave
             || crate::capture::capturer_supports_444(encoder.ingests_rgb_444());
+        // macOS capture has no 10-bit full-chroma format, so a 10-bit session there stays 4:2:0.
+        let mac_ten_bit = cfg!(target_os = "macos") && bit_depth == 10;
+        let ingest_chain_supports_444 = ingest_chain_supports_444 && !mac_ten_bit;
         // Probe opens a tiny encoder, short-circuited. A negative latches until
         // restart — a GPU either supports HEVC 4:4:4 or it does not.
         let gpu_supports_444 = if matches!(
@@ -1827,6 +1868,8 @@ impl FormatFacts {
                 crate::encode::Codec::H265 | crate::encode::Codec::PyroWave
             ) {
                 "the negotiated codec only carries 4:2:0 — 4:4:4 needs HEVC or PyroWave"
+            } else if mac_ten_bit {
+                "a 10-bit session on macOS stays 4:2:0 — capture has no 10-bit full-chroma format"
             } else if !ingest_chain_supports_444 {
                 "this host's encoder backend can't ingest full chroma — 4:4:4 needs direct \
                  NVENC (NVIDIA) or the PyroWave codec"

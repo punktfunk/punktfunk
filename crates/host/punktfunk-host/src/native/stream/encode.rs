@@ -83,6 +83,8 @@ fn capture_path(frame: &crate::capture::CapturedFrame) -> (&'static str, Option<
         pf_frame::FramePayload::Dmabuf(d) => ("dmabuf", Some(d.modifier)),
         #[cfg(target_os = "windows")]
         pf_frame::FramePayload::D3d11(_) => ("d3d11", None),
+        #[cfg(target_os = "macos")]
+        pf_frame::FramePayload::PixelBuffer(_) => ("pixelbuffer", None),
     }
 }
 

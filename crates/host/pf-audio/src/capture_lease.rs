@@ -233,8 +233,11 @@ mod tests {
             "an isolated capturer was parked"
         );
         lease(None).park(&slot);
-        // Windows drops every capturer at park (`park_audio_capture`).
-        assert_eq!(slot.lock().unwrap().is_some(), !cfg!(windows));
+        // Windows and macOS drop every capturer at park (`park_audio_capture`).
+        assert_eq!(
+            slot.lock().unwrap().is_some(),
+            !cfg!(any(windows, target_os = "macos"))
+        );
     }
 
     struct Dead;

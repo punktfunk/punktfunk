@@ -128,7 +128,9 @@ impl VirtualDisplay for MirrorDisplay {
     fn create(&mut self, _mode: Mode) -> Result<VirtualOutput> {
         #[cfg(target_os = "windows")]
         return self.create_windows();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        return self.create_macos();
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         self.create_cast()
     }
 }
@@ -173,9 +175,35 @@ impl MirrorDisplay {
         Ok(out)
     }
 
-    /// A compositor cast of the head: every backend but Windows. A powered-off head is lit
-    /// first (`panel_dpms::wake_head`): it paints nothing to capture.
-    #[cfg(not(target_os = "windows"))]
+    /// macOS: the display itself is the output, as on Windows. It carries the display's
+    /// `CGDirectDisplayID`, which ScreenCaptureKit opens; the keepalive holds the claim only.
+    #[cfg(target_os = "macos")]
+    fn create_macos(&mut self) -> Result<VirtualOutput> {
+        let monitors = monitors::list(self.compositor)?;
+        let target = monitors::resolve(&monitors, &self.connector)?;
+        check_mirrorable(target, self.compositor)?;
+        let display_id: u32 = target
+            .connector
+            .parse()
+            .with_context(|| format!("read display id {:?}", target.connector))?;
+        tracing::info!(
+            display_id,
+            mode = %target.mode_label(),
+            at = %format!("+{}+{}", target.x, target.y),
+            "mirroring an existing display (no virtual display created)"
+        );
+        let dims = (target.width, target.height, refresh_hz(target.refresh_mhz));
+        let claim = Streaming::claim(&target.connector, self.device.clone());
+        let mut out = VirtualOutput::owned(0, Some(dims), Box::new(claim));
+        out.refresh_mhz = Some(target.refresh_mhz).filter(|&mhz| mhz > 0);
+        out.cg_display = Some(display_id);
+        out.ownership = DisplayOwnership::External;
+        Ok(out)
+    }
+
+    /// A compositor cast of the head: every backend but Windows and macOS. A powered-off head
+    /// is lit first (`panel_dpms::wake_head`): it paints nothing to capture.
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     fn create_cast(&mut self) -> Result<VirtualOutput> {
         // Resolve first: geometry for the input anchor, and "that monitor is gone"
         // before any compositor call. `resolve` never substitutes another head.
@@ -317,6 +345,9 @@ fn names_ours_conclusively(compositor: Compositor) -> bool {
         Compositor::Wlroots | Compositor::Mutter | Compositor::Gamescope => false,
         // The inventory reads our EDID manufacturer id, which nothing else carries.
         Compositor::Windows => true,
+        // Ours carry a vendor and product no panel reports (`vdisplay/macos.rs`).
+        #[cfg(target_os = "macos")]
+        Compositor::MacOs => true,
     }
 }
 

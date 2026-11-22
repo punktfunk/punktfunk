@@ -179,8 +179,10 @@ pub fn input_backend_id(chosen: Compositor) -> &'static str {
         // Same protocols, but Umbriel maps absolute motion over the whole layout and ignores
         // the pointer's output: the injector aims in layout space.
         Compositor::Umbriel => "wlr-layout",
-        // pf-inject ignores the id off Linux; Windows has one injector.
+        // pf-inject ignores the id off Linux; Windows and macOS have one injector each.
         Compositor::Windows => "windows",
+        #[cfg(target_os = "macos")]
+        Compositor::MacOs => "macos",
     }
 }
 
