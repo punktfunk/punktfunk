@@ -220,8 +220,12 @@ private final class PinnedTrust: NSObject, URLSessionDelegate, Sendable {
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
         -> (URLSession.AuthChallengeDisposition, URLCredential?)
     {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust,
+        // The host also asks for a client certificate, which paired devices present. The UI
+        // sends its bearer instead, so that challenge is answered with no certificate.
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust else {
+            return (.performDefaultHandling, nil)
+        }
+        guard let trust = challenge.protectionSpace.serverTrust,
               let leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first,
               HostFiles.trusts(serverDER: SecCertificateCopyData(leaf) as Data, pin: files.pin)
         else { return (.cancelAuthenticationChallenge, nil) }
