@@ -5,7 +5,7 @@
 //! Posting needs the Accessibility grant ([`post_event_access`]); without it
 //! [`CgEventInjector::open`] fails and the injector service retries on its backoff.
 
-use crate::cgevent_plan::{pick_bounds, ty, Desk, Planner, Post, Rect, KVK_SPACE};
+use crate::cgevent_plan::{pick_bounds, ty, BoundsCache, Desk, Planner, Post, Rect, KVK_SPACE};
 use crate::InputInjector;
 use anyhow::{bail, Context, Result};
 use objc2_core_foundation::{
@@ -13,16 +13,27 @@ use objc2_core_foundation::{
     CGPoint,
 };
 use objc2_core_graphics::{
-    CGDisplayBounds, CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventType,
-    CGMainDisplayID, CGMouseButton, CGPreflightPostEventAccess, CGRequestPostEventAccess,
-    CGScrollEventUnit,
+    CGDirectDisplayID, CGDisplayBounds, CGDisplayChangeSummaryFlags,
+    CGDisplayRegisterReconfigurationCallback, CGEvent, CGEventField, CGEventFlags,
+    CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightPostEventAccess,
+    CGRequestPostEventAccess, CGScrollEventUnit,
 };
 use punktfunk_core::input::InputEvent;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
 
 /// The display [`set_stream_display`] published; 0 (`kCGNullDirectDisplay`) for none.
 static STREAM_DISPLAY: AtomicU32 = AtomicU32::new(0);
+
+/// Bumped by every display reconfiguration callback and every published display.
+static DISPLAY_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Display rects of the current [`DISPLAY_EPOCH`]. Key 0 is the main display.
+static BOUNDS: Mutex<BoundsCache> = Mutex::new(BoundsCache::new());
+
+static WATCH: Once = Once::new();
 
 /// The display absolute coordinates map into, as a `CGDirectDisplayID`: counterpart of
 /// Windows `stream_target`. Published at capture bring-up, then the aim generation bumps in the
@@ -34,7 +45,27 @@ pub fn set_stream_display(display: Option<u32>) {
         if STREAM_DISPLAY.swap(id, Ordering::Relaxed) != id {
             tracing::info!(display_id = id, "absolute-input stream display set");
         }
+        DISPLAY_EPOCH.fetch_add(1, Ordering::Release);
     });
+}
+
+/// CoreGraphics calls this on the main thread's run loop, in every mode. A blocked main thread
+/// delays it, and the cache keeps the old rect until then. A mode change the host makes is
+/// also republished at its capture bring-up.
+extern "C-unwind" fn reconfigured(
+    _: CGDirectDisplayID,
+    _: CGDisplayChangeSummaryFlags,
+    _: *mut c_void,
+) {
+    DISPLAY_EPOCH.fetch_add(1, Ordering::Release);
+}
+
+fn watch_displays() {
+    let callback = reconfigured as unsafe extern "C-unwind" fn(_, _, _);
+    // SAFETY: `reconfigured` is a plain `extern "C-unwind"` function with the callback's
+    // signature that reads none of its arguments, so the null `userInfo` is never dereferenced.
+    // It stays registered for the process's life.
+    unsafe { CGDisplayRegisterReconfigurationCallback(Some(callback), std::ptr::null_mut()) };
 }
 
 /// Whether this process may post input events: the Accessibility grant. Shows nothing.
@@ -162,20 +193,24 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
     Some(event)
 }
 
-/// The cursor and the stream display's bounds, read now.
+/// The cursor, read now, and the stream display's bounds, read once per display epoch.
 fn desk() -> Desk {
+    WATCH.call_once(watch_displays);
     let cursor = CGEvent::new(None).map_or_else(CGPoint::default, |e| CGEvent::location(Some(&e)));
     let rect = |id| {
         let r = CGDisplayBounds(id);
         (r.origin.x, r.origin.y, r.size.width, r.size.height)
     };
+    let epoch = DISPLAY_EPOCH.load(Ordering::Acquire);
+    let mut cache = BOUNDS.lock().unwrap_or_else(|e| e.into_inner());
     let stream: Option<Rect> = match STREAM_DISPLAY.load(Ordering::Relaxed) {
         0 => None,
-        id => Some(rect(id)),
+        id => Some(cache.get(epoch, id, || rect(id))),
     };
+    let main = cache.get(epoch, 0, || rect(CGMainDisplayID()));
     Desk {
         cursor: (cursor.x, cursor.y),
-        bounds: pick_bounds(stream, rect(CGMainDisplayID())),
+        bounds: pick_bounds(stream, main),
     }
 }
 

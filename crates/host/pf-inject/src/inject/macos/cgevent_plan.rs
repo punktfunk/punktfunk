@@ -464,6 +464,37 @@ pub(crate) fn pick_bounds(stream: Option<Rect>, main: Rect) -> Rect {
     stream.filter(|r| r.2 >= 1.0 && r.3 >= 1.0).unwrap_or(main)
 }
 
+/// Display rects read once per display-configuration epoch, keyed by display id. A new epoch
+/// drops every rect read before it.
+pub(crate) struct BoundsCache {
+    epoch: u64,
+    rects: Vec<(u32, Rect)>,
+}
+
+impl BoundsCache {
+    pub const fn new() -> Self {
+        BoundsCache {
+            epoch: 0,
+            rects: Vec::new(),
+        }
+    }
+
+    /// The rect of `display` in `epoch`, from `read` when this epoch has not read it. Load the
+    /// epoch before reading the rect: a change between the two then costs one extra read.
+    pub fn get(&mut self, epoch: u64, display: u32, read: impl FnOnce() -> Rect) -> Rect {
+        if self.epoch != epoch {
+            self.epoch = epoch;
+            self.rects.clear();
+        }
+        if let Some(&(_, r)) = self.rects.iter().find(|(d, _)| *d == display) {
+            return r;
+        }
+        let r = read();
+        self.rects.push((display, r));
+        r
+    }
+}
+
 /// `p` moved onto `b`. The far edge, `x + w`, is the next display's first column.
 fn clamp_to(b: Rect, (x, y): (f64, f64)) -> (f64, f64) {
     let last = |o: f64, n: f64| o + (n - 1.0).max(0.0);
@@ -1169,5 +1200,26 @@ mod tests {
             main,
             "a gone display"
         );
+    }
+
+    /// A rect is read once per epoch and display; a new epoch, a resize included, reads again.
+    #[test]
+    fn a_cached_rect_lives_one_epoch() {
+        let mut cache = BoundsCache::new();
+        let reads = std::cell::Cell::new(0);
+        let mut get = |epoch, display, r: Rect| {
+            cache.get(epoch, display, || {
+                reads.set(reads.get() + 1);
+                r
+            })
+        };
+        let (small, big) = ((0.0, 0.0, 1280.0, 720.0), (0.0, 0.0, 2560.0, 1440.0));
+        assert_eq!(get(1, 7, small), small);
+        assert_eq!(get(1, 7, big), small, "the same epoch serves the cache");
+        assert_eq!(get(1, 8, big), big, "another display reads its own");
+        assert_eq!(reads.get(), 2);
+        assert_eq!(get(2, 7, big), big, "a reconfiguration reads again");
+        assert_eq!(get(2, 8, small), small);
+        assert_eq!(reads.get(), 4);
     }
 }
