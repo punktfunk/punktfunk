@@ -238,11 +238,13 @@ fn main() {
     punktfunk_core::tls::install_default_provider();
     #[cfg(target_os = "macos")]
     let args = launch_args();
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into())
+    };
     // SCM `service run` has no console; log to a file, not stderr.
     if windows::entry::service_run_requested() {
-        windows::entry::init_file_logging(filter);
+        windows::entry::init_file_logging(filter());
     } else {
         // stderr so stdout stays machine-readable (`openapi > spec.json`). The ring tees DEBUG+
         // past this filter, so the Logs tab keeps every line stderr drops.
@@ -255,13 +257,24 @@ fn main() {
         } else {
             fmt.with_ansi(false)
         };
+        // A serving Mac host also logs to a file: launchd sends stderr nowhere.
+        #[cfg(target_os = "macos")]
+        let file = (args.first().map(String::as_str) == Some("serve")).then(|| {
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(|| telemetry::log_file::Writer)
+                .with_filter(filter())
+        });
+        #[cfg(not(target_os = "macos"))]
+        let file: Option<tracing_subscriber::layer::Identity> = None;
         log_capture::install_global(
             tracing_subscriber::registry()
                 .with(
                     log_capture::RingLayer
                         .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
                 )
-                .with(fmt.with_filter(filter)),
+                .with(fmt.with_filter(filter()))
+                .with(file),
         );
     }
 
@@ -288,12 +301,10 @@ fn main() {
             .to_string();
         let backtrace = std::backtrace::Backtrace::force_capture();
         let ts_ms = clock::unix_ms();
-        log_capture::ring().push_remote(
-            "ERROR",
-            "punktfunk_host::panic",
-            &format!("PANIC: {payload} (thread={thread}, at {location})\n{backtrace}"),
-            ts_ms,
-        );
+        let line = format!("PANIC: {payload} (thread={thread}, at {location})\n{backtrace}");
+        log_capture::ring().push_remote("ERROR", "punktfunk_host::panic", &line, ts_ms);
+        #[cfg(target_os = "macos")]
+        telemetry::log_file::write_panic(&line);
         default_panic(info);
     }));
     windows::entry::install_crash_handler();

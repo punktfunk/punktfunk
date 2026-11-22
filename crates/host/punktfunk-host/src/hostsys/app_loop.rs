@@ -46,9 +46,9 @@ fn is_agent(service: Option<&OsStr>) -> bool {
     service == Some(OsStr::new(AGENT_LABEL))
 }
 
-/// What a Mac launch does before `work`: a `serve` takes the instance lock. Returns only when
-/// the loop is not wanted: the command serves no streams, or no desktop session is there to
-/// connect to. The caller then runs `work` on this thread.
+/// What a Mac launch does before `work`: a `serve` takes the instance lock and opens its log
+/// file. Returns only when the loop is not wanted: the command serves no streams, or no desktop
+/// session is there to connect to. The caller then runs `work` on this thread.
 pub(crate) fn start(args: &[String], work: fn()) {
     let first = args.first().map(String::as_str);
     let looped = matches!(first, Some("serve" | "punktfunk1-host"))
@@ -58,6 +58,7 @@ pub(crate) fn start(args: &[String], work: fn()) {
         // A second launch sends SIGUSR1 to ask for the window; it must not end the host.
         unsafe { libc::signal(libc::SIGUSR1, libc::SIG_IGN) };
         super::instance::take(login_agent());
+        crate::telemetry::log_file::open();
     }
     if looped {
         run_beside(work);
