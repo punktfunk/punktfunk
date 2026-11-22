@@ -13,10 +13,12 @@
 //!   counts up the click state; a move with a button held is a drag.
 //! - Scroll: the shared mapper's libei plan (point distance, v120 clicks, stops) as pixel
 //!   and line events; a phased wire gesture also carries the scroll phase.
+//! - Touch: [`crate::touch_plan`] emulates it with the pointer, scroll and gestures.
 
 use crate::held::HeldInput;
 use crate::plan::Abs;
 use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp, WheelAxis};
+use crate::touch_plan::{Act, TouchPlanner};
 use punktfunk_core::input::scroll::{ScrollEvent, ScrollPhase};
 use punktfunk_core::input::{InputEvent, InputKind};
 use std::collections::VecDeque;
@@ -63,6 +65,14 @@ pub(crate) mod phase {
     pub const CHANGED: u32 = 2;
     pub const ENDED: u32 = 4;
     pub const CANCELLED: u32 = 8;
+    pub const MAY_BEGIN: u32 = 128;
+}
+
+/// `CGMomentumScrollPhase` values. A momentum event carries no scroll phase.
+pub(crate) mod momentum {
+    pub const BEGIN: u32 = 1;
+    pub const CONTINUE: u32 = 2;
+    pub const END: u32 = 3;
 }
 
 /// `kVK_Space`: the key a text event rides on.
@@ -138,11 +148,13 @@ pub(crate) enum Post {
         flags: u64,
     },
     /// Wheel 1 is vertical, positive up; wheel 2 horizontal, positive left. In lines or points.
+    /// `phase` is a [`phase`], `momentum` a [`momentum`]; one of them is 0.
     Scroll {
         lines: bool,
         wheel1: i32,
         wheel2: i32,
         phase: u32,
+        momentum: u32,
         flags: u64,
     },
     /// A pen sample: a mouse event of type `ty` with the tablet-point subtype. `buttons` are
@@ -164,6 +176,15 @@ pub(crate) enum Post {
         pointer: u32,
         caps: u32,
         at: (f64, f64),
+    },
+    /// A trackpad gesture at the pointer: `subtype` and `phase` are
+    /// [`crate::touch_plan::gesture`] values, `value` the magnification or degrees since the
+    /// last one.
+    Gesture {
+        subtype: i64,
+        value: f64,
+        phase: u32,
+        flags: u64,
     },
 }
 
@@ -197,6 +218,7 @@ pub(crate) struct Planner {
     wheel: [WheelAxis; 2],
     /// Axes inside a phased gesture. macOS phases one gesture over both axes.
     open: [bool; 2],
+    touch: TouchPlanner,
 }
 
 impl Planner {
@@ -212,6 +234,7 @@ impl Planner {
             px: [0.0; 2],
             wheel: Default::default(),
             open: [false; 2],
+            touch: TouchPlanner::new(),
         }
     }
 
@@ -250,11 +273,13 @@ impl Planner {
                 let ops = self.scroll.plan(ev);
                 self.lower(ops, phased)
             }
-            // Touch and pen stay off on macOS; pads are another plane.
-            InputKind::TouchDown
-            | InputKind::TouchMove
-            | InputKind::TouchUp
-            | InputKind::GamepadButton
+            InputKind::TouchDown | InputKind::TouchMove | InputKind::TouchUp => {
+                let d = desk();
+                let acts = self.touch.step(ev, now, &d, self.flags());
+                self.act(acts, now, d)
+            }
+            // Pads are another plane.
+            InputKind::GamepadButton
             | InputKind::GamepadAxis
             | InputKind::GamepadState
             | InputKind::GamepadRemove
@@ -262,23 +287,69 @@ impl Planner {
         }
     }
 
-    /// When a held scroll stop falls due ([`Self::flush`]).
+    /// When a held scroll stop, a long press or a momentum frame falls due ([`Self::flush`]).
     pub fn due(&self) -> Option<Instant> {
-        self.scroll.stop_due()
+        match (self.scroll.stop_due(), self.touch.due()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
-    /// The scroll stops due by `now`.
-    pub fn flush(&mut self, now: Instant) -> Vec<Post> {
+    /// The scroll stops, long press and momentum frame due by `now`.
+    pub fn flush(&mut self, now: Instant, desk: &dyn Fn() -> Desk) -> Vec<Post> {
         let ops = self.scroll.flush_due(now);
-        self.lower(ops, false)
+        let mut out = self.lower(ops, false);
+        let acts = self.touch.flush(now, self.flags());
+        if !acts.is_empty() {
+            out.extend(self.act(acts, now, desk()));
+        }
+        out
     }
 
-    /// The ups for every key and button still held, then the end of an open scroll gesture.
+    /// The ups for every key and button still held, then the end of an open scroll gesture and
+    /// of what touch left open.
     pub fn release(&mut self, now: Instant, desk: &dyn Fn() -> Desk) -> Vec<Post> {
         let ups = self.held.clone().release();
         let mut out: Vec<Post> = ups.iter().flat_map(|up| self.plan(up, now, desk)).collect();
         let ops = self.scroll.cancel_all();
         out.extend(self.lower(ops, false));
+        let acts = self.touch.release(self.flags());
+        if !acts.is_empty() {
+            out.extend(self.act(acts, now, desk()));
+        }
+        out
+    }
+
+    /// Touch's acts as events: a point is a move there, a button a press like the client's.
+    fn act(&mut self, acts: Vec<Act>, now: Instant, d: Desk) -> Vec<Post> {
+        let mut out = Vec::new();
+        for a in acts {
+            match a {
+                Act::Point(p) => {
+                    let (x, y) = self.pointer(d.cursor);
+                    let at = clamp_to(d.holding(p), p);
+                    let delta = ((at.0 - x).round() as i32, (at.1 - y).round() as i32);
+                    out.push(self.motion(at, delta));
+                }
+                Act::Button(code, down) => {
+                    let kind = if down {
+                        InputKind::MouseButtonDown
+                    } else {
+                        InputKind::MouseButtonUp
+                    };
+                    let ev = InputEvent {
+                        kind,
+                        _pad: [0; 3],
+                        code,
+                        x: 0,
+                        y: 0,
+                        flags: 0,
+                    };
+                    out.extend(self.button(&ev, now, &|| d));
+                }
+                Act::Post(p) => out.push(p),
+            }
+        }
         out
     }
 
@@ -480,6 +551,7 @@ fn scroll(lines: bool, horizontal: bool, value: i32, phase: u32, flags: u64) -> 
         wheel1,
         wheel2,
         phase,
+        momentum: 0,
         flags,
     }
 }
@@ -1191,9 +1263,9 @@ mod tests {
             ]
         );
         let due = p.due().expect("the lift waits for momentum");
-        assert!(p.flush(due - Duration::from_millis(1)).is_empty());
+        assert!(p.flush(due - Duration::from_millis(1), &|| DESK).is_empty());
         assert_eq!(
-            wheels(&p.flush(due + Duration::from_secs(1))),
+            wheels(&p.flush(due + Duration::from_secs(1), &|| DESK)),
             [(false, 0, 0, phase::ENDED)],
             "the gesture ends once both axes stopped"
         );
@@ -1265,6 +1337,79 @@ mod tests {
             p.release(Instant::now(), &|| DESK).is_empty(),
             "nothing twice"
         );
+    }
+
+    /// Touch lands on the stream display as the mouse does: a tap is a click there, a second
+    /// quick tap a double click, a long press a right drag the injector's deadline wakes for.
+    #[test]
+    fn a_tap_clicks_and_a_long_press_right_drags() {
+        let touch = |kind, x, y| InputEvent {
+            x,
+            y,
+            flags: (1280 << 16) | 720,
+            ..ev(kind, 1)
+        };
+        let (dn, mv, lift) = (
+            InputKind::TouchDown,
+            InputKind::TouchMove,
+            InputKind::TouchUp,
+        );
+        let mut p = planner();
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut at = |n, e| p.plan(&e, ms(n), &|| DESK);
+        let first = at(0, touch(dn, 640, 360));
+        let Post::Mouse { ty, at: point, .. } = first[0] else {
+            panic!("{first:?}")
+        };
+        assert_eq!((ty, point), (ty::MOVED, (3200.0, 720.0)));
+        let taps = [at(50, touch(lift, 0, 0)), at(150, touch(dn, 640, 360))].concat();
+        let taps = [taps, at(200, touch(lift, 0, 0))].concat();
+        assert_eq!(
+            mice(&taps),
+            [
+                (ty::LEFT_DOWN, 0, 1),
+                (ty::LEFT_UP, 0, 1),
+                (ty::MOVED, 0, 0),
+                (ty::LEFT_DOWN, 0, 2),
+                (ty::LEFT_UP, 0, 2),
+            ]
+        );
+
+        at(1000, touch(dn, 100, 100));
+        assert_eq!(p.due(), Some(ms(1500)));
+        let mut posts = p.flush(ms(1500), &|| DESK);
+        posts.extend(p.plan(&touch(mv, 200, 100), ms(1600), &|| DESK));
+        posts.extend(p.plan(&touch(lift, 0, 0), ms(1700), &|| DESK));
+        assert_eq!(
+            mice(&posts),
+            [
+                (ty::RIGHT_DOWN, 1, 1),
+                (ty::RIGHT_DRAGGED, 1, 1),
+                (ty::RIGHT_UP, 1, 1)
+            ]
+        );
+    }
+
+    /// A pan the injector still holds when it goes is cancelled.
+    #[test]
+    fn release_cancels_a_touch_scroll() {
+        let touch = |kind, y| InputEvent {
+            x: 640,
+            y,
+            flags: (1280 << 16) | 720,
+            ..ev(kind, 1)
+        };
+        let mut p = planner();
+        run(
+            &mut p,
+            &[
+                touch(InputKind::TouchDown, 300),
+                touch(InputKind::TouchMove, 340),
+            ],
+        );
+        let posts = p.release(Instant::now(), &|| DESK);
+        assert_eq!(wheels(&posts), [(false, 0, 0, phase::CANCELLED)]);
     }
 
     #[test]

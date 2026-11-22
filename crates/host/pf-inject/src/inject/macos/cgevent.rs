@@ -9,6 +9,7 @@ use crate::cgevent_plan::{
     pick_bounds, ty, BoundsCache, Desk, Planner, Post, Rect, KVK_SPACE, SCREENS,
 };
 use crate::pen_plan::{tablet, PenPlanner};
+use crate::touch_plan::gesture;
 use crate::InputInjector;
 use anyhow::{bail, Context, Result};
 use objc2_core_foundation::{
@@ -123,7 +124,7 @@ impl InputInjector for CgEventInjector {
     }
 
     fn on_deadline(&mut self) -> Result<()> {
-        post(self.plan.flush(Instant::now()))
+        post(self.plan.flush(Instant::now(), &desk))
     }
 }
 
@@ -226,6 +227,7 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
             wheel1,
             wheel2,
             phase,
+            momentum,
             flags,
         } => {
             let unit = if lines {
@@ -240,6 +242,28 @@ fn build(p: Post) -> Option<CFRetained<CGEvent>> {
                 i64::from(!lines),
             );
             set(&e, CGEventField::ScrollWheelEventScrollPhase, phase.into());
+            set(
+                &e,
+                CGEventField::ScrollWheelEventMomentumPhase,
+                momentum.into(),
+            );
+            (e, Some(flags))
+        }
+        Post::Gesture {
+            subtype,
+            value,
+            phase,
+            flags,
+        } => {
+            let e = CGEvent::new(None)?;
+            CGEvent::set_type(Some(&e), CGEventType(gesture::TYPE));
+            set(&e, CGEventField(gesture::SUBTYPE_FIELD), subtype);
+            set(&e, CGEventField(gesture::PHASE_FIELD), phase.into());
+            let field = match subtype {
+                gesture::ZOOM => gesture::MAGNIFY_FIELD,
+                _ => gesture::ROTATE_FIELD,
+            };
+            set_f(&e, CGEventField(field), value);
             (e, Some(flags))
         }
         Post::Tablet {
@@ -346,8 +370,8 @@ fn double_click_interval() -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cgevent_plan::{flag, phase};
-    use objc2_core_graphics::CGScrollPhase;
+    use crate::cgevent_plan::{flag, momentum, phase};
+    use objc2_core_graphics::{CGMomentumScrollPhase, CGScrollPhase};
 
     /// The plan's numbers are the SDK's.
     #[test]
@@ -383,6 +407,14 @@ mod tests {
             (phase::CHANGED, CGScrollPhase::Changed),
             (phase::ENDED, CGScrollPhase::Ended),
             (phase::CANCELLED, CGScrollPhase::Cancelled),
+            (phase::MAY_BEGIN, CGScrollPhase::MayBegin),
+        ] {
+            assert_eq!(ours, sdk.0, "{sdk:?}");
+        }
+        for (ours, sdk) in [
+            (momentum::BEGIN, CGMomentumScrollPhase::Begin),
+            (momentum::CONTINUE, CGMomentumScrollPhase::Continue),
+            (momentum::END, CGMomentumScrollPhase::End),
         ] {
             assert_eq!(ours, sdk.0, "{sdk:?}");
         }
@@ -448,6 +480,7 @@ mod tests {
             wheel1: 7,
             wheel2: -3,
             phase: phase::BEGAN,
+            momentum: 0,
             flags: 0,
         })
         .unwrap();
@@ -462,11 +495,38 @@ mod tests {
             wheel1: -2,
             wheel2: 0,
             phase: 0,
+            momentum: 0,
             flags: 0,
         })
         .unwrap();
         assert_eq!(get(&e, CGEventField::ScrollWheelEventIsContinuous), 0);
         assert_eq!(get(&e, CGEventField::ScrollWheelEventDeltaAxis1), -2);
+
+        let e = build(Post::Scroll {
+            lines: false,
+            wheel1: 5,
+            wheel2: 0,
+            phase: 0,
+            momentum: momentum::CONTINUE,
+            flags: 0,
+        })
+        .unwrap();
+        assert_eq!(get(&e, CGEventField::ScrollWheelEventScrollPhase), 0);
+        assert_eq!(get(&e, CGEventField::ScrollWheelEventMomentumPhase), 2);
+
+        let e = build(Post::Gesture {
+            subtype: gesture::ZOOM,
+            value: 0.25,
+            phase: gesture::CHANGED,
+            flags: flag::COMMAND,
+        })
+        .unwrap();
+        assert_eq!(CGEvent::r#type(Some(&e)), CGEventType(gesture::TYPE));
+        assert_eq!(get(&e, CGEventField(gesture::SUBTYPE_FIELD)), gesture::ZOOM);
+        assert_eq!(get(&e, CGEventField(gesture::PHASE_FIELD)), 2);
+        let magnify = CGEvent::double_value_field(Some(&e), CGEventField(gesture::MAGNIFY_FIELD));
+        assert!((magnify - 0.25).abs() < 1e-3, "{magnify}");
+        assert_eq!(CGEvent::flags(Some(&e)).0, flag::COMMAND);
     }
 
     /// A pen sample builds into a mouse event carrying every tablet field, and an entry into a

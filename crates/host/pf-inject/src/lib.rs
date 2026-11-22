@@ -513,7 +513,14 @@ pub fn touch_supported() -> bool {
     pen::synthetic_pen_available()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// Contacts land as the pointer, scroll and gestures macOS emulates touch with
+/// (`touch_plan`).
+#[cfg(target_os = "macos")]
+pub fn touch_supported() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn touch_supported() -> bool {
     false
 }
@@ -1288,6 +1295,9 @@ mod cgevent_plan;
 #[cfg(any(target_os = "macos", test))]
 #[path = "inject/macos/pen_plan.rs"]
 mod pen_plan;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/touch_plan.rs"]
+mod touch_plan;
 #[cfg(target_os = "macos")]
 pub use cgevent::{
     post_event_access, request_post_event_access, set_screen_display, set_stream_display,
