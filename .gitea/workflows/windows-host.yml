@@ -213,16 +213,24 @@ jobs:
           & "$env:RUNNER_TEMP\src-mtimes.exe" $env:CARGO_TARGET_DIR; if ($LASTEXITCODE) { throw "src-mtimes" }
 
       - name: sccache preflight (a dead cache costs a cold build, not the leg)
-        # Verbatim from the package job: a 401 from storage.unom.io on the daemon's startup check
+        # Verbatim from the package job: a daemon that cannot read storage.unom.io at startup
         # kills cargo at `rustc -vV` before a line compiles.
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          $stats = & sccache --show-stats 2>&1
-          $code = $LASTEXITCODE
-          $stats | Select-Object -First 12 | Write-Output
-          if ($code -ne 0) {
+          # Cargo's own first call. It starts the daemon, which `--show-stats` never does: with
+          # none running that prints zeros and exits 0 against a dead store.
+          $probe = & sccache rustc -vV 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $probe | Select-Object -First 12 | Write-Output
             Write-Warning "sccache daemon failed to start - building this leg without the cache"
             "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          # Cargo keeps a failed compiler probe in the target dir and replays it on every later
+          # run, whatever the daemon does now. Drop it so cargo probes again.
+          $info = Join-Path $env:CARGO_TARGET_DIR '.rustc_info.json'
+          if ((Test-Path $info) -and (Select-String -Path $info -SimpleMatch '"success":false' -Quiet)) {
+            Remove-Item $info -Force
+            Write-Warning "dropped a failed compiler probe cached in $info"
           }
 
       - name: Clippy (Windows host subsystem)
@@ -383,14 +391,21 @@ jobs:
         # passthrough shim without cache secrets.
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          # Capture before truncating: piping a native command into `Select-Object -First`
-          # stops it early, so $LASTEXITCODE stays unset and $null -ne 0 reads as a failure.
-          $stats = & sccache --show-stats 2>&1
-          $code = $LASTEXITCODE
-          $stats | Select-Object -First 12 | Write-Output
-          if ($code -ne 0) {
+          # Cargo's own first call. It starts the daemon, which `--show-stats` never does: with
+          # none running that prints zeros and exits 0 against a dead store. Captured before it
+          # is truncated: a native command piped into `Select-Object -First` sets no exit code.
+          $probe = & sccache rustc -vV 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $probe | Select-Object -First 12 | Write-Output
             Write-Warning "sccache daemon failed to start - building this leg without the cache"
             "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          # Cargo keeps a failed compiler probe in the target dir and replays it on every later
+          # run, whatever the daemon does now. Drop it so cargo probes again.
+          $info = Join-Path $env:CARGO_TARGET_DIR '.rustc_info.json'
+          if ((Test-Path $info) -and (Select-String -Path $info -SimpleMatch '"success":false' -Quiet)) {
+            Remove-Item $info -Force
+            Write-Warning "dropped a failed compiler probe cached in $info"
           }
 
       - name: Build (release, host)

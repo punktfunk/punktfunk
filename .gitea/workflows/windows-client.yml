@@ -281,12 +281,12 @@ jobs:
         # the wrapper when it fails, so the cached probe records a success.
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          # Capture before truncating: piping a native command into `Select-Object -First`
-          # stops it early, so $LASTEXITCODE stays unset and $null -ne 0 reads as a failure.
-          $stats = & sccache --show-stats 2>&1
-          $code = $LASTEXITCODE
-          $stats | Select-Object -First 12 | Write-Output
-          if ($code -ne 0) {
+          # Cargo's own first call. It starts the daemon, which `--show-stats` never does: with
+          # none running that prints zeros and exits 0 against a dead store. Captured before it
+          # is truncated: a native command piped into `Select-Object -First` sets no exit code.
+          $probe = & sccache rustc -vV 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $probe | Select-Object -First 12 | Write-Output
             Write-Warning "sccache daemon failed to start - building this leg without the cache"
             "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
