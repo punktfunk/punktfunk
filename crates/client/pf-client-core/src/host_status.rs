@@ -20,6 +20,8 @@ pub enum Status {
     Streaming,
     Playing(String),
     Online,
+    /// Online, and its host is this device's own ([`crate::trust::local`]).
+    Here,
     /// Answers, but nothing is pinned yet: a click runs the pairing.
     NotPaired,
     /// Offline with a MAC and auto-wake on: a click wakes it first.
@@ -28,12 +30,14 @@ pub enum Status {
 }
 
 impl Status {
+    /// `here`: the host is this device's own, which never wakes from here.
     pub fn of(
         host: &KnownHost,
         online: bool,
         phase: Option<Phase>,
         playing: &str,
         auto_wake: bool,
+        here: bool,
     ) -> Status {
         if let Some(phase) = phase {
             match phase {
@@ -41,7 +45,7 @@ impl Status {
                 Phase::Streaming => Status::Streaming,
             }
         } else if !online {
-            if auto_wake && !host.mac.is_empty() {
+            if auto_wake && !host.mac.is_empty() && !here {
                 Status::OfflineWakes
             } else {
                 Status::Offline
@@ -50,6 +54,8 @@ impl Status {
             Status::NotPaired
         } else if !playing.is_empty() {
             Status::Playing(playing.to_string())
+        } else if here {
+            Status::Here
         } else {
             Status::Online
         }
@@ -61,6 +67,7 @@ impl Status {
             Status::Streaming => client::hostcard_status_streaming().into(),
             Status::Playing(title) => client::hostcard_status_playing(title),
             Status::Online => client::hostcard_status_online().into(),
+            Status::Here => client::hostcard_status_this_device().into(),
             Status::NotPaired => client::hostcard_status_not_paired().into(),
             Status::OfflineWakes => client::hostcard_status_offline_wakes().into(),
             Status::Offline => client::hostcard_status_offline().into(),
@@ -71,7 +78,11 @@ impl Status {
     pub fn live(&self) -> bool {
         matches!(
             self,
-            Status::Online | Status::Streaming | Status::Playing(_) | Status::NotPaired
+            Status::Online
+                | Status::Here
+                | Status::Streaming
+                | Status::Playing(_)
+                | Status::NotPaired
         )
     }
 }
@@ -93,32 +104,57 @@ mod tests {
     #[test]
     fn a_status_is_one_sentence() {
         let mut k = host("Desk", "10.0.0.2", "ab");
-        assert_eq!(Status::of(&k, true, None, "", true), Status::Online);
+        assert_eq!(Status::of(&k, true, None, "", true, false), Status::Online);
         assert_eq!(
-            Status::of(&k, true, None, "Hades", true).sentence(),
+            Status::of(&k, true, None, "Hades", true, false).sentence(),
             "Playing Hades"
         );
         assert_eq!(
-            Status::of(&k, true, Some(Phase::Connecting), "Hades", true),
+            Status::of(&k, true, Some(Phase::Connecting), "Hades", true, false),
             Status::Connecting
         );
-        let streaming = Status::of(&k, false, Some(Phase::Streaming), "Hades", true);
+        let streaming = Status::of(&k, false, Some(Phase::Streaming), "Hades", true, false);
         assert_eq!(
             streaming,
             Status::Streaming,
             "this device's stream beats the probe"
         );
         assert!(streaming.live());
-        assert_eq!(Status::of(&k, false, None, "", true), Status::Offline);
+        assert_eq!(
+            Status::of(&k, false, None, "", true, false),
+            Status::Offline
+        );
         k.mac = vec!["aa:bb:cc:dd:ee:ff".into()];
-        assert_eq!(Status::of(&k, false, None, "", true), Status::OfflineWakes);
-        assert_eq!(Status::of(&k, false, None, "", false), Status::Offline);
+        assert_eq!(
+            Status::of(&k, false, None, "", true, false),
+            Status::OfflineWakes
+        );
+        assert_eq!(
+            Status::of(&k, false, None, "", false, false),
+            Status::Offline
+        );
         let placeholder = host("Den", "10.0.0.3", "");
         assert_eq!(
-            Status::of(&placeholder, true, None, "", true),
+            Status::of(&placeholder, true, None, "", true, false),
             Status::NotPaired
         );
         assert!(Status::NotPaired.live());
         assert!(!Status::OfflineWakes.live());
+    }
+
+    /// This device's own host says so while it answers; offline it never offers a wake, and
+    /// what it has up reads as for any host.
+    #[test]
+    fn this_devices_host_reads_this_device() {
+        let mut k = host("Desk", "10.0.0.2", "ab");
+        k.mac = vec!["aa:bb:cc:dd:ee:ff".into()];
+        let here = Status::of(&k, true, None, "", true, true);
+        assert_eq!(here.sentence(), "This device");
+        assert!(here.live());
+        assert_eq!(Status::of(&k, false, None, "", true, true), Status::Offline);
+        assert_eq!(
+            Status::of(&k, true, None, "Hades", true, true).sentence(),
+            "Playing Hades"
+        );
     }
 }

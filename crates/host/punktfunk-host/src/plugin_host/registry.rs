@@ -265,6 +265,12 @@ impl PluginRegistry {
             .collect()
     }
 
+    /// The title live plugin `id` registered. Read-only; does not prune or emit.
+    pub(crate) fn title(&self, id: &str) -> Option<String> {
+        let map = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        map.get(id).filter(|s| s.is_live()).map(|s| s.title.clone())
+    }
+
     /// Read-only; does not prune or emit.
     fn live_ids(&self) -> Vec<String> {
         let map = self.inner.read().unwrap_or_else(|e| e.into_inner());

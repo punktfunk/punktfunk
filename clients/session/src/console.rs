@@ -145,9 +145,11 @@ struct Launcher {
 impl Launcher {
     /// One overlay action. A launch becomes the session's params, re-resolved from the
     /// settings and the host's preset binding each time, with the unlock the console's password
-    /// prompt left for it. The run-loop-side and Android-only actions are handled there, listed
-    /// so adding an action to the enum keeps failing loudly here instead of falling into a
-    /// wildcard that silently drops it.
+    /// prompt left for it. A launch to this device's own host is refused: there is nothing to
+    /// stream, and a host this process never asked is asked first, blocking for at most
+    /// [`trust::local::LOOK_TIMEOUT`]. The run-loop-side and Android-only actions are handled
+    /// there, listed so adding an action to the enum keeps failing loudly here instead of
+    /// falling into a wildcard that silently drops it.
     fn act(
         &self,
         action: OverlayAction,
@@ -176,6 +178,14 @@ impl Launcher {
                     tracing::warn!(%addr, "launch without a stored pin — refusing");
                     return ActionOutcome::Handled;
                 };
+                // A press before any sweep asked this host still learns whether it is here.
+                trust::local::look_once(port, &fp_hex);
+                if trust::local::is_this_device(&fp_hex) {
+                    tracing::info!(%addr, "stream to this device's own host refused");
+                    let line = pf_l10n::client::error_local_nothing_to_stream();
+                    self.console.set_notice(line.into());
+                    return ActionOutcome::Refused;
+                }
                 tracing::info!(%addr, %title, request_access,
                     launch = launch.as_deref().unwrap_or("desktop"),
                     "launching from the console");
@@ -290,6 +300,17 @@ pub fn run(target: Option<&str>) -> u8 {
         label: window_label,
         seed,
     } = console_entry(target, &known, fake, trust::Settings::load);
+    // A start that would stream asks first whether the host is this device's own, before the
+    // console dials it: that one has nothing to stream, and opens on its games.
+    let entry = match entry {
+        ConsoleEntry::Stream(mut row) => {
+            let here = [(row.port, row.fp_hex.clone())];
+            trust::local::look(&here, trust::local::LOOK_TIMEOUT);
+            row.local = trust::local::is_this_device(&row.fp_hex);
+            ConsoleEntry::Stream(row)
+        }
+        entry => entry,
+    };
     let mut opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
     opts.device_code = trust::device_code(&identity);
     let (overlay, handles) = match SkiaOverlay::console(opts, entry) {
@@ -420,7 +441,8 @@ fn host_display_name(name: &str, addr: &str) -> String {
 
 /// A carousel row for the host the console is opening on: a store record when we have one,
 /// else a bare `addr:port` nobody has reached yet. Offline and action-less by construction —
-/// the refresh tick fills both in once the host answers.
+/// the refresh tick fills both in once the host answers. This device's own host is so from
+/// the first verdict this process has.
 fn seed_row(k: Option<&trust::KnownHost>, addr: &str, port: u16) -> HostRow {
     HostRow {
         key: k
@@ -455,6 +477,7 @@ fn seed_row(k: Option<&trust::KnownHost>, addr: &str, port: u16) -> HostRow {
         game_presets: Default::default(),
         profile: k.and_then(|h| h.profile.clone()),
         screens: None,
+        local: k.is_some_and(|h| trust::local::is_this_device(&h.fp_hex)),
     }
 }
 
@@ -724,6 +747,14 @@ impl ServiceState {
                 title,
             } => {
                 self.end_game(addr, mgmt, fp_hex, app_id, title);
+            }
+            ConsoleCmd::LaunchLocal {
+                mgmt,
+                port,
+                fp_hex,
+                app_id,
+            } => {
+                self.launch_local(mgmt, port, fp_hex, app_id);
             }
             ConsoleCmd::Install {
                 addr,
@@ -1135,6 +1166,27 @@ impl ServiceState {
             .ok()
     }
 
+    /// Ask this device's own host to start a title on its own screen, on a worker as
+    /// `end_game` is; the answer goes to the shell's hold. A record with no pin is refused here:
+    /// loopback is never dialed unpinned.
+    fn launch_local(&self, mgmt: u16, port: u16, fp_hex: String, app_id: String) -> Worker {
+        let identity = self.identity.clone();
+        let console = self.console.clone();
+        std::thread::Builder::new()
+            .name("punktfunk-local-launch".into())
+            .spawn(move || {
+                let answer = match trust::parse_hex32(&fp_hex) {
+                    Some(pin) => library::launch_local(mgmt, port, &identity, pin, &app_id),
+                    None => library::LocalLaunch::Failed(
+                        pf_l10n::client::error_mgmt_not_paired().into(),
+                    ),
+                };
+                tracing::info!(app = %app_id, ?answer, "local launch");
+                console.set_local_launch(answer);
+            })
+            .ok()
+    }
+
     fn change_install(
         &self,
         addr: String,
@@ -1496,11 +1548,15 @@ impl ServiceState {
     /// definition — an advert is a cache entry with a 75-minute TTL that a suspending host sends
     /// no goodbye for, so skipping them would leave a sleeping machine reading Online (and, since
     /// the wake item is gated on `!online`, unwakeable). A saved host found at an address it left
-    /// moves back there. Runs on its own thread; at most one in flight.
+    /// moves back there. First each row and advert is asked at loopback whether it is this
+    /// device's own host. Runs on its own thread; at most one in flight.
     fn sweep(&self, rows: &[HostRow]) {
         if self.probe_inflight.swap(true, Ordering::SeqCst) {
             return;
         }
+        let here: Vec<(u16, String)> = (rows.iter().map(|r| (r.port, r.fp_hex.clone())))
+            .chain(self.discovered.values().map(|d| (d.port, d.fp_hex.clone())))
+            .collect();
         let known = trust::KnownHosts::load();
         let (keys, hosts): (Vec<String>, Vec<trust::KnownHost>) = rows
             .iter()
@@ -1535,6 +1591,7 @@ impl ServiceState {
             .name("punktfunk-probe".into())
             .spawn(move || {
                 let _idle = idle;
+                trust::local::look(&here, trust::local::LOOK_TIMEOUT);
                 let results = trust::probe_known(&hosts, Duration::from_millis(900));
                 let mut map = probed.lock().unwrap();
                 for (key, ok) in keys.into_iter().zip(results) {
@@ -1601,6 +1658,7 @@ impl ServiceState {
             &self.discovered,
             &probed,
             self.seed.as_ref(),
+            trust::local::is_this_device,
         )
     }
 
@@ -1624,13 +1682,15 @@ impl ServiceState {
 /// preset cards (client-settings-profiles.md §5.2a), then discovered-but-unsaved ones by
 /// name, then a still-uncovered `--browse` seed. `home::arrange` applies the player's sort;
 /// the Apple and Android producers send the same order
-/// (`clients/shared/host-row-vectors.json`).
+/// (`clients/shared/host-row-vectors.json`). `here` says whether a fingerprint is this
+/// device's own host ([`trust::local::is_this_device`]), which never wakes from here.
 fn build_rows(
     known: &trust::KnownHosts,
     catalog: &pf_client_core::presets::PresetsFile,
     discovered: &HashMap<String, discovery::DiscoveredHost>,
     probed: &HashMap<String, bool>,
     seed: Option<&HostRow>,
+    here: impl Fn(&str) -> bool,
 ) -> Vec<HostRow> {
     let chip = |p: &pf_client_core::presets::StreamPreset| pf_console_ui::PresetChip {
         id: p.id.clone(),
@@ -1652,6 +1712,7 @@ fn build_rows(
             };
             let advert = discovered.values().find(|d| discovery::same_host(h, d));
             let online = probed.get(&key).copied().unwrap_or(false);
+            let local = here(&h.fp_hex);
             let row = HostRow {
                 key: key.clone(),
                 id: h.id.clone(),
@@ -1670,7 +1731,7 @@ fn build_rows(
                     .and_then(|d| d.mgmt_port)
                     .or(h.mgmt_port)
                     .unwrap_or(library::DEFAULT_MGMT_PORT),
-                can_wake: !online && !h.mac.is_empty(),
+                can_wake: !online && !h.mac.is_empty() && !local,
                 clipboard_sync: h.clipboard_sync,
                 keep_addr: h.keep_addr,
                 last_used: h.last_used,
@@ -1708,6 +1769,7 @@ fn build_rows(
                 profile: h.profile.clone(),
                 // What this host last said this device may stream, from the same kind of cache.
                 screens: pf_client_core::display_targets::cached(&h.fp_hex),
+                local,
             };
             // A pinned card shares the primary tile's live state; its own key lets
             // cursor-follow and the wake path address the card itself.
@@ -1762,6 +1824,7 @@ fn build_rows(
                 game_presets: Default::default(),
                 profile: None,
                 screens: None,
+                local: here(&d.fp_hex),
             }
         })
         .collect();

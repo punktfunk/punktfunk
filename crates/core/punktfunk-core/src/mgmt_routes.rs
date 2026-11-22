@@ -73,6 +73,11 @@ pub fn paired_may_access(method: &str, path: &str) -> bool {
     if method == "POST" && path == "/api/v1/game/end" {
         return true;
     }
+    // A game on the host's own screen: the handler demands `GRANT_LAUNCH` and a call from the
+    // host's own machine.
+    if method == "POST" && path == "/api/v1/game/launch" {
+        return true;
+    }
     // Installing is what launching a missing title does anyway; the handler demands
     // `GRANT_LAUNCH`. Pause and remove demand `GRANT_MANAGE_GAMES`; cancel stays the operator's.
     if (method == "POST" || method == "DELETE") && path_matches("/api/v1/library/install/{}", path)
@@ -158,6 +163,19 @@ mod tests {
             ("GET", "/api/v1/session/settings"),
         ] {
             assert!(!person_route(method, path), "{method} {path}");
+            assert!(!paired_may_access(method, path), "{method} {path}");
+        }
+    }
+
+    /// A device asks its own host to start a game by posting the id; nothing beside or under
+    /// the route is reachable.
+    #[test]
+    fn a_device_reaches_the_launch_route_alone() {
+        assert!(paired_may_access("POST", "/api/v1/game/launch"));
+        for (method, path) in [
+            ("GET", "/api/v1/game/launch"),
+            ("POST", "/api/v1/game/launch/x"),
+        ] {
             assert!(!paired_may_access(method, path), "{method} {path}");
         }
     }

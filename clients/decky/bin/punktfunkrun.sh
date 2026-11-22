@@ -23,6 +23,9 @@
 #   PF_CLIENT_BIN  absolute path of a NATIVE client  (optional; set by the plugin when it
 #                  resolved a non-flatpak install — then the client is run directly and
 #                  PF_APPID/PF_FLATPAK are unused)
+#   PF_LOCAL   non-empty = a title of this device's own library: exec `$PF_HOST_BIN play`,
+#              which asks the host what to run from Steam's SteamGameId
+#   PF_HOST_BIN    absolute path of this device's punktfunk-host  (required with PF_LOCAL)
 #
 # A REFERENCE, NEVER A VALUE. Host refs and preset ids are the only things that ride this
 # channel; no resolution, bitrate or codec ever does. The client resolves both against its own
@@ -39,10 +42,17 @@
 # clean.
 set -u
 
+# The game `play` starts needs Steam's library path and preload, which the cleanup below takes
+# from the host binary. `play` puts these back for its child; an unset one stays unset.
+if [ -n "${PF_LOCAL:-}" ]; then
+    [ -n "${LD_LIBRARY_PATH+x}" ] && export PF_STEAM_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+    [ -n "${LD_PRELOAD+x}" ] && export PF_STEAM_LD_PRELOAD="$LD_PRELOAD"
+fi
+
 APPID="${PF_APPID:-io.unom.punktfunk}"
 FLATPAK="${PF_FLATPAK:-flatpak}"
 # A Deck still on the CamelCase id runs that until its next client update rebases it.
-if [ -z "${PF_APPID:-}" ] && [ -z "${PF_CLIENT_BIN:-}" ] \
+if [ -z "${PF_LOCAL:-}" ] && [ -z "${PF_APPID:-}" ] && [ -z "${PF_CLIENT_BIN:-}" ] \
     && ! "$FLATPAK" info "$APPID" >/dev/null 2>&1 \
     && "$FLATPAK" info io.unom.Punktfunk >/dev/null 2>&1; then
     APPID=io.unom.Punktfunk
@@ -55,6 +65,15 @@ if [ -n "${SYSTEM_LD_LIBRARY_PATH+x}" ]; then
     export LD_LIBRARY_PATH="$SYSTEM_LD_LIBRARY_PATH"
 fi
 unset LD_PRELOAD
+
+if [ -n "${PF_LOCAL:-}" ]; then
+    if [ -z "${PF_HOST_BIN:-}" ]; then
+        echo "punktfunkrun: PF_HOST_BIN is not set (the plugin sets it with PF_LOCAL)" >&2
+        exit 2
+    fi
+    echo "punktfunkrun: play on this device, $PF_HOST_BIN" >&2
+    exec "$PF_HOST_BIN" play
+fi
 
 # The flatpak manifest binds gamescope's socket as `gamescope-0`. Where Steam's gamescope is a
 # later one (Armada starts a splash gamescope first), the vendored WSI layer reaches nobody:

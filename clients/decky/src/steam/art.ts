@@ -1,9 +1,10 @@
 // Shortcut artwork: the plugin's own on the two fixed roles, the game's own on a per-game
-// shortcut. Cosmetic and best-effort; a marker per appId records the version applied.
-import { gameArt, saveIcon, shortcutArt } from "../backend";
+// shortcut, the host's on a synced title. Cosmetic and best-effort; a marker per appId records
+// the version applied.
+import { gameArt, localArt, saveIcon, shortcutArt } from "../backend";
 import { read, write } from "../lib/storage";
 import type { AppStoreGlobal, SteamClientGlobal } from "./client";
-import { artKey, gameArtKey } from "./keys";
+import { artKey, gameArtKey, localArtKey } from "./keys";
 
 declare const SteamClient: SteamClientGlobal;
 declare const appStore: AppStoreGlobal;
@@ -18,7 +19,7 @@ const ART_VERSION = 3;
  */
 async function artOnce(
   marker: string,
-  version: number,
+  version: number | string,
   apply: () => Promise<boolean>,
   isRetry = false,
 ): Promise<void> {
@@ -148,5 +149,34 @@ export function applyGameArtwork(
     // frame, and a gray box there must be retried on the next launch, not recorded as fine.
     const iconLanded = await applyGameIcon(shortcutAppId, steamAppId, art);
     return applied && iconLanded;
+  });
+}
+
+// Bump when what applyHostArtwork fetches changes; the kinds the host has are in the marker too.
+const LOCAL_ART_VERSION = 1;
+// The host's kinds in Steam's slot order: grid, hero, logo, wide grid.
+const HOST_ART_SLOTS = ["portrait", "hero", "logo", "header"];
+
+/** One host image as Steam takes it: png and jpg as they are, anything else re-encoded as PNG. */
+async function hostImage(gameId: string, kind: string): Promise<[string | undefined, string]> {
+  const r = await localArt(gameId, kind);
+  if (!r.ok || !r.data || !r.type) {
+    return [undefined, ""];
+  }
+  return r.type === "png" || r.type === "jpg" ? [r.data, r.type] : [await toPng(r.data, r.type), "png"];
+}
+
+/** Dress a synced title in the host's portrait, hero, logo and header, once per set of kinds. */
+export async function applyHostArtwork(appId: number, gameId: string, kinds: string[]): Promise<void> {
+  const have = HOST_ART_SLOTS.filter((k) => kinds.includes(k));
+  if (have.length === 0) {
+    return;
+  }
+  await artOnce(localArtKey(appId), `${LOCAL_ART_VERSION}:${have.join(",")}`, async () => {
+    const images: Array<[string | undefined, string]> = [];
+    for (const kind of HOST_ART_SLOTS) {
+      images.push(have.includes(kind) ? await hostImage(gameId, kind) : [undefined, ""]);
+    }
+    return setArtSlots(appId, images);
   });
 }

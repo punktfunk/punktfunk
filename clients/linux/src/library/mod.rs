@@ -76,6 +76,9 @@ pub struct View {
     pub hides: RefCell<Option<String>>,
     /// What that profile hides, shown dimmed in the shelf's place while asked for.
     pub hidden: RefCell<Option<Vec<GameEntry>>>,
+    /// The shelf is this device's own host: Play starts a title there, and a title up is not
+    /// resumed by a stream.
+    pub here: Cell<bool>,
 }
 
 impl View {
@@ -100,7 +103,8 @@ pub enum LibraryMsg {
     /// The store changed (hosts, favorites, the sections), or the tab came on screen.
     Refresh,
     Select(String),
-    /// Show this host's shelf: a card's Browse Library, a `browse` link, Start in.
+    /// Show this host's shelf: a card's Browse Library, a link, Start in. On this device's own
+    /// host the request's title then plays as a click on it does.
     Open(ConnectRequest),
     Reload,
     Loaded(u64, Loaded),
@@ -117,6 +121,9 @@ pub enum LibraryMsg {
     Shortcut(String),
     EndGame(String),
     Ended(u64, library::GameEnd, String, Vec<RunningGame>),
+    /// This device's own host answered a Play: why it did not start, if it did not, and what
+    /// it has up now.
+    PlayedHere(u64, Option<String>, Vec<RunningGame>),
     /// Hide a title for the shelf's profile, or show one again (`false`).
     SetHidden(String, bool),
     /// What the host made of it, for the shelf of that generation.
@@ -236,6 +243,7 @@ impl SimpleComponent for LibraryPage {
             sender: sender.input_sender().clone(),
             hides: RefCell::default(),
             hidden: RefCell::default(),
+            here: Cell::new(false),
         });
 
         let canvas = canvas::Canvas::new(&view, MAX_WIDTH);
@@ -442,9 +450,14 @@ impl SimpleComponent for LibraryPage {
                     .map(|s| s.key.clone());
                 match key {
                     Some(key) => self.select(&key),
-                    None => out(LibraryOutput::Toast(desktop::desktop_lib_pair_to_browse(
-                        &req.host.name,
-                    ))),
+                    None => {
+                        return out(LibraryOutput::Toast(desktop::desktop_lib_pair_to_browse(
+                            &req.host.name,
+                        )))
+                    }
+                }
+                if let Some(id) = req.launch.filter(|_| self.here()) {
+                    self.play_here(id);
                 }
             }
             LibraryMsg::Reload if self.view.hidden.borrow().is_some() => self.load_hidden(),
@@ -474,6 +487,7 @@ impl SimpleComponent for LibraryPage {
                 self.group = by;
                 self.relayout();
             }
+            LibraryMsg::Play(id) if self.here() => self.play_here(id),
             LibraryMsg::Play(id) => {
                 if let Some(mut req) = self.shelf().map(|s| s.req) {
                     // A title already up resumes: launching it again is how a second copy starts.
@@ -542,6 +556,15 @@ impl SimpleComponent for LibraryPage {
             }
             LibraryMsg::Ended(generation, outcome, title, running) => {
                 out(LibraryOutput::Toast(outcome.notice(&title)));
+                if generation == self.generation {
+                    self.set_running(running);
+                    self.relayout();
+                }
+            }
+            LibraryMsg::PlayedHere(generation, refused, running) => {
+                if let Some(why) = refused {
+                    out(LibraryOutput::Toast(why));
+                }
                 if generation == self.generation {
                     self.set_running(running);
                     self.relayout();
@@ -761,6 +784,40 @@ fn arrange_menu(
 }
 
 impl LibraryPage {
+    /// The shelf on screen is this device's own host.
+    fn here(&self) -> bool {
+        (self.shelf().and_then(|s| s.req.host.fp_hex))
+            .is_some_and(|fp| pf_client_core::trust::local::is_this_device(&fp))
+    }
+
+    /// Ask this device's own host to start title `id` on its own screen, on a worker. Why it did
+    /// not, and what the host has up then, come back as [`LibraryMsg::PlayedHere`].
+    fn play_here(&self, id: String) {
+        let Some(shelf) = self.shelf() else {
+            return;
+        };
+        let Some(pin) = (shelf.req.host.fp_hex.as_deref()).and_then(crate::trust::parse_hex32)
+        else {
+            return;
+        };
+        let (sender, identity) = (self.view.sender.clone(), self.identity.clone());
+        let generation = self.generation;
+        let (addr, mgmt, port) = (shelf.req.host.addr, shelf.mgmt_port, shelf.req.host.port);
+        std::thread::Builder::new()
+            .name("punktfunk-local-launch".into())
+            .spawn(move || {
+                let answer = library::launch_local(mgmt, port, &identity, pin, &id);
+                tracing::info!(app = %id, ?answer, "local launch");
+                let running = library::fetch_running(&addr, mgmt, port, &identity, Some(pin));
+                let _ = sender.send(LibraryMsg::PlayedHere(
+                    generation,
+                    answer.refusal(),
+                    running,
+                ));
+            })
+            .expect("spawn local-launch thread");
+    }
+
     fn shelf(&self) -> Option<Shelf> {
         let selected = self.view.selected.borrow().clone()?;
         self.view
@@ -818,11 +875,13 @@ impl LibraryPage {
         }
     }
 
-    /// A shelf per paired host, then one per preset it pins; a desktop per paired host.
+    /// A shelf per paired host, then one per preset it pins; a desktop per paired host. This
+    /// device's own host has its shelf alone: nothing streams it.
     fn shelves(&self) -> (Vec<Shelf>, Vec<Desktop>) {
         let presets = self.store.presets();
         let (mut shelves, mut desktops) = (Vec::new(), Vec::new());
         for k in self.store.hosts().hosts.iter().filter(|k| k.paired) {
+            let local = pf_client_core::trust::local::is_this_device(&k.fp_hex);
             let key = k.id.clone().unwrap_or_else(|| k.card_key());
             let req = ConnectRequest {
                 host: HostTarget::from(k),
@@ -838,6 +897,9 @@ impl LibraryPage {
                 profile: k.profile.as_ref().map(|p| p.id.clone()),
             };
             shelves.push(shelf(key.clone(), k.name.clone(), req.clone()));
+            if local {
+                continue;
+            }
             for p in k
                 .pinned_presets
                 .iter()
@@ -1068,9 +1130,12 @@ impl LibraryPage {
         *self.view.running.borrow_mut() = by_id;
     }
 
+    /// The rows for the shelf as it stands. This device's own host leads its grid with no
+    /// desktop, and its titles are played, never resumed.
     fn relayout(&mut self) {
         let started = std::time::Instant::now();
         let sections = layout::sections(&self.store.settings().library_sections);
+        self.view.here.set(self.here());
         let view = Rc::clone(&self.view);
         let rows = if let Some(hidden) = view.hidden.borrow().as_deref() {
             let name = view.hides.borrow().clone().unwrap_or_default();
@@ -1089,6 +1154,7 @@ impl LibraryPage {
                 desktops: (view.desktops.borrow().iter())
                     .map(|d| format!("{}\0{}\0{}\0{}", d.req.card_key(), d.name, d.os, d.playing))
                     .collect(),
+                own_desktop: !view.here.get(),
             })
         };
         let built = started.elapsed().as_secs_f64() * 1000.0;

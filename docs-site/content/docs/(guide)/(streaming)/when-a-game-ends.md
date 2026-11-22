@@ -42,3 +42,13 @@ keep its screen until released. On a desktop session (KWin, GNOME, Sway) the set
 as written.
 
 Hooks can react to `game.running` and `game.exited`: see [Automation](/docs/automation).
+
+## At the desk
+
+A game started on the host's own screen with [Play on this device](/docs/play-on-this-device) has
+no session, so **When the game exits**, **When the session ends** and the **Reconnect window** don't
+act on it. It runs until it exits or someone ends it: see
+[Ending a game](/docs/game-library#ending-a-game).
+
+**When you launch another game** acts among the desk's own games. **Close it first** closes the
+desk's earlier game when you start another there, and never a game streamed to a device.

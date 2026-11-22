@@ -70,8 +70,12 @@ enum AudioDrain {
                 log.info("audio: the host changed the audio format — rebuilding playback")
                 onFormat()
                 return false
+            } catch PunktfunkClientError.closed {
+                return false
             } catch {
-                return false // session closed
+                // An undecodable format or a core panic: the session runs on without sound.
+                log.error("audio playback stopped: \(error)")
+                return false
             }
             guard let pcm, pcm.frameCount > 0 else {
                 // Nothing on the wire: conceal from the decoder's own state, bounded by the

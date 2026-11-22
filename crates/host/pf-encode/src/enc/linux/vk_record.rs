@@ -259,8 +259,9 @@ impl VulkanVideoEncoder {
         Ok(SourceAcquire::Encode(src))
     }
 
-    /// The native planar arm: the producer's visible-size NV12/P010 buffer is the encode source.
-    /// Safe at every mode because native sessions run true-size headers (see
+    /// The native planar arm: the producer's visible-size NV12/P010 buffer is the encode source,
+    /// in a layout the planar offer proved ([`super::vulkan_planar_capture_modifiers`]). Safe at
+    /// every mode because native sessions run true-size headers (see
     /// [`OpenSpec::native_nv12`]). No compositing stage: the session plan negotiates native NV12
     /// only when `!cursor_blend`.
     unsafe fn acquire_native(&mut self, frame: &CapturedFrame) -> Result<EncodeSource> {
@@ -290,12 +291,6 @@ impl VulkanVideoEncoder {
             bail!(
                 "vulkan-encode (native planar): DMA-BUF FourCC {:#x} does not match {want:?}",
                 d.fourcc
-            );
-        }
-        if d.modifier != 0 {
-            bail!(
-                "vulkan-encode (native planar): only LINEAR is supported, got modifier {:#x}",
-                d.modifier
             );
         }
         let (img, view, fresh) = self.import_cached(d, frame.width, frame.height)?;

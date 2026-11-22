@@ -149,11 +149,14 @@ pub(crate) struct ResolveInputs {
     pub(crate) vulkan_row: bool,
     /// NVIDIA's device nodes exist, which `auto` reads. Linux only.
     pub(crate) nvidia: bool,
+    /// The render node VAAPI encodes on is Intel's. Linux only.
+    pub(crate) intel: bool,
     pub(crate) features: Features,
 }
 
 impl ResolveInputs {
-    /// The inputs in force now. Probes nothing: `selection_key` already stats the NVIDIA nodes.
+    /// The inputs in force now. Probes nothing: `selection_key` already stats the NVIDIA nodes,
+    /// and the node's vendor is one sysfs read.
     fn current() -> ResolveInputs {
         ResolveInputs {
             pref: pf_host_config::config().encoder_pref.clone(),
@@ -164,6 +167,11 @@ impl ResolveInputs {
             nvidia: pf_gpu::nvidia_present(),
             #[cfg(not(target_os = "linux"))]
             nvidia: false,
+            #[cfg(target_os = "linux")]
+            intel: pf_libva::node_vendor_id(&pf_gpu::linux_render_node())
+                == Some(pf_gpu::VENDOR_INTEL),
+            #[cfg(not(target_os = "linux"))]
+            intel: false,
             features: Features::BUILT,
         }
     }
@@ -579,6 +587,7 @@ mod tests {
             gpu: "card0".into(),
             vulkan_row: true,
             nvidia: false,
+            intel: false,
             features: Features::BUILT,
         };
         let auto = resolve_in(&cache, inputs("auto"));

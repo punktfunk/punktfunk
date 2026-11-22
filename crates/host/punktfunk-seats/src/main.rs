@@ -86,10 +86,12 @@ mod linux {
             return ExitCode::from(pf_seats::linux::door::main(rest));
         }
         // No flags here: every word is data from a seat unit's drop-in.
-        if let [verb, check, mount, options, source, stage] = args.as_slice()
+        if let [verb, check, mount, options, source, stage, upper @ ..] = args.as_slice()
             && verb == pf_seats::linux::stage::VERB
+            && upper.len() <= 1
         {
-            let code = pf_seats::linux::stage::run(check, mount, options, source, stage);
+            let upper = upper.first().map(String::as_str);
+            let code = pf_seats::linux::stage::run(check, mount, options, source, stage, upper);
             return ExitCode::from(code);
         }
         match run(args) {

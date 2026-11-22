@@ -6,6 +6,7 @@ import { FaTv } from "react-icons/fa";
 import { installGamePageStream } from "./game-page/library-page";
 import { refreshHosts } from "./hosts/store";
 import { QamPanel } from "./panel/Panel";
+import { requestSync, stopSync } from "./steam/local-sync";
 import { watchRunningStreams } from "./steam/running";
 import { ensureGamepadUiShortcut } from "./steam/shortcuts";
 import { PluginErrorBoundary } from "./ui/boundary";
@@ -23,10 +24,14 @@ export default definePlugin(() => {
   const removeGamePageStream = installGamePageStream();
   // Steam's app lifetime feed tells the game page when its stream is up (Stream ↔ Stop).
   const unwatchRunning = watchRunningStreams();
+  // This device's library into Steam: adds only. Stopped on dismount, so a reloaded plugin never
+  // runs two syncs at once.
+  requestSync("none");
   return {
     onDismount() {
       removeGamePageStream();
       unwatchRunning();
+      stopSync();
     },
     // Equals plugin.json "name": Decky finds the plugin by it, not by the lowercase folder, and
     // shows it in its list and as the panel's title. No `titleView`: Decky's title bar already

@@ -138,6 +138,35 @@ fn streaming_line(names: &[&str]) -> String {
     }
 }
 
+/// A link's connect once its host is settled. Whether that host is this device is asked once,
+/// off the UI thread, before [`link_msg`] picks the route.
+fn link_connect(sender: relm4::Sender<AppMsg>, req: ConnectRequest, wake: bool) {
+    let (port, fp) = (req.host.port, req.host.fp_hex.clone().unwrap_or_default());
+    let spawned = std::thread::Builder::new()
+        .name("punktfunk-link".into())
+        .spawn(move || {
+            pf_client_core::trust::local::look_once(port, &fp);
+            let here = pf_client_core::trust::local::is_this_device(&fp);
+            sender.emit(link_msg(req, wake, here));
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "link thread did not start");
+    }
+}
+
+/// What a link raises. This device's own host is never dialed: its shelf opens, and plays the
+/// link's title there. Any other host dials, waking first on `wake`.
+fn link_msg(req: ConnectRequest, wake: bool, here: bool) -> AppMsg {
+    match (here, wake) {
+        (true, _) => AppMsg::OpenLibrary(ConnectRequest {
+            preset: None,
+            ..req
+        }),
+        (false, true) => AppMsg::WakeConnect(req),
+        (false, false) => AppMsg::Connect(req),
+    }
+}
+
 impl AppModel {
     /// Opens the surface [`trust_route`] picks: the stored pin dials, a changed fingerprint
     /// gets the PIN dialog, a new `pair=optional` host gets the TOFU offer, and anything
@@ -343,7 +372,8 @@ impl AppModel {
     /// resolution and every refusal rule — including "only a stable record id may dial
     /// unattended" — live in the shared brain (`plan_from_link`); this is only the GTK end of
     /// it: turn the outcome into the same messages a card click raises, so a link gets the
-    /// identical wake, trust and error surfaces and NOT a second connect path of its own.
+    /// identical wake, trust and error surfaces and NOT a second connect path of its own. A
+    /// link to this device's own host takes its shelf's Play instead ([`link_msg`]).
     pub(super) fn open_deep_link(&mut self, url: &str, sender: &ComponentSender<AppModel>) {
         use pf_client_core::deeplink;
         use pf_client_core::orchestrate::{plan_from_link, PlanOutcome};
@@ -392,11 +422,7 @@ impl AppModel {
                 }
                 // A link is a launch like any other: with a MAC it takes the dial-first wake
                 // path, so a sleeping host wakes instead of erroring.
-                sender.input(if plan.wake {
-                    AppMsg::WakeConnect(req)
-                } else {
-                    AppMsg::Connect(req)
-                });
+                link_connect(sender.input_sender().clone(), req, plan.wake);
             }
             Ok(PlanOutcome::ConfirmConnect(plan)) => {
                 // The link named this (saved, pinned) host by its LABEL or its ADDRESS rather
@@ -440,13 +466,9 @@ impl AppModel {
                 let sender = sender.clone();
                 let wake = plan.wake;
                 dialog.connect_response(Some("connect"), move |_, _| {
-                    // The same two messages the `Connect` arm raises, so the confirmed link
-                    // gets the identical wake / trust / error surfaces a card click gets.
-                    sender.input(if wake {
-                        AppMsg::WakeConnect(req.clone())
-                    } else {
-                        AppMsg::Connect(req.clone())
-                    });
+                    // The same route the `Connect` arm takes, so the confirmed link gets the
+                    // identical wake / trust / error surfaces a card click gets.
+                    link_connect(sender.input_sender().clone(), req.clone(), wake);
                 });
                 dialog.present(Some(&self.window));
             }
@@ -565,5 +587,28 @@ mod tests {
             "Streaming from Desk and Den"
         );
         assert_eq!(streaming_line(&["A", "B", "C"]), "Streaming from 3 hosts");
+    }
+
+    /// A link to this device's own host opens its shelf on the link's title, waking nothing
+    /// and dialing nothing; a link to any other host dials.
+    #[test]
+    fn a_link_to_this_device_opens_its_shelf() {
+        let req = ConnectRequest {
+            launch: Some("steam:570".into()),
+            preset: Some("aaaaaaaaaaaa".into()),
+            ..ConnectRequest::default()
+        };
+        for wake in [false, true] {
+            let AppMsg::OpenLibrary(open) = link_msg(req.clone(), wake, true) else {
+                panic!("this device is never dialed");
+            };
+            assert_eq!(open.launch.as_deref(), Some("steam:570"));
+            assert_eq!(open.preset, None, "its shelf pins no preset");
+        }
+        assert!(matches!(
+            link_msg(req.clone(), true, false),
+            AppMsg::WakeConnect(_)
+        ));
+        assert!(matches!(link_msg(req, false, false), AppMsg::Connect(r) if r.launch.is_some()));
     }
 }

@@ -894,6 +894,7 @@
 	"games_detached_note": "Detail line on a game row on Home, under the badge 'Nobody streaming'.",
 	"games_untracked_note": "Detail line on a game row on Home, under the badge 'Not tracked'.",
 	"games_closing_in": "Detail line on a game row on Home, under the badge 'Waiting for client'. time: a countdown such as 1:23.",
+	"games_plane_local": "Detail line on a game row on Home: the host started this game on its own screen, for someone at the PC, so no device streams it. Shown under the badge Starting, Running or Ended.",
 	"games_end_all_waiting_confirm": "Body of the confirm dialog titled 'End all {count} games nobody is streaming?'. count: number of such games.",
 	"games_end_all_waiting_title": "Title of a confirm dialog on Home before ending several games at once. count: number of games nobody is streaming.",
 	"action_stop_session_all_confirm": "Body of the 'Stop every live session?' dialog on the Home page. count: number of live sessions, at least 2.",

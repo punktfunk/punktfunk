@@ -1167,6 +1167,9 @@ mod person {
     }
 
     /// [`send_cert`] with the answer's body.
+    /// A device's End game from the LAN: from this machine it would go to the owner's host.
+    const LAN_PEER: &str = "192.168.1.50:40000";
+
     async fn as_device(
         app: &Router,
         mut req: axum::http::Request<Body>,
@@ -1398,7 +1401,10 @@ mod person {
             assert_eq!(status, StatusCode::CONFLICT, "{what}");
             assert_eq!(body["error"], password, "{what}");
         }
-        let end_game = json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+        let mut end_game = json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+        end_game
+            .extensions_mut()
+            .insert(PeerAddr(LAN_PEER.parse().unwrap()));
         let (status, _) = as_device(&app, end_game, &fp).await;
         assert_ne!(status, StatusCode::BAD_GATEWAY, "answered on the door");
         let windows = format!("/api/v1/profiles/{WINDOWS}/wake");
@@ -1430,7 +1436,12 @@ mod person {
         let (listed, other) = ("ab".repeat(32), "cd".repeat(32));
         let sup = Arc::new(Fake::new(ledger(), |_| Err(refused("x", "y"))));
         let (app, profiles) = door_with("own-play-lock", sup.clone(), &[&listed, &other], WINDOWS);
-        let end_game = || json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+        let end_game = || {
+            let mut req = json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
+            req.extensions_mut()
+                .insert(PeerAddr(LAN_PEER.parse().unwrap()));
+            req
+        };
         let (status, _) = as_device(&app, end_game(), &other).await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "open: sent to its seat");
         let device = pf_seats::ipc::Device {

@@ -8,9 +8,103 @@
 //
 // The IO thread allocates nothing and logs nothing. It takes one lock, held for a copy.
 
-#if !os(tvOS)
 import AVFoundation
 import os
+
+/// Which input channels become the mono mic. A 1-based `pick` copies that channel: a pro
+/// interface has the mic on one of N inputs, where a converter's downmix would take 0 and 1.
+/// A pick of 0, or one the device does not have, sums every channel but the 0-based `loopback`
+/// inputs, which carry what the Mac plays. A loopback list covering every channel is ignored.
+struct MicChannelPlan: Equatable, Sendable {
+    let pick: Int
+    let loopback: [Int]
+
+    /// The 0-based channel to copy, or nil to mix.
+    func pinned(channels: Int) -> Int? {
+        pick >= 1 && pick <= channels ? pick - 1 : nil
+    }
+
+    /// Whether a mix of `channels` leaves the loopback inputs out.
+    func skipsLoopback(channels: Int) -> Bool {
+        !(0..<channels).allSatisfy { loopback.contains($0) }
+    }
+
+    /// The fold as the log names it: "channel 2/4", "mix 3/4ch→mono" or "mono".
+    func label(channels: Int) -> String {
+        if pinned(channels: channels) != nil { return "channel \(pick)/\(channels)" }
+        guard channels > 1 else { return "mono" }
+        let mixed = skipsLoopback(channels: channels)
+            ? (0..<channels).filter { !loopback.contains($0) }.count : channels
+        return "mix \(mixed)/\(channels)ch→mono"
+    }
+
+    /// Fold `channels` of input into `out`, `frames` long. `input` has the `floatChannelData`
+    /// layout: one buffer strided by the channel count when `interleaved`, else one per channel.
+    /// A mix is clamped to [-1, 1], so a lone hot channel passes at full level. Allocation-free:
+    /// it runs on the IO thread.
+    func fold(
+        input: UnsafePointer<UnsafeMutablePointer<Float>>, frames: Int, channels: Int,
+        interleaved: Bool, out: UnsafeMutablePointer<Float>
+    ) {
+        if let ch = pinned(channels: channels) {
+            if interleaved {
+                let d = input[0]
+                for i in 0..<frames { out[i] = d[i * channels + ch] }
+            } else {
+                let d = input[ch]
+                for i in 0..<frames { out[i] = d[i] }
+            }
+            return
+        }
+        let skip = skipsLoopback(channels: channels)
+        out.update(repeating: 0, count: frames)
+        for c in 0..<channels where !skip || !loopback.contains(c) {
+            if interleaved {
+                let d = input[0]
+                for i in 0..<frames { out[i] += d[i * channels + c] }
+            } else {
+                let d = input[c]
+                for i in 0..<frames { out[i] += d[i] }
+            }
+        }
+        if channels > 1 { for i in 0..<frames { out[i] = max(-1, min(1, out[i])) } }
+    }
+}
+
+/// Cuts the worker's resampled mono into the encoder's packet size and numbers the packets the
+/// encoder returns. A remainder short of a packet waits for the next batch. Worker-confined.
+struct MicPacketizer {
+    let packetFrames: Int
+    private var fifo: [Float] = []
+    private var seq: UInt32 = 0
+
+    init(packetFrames: Int) {
+        self.packetFrames = packetFrames
+        fifo.reserveCapacity(48_000)
+    }
+
+    /// Queue `samples`, give each whole packet to `encode`, and each packet it returns to `send`
+    /// with its sequence number. A packet `encode` refuses (nil) is dropped.
+    mutating func push(
+        _ samples: UnsafeBufferPointer<Float>,
+        encode: (UnsafeBufferPointer<Float>) -> [Data]?,
+        send: (Data, UInt32) -> Void
+    ) {
+        fifo.append(contentsOf: samples)
+        var head = 0
+        while fifo.count - head >= packetFrames {
+            let packets = fifo.withUnsafeBufferPointer {
+                encode(UnsafeBufferPointer(rebasing: $0[head..<head + packetFrames]))
+            }
+            head += packetFrames
+            for packet in packets ?? [] {
+                send(packet, seq)
+                seq &+= 1
+            }
+        }
+        if head > 0 { fifo.removeFirst(head) } // keeps capacity: no realloc
+    }
+}
 
 /// Mono capture on its way from the IO thread to the worker. Fixed size: a worker that falls
 /// behind loses the oldest audio, and the IO thread never waits on it.
@@ -77,8 +171,8 @@ private final class FoldScratch: @unchecked Sendable {
     /// Fold `frames` frames of `list`, from frame `offset`, into `mono`. False when the list
     /// holds less than that, which a well-formed callback never does.
     func fold(
-        _ list: UnsafeMutableAudioBufferListPointer, offset: Int, frames: Int, pinned: Int?,
-        skip: [Int]
+        _ list: UnsafeMutableAudioBufferListPointer, offset: Int, frames: Int,
+        plan: MicChannelPlan
     ) -> Bool {
         guard let head = list.first, let data = head.mData else { return false }
         let width = MemoryLayout<Float>.size
@@ -86,9 +180,8 @@ private final class FoldScratch: @unchecked Sendable {
         if list.count == 1, packed > 1 {
             guard Int(head.mDataByteSize) >= (offset + frames) * packed * width else { return false }
             planes[0] = data.assumingMemoryBound(to: Float.self) + offset * packed
-            SessionAudio.foldToMono(
-                input: planes, frames: frames, channels: packed, interleaved: true,
-                pinned: pinned, skip: skip, out: mono)
+            plan.fold(
+                input: planes, frames: frames, channels: packed, interleaved: true, out: mono)
             return true
         }
         let channels = min(list.count, Self.channels)
@@ -98,9 +191,8 @@ private final class FoldScratch: @unchecked Sendable {
             else { return false }
             planes[c] = plane.assumingMemoryBound(to: Float.self) + offset
         }
-        SessionAudio.foldToMono(
-            input: planes, frames: frames, channels: channels, interleaved: false,
-            pinned: pinned, skip: skip, out: mono)
+        plan.fold(
+            input: planes, frames: frames, channels: channels, interleaved: false, out: mono)
         return true
     }
 }
@@ -113,10 +205,9 @@ final class MicUplink: @unchecked Sendable {
     private let wake: DispatchSemaphore
     private let stopped = StopFlag()
 
-    /// `pinned` is the 0-based input channel to take; nil sums them all but the 0-based `skip`
-    /// (loopback inputs). One second of ring at 192 kHz: a worker stalled for longer than that
-    /// has lost the audio anyway.
-    init(pinned: Int?, skip: [Int] = []) {
+    /// The IO thread folds each quantum by `plan`. One second of ring at 192 kHz: a worker
+    /// stalled for longer than that has lost the audio anyway.
+    init(plan: MicChannelPlan) {
         let ring = MicRing(capacity: 192_000)
         let wake = DispatchSemaphore(value: 0)
         let scratch = FoldScratch()
@@ -128,7 +219,7 @@ final class MicUplink: @unchecked Sendable {
             var done = 0
             while done < total {
                 let step = min(total - done, FoldScratch.frames)
-                guard scratch.fold(list, offset: done, frames: step, pinned: pinned, skip: skip)
+                guard scratch.fold(list, offset: done, frames: step, plan: plan)
                 else { break }
                 ring.write(scratch.mono, count: step)
                 done += step
@@ -170,4 +261,3 @@ final class MicUplink: @unchecked Sendable {
         wake.signal()
     }
 }
-#endif

@@ -11,7 +11,8 @@
 //!   name), not LUID (reassigned every boot) or adapter index.
 //! - **Selection** ([`selected_gpu`] / [`pick`]): inventory + preference → render/encode GPU.
 //!   Windows: **manual > `PUNKTFUNK_RENDER_ADAPTER` substring > auto (max dedicated VRAM)**.
-//!   Linux: manual > NVIDIA present > the node `linux_render_node` names. A vanished
+//!   Linux: manual > NVIDIA present > the node `linux_render_node` names (env, else boot
+//!   VGA, else renderD128). A vanished
 //!   preferred GPU auto-selects (`PickSource::PreferenceMissing`) so the host keeps streaming.
 //!
 //! A preference change applies to the **next session**. [`session_begin`] /
@@ -579,8 +580,8 @@ pub fn render_node_env() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The manual preference's render node, else the live [`render_node_env`] read, else
-/// `/dev/dri/renderD128`.
+/// The manual preference's render node, else the live [`render_node_env`] read, else the
+/// boot-VGA GPU's ([`boot_vga_node`]), else `/dev/dri/renderD128`.
 #[cfg(target_os = "linux")]
 pub fn linux_render_node() -> PathBuf {
     if let Some(g) = manual_selection()
@@ -588,7 +589,40 @@ pub fn linux_render_node() -> PathBuf {
     {
         return node;
     }
-    render_node_env().unwrap_or_else(|| PathBuf::from("/dev/dri/renderD128"))
+    render_node_env()
+        .or_else(|| {
+            boot_vga_node(&enumerate(), |node| {
+                let name = node
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                std::fs::read_to_string(format!("/sys/class/drm/{name}/device/boot_vga"))
+                    .is_ok_and(|v| v.trim() == "1")
+            })
+        })
+        .unwrap_or_else(|| PathBuf::from("/dev/dri/renderD128"))
+}
+
+/// The render node of the GPU the firmware booted on, unless it is NVIDIA's: Mesa ranks it first,
+/// so a desktop compositor and a gamescope with no preference render there. Render minors follow
+/// driver bind order, which on two GPUs can name the idle one.
+#[cfg(target_os = "linux")]
+fn boot_vga_node(gpus: &[GpuInfo], boot_vga: impl Fn(&std::path::Path) -> bool) -> Option<PathBuf> {
+    gpus.iter()
+        .filter(|g| g.vendor_id != VENDOR_NVIDIA)
+        .filter_map(|g| g.handle.render_node.clone())
+        .find(|node| boot_vga(node))
+}
+
+/// The GPU an operator named, by the console pick or `PUNKTFUNK_RENDER_NODE`; `None` on auto.
+#[cfg(target_os = "linux")]
+pub fn linux_named_gpu() -> Option<GpuInfo> {
+    manual_selection().or_else(|| {
+        let node = render_node_env()?;
+        enumerate()
+            .into_iter()
+            .find(|g| g.handle.render_node.as_deref() == Some(node.as_path()))
+    })
 }
 
 /// NVIDIA is present when its device nodes exist; no CUDA context is
@@ -735,6 +769,30 @@ mod tests {
                 name: name.into(),
             }),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_boot_vga_gpu_names_the_node_unless_it_is_nvidias() {
+        let at = |vendor, node: &str| GpuInfo {
+            handle: GpuHandle {
+                render_node: Some(PathBuf::from(node)),
+            },
+            ..gpu(vendor, 0, "", 0)
+        };
+        let boot = |want: &'static str| move |n: &std::path::Path| n == std::path::Path::new(want);
+        let two = [
+            at(VENDOR_INTEL, "/dev/dri/renderD128"),
+            at(VENDOR_INTEL, "/dev/dri/renderD129"),
+        ];
+        let d129 = Some(PathBuf::from("/dev/dri/renderD129"));
+        assert_eq!(boot_vga_node(&two, boot("/dev/dri/renderD129")), d129);
+        assert_eq!(boot_vga_node(&two, |_| false), None);
+        let nvidia = [
+            at(VENDOR_INTEL, "/dev/dri/renderD128"),
+            at(VENDOR_NVIDIA, "/dev/dri/renderD129"),
+        ];
+        assert_eq!(boot_vga_node(&nvidia, boot("/dev/dri/renderD129")), None);
     }
 
     #[test]

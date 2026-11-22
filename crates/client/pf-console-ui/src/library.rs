@@ -211,10 +211,11 @@ struct Shared {
     /// The fetch the list answers, set as the shell sends it. Its host says whose list this
     /// is; a list or phase written under another key is dropped.
     req: RequestKey,
-    /// Each launched title's host-side state string (`launching`, `running`, …) and whether a
-    /// `window` is still to come, by library id — the launch hold's answer. Replaced whole on
-    /// every `/status` read.
-    states: std::collections::HashMap<String, (String, bool)>,
+    /// Each launched title's `/status` row by library id and whether it plays on the host's own
+    /// screen (`plane: local`) — the launch hold's answer: its state string (`launching`,
+    /// `running`, …), whether a `window` is still to come, and why a launch there stopped. A
+    /// stream of the same title is another key. Replaced whole on every `/status` read.
+    states: std::collections::HashMap<(String, bool), pf_client_core::library::RunningGame>,
     /// Every download the host reported, by library id: the launch hold's and the tiles'.
     downloads: std::collections::HashMap<String, pf_client_core::library::DownloadProgress>,
     /// This device's grants from the last `/status` read; `None` from a host without them.
@@ -405,7 +406,7 @@ impl LibraryShared {
         s.status_gen += 1;
         s.states = games
             .iter()
-            .filter_map(|g| Some((g.app_id.clone()?, (g.state.clone(), g.awaiting_window))))
+            .filter_map(|g| Some(((g.app_id.clone()?, g.plane == "local"), g.clone())))
             .collect();
         let mut changed = false;
         for g in &mut s.games {
@@ -431,9 +432,22 @@ impl LibraryShared {
 
     /// The host's state string for one launched title, and whether it will report `window`
     /// next, from the last `/status` read; `None` when the host lists nothing for it (no lease
-    /// yet, or the launch never resolved).
-    pub(crate) fn launch_state(&self, id: &str) -> Option<(String, bool)> {
-        self.0.lock().unwrap().states.get(id).cloned()
+    /// yet, or the launch never resolved). `local` asks after the title on the host's own
+    /// screen, else after a stream of it.
+    pub(crate) fn launch_state(&self, id: &str, local: bool) -> Option<(String, bool)> {
+        let s = self.0.lock().unwrap();
+        s.states
+            .get(&(id.to_string(), local))
+            .map(|g| (g.state.clone(), g.awaiting_window))
+    }
+
+    /// Why a launch of `id` on the host's own screen stopped, from the last `/status` read.
+    pub(crate) fn launch_outcome(
+        &self,
+        id: &str,
+    ) -> Option<pf_client_core::library::LaunchVerdict> {
+        let s = self.0.lock().unwrap();
+        s.states.get(&(id.to_string(), true))?.outcome.clone()
     }
 
     /// The host's downloads and this device's grants from a `/status` read. Call before
@@ -819,13 +833,16 @@ mod tests {
                 awaiting_window: false,
                 session_id: None,
                 endable: false,
+                plane: String::new(),
+                outcome: None,
             })
             .collect()
     }
 
     /// The launch hold reads each title's state, and paces on reads landing — so a read
     /// that changes no badge still counts, and `launching` is up for the badge but not
-    /// running for the hold.
+    /// running for the hold. The title on the host's own screen and a stream of it are two
+    /// rows.
     #[test]
     fn status_reads_keep_state_and_count_even_when_nothing_changed() {
         let shared = LibraryShared::default();
@@ -853,11 +870,12 @@ mod tests {
         assert_eq!(shared.status_gen(), 1);
         assert_eq!(
             shared
-                .launch_state("steam:Celeste")
+                .launch_state("steam:Celeste", false)
                 .map(|(s, _)| s)
                 .as_deref(),
             Some("launching")
         );
+        assert_eq!(shared.launch_state("steam:Celeste", true), None);
         assert!(
             shared.snapshot().games[1].running,
             "launching is up on the shelf, behind the desktop tile"
@@ -868,13 +886,21 @@ mod tests {
         assert_eq!(shared.snapshot().generation, badges, "no badge moved");
         assert_eq!(
             shared
-                .launch_state("steam:Celeste")
+                .launch_state("steam:Celeste", false)
                 .map(|(s, _)| s)
                 .as_deref(),
             Some("running")
         );
+        // The desk playing the title while a device streams it: each hold reads its own row.
+        let mut both = running(&["steam:Celeste", "steam:Celeste"], "running");
+        both[0].plane = "local".into();
+        both[0].state = "window".into();
+        shared.set_running(&both);
+        let state = |local| shared.launch_state("steam:Celeste", local).map(|(s, _)| s);
+        assert_eq!(state(true).as_deref(), Some("window"));
+        assert_eq!(state(false).as_deref(), Some("running"));
         shared.set_running(&[]);
-        assert_eq!(shared.launch_state("steam:Celeste"), None);
+        assert_eq!(shared.launch_state("steam:Celeste", false), None);
     }
 
     /// Cached catalog is `Ready` + stale, never an error. Live `set_games` clears the flag.

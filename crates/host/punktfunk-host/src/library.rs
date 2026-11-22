@@ -31,6 +31,7 @@ mod overrides;
 mod profile;
 mod scanners;
 mod stats;
+mod steam_entries;
 
 pub use art::*;
 pub use custom::*;
@@ -42,6 +43,7 @@ pub use overrides::*;
 pub use profile::*;
 pub use scanners::*;
 pub use stats::*;
+pub use steam_entries::*;
 
 /// Cover art. The client prefers `portrait` for a grid and falls back to `header`
 /// when a title has no 600×900 capsule (common for older Steam apps).
@@ -537,20 +539,23 @@ pub(crate) fn sorted_games_for(view: &View) -> std::sync::Arc<Vec<GameEntry>> {
 
 /// Merge every enabled source, the custom entries and the profile in view's own titles in `view`,
 /// sorted by [`sort_key`], each carrying its play stats, its game overrides and what Art & Metadata
-/// sources fill, plus the host's own [`GAME_MODE_ID`] tile. Split out so the two public views
-/// differ only in how they apply the hidden set.
+/// sources fill, plus the host's own [`GAME_MODE_ID`] tile. The Steam entries the Decky plugin
+/// made are left out ([`SteamEntries::hidden`]). Split out so the two public views differ only in
+/// how they apply the hidden set.
 fn collect_games(view: &View) -> Vec<GameEntry> {
-    let off = disabled_scanners(view);
+    let gate = Gate::of(view);
     let stats = game_stats();
     let overrides = Overrides::load(view);
     let fills = Fills::load(view);
+    let synced = SteamEntries::load().hidden();
     // Every row of the box's passes [`source_off`]: its source's toggle and the seat rules. The
     // profile's own titles are its account's: no rule for the box's rows applies to them.
     let mut games: Vec<GameEntry> = load_custom()
         .into_iter()
-        .filter(|e| !source_off(e, &off, view.reach))
+        .filter(|e| !source_off(e, &gate))
         .chain(own_entries(view))
         .map(GameEntry::from)
+        .filter(|g| !synced_away(&g.id, &synced))
         .collect();
     for g in &mut games {
         g.stats = stats.get(&g.id).map(|t| t.entry(None));

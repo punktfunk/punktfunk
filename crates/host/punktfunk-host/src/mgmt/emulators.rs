@@ -295,7 +295,7 @@ pub(crate) async fn prepare_emulator(
             Some(Folder::Path(p)) => Some(p.as_path()),
             _ => staged.as_ref().map(handover::Scratch::path),
         };
-        crate::emulators::prepare(&id, platform.as_deref(), dir, pad, None)
+        crate::emulators::prepare(&id, platform.as_deref(), dir, pad)
     })
     .await;
     match prepared {

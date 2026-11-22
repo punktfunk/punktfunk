@@ -11,6 +11,7 @@ import { MoonlightPairingSection } from "./MoonlightPairingCard";
 import { PairedRowView, usePairedDevices } from "./PairedDevices";
 import { type BoundDevice, PairSheet, useNativePairing } from "./PairSheet";
 import { PendingRow, usePendingDevices, WaitingRow } from "./PendingDevices";
+import { isStreaming } from "./pairedRows";
 import { DevicesView } from "./view";
 
 /**
@@ -33,12 +34,9 @@ export const SectionDevices: FC = () => {
 	});
 	const pending = usePendingDevices();
 	const paired = usePairedDevices();
-	// Who is streaming right now: a session's `client` is its fingerprint's prefix.
 	const status = useGetStatus({ query: { refetchInterval: 15_000 } });
 	const streaming = (fingerprint: string) =>
-		(status.data?.sessions ?? []).some(
-			(s) => s.plane !== "gamestream" && fingerprint.startsWith(s.client),
-		);
+		isStreaming(status.data?.sessions ?? [], fingerprint);
 
 	const armed = native.status.data?.armed && native.pin;
 	const waiting = [

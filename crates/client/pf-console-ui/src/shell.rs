@@ -329,6 +329,8 @@ pub(crate) fn gpu_cache_budget(base: usize, k: f64) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Takeover {
     Launching,
+    /// A title plays on this device: nothing to press until the card is up.
+    PlayingHere,
     Asking,
     SeatWait,
     Connecting,
@@ -373,8 +375,8 @@ pub(crate) struct Shell {
     /// The `host_sort` / `host_grouping` values `hosts` was last arranged by.
     hosts_order: (Option<serde_json::Value>, Option<serde_json::Value>),
     pub(crate) in_stream: bool,
-    /// Where the connect is, from the press to the stream. Input waits while it is past
-    /// [`Connect::Idle`].
+    /// Where the connect is, from the press to the stream. Input waits while it raises a
+    /// takeover.
     connect: Connect,
     /// How far a connect is from asking its profiles a second time.
     reask: Reask,
@@ -678,9 +680,23 @@ impl Shell {
     }
 
     /// The console is covering a live stream — a launch hold — and wants the
-    /// pad as menu events, masked off the wire.
+    /// pad as menu events, masked off the wire. A hold on this device covers none.
     pub(crate) fn holds_stream(&self) -> bool {
-        self.connect.launching().is_some()
+        self.connect.launching().is_some_and(|l| !l.local)
+    }
+
+    /// A title plays on this device and the console has let go: no frame, no pad.
+    pub(crate) fn playing_here(&self) -> bool {
+        self.connect.playing_here().is_some_and(|p| !p.card)
+    }
+
+    /// Focus left or came back. Only while a title plays here does it matter: back after
+    /// leaving puts the card up, and leaving again takes it down.
+    pub(crate) fn focus(&mut self, gained: bool) {
+        if let Some(p) = self.connect.playing_here_mut() {
+            p.card = gained && (p.left || p.card);
+            p.left = !gained;
+        }
     }
 
     /// No input for [`crate::console::IDLE_AFTER`].
@@ -714,7 +730,9 @@ impl Shell {
         });
     }
 
-    fn sync(&mut self) {
+    /// What the service reported since the last frame, taken into the shell. A host that
+    /// draws no frame (a title playing here) calls it on its own.
+    pub(crate) fn sync(&mut self) {
         self.backdrop.sync(&self.settings);
         self.sync_hosts();
         if let Some(text) = self.console.take_notice() {
@@ -739,11 +757,12 @@ impl Shell {
         self.settle_focus();
     }
 
-    /// While the shelf on top shows a live download and no launch hold polls already, re-read
-    /// `/status` every [`DOWNLOADS_POLL`] so its tile's percentage moves.
+    /// While the shelf on top shows a live download and no launch hold or watch polls already,
+    /// re-read `/status` every [`DOWNLOADS_POLL`] so its tile's percentage moves.
     fn tick_downloads(&mut self) {
         let t = self.t();
-        if self.holds_stream() || t - self.downloads_polled < DOWNLOADS_POLL {
+        let polls = matches!(self.connect, Connect::Launching(_) | Connect::Watching(_));
+        if polls || t - self.downloads_polled < DOWNLOADS_POLL {
             return;
         }
         if !self.library.any_live_download() {
@@ -1349,9 +1368,36 @@ impl Shell {
     /// A menu event while takeover `t` owns the input. B drops every card; the launch
     /// hold before its dial lands and the connect card also cancel the dial. A dropped
     /// connect takes its re-ask along, so the next connect may ask again. After the dial
-    /// lands, A or B on the launch hold shows the stream.
+    /// lands, A or B on the launch hold shows the stream. A hold on this device dialed
+    /// nothing and cancels nothing: B takes its screen down and the launch is still watched;
+    /// once it gave up, A or B leaves it. The card over a title playing here has one action,
+    /// End game.
     fn takeover_menu(&mut self, t: Takeover, ev: MenuEvent) -> Option<MenuPulse> {
+        // A hold on this device: whether it gave up.
+        let here = (self.connect.launching())
+            .filter(|l| l.local)
+            .map(|l| l.failed.is_some());
         match (t, ev) {
+            (Takeover::Launching, MenuEvent::Back) if here == Some(false) => {
+                if let Connect::Launching(l) = std::mem::take(&mut self.connect) {
+                    self.connect = Connect::Watching(l);
+                }
+            }
+            (Takeover::Launching, MenuEvent::Confirm | MenuEvent::Back) if here == Some(true) => {
+                self.connect = Connect::Idle;
+            }
+            (Takeover::Launching, _) if here.is_some() => return None,
+            (Takeover::PlayingHere, MenuEvent::Confirm) => {
+                let p = self.connect.playing_here().filter(|p| p.card)?;
+                let end = ConsoleCmd::EndGame {
+                    addr: p.hold.host.addr.clone(),
+                    mgmt: p.hold.host.mgmt,
+                    fp_hex: p.hold.host.fp_hex.clone(),
+                    app_id: p.hold.host.id.clone(),
+                    title: p.hold.title.clone(),
+                };
+                self.bus.send(end);
+            }
             (Takeover::Launching, MenuEvent::Confirm | MenuEvent::Back)
                 if self.connect.launching().is_some_and(|l| l.connected) =>
             {
@@ -1407,7 +1453,26 @@ impl Shell {
         };
         // A takeover swallows every pointer event: clicking through a connect card onto
         // the library would start a second session. Right button is its B.
+        let here = self.connect.launching().is_some_and(|l| l.local);
         match self.takeover() {
+            // A hold on this device: the right button is its B, a press its A.
+            Some(Takeover::Launching) if here => {
+                if p.kind == PointerKind::Back {
+                    self.takeover_menu(Takeover::Launching, MenuEvent::Back);
+                } else if p.press() {
+                    self.takeover_menu(Takeover::Launching, MenuEvent::Confirm);
+                }
+                return true;
+            }
+            // The card's End game takes a click on its hint, never one anywhere.
+            Some(Takeover::PlayingHere) => {
+                let on_end = (self.hint_rects.iter())
+                    .any(|(key, r)| *key == crate::glyphs::HintKey::Confirm && p.hits(*r));
+                if p.press() && on_end {
+                    self.handle_menu(MenuEvent::Confirm);
+                }
+                return true;
+            }
             Some(Takeover::Launching) => {
                 let connected = self.connect.launching().is_some_and(|l| l.connected);
                 if connected && (p.press() || p.kind == PointerKind::Back) {

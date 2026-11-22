@@ -615,7 +615,8 @@ impl Rig {
         }
         // The profile exists once the session does. A first copy runs beside the start; the seat's
         // Steam titles start once it lands, and its launchers are pointed at it then.
-        super::steam::ensure_copy(id, &seat.account, seat.id.as_str());
+        let share = seat.kind.supervisor_owns_account();
+        super::steam::ensure_copy(id, &seat.account, seat.id.as_str(), share);
         let steam = super::steam::box_install().and(super::steam::seat_exe(&seat.account));
         let temp_root = self
             .root

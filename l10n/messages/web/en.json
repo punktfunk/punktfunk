@@ -1178,6 +1178,7 @@
 	"games_detached_note": "Its stream ended, and the game is still running",
 	"games_untracked_note": "This title exposes nothing the host can recognize its process by, so quitting it won't end the session",
 	"games_closing_in": "Its client is gone — closing in {time} unless it comes back",
+	"games_plane_local": "On this PC's screen",
 	"games_end_all_waiting_confirm": [
 		{
 			"declarations": [

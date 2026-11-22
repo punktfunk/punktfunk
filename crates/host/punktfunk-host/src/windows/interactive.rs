@@ -241,6 +241,12 @@ impl Drop for Revert {
     }
 }
 
+/// Someone is signed in on this process's WTS session, so a launch has a user to start as.
+/// Needs SYSTEM, as [`spawn_as_current_session_user`] does.
+pub fn signed_in() -> bool {
+    session_user_token().is_ok()
+}
+
 /// A primary token for the signed-in user of this process's WTS session. Needs SYSTEM.
 pub(super) fn session_user_token() -> Result<Owned<HANDLE>> {
     let session = current_process_session_id()?;

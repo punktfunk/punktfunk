@@ -101,6 +101,10 @@ Sign in to Steam once on each seat. One Steam account can play on one seat at a 
 needs an account of their own; [Steam Families](https://store.steampowered.com/families) shares the
 games. Seats install nothing twice: their Steam lists the PC's game folders first.
 
+A seat Punktfunk made also finds the non-Steam games added to the PC's Steam in its own Steam, with
+their art and launch options. It gets the ones its account can open; a game kept in someone's user
+folder stays theirs. A seat picks up a change the next time it starts.
+
 Don't pin `steam.exe` from `C:\Program Files (x86)\Steam` on a seat, or start it from File Explorer:
 that starts the PC's Steam and closes the other one.
 

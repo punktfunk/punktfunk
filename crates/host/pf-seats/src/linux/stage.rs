@@ -10,8 +10,14 @@
 //!
 //! `owner=<uid>`: root opens the folder and it must be that uid's. `reader=<account>`: the account
 //! opens it with its own groups, so it must be able to walk to it, read it and enter it.
+//!
+//! A seventh word, `<upper>`, makes the folder the lower layer of an overlay: it is mounted at
+//! `<stage>.lower`, and the overlay at `<stage>` writes into `<upper>/upper`. Where the kernel
+//! refuses the overlay, the lower is bound at `<stage>` and the seat gets the folder read-only.
+//! A stage already mounted is left as it is.
 
 use super::libraries::IDMAP_FS;
+use std::path::{Component, Path};
 
 /// The verb of `punktfunk-seats` that runs the helper.
 pub const VERB: &str = "stage";
@@ -46,10 +52,29 @@ fn refusal(check: &Check, options: &str, uid: u32, fstype: Option<&str>) -> Opti
     None
 }
 
+/// Whether `upper` may hold an overlay's upper layer: a plain path in the seats' own folders,
+/// with nothing overlayfs reads as a separator in its options.
+fn upper_ok(upper: &str) -> bool {
+    let path = Path::new(upper);
+    path.starts_with(Path::new(super::STATE_DIR).join("seats"))
+        && path
+            .components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+        && !upper.contains([',', ':', '\\'])
+        && !upper.chars().any(char::is_whitespace)
+}
+
 /// The helper. The unit ignores its exit code: a folder not mounted leaves the seat an empty one.
 #[cfg(target_os = "linux")]
-pub fn run(check: &str, mount: &str, options: &str, source: &str, stage: &str) -> u8 {
-    match linux::stage(check, mount, options, source, stage) {
+pub fn run(
+    check: &str,
+    mount: &str,
+    options: &str,
+    source: &str,
+    stage: &str,
+    upper: Option<&str>,
+) -> u8 {
+    match linux::stage(check, mount, options, source, stage, upper) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("seat stage: {source} not mounted: {error}");
@@ -61,23 +86,34 @@ pub fn run(check: &str, mount: &str, options: &str, source: &str, stage: &str) -
 #[cfg(target_os = "linux")]
 mod linux {
     use super::super::{accounts, libraries};
-    use super::{parse, refusal, Check};
+    use super::{parse, refusal, upper_ok, Check};
     use rustix::mount::UnmountFlags;
     use rustix::process::{Gid, Uid};
     use std::os::fd::OwnedFd;
     use std::path::Path;
 
-    /// The folder at `source` mounted at `stage`, or why not. The scratch goes either way.
+    /// The folder at `source` mounted at `stage`, below an overlay into `upper` when given, or
+    /// why not. The scratch goes either way.
     pub(super) fn stage(
         check: &str,
         mount: &str,
         options: &str,
         source: &str,
         stage: &str,
+        upper: Option<&str>,
     ) -> Result<(), String> {
         let check = parse(check).ok_or_else(|| format!("unknown check {check}"))?;
         if !Path::new(stage).starts_with(libraries::STAGE_ROOT) {
             return Err(format!("the stage lies outside {}", libraries::STAGE_ROOT));
+        }
+        let lower = format!("{stage}.lower");
+        let target = match upper {
+            None => stage,
+            Some(upper) if upper_ok(upper) && upper_ok_stage(stage) => lower.as_str(),
+            Some(upper) => return Err(format!("{upper} can't hold an overlay for {stage}")),
+        };
+        if upper.is_some() && mounted(stage) {
+            return Ok(());
         }
         let folder = match &check {
             Check::Owner(_) => open_dir(Path::new(source)),
@@ -95,14 +131,70 @@ mod linux {
                 if let Some(reason) = refusal(&check, options, uid, fstype.as_deref()) {
                     return Err(reason.to_owned());
                 }
-                let args = ["--bind", "-o", options, &scratch, stage];
+                let args = ["--bind", "-o", options, &scratch, target];
                 super::super::run("mount", mount, &args)
                     .map(drop)
                     .map_err(|e| e.message)
             });
         let _ = rustix::mount::unmount(scratch.as_str(), UnmountFlags::DETACH);
         let _ = std::fs::remove_dir(&scratch);
-        mounted
+        mounted?;
+        match upper {
+            Some(upper) => overlay(mount, &lower, upper, stage),
+            None => Ok(()),
+        }
+    }
+
+    /// An overlay of `lower` and `<upper>/upper` at `stage`, else `lower` itself, read-only.
+    /// The last run's overlay lives on in the seat user's manager until it stops, up to logind's
+    /// 10 s delay later; the kernel refuses the upper folder with `EBUSY` till then.
+    fn overlay(mount: &str, lower: &str, upper: &str, stage: &str) -> Result<(), String> {
+        let mut refused = rustix::io::Errno::BUSY;
+        for _ in 0..30 {
+            match overlay_once(lower, upper, stage) {
+                Ok(()) => return Ok(()),
+                Err(e) if e == rustix::io::Errno::BUSY => refused = e,
+                Err(e) => {
+                    refused = e;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        eprintln!("seat stage: {stage} read-only, overlay refused: {refused}");
+        let args = ["--bind", lower, stage];
+        super::super::run("mount", mount, &args)
+            .map(drop)
+            .map_err(|e| e.message)
+    }
+
+    fn overlay_once(lower: &str, upper: &str, stage: &str) -> rustix::io::Result<()> {
+        use rustix::mount::{
+            fsconfig_create, fsconfig_set_string, fsmount, fsopen, move_mount, FsMountFlags,
+            FsOpenFlags, MountAttrFlags, MoveMountFlags,
+        };
+        let fs = fsopen("overlay", FsOpenFlags::FSOPEN_CLOEXEC)?;
+        fsconfig_set_string(&fs, "lowerdir", lower)?;
+        fsconfig_set_string(&fs, "upperdir", format!("{upper}/upper").as_str())?;
+        fsconfig_set_string(&fs, "workdir", format!("{upper}/work").as_str())?;
+        fsconfig_create(&fs)?;
+        let attrs = MountAttrFlags::MOUNT_ATTR_NOSUID | MountAttrFlags::MOUNT_ATTR_NODEV;
+        let made = fsmount(&fs, FsMountFlags::FSMOUNT_CLOEXEC, attrs)?;
+        let flags = MoveMountFlags::MOVE_MOUNT_F_EMPTY_PATH;
+        move_mount(&made, "", rustix::fs::CWD, stage, flags)
+    }
+
+    /// Whether something is mounted at `path`: its device differs from its folder's.
+    fn mounted(path: &str) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        let dev = |p: &Path| std::fs::metadata(p).map(|m| m.dev()).ok();
+        let path = Path::new(path);
+        path.parent().is_some_and(|parent| dev(path) != dev(parent))
+    }
+
+    /// A stage whose name overlayfs can take in its options.
+    fn upper_ok_stage(stage: &str) -> bool {
+        !stage.contains([',', ':', '\\']) && !stage.chars().any(char::is_whitespace)
     }
 
     /// The folder at `path`, refused when any part of the path is a link.
@@ -256,6 +348,23 @@ mod tests {
         assert_eq!(parse("reader=enrico"), Some(Check::Reader("enrico".into())));
         for bad in ["owner=", "owner=me", "reader=", "owner", "writer=1000", ""] {
             assert_eq!(parse(bad), None, "{bad:?}");
+        }
+    }
+
+    /// An overlay writes only into the seats' own folders, by a path overlayfs reads whole.
+    #[test]
+    fn an_overlay_s_upper_lies_in_the_seats_own_folders() {
+        let ok = "/var/lib/punktfunk-seats/seats/0123456789abcdef0123456789abcdef/overlays/00aa";
+        assert!(upper_ok(ok));
+        for bad in [
+            "/home/enrico/upper",
+            "/var/lib/punktfunk-seats/trust/x",
+            "/var/lib/punktfunk-seats/seats/../../../etc",
+            "/var/lib/punktfunk-seats/seats/x,lowerdir=/",
+            "/var/lib/punktfunk-seats/seats/x y",
+            "var/lib/punktfunk-seats/seats/x",
+        ] {
+            assert!(!upper_ok(bad), "{bad}");
         }
     }
 

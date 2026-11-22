@@ -25,6 +25,8 @@ pub(crate) struct Probes {
     pub(crate) vaapi_missed: OnceLock<()>,
     /// libva's 10-bit encode entrypoints, HEVC then AV1, kept once a display answered.
     pub(crate) vaapi_ten_bit: [Probed<bool>; 2],
+    /// libva's 8-bit HEVC entrypoint, kept once a display answered.
+    pub(crate) vaapi_hevc: Probed<bool>,
     /// Vulkan Video encode caps, HEVC then AV1, kept once the probe could ask.
     pub(crate) vulkan: [Probed<VulkanFacts>; 2],
 }
@@ -481,13 +483,13 @@ impl Resolved {
     }
 
     /// What a producer's own NV12 or P010 may arrive as for this session: the whole planar
-    /// offer, LINEAR (0) included, and empty when the encoder reads none of them. Only the
-    /// native libva session takes a tiled one; every other lane keeps LINEAR.
+    /// offer, LINEAR (0) included, and empty when the encoder reads none of them. Intel's
+    /// encoders take a tiled one, each by its own proof; every other lane keeps LINEAR.
     pub fn planar_capture_modifiers(&self, codec: Codec, bit_depth: u8, hdr: bool) -> Vec<u64> {
         let ten_bit = bit_depth >= 10;
         #[cfg(feature = "vulkan-encode")]
         if self.amd_intel_opens_vulkan(codec, ten_bit, hdr) {
-            return vec![0];
+            return vulkan_video::vulkan_planar_capture_modifiers(codec, ten_bit);
         }
         #[cfg(not(feature = "vulkan-encode"))]
         let _ = hdr;
@@ -556,8 +558,31 @@ impl Resolved {
     fn amd_intel_opens_vulkan(&self, codec: Codec, ten_bit: bool, hdr: bool) -> bool {
         self.inputs.features.vulkan_encode
             && amd_intel_vulkan_depth(codec, ten_bit, hdr).is_some_and(|ten| {
-                self.inputs.vulkan_row && self.vulkan_encode_available_at(codec, ten)
+                self.inputs.vulkan_row
+                    && !self.intel_hevc_on_vaapi(codec, ten)
+                    && self.vulkan_encode_available_at(codec, ten)
             })
+    }
+
+    /// Intel's HEVC stays on VAAPI wherever libva encodes it: iHD's low-power encoder takes half
+    /// ANV's time and runs an intra refresh wave, which ANV has no extension for. A `vulkan` pin
+    /// opens Vulkan, so the capture answers follow it there.
+    fn intel_hevc_on_vaapi(&self, codec: Codec, ten_bit: bool) -> bool {
+        self.inputs.intel
+            && codec == Codec::H265
+            && self.backend() != LinuxBackend::Vulkan
+            && self.vaapi_hevc(ten_bit) == Some(true)
+    }
+
+    /// libva's HEVC entrypoint at this depth. `None` while no display opened to ask; it runs
+    /// again after [`RETRY_AFTER`].
+    fn vaapi_hevc(&self, ten_bit: bool) -> Option<bool> {
+        if ten_bit {
+            return self.vaapi_ten_bit(Codec::H265);
+        }
+        self.probes
+            .vaapi_hevc
+            .ask(|| vaapi_native::probe_entrypoint(Codec::H265, false))
     }
 
     /// Vulkan Video is built, switched on and the AMD/Intel plane's encoder for `codec`.
@@ -737,7 +762,8 @@ fn probe_vulkan_encode_caps(codec: Codec) -> Option<VulkanFacts> {
         } else {
             tracing::info!(
                 ?codec,
-                "Vulkan Video encode unavailable (no encode queue for this codec) — keeping the \
+                "Vulkan Video encode unavailable (no encode queue or no bitrate mode for this \
+                 codec) — keeping the \
                  packed-RGB capture negotiation (the native-NV12 path has no VAAPI fallback)"
             );
         }
@@ -930,6 +956,7 @@ mod tests {
             gpu: String::new(),
             vulkan_row: true,
             nvidia: false,
+            intel: false,
             features: Features::BUILT,
         })
     }
@@ -1097,7 +1124,8 @@ mod tests {
     }
 
     /// A `vulkan` pin the GPU can't open falls back to VAAPI rather than failing the session.
-    /// GPU-free: without a device the error must be VAAPI's, not Vulkan's.
+    /// Where Vulkan can't encode, the error must be VAAPI's (libva names its calls `va…`), not
+    /// Vulkan's.
     #[cfg(feature = "vulkan-encode")]
     #[test]
     fn a_vulkan_pin_falls_back_to_vaapi() {
@@ -1109,7 +1137,8 @@ mod tests {
             Ok((_, label)) => assert!(matches!(label, "vulkan" | "vaapi-native"), "{label}"),
             Err(e) => {
                 let msg = format!("{e:#}");
-                assert!(msg.contains("libva") || msg.contains("VAAPI"), "{msg}");
+                let vaapi = msg.contains("libva") || msg.contains("VAAPI") || msg.starts_with("va");
+                assert!(vaapi, "{msg}");
             }
         }
     }
@@ -1157,6 +1186,7 @@ mod tests {
             gpu: "card0".into(),
             vulkan_row: true,
             nvidia: false,
+            intel: false,
             features,
         }
     }
@@ -1328,6 +1358,42 @@ mod tests {
         assert!(on.native_nv12_ok(Codec::Av1, 8, false, false, false));
         assert!(!off.native_nv12_ok(Codec::Av1, 8, false, false, false));
         assert!(off.native_nv12_ok(Codec::H265, 8, false, false, false));
+    }
+
+    /// Intel's HEVC opens VAAPI at the depth libva encodes it; AV1, an Intel node without libva's
+    /// HEVC, a `vulkan` pin and AMD keep Vulkan Video.
+    #[test]
+    fn intel_hevc_opens_vaapi_where_libva_encodes_it() {
+        let cache = Mutex::new(HashMap::new());
+        let at_pref = |pref: &str, intel: bool, va_8: bool, va_10: bool| {
+            let r = resolve_in(
+                &cache,
+                ResolveInputs {
+                    intel,
+                    gpu: format!("{intel}{va_8}{va_10}"),
+                    ..inputs(pref, FULL)
+                },
+            );
+            r.probes.vulkan[0].fill(vulkan(true, true));
+            r.probes.vulkan[1].fill(vulkan(true, true));
+            r.probes.vaapi_hevc.fill(va_8);
+            r.probes.vaapi_ten_bit[0].fill(va_10);
+            r
+        };
+        let at = |intel, va_8, va_10| at_pref("vaapi", intel, va_8, va_10);
+        let intel = at(true, true, true);
+        assert!(!intel.amd_intel_opens_vulkan(Codec::H265, false, false));
+        assert!(!intel.amd_intel_opens_vulkan(Codec::H265, true, true));
+        assert!(intel.amd_intel_opens_vulkan(Codec::Av1, false, false));
+        let intel_8bit_va = at(true, true, false);
+        assert!(!intel_8bit_va.amd_intel_opens_vulkan(Codec::H265, false, false));
+        assert!(intel_8bit_va.amd_intel_opens_vulkan(Codec::H265, true, false));
+        let intel_no_va = at(true, false, false);
+        assert!(intel_no_va.amd_intel_opens_vulkan(Codec::H265, false, false));
+        let amd = at(false, true, true);
+        assert!(amd.amd_intel_opens_vulkan(Codec::H265, false, false));
+        let pinned = at_pref("vulkan", true, true, true);
+        assert!(pinned.amd_intel_opens_vulkan(Codec::H265, false, false));
     }
 
     /// Which backend writes 10-bit from an 8-bit SDR surface.

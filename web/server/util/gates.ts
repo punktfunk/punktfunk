@@ -13,6 +13,8 @@ import removePost, {
 import exportPost from "../routes/api/v1/emulators/[id]/saves/export.post";
 import importPost from "../routes/api/v1/emulators/[id]/saves/import.post";
 import relayPost from "../routes/api/v1/events/relay.post";
+import handoffReportPost from "../routes/api/v1/game/handoff/[token].post";
+import handoffPost from "../routes/api/v1/game/handoff.post";
 import holdReleasePost from "../routes/api/v1/game/holds/[token]/release.post";
 import hooksPut from "../routes/api/v1/hooks.put";
 import settingsPatch, {
@@ -27,6 +29,7 @@ import decidePost, {
 } from "../routes/api/v1/plugin-access/[plugin]/decide.post";
 import pluginPut from "../routes/api/v1/plugins/[id].put";
 import { when as setsPin } from "../routes/api/v1/profiles/[id]/lock.post";
+import steamEntriesPut from "../routes/api/v1/steam/entries.put";
 import installPost from "../routes/api/v1/store/install.post";
 import sourcesPut from "../routes/api/v1/store/sources/[name].put";
 import type { When } from "./confirm";
@@ -102,6 +105,8 @@ const LAUNCHES = "what every launch of that emulator already does";
 const DOWNLOADS = "an installed plugin downloads its own title";
 const INSTALLED =
 	"starts only installed plugins: each install was the decision";
+const LISTED =
+	"starts only a title the library lists: adding the entry was the decision";
 const ADMITS_NONE =
 	"makes a seat but admits no device; removing one is gated. A Windows password it carries is one the caller already holds";
 const PERSON_TICKET =
@@ -141,6 +146,9 @@ export const GATES: readonly Route[] = [
 	gated("POST", "emulators/{id}/saves/export", exportPost),
 	gated("POST", "emulators/{id}/saves/import", importPost),
 	open("POST", "game/end", STEERS),
+	open("POST", "game/launch", LISTED),
+	refused("POST", "game/handoff", handoffPost),
+	refused("POST", "game/handoff/{token}", handoffReportPost),
 	refused("POST", "game/holds/{token}/release", holdReleasePost),
 	refused("POST", "events/relay", relayPost),
 	open("PUT", "gpus/preference", SETTING),
@@ -222,6 +230,7 @@ export const GATES: readonly Route[] = [
 	open("POST", "stats/capture/start", RECORD),
 	open("POST", "stats/capture/stop", RECORD),
 	open("DELETE", "stats/recordings/{id}", RECORD),
+	refused("PUT", "steam/entries", steamEntriesPut),
 	ownLane(gated("POST", "store/install", installPost)),
 	open("POST", "store/refresh", REFRESH),
 	open("POST", "store/runtime", INSTALLED),

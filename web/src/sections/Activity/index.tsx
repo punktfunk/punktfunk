@@ -188,13 +188,16 @@ export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
 	);
 };
 
-/** The subject of an event, in one line — whatever the payload actually names. */
+/**
+ * The subject of an event, in one line — whatever the payload actually names. A `local` game's
+ * `client` is the key `desk`, which names no device.
+ */
 export function describe(e: ActivityEntry): string {
 	const d = e.data;
 	const client =
 		pick(d.client, "name") ??
 		pick(d.session, "client") ??
-		pick(d.game, "client") ??
+		(pick(d.game, "plane") === "local" ? undefined : pick(d.game, "client")) ??
 		pick(d.device, "name");
 	const stream = d.stream as Record<string, unknown> | undefined;
 	const parts = [

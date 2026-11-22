@@ -836,7 +836,8 @@ impl Shell {
 
 impl Shell {
     /// Browse mode's console: menu events while no stream is engaged, and the action the
-    /// console took. `Break` is the console's Quit.
+    /// console took; a launch refused before its dial ends the console's connect. `Break` is
+    /// the console's Quit.
     pub(super) fn browse_tick(
         &mut self,
         stream: &mut Option<StreamState>,
@@ -883,6 +884,11 @@ impl Shell {
                         self.presenter.vulkan_decode(),
                     ) {
                         ActionOutcome::Handled => {}
+                        ActionOutcome::Refused => {
+                            if let Some(o) = self.overlay.as_mut() {
+                                o.session_phase(SessionPhase::Ended(None));
+                            }
+                        }
                         ActionOutcome::Start(params) => {
                             // A live pump here would be detached by the assignment —
                             // `StreamState` has no `Drop`, so its thread would keep

@@ -1,4 +1,4 @@
-// The two decisions that stop a rebuild loop, driven with a synthetic clock.
+// The decisions that stop a rebuild loop, driven with a synthetic clock.
 //
 // The loop's shape, for the plant-the-defect cases below: the voice-processing engine fails to
 // start (~1.9 s spent trying), the fallback comes up, and its own HAL fallout retriggers the
@@ -97,6 +97,34 @@ final class AudioRebuildPolicyTests: XCTestCase {
         // Back to the first device: the earlier failure may have been mid-transition — one fresh
         // attempt again, not a permanent ban.
         XCTAssertTrue(gate.shouldTry(input: 42))
+    }
+
+    /// A voice processor that starts and then stops itself, after every rebuild (#2569, a
+    /// Scarlett 4i4: stops 0.1–3.4 s after each start). Unlatched, the session never plays.
+    func testAVoiceProcessorThatKeepsDyingLatchesOnItsSecondChance() {
+        typealias Gate = CombinedTopologyGate
+        XCTAssertFalse(
+            Gate.stoppedEngineFailed(stopped: true, devicesMoved: false, attempt: 0, chain: 0),
+            "the first stop after a fresh start may be the hardware moving: one more try")
+        XCTAssertTrue(
+            Gate.stoppedEngineFailed(stopped: true, devicesMoved: false, attempt: 0, chain: 1),
+            "stopped again within the chain window of the rebuild that started it")
+        XCTAssertTrue(
+            Gate.stoppedEngineFailed(stopped: true, devicesMoved: false, attempt: 1, chain: 0),
+            "dead before the rebuild's own liveness check, then retried")
+        XCTAssertFalse(
+            Gate.stoppedEngineFailed(stopped: false, devicesMoved: false, attempt: 2, chain: 3),
+            "a running engine, or none, is no voice-processing failure")
+    }
+
+    /// A USB headset unplugged: the output moves (rebuild 1), then the input moves and stops the
+    /// engine rebuild 1 started (rebuild 2, chained). That is the hardware moving twice, not the
+    /// processor failing: echo cancellation must survive it.
+    func testAStopThatFollowsADeviceSwitchIsNoVoiceProcessingFailure() {
+        XCTAssertFalse(CombinedTopologyGate.stoppedEngineFailed(
+            stopped: true, devicesMoved: true, attempt: 0, chain: 1))
+        XCTAssertFalse(CombinedTopologyGate.stoppedEngineFailed(
+            stopped: true, devicesMoved: true, attempt: 1, chain: 0))
     }
 
     /// "No resolvable input device" is a real failure key too, distinct from "never failed".

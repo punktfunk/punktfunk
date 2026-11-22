@@ -1376,7 +1376,10 @@ fn spawn_launch_and_lease(
             compositor,
             nested_spawn,
             seat: seat.as_deref(),
+            place: crate::library::Place::Stream,
         },
+        #[cfg(windows)]
+        &crate::library::View::here(),
     );
     let spawned_now = spawned.now;
     if let Some(t) = launch_target {
@@ -1870,8 +1873,10 @@ mod tests {
                 plane: crate::events::Plane::Native,
                 preset: None,
                 profile: None,
-                pad: punktfunk_core::config::GamepadPref::Auto,
-                pad_slots: None,
+                pads: crate::session_launch::Pads::Session {
+                    kind: punktfunk_core::config::GamepadPref::Auto,
+                    slots: None,
+                },
             },
             launch_outcome: unbounded_channel().0,
             frame_map: Default::default(),

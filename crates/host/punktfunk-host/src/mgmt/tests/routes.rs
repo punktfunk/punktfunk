@@ -192,8 +192,18 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("DELETE", "/api/v1/session/settings", true, true),
         // A device ends only games it launched; the handler scopes it.
         ("POST", "/api/v1/game/end", true, true),
+        // A game on the host's own screen: a device with the launch grant, from this machine.
+        // Never a plugin.
+        ("POST", "/api/v1/game/launch", false, true),
         // A seat's held launch: only the host with the plugins lets it go.
         ("POST", "/api/v1/game/holds/{token}/release", false, false),
+        // `punktfunk-host play` in Steam's tree, on the host's own token: never a plugin or a
+        // device, since a handoff hands out a command line.
+        ("POST", "/api/v1/game/handoff", false, false),
+        ("POST", "/api/v1/game/handoff/{token}", false, false),
+        // The Decky plugin syncs the desk's Steam through `ctl steam`, on the host's own token.
+        ("GET", "/api/v1/steam/entries", false, false),
+        ("PUT", "/api/v1/steam/entries", false, false),
         // Library writes are plugin-lane (scanner job); privileged fields inside the payload
         // are refused in the handler — see `plugin_lane_cannot_set_command_execution_fields`.
         ("GET", "/api/v1/library", true, true),
@@ -743,6 +753,11 @@ fn every_route_has_a_side_on_the_door() {
         ("DELETE", "/api/v1/session/settings", false),
         ("POST", "/api/v1/game/end", false),
         ("POST", "/api/v1/game/holds/{token}/release", false),
+        ("POST", "/api/v1/game/launch", false),
+        ("POST", "/api/v1/game/handoff", false),
+        ("POST", "/api/v1/game/handoff/{token}", false),
+        ("GET", "/api/v1/steam/entries", false),
+        ("PUT", "/api/v1/steam/entries", false),
         // Moonlight is the owner's row's: the door never serves it.
         ("GET", "/api/v1/pair", false),
         ("POST", "/api/v1/pair/pin", false),
@@ -979,15 +994,18 @@ fn every_device_route_has_a_side_on_the_door() {
         ("GET", "/api/v1/library/art/{id}/{kind}"),
     ];
     // What the owner's host answers as the device: installs land in the box's shared game files,
-    // and a person's writes in the library that host writes.
+    // a person's writes in the library that host writes, and a launch on the screen it plays.
     let owner: Vec<(&str, &str)> = [
         ("POST", "/api/v1/library/install/{id}"),
         ("DELETE", "/api/v1/library/install/{id}"),
         ("POST", "/api/v1/library/install/{id}/pause"),
+        ("POST", "/api/v1/game/launch"),
     ]
     .into_iter()
     .chain(punktfunk_core::mgmt_routes::PERSON.iter().copied())
     .collect();
+    // From this machine the owner's host, which plays the box's screen; else the device's seat.
+    const DESK: &[(&str, &str)] = &[("POST", "/api/v1/game/end")];
 
     let doc: serde_json::Value = serde_json::from_str(&openapi_json()).unwrap();
     let mut device: Vec<(Method, &str)> = Vec::new();
@@ -1003,6 +1021,8 @@ fn every_device_route_has_a_side_on_the_door() {
                 None
             } else if owner.contains(&row) {
                 Some(Side::Owner)
+            } else if DESK.contains(&row) {
+                Some(Side::Desk)
             } else {
                 Some(Side::Seat)
             };
@@ -1014,7 +1034,7 @@ fn every_device_route_has_a_side_on_the_door() {
             device.push((method, rest));
         }
     }
-    for (method, path) in DOOR_OWN.iter().chain(&owner) {
+    for (method, path) in DOOR_OWN.iter().chain(&owner).chain(DESK) {
         let rest = path.strip_prefix("/api/v1/").unwrap();
         assert!(
             device.iter().any(|(m, p)| m == method && *p == rest),

@@ -1,7 +1,8 @@
 // One host in the QAM panel: one compact row. A ready host streams on a press, and its ▾ (or the
 // controller's menu button) lists its profiles, pinned presets, the host's Screen section, and
-// Wake or the host's own power actions. A host that needs access opens the trust sheet. The
-// host's bound preset is never listed: the plain press already applies it.
+// Wake or the host's own power actions. A host that needs access opens the trust sheet, and this
+// device's own host the console. The host's bound preset is never listed: the plain press
+// already applies it.
 import {
   ConfirmModal,
   DialogButton,
@@ -29,6 +30,7 @@ import { type HostView, trustState } from "../hosts/model";
 import { t } from "../i18n";
 import { toast } from "../lib/toast";
 import { OsMark } from "../os-icon";
+import { launchGamepadUi } from "../steam/launch";
 import { startStream } from "../stream";
 import { TrustSheet } from "../trust/trust";
 import { actionLabel, pickHostScreen, runHostAction, screenLabel, wakeHost } from "./actions";
@@ -363,6 +365,19 @@ export const HostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, sh
           </DialogButton>
         )}
     </Focusable>
+  );
+};
+
+/** This device's own host: press opens the console, where its games play with no stream. */
+export const LocalHostRow: FC<{ host: HostView; showAddress: boolean }> = ({ host, showAddress }) => {
+  return (
+    <DialogButton
+      style={{ ...SQUARE, width: "100%" }}
+      onOKActionDescription={t("decky_open_app")}
+      onClick={() => void launchGamepadUi()}
+    >
+      <HostLabel host={host} icon={<OsMark os={host.os} />} showAddress={showAddress} />
+    </DialogButton>
   );
 };
 

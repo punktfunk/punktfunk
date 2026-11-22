@@ -566,6 +566,7 @@ pub(crate) async fn vouched_by_seat(st: &MgmtState, profile: &str, token: &str) 
         body: serde_json::to_vec(&serde_json::json!({ "token": token })).ok()?,
         device: None,
         person: None,
+        local: false,
         stream: false,
         start: false,
     };

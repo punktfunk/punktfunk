@@ -2831,7 +2831,7 @@
           "session"
         ],
         "summary": "End a launched game",
-        "description": "Ends games nobody is streaming: those waiting out the reconnect window and\nlaunches left running after their session ended (`detached` in `GET /status`).\nWith `streaming`, also ends games still on a live session; the session itself\nstays up (`DELETE /session` plus `game_on_session_end`). `app_id` narrows it to\none title. A paired device ends only games it launched.",
+        "description": "Ends games nobody is streaming: those waiting out the reconnect window and launches left\nrunning after their session ended (`detached` in `GET /status`). With `streaming`, also ends\ngames still on a live session; the session itself stays up (`DELETE /session` plus\n`game_on_session_end`). `app_id` narrows it to one title. A game this host started on its\nown screen (`local`) ends only when `app_id` names it. A paired device ends only games it\nlaunched, and a `local` game when it holds the launch grant and calls from this device.",
         "operationId": "endGame",
         "requestBody": {
           "content": {
@@ -2888,6 +2888,136 @@
         "x-scope": "profile-data"
       }
     },
+    "/api/v1/game/handoff": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Hand a launch to Steam's tree",
+        "description": "`punktfunk-host play` calls this from inside the Steam entry a title was synced as, with\nSteam's game id for that entry and the pad filter Steam set for it. The host finds the title\nin its Steam map and claims it for its own screen, then runs the download wait, the launch\nhold and emulator prepare with the pads that filter leaves, and answers the command to run\nand a token to report on. A title the host already runs answers `running`: start nothing, and\nwait until `GET /status` no longer lists it. Admin lane only.",
+        "operationId": "handOffGame",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What to run, or that the title already runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The title the entry names is no longer in the library",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No screen of its own, no synced title for that entry, or the launch ended before it started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-exec"
+      }
+    },
+    "/api/v1/game/handoff/{token}": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Report on a handed-over launch",
+        "description": "`play` reports `started` once, with the process id of the game; the host watches that\nprocess only if it is its own user's and started after the handoff. Then `exited` once, with\nthe exit code. Sent without `started`, `exited` says nothing started. A token nobody reported\na start on within 10 minutes is dropped. Admin lane only.",
+        "operationId": "reportHandoff",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The `token` of the handoff's answer",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Taken"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No handoff waits on that token: never issued, spent or dropped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Reported already, or the process is not one this launch started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "profile-exec"
+      }
+    },
     "/api/v1/game/holds/{token}/release": {
       "post": {
         "tags": [
@@ -2933,6 +3063,89 @@
           }
         },
         "x-scope": "profile-exec"
+      }
+    },
+    "/api/v1/game/launch": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Start a game on this host's own screen",
+        "description": "For a client on this same device: the host starts the title on its own screen, with no\nstream, and holds it until it is gone. What happens next rides `GET /status` as a `local`\nrow. The operator always may; a paired device may when it holds the launch grant and calls\nfrom this device. The title is the owner profile's, whichever device asked.",
+        "operationId": "launchGame",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchGameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This host already runs it; nothing new starts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchGameResult"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Claimed: the title starts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchGameResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This device may not start games, or isn't this device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No screen of its own, nobody signed in, no desktop running, or no Steam entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "host"
       }
     },
     "/api/v1/gpus": {
@@ -10464,6 +10677,93 @@
         "x-scope": "host"
       }
     },
+    "/api/v1/steam/entries": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List what may be synced into Steam",
+        "description": "The titles of the owner profile's library that a Steam entry of their own may start: games\nwith a launch recipe, no launchers and no Steam titles. Each names its source, its platform\nas the library has it and the art kinds the host serves for it at `GET /library/art`. Admin\nlane only.",
+        "operationId": "listSteamEntries",
+        "responses": {
+          "200": {
+            "description": "The titles and their sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SteamEntryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "host"
+      },
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Store the map of synced entries",
+        "description": "The plugin sends the whole map after each sync: version 1, each synced title's library id →\nthe 32-bit app id of its entry, and `own`, every other entry it made. The library leaves out\nthe `steam:<app id>` title of each, and a launch of a synced title in Game Mode asks Steam to\nrun its entry. Admin lane only.",
+        "operationId": "setSteamEntries",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SteamEntries"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "Not a version 1 map, a Steam title or an app id of 0 in it, two titles on one app id, or too many entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The map was not saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "host"
+      }
+    },
     "/api/v1/store/catalog": {
       "get": {
         "tags": [
@@ -11509,9 +11809,20 @@
             "description": "Seconds until this game is ended — only present on a `grace` row.",
             "minimum": 0
           },
+          "outcome": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GameOutcome",
+                "description": "On a `local` row that is `exited` because the launch was refused late or died at the\nstart, for a minute: why, as a host message."
+              }
+            ]
+          },
           "plane": {
             "$ref": "#/components/schemas/Plane",
-            "description": "`native`, `gamestream` or `web`."
+            "description": "`native`, `gamestream`, `web`, or `local`: this host started it on its own screen for a\nclient on the same device, with no stream. A `local` row's `client` is `desk`."
           },
           "seat": {
             "type": [
@@ -11528,7 +11839,7 @@
           },
           "state": {
             "type": "string",
-            "description": "`launching` | `running` | `window` (its window is on the streamed screen) | `exited` |\n`untracked` (exit will never be seen) | `grace` (reconnect window) | `detached` (still\nrunning, no session holds it).",
+            "description": "`launching` | `running` | `window` (its window is on the screen) | `exited` |\n`untracked` (exit will never be seen) | `grace` (reconnect window) | `detached` (still\nrunning, no session holds it).",
             "example": "running"
           },
           "store": {
@@ -15084,6 +15395,31 @@
           "always"
         ]
       },
+      "GameOutcome": {
+        "type": "object",
+        "description": "Why a launch did not start, as a host message the client words.",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The host message's id (`launch_*`).",
+            "example": "launch_download_failed"
+          },
+          "params": {
+            "type": "object",
+            "description": "The values of that message's placeholders, by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "GameOverrides": {
         "type": "object",
         "description": "Stream settings this host sets for a game. A field left out is the device's to decide.",
@@ -15369,6 +15705,127 @@
             "format": "int64",
             "description": "Gaps of 500 ms or more — the feed stopping, not jitter.",
             "minimum": 0
+          }
+        }
+      },
+      "HandoffAnswer": {
+        "type": "object",
+        "required": [
+          "token",
+          "app_id",
+          "title"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "The title's library id, as `GET /status` lists it."
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What `sh -c` runs. Absent when the title already runs."
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Always null: the command changes into its own directory."
+          },
+          "env": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Set on top of Steam's environment for the game. Absent when the title already runs.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Present and true when this host already runs the title."
+          },
+          "title": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "What the reports name: `POST /game/handoff/{token}`. 64 hex. A `running` answer's\nnames nothing."
+          }
+        }
+      },
+      "HandoffEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The game's process, which `play` started.",
+            "required": [
+              "pid",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "started"
+                ]
+              },
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "That process exited with `code`. Before `started`: nothing started.",
+            "required": [
+              "code",
+              "event"
+            ],
+            "properties": {
+              "code": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "exited"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What `play` reports on a handoff."
+      },
+      "HandoffRequest": {
+        "type": "object",
+        "required": [
+          "steam_gameid",
+          "sdl_ignore",
+          "sdl_ignore_except"
+        ],
+        "properties": {
+          "sdl_ignore": {
+            "type": "string",
+            "description": "`SDL_GAMECONTROLLER_IGNORE_DEVICES` as Steam set it for the entry; empty when unset."
+          },
+          "sdl_ignore_except": {
+            "type": "string",
+            "description": "`SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT` as Steam set it; empty when unset."
+          },
+          "steam_gameid": {
+            "type": "string",
+            "description": "Steam's 64-bit game id of the entry (`SteamGameId`), in decimal.",
+            "example": "12412508506844823552"
           }
         }
       },
@@ -15717,6 +16174,7 @@
           "codecs",
           "gamestream",
           "door",
+          "local_play",
           "ports"
         ],
         "properties": {
@@ -15805,6 +16263,10 @@
           "local_ip": {
             "type": "string",
             "description": "Fresh LAN IP each request — do not cache. Cold-boot and network-move report\n`127.0.0.1` until a real address exists."
+          },
+          "local_play": {
+            "type": "boolean",
+            "description": "This host has a screen of its own and starts games there for a client on the same\ndevice (`POST /game/launch`). `false` on a seat and on the door."
           },
           "os": {
             "type": "string",
@@ -16289,6 +16751,34 @@
           }
         }
       },
+      "LaunchGameRequest": {
+        "type": "object",
+        "required": [
+          "app_id"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "Store-qualified library id (`steam:570`), as `GET /library` lists it."
+          }
+        }
+      },
+      "LaunchGameResult": {
+        "type": "object",
+        "required": [
+          "via"
+        ],
+        "properties": {
+          "running": {
+            "type": "boolean",
+            "description": "Present and true when this host already runs it."
+          },
+          "via": {
+            "$ref": "#/components/schemas/LaunchVia",
+            "description": "`host`: this host starts it. `steam`: the Steam that owns this host's screen was asked to."
+          }
+        }
+      },
       "LaunchSpec": {
         "type": "object",
         "description": "How the host launches a title. Open-ended so new stores slot in: the host builds each\nkind's command (`steam_appid` → `steam://rungameid/<value>`); `command` runs `<value>`\nthrough `sh -c` or `cmd.exe /c`.",
@@ -16317,6 +16807,14 @@
             "description": "Appid for `steam_appid`, the shell command for `command`, or — for `exec` — the name of a\ntemplate in the publishing plugin's manifest."
           }
         }
+      },
+      "LaunchVia": {
+        "type": "string",
+        "description": "How a game on the host's own screen starts.",
+        "enum": [
+          "host",
+          "steam"
+        ]
       },
       "Layer": {
         "type": "string",
@@ -17861,7 +18359,8 @@
         "enum": [
           "native",
           "gamestream",
-          "web"
+          "web",
+          "local"
         ]
       },
       "PlatformCount": {
@@ -19058,7 +19557,7 @@
             "items": {
               "$ref": "#/components/schemas/ActiveGame"
             },
-            "description": "Launched titles: live sessions' games, `grace` and `detached` rows, and launches still\nwaiting for their session. Empty for a desktop-only stream."
+            "description": "Launched titles: live sessions' games, `grace` and `detached` rows, the `local` games\nthis host started on its own screen, and launches still waiting for their session.\nEmpty for a desktop-only stream."
           },
           "grants": {
             "type": "integer",
@@ -20633,6 +21132,127 @@
             "format": "int64",
             "description": "Unix start of the in-progress capture (`0` if idle).",
             "minimum": 0
+          }
+        }
+      },
+      "SteamEntries": {
+        "type": "object",
+        "description": "The map, as stored and as `PUT /steam/entries` takes it.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "entries": {
+            "type": "object",
+            "description": "Library id → the 32-bit app id of that title's own Steam entry.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "own": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Every other entry the plugin made: the Punktfunk ones and the per-game stream ones."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Always 1.",
+            "minimum": 0
+          }
+        }
+      },
+      "SteamEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "source",
+          "art"
+        ],
+        "properties": {
+          "art": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The art the host has for it: `portrait`, `hero`, `logo`, `header`."
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The platform as the library has it."
+          },
+          "source": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "SteamEntryList": {
+        "type": "object",
+        "description": "The titles a Steam entry may start, and where they come from.",
+        "required": [
+          "steam_owns_desk",
+          "sources",
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SteamEntry"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SteamSource"
+            }
+          },
+          "steam_owns_desk": {
+            "type": "boolean",
+            "description": "Steam owns the box's screen (Game Mode): only what Steam starts is shown there."
+          }
+        }
+      },
+      "SteamSource": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "games"
+        ],
+        "properties": {
+          "games": {
+            "type": "integer",
+            "description": "Its titles in `entries`.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "The source's id, as each entry's `source` names it.",
+            "example": "rom-manager"
+          },
+          "name": {
+            "type": "string",
+            "example": "ROM Manager"
           }
         }
       },

@@ -35,11 +35,18 @@ pub(super) fn av1_coded_frame(w: u32, h: u32, align: vk::Extent2D) -> vk::Extent
     }
 }
 
-/// The session's rate control as `(mode, (vbv_window_ms, vbv_initial_ms), bitrate)`. VBR
-/// (average == max) when the driver advertises it and `rc_env` (`PUNKTFUNK_VULKAN_RC`) is not
-/// `cbr`: Vulkan cannot suppress CBR's filler, so the mode is the only lever. CBR keeps the loose
-/// (1000, 500) window, since a tighter one starts stuffing earlier. `bitrate` is clamped to the
-/// driver's `hw_max`.
+/// Whether the driver has a bitrate mode [`rc_plan`] installs. Mesa's Intel driver has neither
+/// before 26.3, nor without HuC firmware, and CBR forced on it does not encode the picture.
+pub(super) fn rate_controlled(modes: vk::VideoEncodeRateControlModeFlagsKHR) -> bool {
+    use vk::VideoEncodeRateControlModeFlagsKHR as Rc;
+    modes.intersects(Rc::CBR | Rc::VBR)
+}
+
+/// The session's rate control as `(mode, (vbv_window_ms, vbv_initial_ms), bitrate)`, for a
+/// driver that is [`rate_controlled`]. VBR (average == max) when the driver advertises it and
+/// `rc_env` (`PUNKTFUNK_VULKAN_RC`) is not `cbr`: Vulkan cannot suppress CBR's filler, so the
+/// mode is the only lever. CBR keeps the loose (1000, 500) window, since a tighter one starts
+/// stuffing earlier. `bitrate` is clamped to the driver's `hw_max`.
 pub(super) fn rc_plan(
     modes: vk::VideoEncodeRateControlModeFlagsKHR,
     rc_env: Option<&str>,
@@ -49,14 +56,6 @@ pub(super) fn rc_plan(
 ) -> (vk::VideoEncodeRateControlModeFlagsKHR, (u32, u32), u64) {
     use vk::VideoEncodeRateControlModeFlagsKHR as Rc;
     let vbr_advertised = modes.contains(Rc::VBR);
-    if !vbr_advertised && !modes.contains(Rc::CBR) {
-        // DEFAULT mode needs a no-layer shape this backend does not speak.
-        tracing::warn!(
-            modes = modes.as_raw(),
-            "vulkan-encode: driver advertises neither CBR nor VBR — installing CBR anyway \
-             (pre-existing behaviour; may fail validation on this driver)"
-        );
-    }
     // `vbr` is honoured only when advertised; anything but `cbr` means auto.
     let vbr = vbr_advertised && !rc_env.is_some_and(|v| v.trim().eq_ignore_ascii_case("cbr"));
     let (mode, vbv_ms) = if vbr {

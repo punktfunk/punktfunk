@@ -36,6 +36,12 @@ use std::marker::PhantomData;
 #[derive(Clone, Debug)]
 pub(crate) struct PairedDevice(pub String);
 
+/// Whether the paired device's call came from this machine: its transport's peer is loopback,
+/// and no page server relayed it. Stamped beside [`PairedDevice`]. For a device the door
+/// vouches for, it is the door's word on the call the door received ([`LOOPBACK_HEADER`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Loopback(pub bool);
+
 /// Which plugin a request came from, when it presented that plugin's own token rather than the
 /// runner's shared one. Stamped like [`PairedDevice`], for the same reason: the routes that care
 /// ask "whose is this", not "how did it prove it".
@@ -159,7 +165,8 @@ impl AuthLane {
 /// lanes below. Cert: [`device_may`]. Bearer: full admin, confined to loopback because
 /// the listener binds all interfaces by default. Loopback is the [`PeerAddr`] the transport
 /// stamped; a request that carries none is a 500 on every route. A request a page server
-/// relayed is never loopback, whatever its peer.
+/// relayed is never loopback, whatever its peer. The device lane carries that fact to its
+/// handler as [`Loopback`]; the door's vouched lane carries the door's word for it instead.
 pub(crate) async fn require_auth(
     State(st): State<Arc<MgmtState>>,
     mut req: Request,
@@ -171,9 +178,11 @@ pub(crate) async fn require_auth(
         next.run(req).await
     }
 
-    /// The `Cert` lane, plus which device it is. Handlers re-read the pairing store from this.
-    async fn forward_device(mut req: Request, next: Next, fp: String) -> Response {
+    /// The `Cert` lane, plus which device it is and whether it called from this machine.
+    /// Handlers re-read the pairing store from this.
+    async fn forward_device(mut req: Request, next: Next, fp: String, loopback: bool) -> Response {
         req.extensions_mut().insert(PairedDevice(fp));
+        req.extensions_mut().insert(Loopback(loopback));
         forward(req, next, AuthLane::Cert).await
     }
 
@@ -268,7 +277,7 @@ pub(crate) async fn require_auth(
                 .is_some_and(|n| n.effective(fp, crate::clock::unix_secs()).is_some())
         {
             let fp = fp.clone();
-            return forward_device(req, next, fp).await;
+            return forward_device(req, next, fp, from_loopback).await;
         }
     }
     // A browser's device token. The same lane and the same route set as the certificate above:
@@ -283,7 +292,7 @@ pub(crate) async fn require_auth(
                     .as_ref()
                     .is_some_and(|n| n.effective(&fp, crate::clock::unix_secs()).is_some())
             {
-                return forward_device(req, next, fp).await;
+                return forward_device(req, next, fp, from_loopback).await;
             }
         }
     }
@@ -317,8 +326,9 @@ pub(crate) async fn require_auth(
     match presented {
         Some(token) if token_eq(token, expected) => match vouched(&req) {
             // The door, holding this host's token, calls for a device it placed here: the
-            // device's own lane, under the device's own pairing as this host holds it. A person
-            // the door vouches for needs none: a locked owner's copy lists the owner's alone.
+            // device's own lane, under the device's own pairing as this host holds it, and
+            // loopback on the door's word alone. A person the door vouches for needs no pairing:
+            // a locked owner's copy lists the owner's alone.
             Some(fp) => {
                 let paired = st
                     .native
@@ -329,7 +339,11 @@ pub(crate) async fn require_auth(
                     if let Some(person) = person {
                         req.extensions_mut().insert(person);
                     }
-                    forward_device(req, next, fp).await
+                    let local = req
+                        .headers()
+                        .get(LOOPBACK_HEADER)
+                        .is_some_and(|v| v.as_bytes() == b"1");
+                    forward_device(req, next, fp, local).await
                 } else {
                     api_error(
                         StatusCode::UNAUTHORIZED,
@@ -400,6 +414,11 @@ pub(crate) async fn require_auth(
 
 /// A device the admin caller vouches for: the door, passing on a call a device made to it.
 pub(crate) const VOUCH_HEADER: &str = "x-punktfunk-device";
+
+/// `1` beside [`VOUCH_HEADER`]: the vouched device called the door from this machine. Read only
+/// with this host's admin token, from loopback, for a device this host admits; ignored on every
+/// other lane. The door sets it from its own [`Loopback`], never from the device's request.
+pub(crate) const LOOPBACK_HEADER: &str = "x-punktfunk-loopback";
 
 /// The vouched device's fingerprint, when the request carries one that could be a fingerprint.
 fn vouched(req: &Request) -> Option<String> {

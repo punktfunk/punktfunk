@@ -193,11 +193,12 @@ async def _exec(
     stdin_text: str | None = None,
     merge_stderr: bool = False,
     env_extra: dict[str, str] | None = None,
-) -> tuple[int, str, str]:
-    """Run ``argv`` in the user-session env: ``(returncode, stdout, stderr)``, decoded.
-    ``(-1, "", "")`` when ``argv`` is empty (nothing installed), or the call errors or times out.
-    ``merge_stderr`` folds stderr into stdout, ``env_extra`` adds to the environment. A timed-out
-    child is killed and reaped, so its pipes close with it."""
+    text: bool = True,
+) -> tuple[int, str | bytes, str]:
+    """Run ``argv`` in the user-session env: ``(returncode, stdout, stderr)``, decoded; stdout
+    stays bytes with ``text=False``. ``(-1, "", "")`` when ``argv`` is empty (nothing installed),
+    or the call errors or times out. ``merge_stderr`` folds stderr into stdout, ``env_extra`` adds
+    to the environment. A timed-out child is killed and reaped, so its pipes close with it."""
     if not argv:
         return -1, "", ""
     proc = None
@@ -214,7 +215,7 @@ async def _exec(
         rc = proc.returncode if proc.returncode is not None else -1
         return (
             rc,
-            (out or b"").decode("utf-8", "replace"),
+            (out or b"").decode("utf-8", "replace") if text else (out or b""),
             (err or b"").decode("utf-8", "replace"),
         )
     except asyncio.TimeoutError:

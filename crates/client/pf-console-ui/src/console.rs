@@ -268,6 +268,18 @@ impl Console {
         self.shell.holds_stream()
     }
 
+    /// A title this device's own host started is up and the console has let go: a host draws
+    /// no frame, closes its pads and lets the screen saver run until this turns false.
+    pub fn playing_here(&self) -> bool {
+        self.shell.playing_here()
+    }
+
+    /// The window gained or lost focus. Focus alone decides nothing; one regained after it was
+    /// lost while a title plays here brings the console back over it.
+    pub fn focus(&mut self, gained: bool) {
+        self.shell.focus(gained);
+    }
+
     /// True while a field is being edited: keep IME / SDL text-input started, and
     /// route printable keys as text, not [`Key`]s.
     pub fn editing(&self) -> bool {
@@ -359,11 +371,15 @@ impl Console {
 
 /// The desktop connect a [`ConsoleEntry::Stream`] carries. Built from the entry's own
 /// row, never from `Shell::hosts` — that list is empty until the first `sync()`. Same
-/// shape as the Options screen's "Connect to X": no launch, no preset override.
+/// shape as the Options screen's "Connect to X": no launch, no preset override. This
+/// device's own host has nothing to stream: its entry is its shelf alone.
 fn stream_intent(entry: &ConsoleEntry) -> Option<crate::screens::ConnectIntent> {
     let ConsoleEntry::Stream(host) = entry else {
         return None;
     };
+    if host.local {
+        return None;
+    }
     Some(crate::screens::ConnectIntent {
         addr: host.addr.clone(),
         port: host.port,
@@ -375,6 +391,7 @@ fn stream_intent(entry: &ConsoleEntry) -> Option<crate::screens::ConnectIntent> 
         profile: host.remembered().map(|p| p.id.clone()),
         ask: crate::screens::ProfileAsk::of(host),
         seat: None,
+        local: false,
     })
 }
 
@@ -449,6 +466,14 @@ mod tests {
         assert_eq!(intent.preset, None);
         assert!(!intent.request_access);
         assert_eq!(intent.title, "Desk");
+        let here = HostRow {
+            local: true,
+            ..row()
+        };
+        assert!(
+            stream_intent(&ConsoleEntry::Stream(Box::new(here))).is_none(),
+            "this device's own host opens on its games"
+        );
     }
 
     /// A shelf entry loads its own library; the host list fetches nothing.

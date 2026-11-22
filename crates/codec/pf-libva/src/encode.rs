@@ -50,6 +50,8 @@ use crate::VA_INVALID_ID;
 
 const VA_CONFIG_ATTRIB_RATE_CONTROL: u32 = 5;
 const VA_CONFIG_ATTRIB_ENC_PACKED_HEADERS: u32 = 10;
+const VA_CONFIG_ATTRIB_ENC_QUALITY_RANGE: u32 = 21;
+const PCI_VENDOR_INTEL: u32 = 0x8086;
 /// `VASurfaceStatus`: work is still queued against the surface.
 const VA_SURFACE_RENDERING: c_int = 1;
 /// `VASurfaceStatus`: a display pipeline holds the surface.
@@ -136,6 +138,8 @@ pub struct Encoder {
     /// `VAEntrypointEncSliceLP` where the driver has it: Intel's fixed-function
     /// VDEnc, the only path under the frame budget there. AMD has only `EncSlice`.
     entrypoint: c_int,
+    /// The preset every picture asks for; `None` keeps the driver's default.
+    quality_level: Option<u32>,
     /// HDR10 static metadata, written as an SEI with every HEVC IDR.
     hdr: Option<HdrStatic>,
     /// HEVC picture order count of the next picture; an IDR's is 0.
@@ -276,6 +280,10 @@ impl Encoder {
                 kind: vahevc::VA_CONFIG_ATTRIB_PREDICTION_DIRECTION,
                 value: 0,
             },
+            VaConfigAttrib {
+                kind: VA_CONFIG_ATTRIB_ENC_QUALITY_RANGE,
+                value: 0,
+            },
         ];
         // SAFETY: `probe` is a live array of exactly `probe.len()` entries the call
         // fills in place; profile and entrypoint are libva enum values.
@@ -292,6 +300,18 @@ impl Encoder {
 
         let supported_rc = probe[1].value;
         let supported_packed = probe[2].value;
+        let quality_level = preset(
+            matches!(codec, CodecParams::Hevc { .. }),
+            entrypoint,
+            crate::node_vendor_id(std::path::Path::new(&display.path)),
+            probe[6].value,
+        );
+        if let Some(level) = quality_level {
+            tracing::info!(
+                level,
+                "VAAPI: Intel's full HEVC entrypoint runs its fastest preset"
+            );
+        }
         if supported_rc & vah::VA_RC_CBR == 0 {
             bail!("this driver offers no CBR rate control for profile {profile}");
         }
@@ -403,6 +423,7 @@ impl Encoder {
             display,
             codec,
             entrypoint,
+            quality_level,
             hdr: None,
             poc: 0,
             config,
@@ -1031,6 +1052,18 @@ impl Encoder {
         stripe: Option<Stripe>,
     ) -> Result<()> {
         let is_idr = slice.is_idr;
+        // Ahead of the sequence, which takes the preset as it is parsed.
+        if let Some(quality_level) = self.quality_level {
+            let preset = vah::VaEncMiscParameterQualityLevel {
+                quality_level,
+                ..Default::default()
+            };
+            self.render_misc(
+                owned,
+                vah::VA_ENC_MISC_PARAMETER_TYPE_QUALITY_LEVEL,
+                &preset,
+            )?;
+        }
         let seq = hevc.va_sequence();
         self.render(owned, vah::VA_ENC_SEQUENCE_PARAMETER_BUFFER_TYPE, &seq)?;
         let (rc, hrd, frame_rate) = self.params.rate_control();
@@ -1351,6 +1384,18 @@ impl Drop for Encoder {
 }
 
 /// Open a display and an encoder on it, for callers with no display of their own.
+/// The preset a session asks for, given the driver's `range`: the fastest, on Intel's full HEVC
+/// entrypoint alone. That one searches motion in render-engine kernels, and its fastest preset
+/// halves them at the same PSNR; elsewhere a faster preset costs picture for little speed.
+fn preset(hevc: bool, entrypoint: c_int, vendor: Option<u32>, range: u32) -> Option<u32> {
+    (hevc
+        && entrypoint == vah::VA_ENTRYPOINT_ENC_SLICE
+        && vendor == Some(PCI_VENDOR_INTEL)
+        && range != vahevc::VA_ATTRIB_NOT_SUPPORTED
+        && range > 1)
+        .then_some(range)
+}
+
 pub fn open(params: SessionParams, codec: CodecParams) -> Result<Encoder> {
     let va = crate::Libva::load().context("libva")?;
     let display = Display::open(va).context("no VAAPI display")?;
@@ -1407,6 +1452,24 @@ fn direct_ingest(
 #[cfg(test)]
 mod direct_ingest_tests {
     use super::*;
+
+    #[test]
+    fn only_intels_full_hevc_entrypoint_runs_the_fastest_preset() {
+        let (full, lp) = (
+            vah::VA_ENTRYPOINT_ENC_SLICE,
+            vah::VA_ENTRYPOINT_ENC_SLICE_LP,
+        );
+        let intel = Some(PCI_VENDOR_INTEL);
+        assert_eq!(preset(true, full, intel, 7), Some(7));
+        assert_eq!(preset(true, lp, intel, 7), None);
+        assert_eq!(preset(false, full, intel, 7), None);
+        assert_eq!(preset(true, full, Some(0x1002), 7), None);
+        assert_eq!(preset(true, full, None, 7), None);
+        assert_eq!(
+            preset(true, full, intel, vahevc::VA_ATTRIB_NOT_SUPPORTED),
+            None
+        );
+    }
 
     #[test]
     fn only_a_matching_yuv_source_skips_the_vpp_pass() {
