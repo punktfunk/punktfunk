@@ -199,6 +199,8 @@ pub enum Ctl {
     SetReferenceFloor(Option<(u32, u16)>),
     /// The same confirmations whatever the link, for the kept anchor.
     NoteConfirmed(Option<(u32, u16)>),
+    /// Whether a wave heals the client's decoder.
+    SetWaveHeals(bool),
 }
 
 impl Ctl {
@@ -218,6 +220,7 @@ impl Ctl {
             wire::ENCODE_CTL_NOTE_CONFIRMED => Self::NoteConfirmed(
                 (req.arg1 & 1 != 0).then_some((req.arg0, (req.arg1 >> 1) as u16)),
             ),
+            wire::ENCODE_CTL_SET_WAVE_HEALS => Self::SetWaveHeals(req.arg0 != 0),
             _ => return None,
         })
     }

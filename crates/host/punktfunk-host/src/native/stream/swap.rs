@@ -628,6 +628,7 @@ pub(super) mod tests {
             shared: Shared {
                 acked: Default::default(),
                 lossy_window: Default::default(),
+                no_wave: Default::default(),
                 arrival_poke: Default::default(),
                 driver_dropped: Default::default(),
                 screen_wire: Arc::new(crate::native::wiring::ScreenWire::new()),

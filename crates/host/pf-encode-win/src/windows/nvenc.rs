@@ -744,6 +744,10 @@ impl Encoder for NvencD3d11Encoder {
         self.s.confirmed = acked;
     }
 
+    fn set_wave_heals(&mut self, heals: bool) {
+        self.s.wave_heals = heals;
+    }
+
     fn invalidate_ref_frames(&mut self, first: i64, last: i64) -> bool {
         self.s.invalidate_ref_frames(first, last)
     }

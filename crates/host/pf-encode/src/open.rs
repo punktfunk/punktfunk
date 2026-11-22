@@ -105,6 +105,9 @@ impl Encoder for TrackedEncoder {
     fn note_confirmed(&mut self, acked: Option<Acked>) {
         self.inner.note_confirmed(acked)
     }
+    fn set_wave_heals(&mut self, heals: bool) {
+        self.inner.set_wave_heals(heals)
+    }
     fn set_pipelined(&mut self, on: bool) -> bool {
         self.inner.set_pipelined(on)
     }
