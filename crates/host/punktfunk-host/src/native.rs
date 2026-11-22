@@ -658,8 +658,9 @@ pub(crate) fn stop_exiting(code: i32) -> Result<(), String> {
 /// Catch `SIGTERM`/`SIGINT` or [`stop_exiting`], end the live sessions, give the box back, then
 /// exit: 0 on a signal, the stop's code otherwise. `exit` runs no destructor, so this is where
 /// the audio defaults, every display's topology restore and output, and a Game Mode takeover are
-/// undone. Crash-restore lives in `$XDG_RUNTIME_DIR`, which logind removes with the user manager.
-/// Blocking, under [`SHUTDOWN_RESTORE_GRACE`].
+/// undone, and where a macOS host's children end. Crash-restore lives in `$XDG_RUNTIME_DIR`,
+/// which logind removes with the user manager. Blocking, under [`SHUTDOWN_RESTORE_GRACE`] and
+/// the children's own graces.
 fn install_shutdown_restore() {
     #[cfg(unix)]
     tokio::spawn(async {
@@ -683,6 +684,9 @@ fn install_shutdown_restore() {
             signal = sig,
             "host stopping — handing the box's session back"
         );
+        // Beside the restore, so the runner's plugin finalizers don't wait behind it.
+        #[cfg(target_os = "macos")]
+        let companions = tokio::task::spawn_blocking(crate::hostsys::companions::stop);
         // Sessions end first, as a power action ends them: each client hears a typed close
         // instead of freezing on a display torn down under it.
         crate::power::set_closing(true);
@@ -703,6 +707,8 @@ fn install_shutdown_restore() {
                 "the session restore did not finish in time — exiting anyway"
             );
         }
+        #[cfg(target_os = "macos")]
+        let _ = companions.await;
         std::process::exit(code);
     });
 }

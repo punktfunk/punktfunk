@@ -235,7 +235,8 @@ pub(crate) struct MgmtState {
 }
 
 /// `native` is the shared native pairing handle when the unified host
-/// runs the native QUIC server.
+/// runs the native QUIC server. On macOS the web console and the plugin runner start
+/// beside the API ([`crate::hostsys::companions`]).
 pub async fn run(
     state: Arc<AppState>,
     opts: Options,
@@ -325,9 +326,12 @@ pub async fn run(
     // Plain HTTP answers only while the plane runs; a host serving no browsers drops plaintext
     // peers.
     let plain = browser_plane.then(bootstrap_app);
-    if opts.restart_runner {
+    // A macOS runner is this host's own child, started fresh below.
+    if opts.restart_runner && !cfg!(target_os = "macos") {
         crate::plugins::restart_stale_runtime();
     }
+    #[cfg(target_os = "macos")]
+    crate::hostsys::companions::start();
     serve_https_with_plain(opts.bind, app, tls, plain).await
 }
 

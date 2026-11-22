@@ -218,7 +218,7 @@ impl AppState {
 /// share one [`crate::native_pairing`] handle. `gamestream` additionally brings up
 /// nvhttp pairing, RTSP, ENet control, and `_nvstream` mDNS. Those planes pair over
 /// plain HTTP, so they are opt-in (the `gamestream` setting or `serve --gamestream`)
-/// and for a trusted LAN only.
+/// and for a trusted LAN only. A macOS host's console and runner end when it returns.
 pub fn serve(
     mgmt: crate::mgmt::Options,
     native: crate::native::NativeServe,
@@ -475,6 +475,8 @@ pub fn serve(
             .map(|_| ())
         };
         crate::events::emit(crate::events::EventKind::HostStopping);
+        #[cfg(target_os = "macos")]
+        crate::hostsys::companions::stop();
         served
     })
 }
