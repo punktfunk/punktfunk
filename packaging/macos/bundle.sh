@@ -95,8 +95,9 @@ else
     fi
 fi
 
-# A prebuilt UI wins; else the HostUI package, when it exists.
+# A prebuilt UI wins; else the HostUI package, when it exists. Its texts are generated first.
 if [ -z "$ui_lib" ] && [ -f "$here/HostUI/Package.swift" ]; then
+    bash "$root/scripts/gen-l10n-hostui.sh" >&2 || die "the HostUI texts didn't generate"
     swift build -c release --arch arm64 --package-path "$here/HostUI" >&2 || die "the HostUI build failed"
     ui_bin=$(swift build -c release --arch arm64 --package-path "$here/HostUI" --show-bin-path)
     ui_lib=$ui_bin/lib$ui_name.dylib
