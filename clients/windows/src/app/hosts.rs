@@ -190,13 +190,21 @@ pub(super) fn rescan(svc: &Svc) {
 
 /// A click on a saved host: a wake packet first when the probe did not reach it and it has a
 /// MAC, then the dial at once. Looking unreachable is not unreachable (a routed host answers
-/// a dial it never advertised for); only a failed dial falls into the "Waking…" wait.
+/// a dial it never advertised for); only a failed dial falls into the "Waking…" wait. This
+/// device's own host has nothing to stream: the click opens its library.
 pub(super) fn connect_saved(svc: &Svc, target: Target, online: bool) {
-    if !online && !target.host.mac.is_empty() {
+    if is_here(&target.host) {
+        open_library(svc, target);
+    } else if !online && !target.host.mac.is_empty() {
         initiate_waking(&svc.ctx, target, &svc.set_screen, &svc.set_status);
     } else {
         initiate(&svc.ctx, target, &svc.set_screen, &svc.set_status);
     }
+}
+
+/// Whether `host` is this device's own host, by the probe sweep's loopback ask.
+pub(super) fn is_here(host: &HostTarget) -> bool {
+    (host.fp_hex.as_deref()).is_some_and(pf_client_core::trust::local::is_this_device)
 }
 
 /// What a saved host's card says under its name, from the probe sweep and what the host has
@@ -206,7 +214,8 @@ pub(super) fn status_of(k: &KnownHost, online: bool, auto_wake: bool) -> Status 
         true => pf_client_core::library::now_playing(&k.fp_hex),
         false => String::new(),
     };
-    Status::of(k, online, None, &playing, auto_wake)
+    let here = pf_client_core::trust::local::is_this_device(&k.fp_hex);
+    Status::of(k, online, None, &playing, auto_wake, here)
 }
 
 /// The status line: the presence dot, then the sentence. A running game reads in green.
@@ -607,7 +616,7 @@ pub(super) fn keep_warm(k: &KnownHost, adverts: &[DiscoveredHost], online: bool)
 }
 
 /// A saved host's cards: its own, then its pinned host+preset cards in pin order. A pin whose
-/// preset is gone has none.
+/// preset is gone has none. This device's own host has its own card alone, with no preset.
 fn saved_cards<'a>(
     props: &HostsProps,
     k: &'a KnownHost,
@@ -620,7 +629,8 @@ fn saved_cards<'a>(
     let online = props.probed.get(&k.card_key()).copied().unwrap_or(false);
     keep_warm(k, &props.hosts, online);
     let status = status_of(k, online, auto_wake);
-    let preset = |id: &String| presets.iter().find(|p| &p.id == id);
+    let local = pf_client_core::trust::local::is_this_device(&k.fp_hex);
+    let preset = |id: &String| presets.iter().find(|p| &p.id == id).filter(|_| !local);
     let mut cards = vec![SavedCard {
         host: k,
         status: status.clone(),
@@ -708,13 +718,15 @@ fn screen_submenu(
 }
 
 /// The rows of a host's own card: what a connect uses, then where else the card leads. What
-/// configures the host is on its page.
+/// configures the host is on its page. This device's own host offers no Connect with, Screen
+/// or Wake: nothing streams it.
 fn saved_menu_rows(c: &SavedCard, presets: &[CardPreset]) -> MenuRows<MenuAction> {
     use MenuAction as A;
     let (k, online) = (c.host, c.status.live());
+    let streams = !pf_client_core::trust::local::is_this_device(&k.fp_hex);
     let mut rows = MenuRows::new();
     // One-off connects: "Connect with" NEVER rebinds the host.
-    if !presets.is_empty() {
+    if !presets.is_empty() && streams {
         let mut leaves = vec![rows.row(
             client::hostcard_default_settings(),
             A::ConnectWith(String::new()),
@@ -730,7 +742,7 @@ fn saved_menu_rows(c: &SavedCard, presets: &[CardPreset]) -> MenuRows<MenuAction
     }
     // Which screen a connect streams, under the binding's preset. Only a reachable host can
     // take a pick.
-    if let Some(t) = display_targets::cached(&k.fp_hex).filter(|_| k.paired && online) {
+    if let Some(t) = display_targets::cached(&k.fp_hex).filter(|_| k.paired && online && streams) {
         let screen = screen_submenu(&mut rows, &t, bound_screen_preset(k, presets));
         rows.items.extend(screen);
     }
@@ -738,7 +750,7 @@ fn saved_menu_rows(c: &SavedCard, presets: &[CardPreset]) -> MenuRows<MenuAction
     if k.paired {
         rows.push(client::hostcard_browse_library(), A::Library);
     }
-    if !online && !k.mac.is_empty() {
+    if !online && !k.mac.is_empty() && streams {
         rows.push(client::hostcard_wake(), A::Wake);
     }
     // Re-pick who plays on this host, only where a pick is saved.
@@ -763,7 +775,8 @@ fn pinned_menu_rows(k: &KnownHost) -> MenuRows<MenuAction> {
     rows
 }
 
-/// One saved card: the host's own, or a pinned host+preset one.
+/// One saved card: the host's own, or a pinned host+preset one. This device's own host names
+/// no screen, and its click opens its library ([`connect_saved`]).
 fn saved_card(props: &HostsProps, c: &SavedCard, presets: &[CardPreset], default: bool) -> View {
     let (svc, pal) = (&props.svc, &props.svc.pal);
     let (k, online) = (c.host, c.status.live());
@@ -827,7 +840,7 @@ fn saved_card(props: &HostsProps, c: &SavedCard, presets: &[CardPreset], default
     let mut lines: Vec<View> = vec![status_line(pal, &c.status)];
     // Core's screen line: "Streams LG TV", "Second screen". The only screen adds nothing.
     let screen = display_targets::cached(&k.fp_hex)
-        .filter(|_| k.paired)
+        .filter(|_| k.paired && !is_here(&target.host))
         .and_then(|t| {
             t.card_line_under(match c.pinned {
                 Some(p) => p.bound(),

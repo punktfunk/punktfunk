@@ -2,6 +2,8 @@
 //! ties the two together, and how the host tells the game still runs
 //! (`design/session-game-lifetime.md`).
 
+// The box's own launches: no stream, the host holds the lease.
+pub(crate) mod desk;
 // Session⇄game lease: when the game started, when it exits, how to end it.
 pub(crate) mod gamelease;
 // Launch holds: plugins and hooks that act before a game starts.

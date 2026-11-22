@@ -216,6 +216,7 @@ fn publish_own_titles(seat: &pf_seats::Seat, profile: &str) {
         body,
         device: None,
         person: None,
+        local: false,
         stream: false,
         start: false,
     };
@@ -281,6 +282,7 @@ fn hand_on(seat: &pf_seats::Seat, ev: &HostEvent) {
         body: Vec::new(),
         device: None,
         person: None,
+        local: false,
         stream: false,
         start: false,
     };
@@ -329,6 +331,7 @@ fn post_relay(owner: &pf_seats::Seat, ev: &HostEvent, timeout: Duration) -> bool
         body,
         device: None,
         person: None,
+        local: false,
         stream: false,
         start: false,
     };

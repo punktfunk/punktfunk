@@ -652,6 +652,7 @@ fn the_person_lane_is_pinned() {
         ("POST", "/api/v1/client-logs"),
         ("PUT", "/api/v1/display/clients/{fingerprint}"),
         ("POST", "/api/v1/game/end"),
+        ("POST", "/api/v1/game/launch"),
         ("POST", "/api/v1/library/install/{id}"),
         ("DELETE", "/api/v1/library/install/{id}"),
         ("POST", "/api/v1/library/install/{id}/pause"),

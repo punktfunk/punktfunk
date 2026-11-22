@@ -288,6 +288,12 @@ impl GameLease {
     pub fn shared(&self) -> Arc<LeaseShared> {
         self.shared.clone()
     }
+
+    /// The watcher still runs. One that gave up on a game that never appeared leaves its state
+    /// at `launching`.
+    pub fn watching(&self) -> bool {
+        self.watcher.as_ref().is_some_and(|w| !w.is_finished())
+    }
 }
 
 /// Ends the watch and gives the workspace back. Runs on every exit, panic

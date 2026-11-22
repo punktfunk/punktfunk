@@ -111,15 +111,15 @@ impl WindowsLaunch {
     }
 }
 
-/// Launches a store-qualified library id as the user of the host's WTS session.
+/// Launches a store-qualified library id from `view`'s library as the user of the host's WTS
+/// session.
 ///
 /// [`windows_launch_for`] maps the recipe and
-/// [`crate::interactive::spawn_as_current_session_user`] starts it after capture
-/// is live. The returned PID enters
+/// [`crate::interactive::spawn_as_current_session_user`] starts it. The returned PID enters
 /// [`crate::gamelease::LeaseRequest::spawned`] only when it owns the game rather
 /// than a protocol hand-off.
-pub fn launch_title(id: &str) -> Result<WindowsLaunch> {
-    let entry = find_game_for(&View::here(), id)
+pub fn launch_title(view: &View, id: &str) -> Result<WindowsLaunch> {
+    let entry = find_game_for(view, id)
         .filter(|g| g.launch.is_some())
         .ok_or_else(|| anyhow::anyhow!("no launchable library entry '{id}'"))?;
     let spec = entry.launch.clone().expect("filtered to Some above");

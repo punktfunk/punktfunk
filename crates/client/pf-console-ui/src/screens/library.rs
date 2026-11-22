@@ -550,8 +550,9 @@ impl LibraryScreen {
         &self.host.key
     }
 
-    /// Whether this is `host`'s shelf: same row key, the same pin, if any, and the same
-    /// remembered profile, whose library the shelf is.
+    /// Whether this is `host`'s shelf: same row key, the same pin, if any, the same
+    /// remembered profile, whose library the shelf is, and the same answer to whether it is
+    /// this device's own host, which decides what a press on a title does.
     pub(crate) fn shelf_of(&self, host: &HostRow) -> bool {
         fn pin(h: &HostRow) -> Option<&str> {
             h.pin.as_ref().map(|p| p.id.as_str())
@@ -562,6 +563,7 @@ impl LibraryScreen {
         self.host.key == host.key
             && pin(&self.host) == pin(host)
             && plays(&self.host) == plays(host)
+            && self.host.local == host.local
     }
 
     /// A decoded poster, for the launch hold drawn over this shelf. The focused tile
@@ -624,7 +626,11 @@ impl LibraryScreen {
         };
         if self.hidden.is_none() && shared.generation() != self.generation {
             let snap = shared.snapshot();
-            let (phase, games, generation) = (snap.phase, snap.games, snap.generation);
+            let (phase, mut games, generation) = (snap.phase, snap.games, snap.generation);
+            // This device's own host has no desktop to stream.
+            if self.host.local {
+                games.retain(|g| g.id != crate::library::DESKTOP_ID);
+            }
             // A title hidden or shown in place keeps the shelf: the cursor stays on its index.
             let edited = !self.games.is_empty() && snap.edits != self.edits;
             self.edits = snap.edits;
@@ -829,13 +835,15 @@ impl LibraryScreen {
     }
 
     /// The button the state card offers: Retry after a failure that can retry, the desk
-    /// when the host has no titles.
+    /// when the host has no titles and is not this device's own.
     fn state_action(&self) -> Option<StateAction> {
         match self.phase {
             LibraryPhase::Error {
                 can_retry: true, ..
             } => Some(StateAction::Retry),
-            LibraryPhase::Empty if self.hidden.is_none() => Some(StateAction::StreamDesktop),
+            LibraryPhase::Empty if self.hidden.is_none() && !self.host.local => {
+                Some(StateAction::StreamDesktop)
+            }
             _ => None,
         }
     }

@@ -14,6 +14,19 @@ test("a game row names the client and the game", () => {
 	expect(line).toBe("Deck · Celeste");
 });
 
+test("a local game's row names the game and no device", () => {
+	const line = describeEntry({
+		seq: 3,
+		ts_ms: 0,
+		kind: "game.running",
+		data: {
+			kind: "game.running",
+			game: { client: "desk", title: "Dota 2", plane: "local" },
+		},
+	});
+	expect(line).toBe("Dota 2");
+});
+
 test("an access row names the device", () => {
 	const line = describeEntry({
 		seq: 2,

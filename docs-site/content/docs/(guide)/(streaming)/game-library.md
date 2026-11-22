@@ -31,6 +31,9 @@ A source marked **Stopped** has a plugin that isn't running: see
   and launching; nothing is deleted. Click again to bring them back.
 - **One title:** **Hide from your devices** on its poster. The console keeps it, marked **Hidden**,
   so you can **Show on your devices again**.
+- **Games added to Steam:** the library hides the Steam entry of every game the Decky plugin adds
+  from **Games in Steam** ([Steam Deck](/docs/steam-deck#games-in-steam)), so each game shows once,
+  under its own source.
 - **For good:** uninstall the source's plugin.
 
 ## A game's page
@@ -120,6 +123,9 @@ game runs on the host, the tile reads **Resume** and the game's name.
 | A link | `punktfunk://connect/couch-pc?launch=steam:570`. See [Presets and links](/docs/presets-and-links). |
 | Command line | `punktfunk library couch-pc` lists ids; `punktfunk launch couch-pc --game steam:570` streams one. See [the `punktfunk` CLI](/docs/clients#scripting-the-punktfunk-cli). |
 
+On the PC that runs the host, a launch plays there with no stream: see
+[Play on this device](/docs/play-on-this-device).
+
 Where the game opens (your desktop, a gamescope session, or a headless session of its own) is
 display policy: see [Dedicated game sessions](/docs/virtual-displays#dedicated-game-sessions).
 Whether quitting the game ends the session, and the reverse, is under
@@ -160,7 +166,8 @@ Deck plays the three at 1280×800 and 60 Hz. Moving them to 1440p later is one e
 
 They apply when a device connects to launch the game, from a Punktfunk library, a link or
 `punktfunk launch`. A game started inside a running stream, on its desktop, in Steam or from the
-library, keeps that stream's settings until the next such connect. Moonlight doesn't use them.
+library, keeps that stream's settings until the next such connect. Moonlight doesn't use them, and
+neither does a game played on the PC that runs the host, which has no stream.
 
 Each app says what the host set: see [Presets and links](/docs/presets-and-links#using-a-preset).
 An app that doesn't read them (an older version, or one that hasn't loaded the library yet) still
@@ -172,7 +179,8 @@ seats use the box's, set on your own **Library** page.
 
 **End game** closes a title on the host. A device can end a game it launched, while a stream
 plays it or after the stream has ended. It can't end a game another device started or one you
-started yourself on the host.
+started yourself on the host. From the PC that runs the host, it can also end a game started
+there with [Play on this device](/docs/play-on-this-device).
 
 | Where | How |
 |---|---|
@@ -189,11 +197,13 @@ running after their stream ended as **Nobody streaming**, with **End now**.
 ## Play stats
 
 Each launch from Punktfunk records the time and adds one to the title's launch count. Play time
-grows while the host sees the game running with a session attached. A launcher tile, or a custom
-entry with no **Process** hint, gets no play time.
+grows while the host sees the game running with a session attached, or at the desk with
+[Play on this device](/docs/play-on-this-device). A launcher tile, or a custom entry with no
+**Process** hint, gets no play time.
 
 A Punktfunk session also credits its profile: the title's numbers count every launch, and each
-profile keeps its own beside them. A Moonlight session counts toward the title only.
+profile keeps its own beside them. A game at the desk credits the owner profile. A Moonlight
+session counts toward the title only.
 
 The Apple, Linux and Windows apps and the controller home sort by **Recent** and **Most played**.
 The Apple and Linux apps and the controller home keep a **Recently played** row.

@@ -3,6 +3,7 @@
   "pages": [
     "install-client",
     "pairing",
+    "play-on-this-device",
     "clients",
     "browser-client",
     "samsung-tv",

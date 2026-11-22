@@ -144,7 +144,8 @@ punktfunk hosts — the saved-hosts store (shared with the desktop client)
   punktfunk hosts list [--probe] [--json]
       Every saved host, name TAB addr:port TAB paired/trusted TAB state.
       --probe asks each host directly (no mDNS, so routed/VPN hosts answer
-      too); --json emits one object with per-host detail, presets included.
+      too); --json emits one object with per-host detail, presets included,
+      and \"local\": true for this device's own host.
 
   punktfunk hosts add <host[:port]> [--name LABEL] [--fp HEX]
       Save a host by address — the door for a box mDNS never sees (Tailscale,
@@ -277,7 +278,12 @@ host (`punktfunk default-host`), and exits 5 when there is none.
                  left to record the approval.
 
 Exit 0 when the stream ends cleanly, 2 connect failed, 3 the host no longer
-trusts this device (re-pair), 4 the renderer could not start."
+trusts this device (re-pair), 4 the renderer could not start.
+
+On this device's own host nothing streams: the host starts --game on its own
+screen, and exits 5 without one. --exec then waits until the title has ended.
+Exit 0 once it is started (or, under --exec, ended), 2 when the host refused it
+or the title stopped, with the reason on stderr."
             }
             "profiles" => {
                 "\
@@ -884,8 +890,15 @@ from the config directory for a true factory reset."
     }
 
     /// `hosts list [--probe] [--json]`: a line or an object per saved host, in store order.
+    /// `--json` first asks each host at loopback whether it is this device's own.
     fn hosts_list(args: &[String]) -> u8 {
         let known = KnownHosts::load();
+        if has(args, "--json") {
+            let here: Vec<(u16, String)> = (known.hosts.iter())
+                .map(|h| (h.port, h.fp_hex.clone()))
+                .collect();
+            trust::local::look(&here, trust::local::LOOK_TIMEOUT);
+        }
         let online: Option<Vec<bool>> = has(args, "--probe").then(|| {
             trust::probe_reachable_many(
                 known
@@ -932,7 +945,8 @@ from the config directory for a true factory reset."
     }
 
     /// The `hosts list --json` object. `preset` and `pinned_presets` resolve against `catalog`
-    /// (a dangling id drops out); `online` is `null` when nothing was probed.
+    /// (a dangling id drops out); `online` is `null` when nothing was probed; `local` is true
+    /// for this device's own host.
     fn host_json(h: &KnownHost, catalog: &PresetsFile, online: Option<bool>) -> serde_json::Value {
         let preset = h
             .preset_id
@@ -962,6 +976,7 @@ from the config directory for a true factory reset."
             "profile": preset,
             "pinned_profiles": pinned,
             "online": online,
+            "local": trust::local::is_this_device(&h.fp_hex),
         })
     }
 
@@ -1445,7 +1460,8 @@ from the config directory for a true factory reset."
 
     /// `launch <host-ref> [--game ID] [--preset REF] [--exec]` — start a stream, wake included.
     /// `--exec` becomes the session process instead of supervising it: under a gamescope wrapper
-    /// the launched process must BE the streaming one for focus and lifecycle to work.
+    /// the launched process must BE the streaming one for focus and lifecycle to work. On this
+    /// device's own host nothing streams: [`launch_here`].
     fn launch(args: &[String]) -> u8 {
         let exec = has(args, "--exec");
         let request_access = has(args, "--request-access");
@@ -1465,6 +1481,14 @@ from the config directory for a true factory reset."
             Ok(v) => v,
             Err(code) => return code,
         };
+        let host = &known.hosts[i];
+        trust::local::look(
+            &[(host.port, host.fp_hex.clone())],
+            trust::local::LOOK_TIMEOUT,
+        );
+        if trust::local::is_this_device(&host.fp_hex) {
+            return launch_here(host, value(args, "--game"), exec);
+        }
         let mut plan = ConnectPlan::for_host(
             &known.hosts[i],
             value(args, "--game").as_deref(),
@@ -1483,6 +1507,56 @@ from the config directory for a true factory reset."
             plan.play_as(Some(wanted));
         }
         run_plan(plan, exec, request_access)
+    }
+
+    /// `launch` on this device's own host: the host starts `game` on its own screen. `--exec`
+    /// then stays until the host lists the title as exited, or not at all for three reads a
+    /// second apart; a launch that stopped with the host's reason exits `CONNECT_FAILED`.
+    fn launch_here(host: &KnownHost, game: Option<String>, exec: bool) -> u8 {
+        let Some(game) = game else {
+            eprintln!(
+                "{} is this device — there is nothing to stream. Pass --game ID to play a title on it.",
+                shown(&host.name)
+            );
+            return UNRESOLVED;
+        };
+        let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
+            eprintln!("{} isn't paired yet", shown(&host.name));
+            return NEEDS_INTERACTION;
+        };
+        let identity = match trust::load_or_create_identity() {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let mgmt = host.effective_mgmt_port();
+        let answer = library::launch_local(mgmt, host.port, &identity, pin, &game);
+        if let Some(why) = answer.refusal() {
+            eprintln!("{}", shown(&why));
+            return CONNECT_FAILED;
+        }
+        if !exec {
+            return OK;
+        }
+        let mut missed = 0;
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let games = library::fetch_running(&host.addr, mgmt, host.port, &identity, Some(pin));
+            let row = games.iter().find(|g| g.app_id.as_deref() == Some(&game));
+            if let Some((g, why)) = row.and_then(|g| Some((g, g.outcome.as_ref()?))) {
+                let title = if g.title.is_empty() { &game } else { &g.title };
+                eprintln!("{}", shown(&why.line(title)));
+                return CONNECT_FAILED;
+            }
+            match row {
+                Some(g) if g.state == "exited" => return OK,
+                Some(_) => missed = 0,
+                None if missed >= 2 => return OK,
+                None => missed += 1,
+            }
+        }
     }
 
     fn list_profiles(host: &KnownHost) -> Result<Option<Vec<ListedProfile>>, u8> {
@@ -2393,8 +2467,8 @@ from the config directory for a true factory reset."
             }
         }
 
-        /// A binding to a preset that is gone lists as `null`, not as an error, and a probe
-        /// answer lands in `online`.
+        /// A binding to a preset that is gone lists as `null`, not as an error, a probe
+        /// answer lands in `online`, and a host never found at loopback is not `local`.
         #[test]
         fn a_host_object_drops_a_preset_the_catalog_lost() {
             let mut h = saved(true);
@@ -2406,6 +2480,7 @@ from the config directory for a true factory reset."
             assert_eq!(v["pinned_presets"], serde_json::json!([]));
             assert_eq!(v["pinned_profiles"], serde_json::json!([]));
             assert_eq!(v["online"], false);
+            assert_eq!(v["local"], false);
         }
 
         fn say(

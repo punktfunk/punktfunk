@@ -150,6 +150,9 @@ fn the_person_lane_reaches_what_is_pinned() {
         ("POST", "/api/v1/emulators/{id}/saves/import"),
         ("POST", "/api/v1/game/end"),
         ("POST", "/api/v1/game/holds/{token}/release"),
+        // A seat has no screen of its own: a handoff there answers `local_no_desk`.
+        ("POST", "/api/v1/game/handoff"),
+        ("POST", "/api/v1/game/handoff/{token}"),
         ("GET", "/api/v1/hooks"),
         ("PUT", "/api/v1/hooks"),
         ("GET", "/api/v1/library"),

@@ -144,6 +144,9 @@ pub struct HostsPage {
     nav: adw::NavigationView,
     sender: relm4::Sender<HostsMsg>,
     adverts: HashMap<String, DiscoveredHost>,
+    /// Each live advert's stream port and pin, for the sweep to ask at loopback whether it is
+    /// this device's own host. Rewritten on every rebuild.
+    advert_pins: Rc<std::cell::RefCell<Vec<(u16, String)>>>,
     /// Saved hosts proven reachable by the periodic QUIC probe (mDNS-independent), keyed by
     /// [`KnownHost::card_key`].
     probed: HashMap<String, bool>,
@@ -376,9 +379,11 @@ impl SimpleComponent for HostsPage {
         // The reachability sweep — the only thing presence is made of, since an advert outlives
         // the machine it describes. Each cycle probes every saved host off the main thread
         // (bounded QUIC handshake, then the addresses a silent host left); the first sweep runs
-        // at once, then every `trust::PROBE_INTERVAL`.
+        // at once, then every `trust::PROBE_INTERVAL`. First, saved hosts and adverts are asked
+        // at loopback whether they are this device's own host.
+        let advert_pins = Rc::new(std::cell::RefCell::new(Vec::new()));
         {
-            let (sender, store) = (sender.clone(), store.clone());
+            let (sender, store, adverts) = (sender.clone(), store.clone(), advert_pins.clone());
             glib::spawn_future_local(async move {
                 loop {
                     let hosts: Vec<KnownHost> = store
@@ -388,11 +393,16 @@ impl SimpleComponent for HostsPage {
                         .filter(|h| !h.addr.is_empty())
                         .cloned()
                         .collect();
-                    if !hosts.is_empty() {
+                    let mut here: Vec<(u16, String)> =
+                        hosts.iter().map(|h| (h.port, h.fp_hex.clone())).collect();
+                    here.extend(adverts.borrow().iter().cloned());
+                    if !here.is_empty() {
                         let (tx, rx) = async_channel::bounded(1);
                         std::thread::Builder::new()
                             .name("punktfunk-probe".into())
                             .spawn(move || {
+                                use pf_client_core::trust::local;
+                                local::look(&here, local::LOOK_TIMEOUT);
                                 let results =
                                     crate::trust::probe_known(&hosts, crate::trust::PROBE_TIMEOUT);
                                 let map: HashMap<String, bool> =
@@ -415,6 +425,7 @@ impl SimpleComponent for HostsPage {
             nav,
             sender: sender.input_sender().clone(),
             adverts: HashMap::new(),
+            advert_pins,
             probed: HashMap::new(),
             sessions: HashMap::new(),
             drawn: None,
@@ -612,8 +623,12 @@ impl HostsPage {
             .collect()
     }
 
-    /// Build the models, redraw the cards when they changed, and refresh an open host page.
+    /// Build the models, redraw the cards when they changed, and refresh an open host page. The
+    /// adverts' pins go to the next sweep's loopback ask.
     fn rebuild(&mut self) {
+        *self.advert_pins.borrow_mut() = (self.adverts.values())
+            .map(|a| (a.port, a.fp_hex.clone()))
+            .collect();
         let hosts = self.store.hosts().hosts.clone();
         let settings = self.store.settings().clone();
         let presets = self.presets();
@@ -624,6 +639,7 @@ impl HostsPage {
             sessions: &self.sessions,
             playing: &playing,
             screen: &screen,
+            here: &pf_client_core::trust::local::is_this_device,
         };
         let bands = model::saved_bands(&hosts, &presets, &settings, &live);
         let discovered = model::discovered_cards(self.adverts.values(), &hosts, &self.sessions);
@@ -697,6 +713,8 @@ impl HostsPage {
         page.refresh(k, &live);
     }
 
+    /// What `k`'s page shows beside its record. This device's own host has no Screen answer to
+    /// show: nothing streams it.
     fn detail_live(&self, k: &KnownHost, settings: &Settings) -> detail::Live {
         let online = self.probed.get(&k.card_key()).copied().unwrap_or(false);
         let playing = if k.fp_hex.is_empty() {
@@ -705,16 +723,18 @@ impl HostsPage {
             pf_client_core::library::now_playing(&k.fp_hex)
         };
         let phase = self.sessions.get(&k.card_key()).copied();
+        let local = pf_client_core::trust::local::is_this_device(&k.fp_hex);
         detail::Live {
-            status: Status::of(k, online, phase, &playing, settings.auto_wake),
+            status: Status::of(k, online, phase, &playing, settings.auto_wake, local),
             online,
+            local,
             presets: self.presets(),
             actions: if k.fp_hex.is_empty() {
                 Vec::new()
             } else {
                 pf_client_core::host_actions::cached(&k.fp_hex)
             },
-            screens: if k.paired && !k.fp_hex.is_empty() {
+            screens: if k.paired && !k.fp_hex.is_empty() && !local {
                 display_targets::cached(&k.fp_hex)
             } else {
                 None

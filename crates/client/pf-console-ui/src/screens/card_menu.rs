@@ -244,7 +244,8 @@ impl CardMenu {
 
     /// The rows this menu offers. A TV has no clipboard, so no Copy link; home-screen
     /// shortcuts and launcher files are Android's, off TV. Only Android TV's sessions share a
-    /// clipboard, and this row is what turns that off there.
+    /// clipboard, and this row is what turns that off there. This device's own host offers
+    /// no stream verb ([`Self::streams`]).
     fn actions(
         &self,
         store: &dyn SettingsStore,
@@ -253,7 +254,9 @@ impl CardMenu {
     ) -> Vec<Action> {
         let mut rows = self.all_actions(store, book);
         let handheld = device.platform == Platform::Android && !device.tv;
+        let local = self.host().local;
         rows.retain(|a| match a {
+            _ if local && Self::streams(*a) => false,
             Action::Hide => device.hides,
             Action::CopyLink => !device.tv,
             Action::Clipboard => !device.tv || device.platform == Platform::Android,
@@ -342,9 +345,27 @@ impl CardMenu {
         a
     }
 
+    /// Rows that only mean something for a stream: none is offered for this device's own host.
+    fn streams(a: Action) -> bool {
+        matches!(
+            a,
+            Action::ConnectWith
+                | Action::PlayWith
+                | Action::Preset(_)
+                | Action::BindPreset
+                | Action::Pin(_)
+                | Action::Screen(_)
+                | Action::ScreenNote
+                | Action::SpeedTest
+                | Action::Clipboard
+                | Action::Wake
+        )
+    }
+
     /// Host details, section by section; the tab strip takes the sections in this order.
     /// Power leads: sleep and shut down are the rows a player reaches for nightly, the
-    /// rest is set once. An empty section drops out.
+    /// rest is set once. An empty section drops out, as does a stream row on this device's
+    /// own host.
     fn details(&self, host: &HostRow, store: &dyn SettingsStore) -> Vec<Action> {
         let mut a = Vec::new();
         if host.can_wake && !host.online {
@@ -380,6 +401,7 @@ impl CardMenu {
             a.push(Action::SendLogs);
         }
         a.push(Action::Forget);
+        a.retain(|a| !(host.local && Self::streams(*a)));
         a
     }
 
@@ -1421,6 +1443,56 @@ mod tests {
             install: None,
             overrides: None,
         }
+    }
+
+    /// This device's own host offers no stream verb: no Connect with, presets, screen, speed
+    /// test, clipboard or wake. The library, End game, links, power, logs and Forget stay.
+    #[test]
+    fn this_devices_host_offers_no_stream_verb() {
+        use Action::*;
+        let device = Device::test();
+        let here = HostRow {
+            local: true,
+            actions: powered().actions,
+            screens: screened(false).screens,
+            ..host()
+        };
+        assert_eq!(
+            rows_on(&CardMenu::for_host(&here), &device),
+            vec![Browse, CopyLink, Details]
+        );
+        let all = all_rows(&here);
+        assert!(all.iter().all(|a| !CardMenu::streams(*a)), "{all:?}");
+        assert!([Host(0), SendLogs, Forget].iter().all(|a| all.contains(a)));
+        let sections = details(&here).sections(crate::store::file_store());
+        assert!(!sections.contains(&Section::Presets) && !sections.contains(&Section::Screen));
+        let ended = LibraryGame {
+            endable: true,
+            ..game()
+        };
+        assert_eq!(
+            rows_on(&CardMenu::for_game(&here, &ended, None), &device),
+            vec![Favorite, TitleDetails, CopyLink, EndGame]
+        );
+        let card = CardMenu::on(
+            Subject::Game {
+                host: here.clone(),
+                game: Box::new(ended),
+                cover: None,
+            },
+            Mode::Details,
+        );
+        let titles = rows_on(&card, &device);
+        assert!(
+            titles.contains(&Play) && !titles.contains(&BindPreset),
+            "{titles:?}"
+        );
+        // The same rows on a host this device streams.
+        assert!(all_rows(&HostRow {
+            local: false,
+            ..here
+        })
+        .contains(&SpeedTest));
     }
 
     /// The design's three card menus: six rows at most, three on a pin, two on a find.

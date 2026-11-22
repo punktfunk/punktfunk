@@ -2404,8 +2404,10 @@ fn a_refused_launch_runs_none_of_its_prep() {
         plane: crate::events::Plane::Native,
         preset: None,
         profile: None,
-        pad: punktfunk_core::config::GamepadPref::Xbox360,
-        pad_slots: None,
+        pads: crate::session_launch::Pads::Session {
+            kind: punktfunk_core::config::GamepadPref::Xbox360,
+            slots: None,
+        },
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

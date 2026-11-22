@@ -127,7 +127,7 @@ impl Verb {
 
 /// The verbs under a card. The action tiles have none: OK is all they do. The card's whole
 /// menu is the hold's; a More… here only repeated these. Profile shows where who plays is
-/// a choice ([`ProfileBook::choice`]).
+/// a choice ([`ProfileBook::choice`]). This device's own host is never streamed or woken.
 fn verbs(slot: &Slot<'_>, book: &ProfileBook) -> Vec<Verb> {
     let Slot::Host(h) = slot else {
         return Vec::new();
@@ -136,11 +136,14 @@ fn verbs(slot: &Slot<'_>, book: &ProfileBook) -> Vec<Verb> {
     if !h.paired {
         v.push(Verb::Pair);
     } else if h.online {
-        v.extend([Verb::Games, Verb::ConnectWith]);
+        v.push(Verb::Games);
+        if !h.local {
+            v.push(Verb::ConnectWith);
+        }
         if book.choice(h) {
             v.push(Verb::Profile);
         }
-    } else if h.can_wake {
+    } else if h.can_wake && !h.local {
         v.push(Verb::Wake);
     }
     v.push(Verb::Details);
@@ -465,6 +468,8 @@ impl ScreenView for HomeScreen {
                     Slot::Host(h) if !h.paired => fx.push(Screen::Pair(
                         super::pair::PairScreen::new(h, &ctx.device.name),
                     )),
+                    // This device's own host has nothing to stream: OK opens its games.
+                    Slot::Host(h) if h.local => fx.tab = Some(crate::shell::Tab::Games),
                     Slot::Host(h) if !h.online && h.can_wake => {
                         // Wake first; the overlay connects once the host answers.
                         fx.cmds.push(ConsoleCmd::wake(&h.key, true));
@@ -640,6 +645,10 @@ impl ScreenView for HomeScreen {
             Slot::Host(h) if !h.paired => hints.push(Hint::new(
                 HintKey::Confirm,
                 pf_l10n::console::console_card_pair(),
+            )),
+            Slot::Host(h) if h.local => hints.push(Hint::new(
+                HintKey::Confirm,
+                pf_l10n::console::console_verb_games(),
             )),
             Slot::Host(h) if !h.online && h.can_wake => hints.push(Hint::new(
                 HintKey::Confirm,
@@ -1054,7 +1063,8 @@ fn no_games(slot: &Slot<'_>) -> Option<String> {
 /// A card's one status line and its ink: what the host is doing, whether OK will reach
 /// it, the preset a pinned or bound card connects with, and the screen it streams unless that
 /// is the default, the bound preset's when it decides
-/// ([`pf_client_core::display_targets::Targets::card_line_under`]).
+/// ([`pf_client_core::display_targets::Targets::card_line_under`]). This device's own host,
+/// awake, is "This device", which streams nothing.
 fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
     if let Some(p) = &h.pin {
         return (p.name.clone(), accent_color(ui, p.accent.as_deref()));
@@ -1064,6 +1074,9 @@ fn status(ui: &Frame, h: &HostRow) -> (String, Color4f) {
             pf_l10n::client::hostcard_status_playing(&h.running),
             ui.live(),
         );
+    } else if h.local && h.online {
+        let here = pf_l10n::client::hostcard_status_this_device();
+        return (here.into(), ui.live());
     } else if !h.saved {
         (pf_l10n::client::hostcard_status_found(), ui.fg(0.7))
     } else if !h.paired {

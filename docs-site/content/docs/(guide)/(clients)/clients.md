@@ -27,7 +27,8 @@ Samsung TV app find hosts on your network by themselves. They share
 [presets and `punktfunk://` links](/docs/presets-and-links), the
 [in-stream keys](/docs/shortcuts#getting-your-input-back) and the settings on
 [Client settings](/docs/client-settings). The Apple, Android, Linux and Windows apps also ask which
-[profile](/docs/profiles#how-players-pick) plays.
+[profile](/docs/profiles#how-players-pick) plays. On the PC that runs a host, the Linux and Windows
+apps play its games there, with no stream: [Play on this device](/docs/play-on-this-device).
 
 ## Apple app (Mac, iPhone, iPad, Apple TV, Vision Pro)
 
@@ -115,7 +116,7 @@ punktfunk discover                            # hosts advertising on this networ
 punktfunk pair <host>[:port] --pin -          # pair this device; PIN on stdin
 punktfunk hosts list --probe                  # saved hosts, each checked live
 punktfunk library <host-ref> --json           # the host's games
-punktfunk launch <host-ref> --game <id>       # stream, waking the host first
+punktfunk launch <host-ref> --game <id>       # stream, waking the host first; plays it here on this PC's host
 punktfunk profiles <host-ref>                 # who plays on the host; --pick saves one
 punktfunk launch <host-ref> --as <profile>    # stream as that profile, this time only
 punktfunk end-game <host-ref> --game <id>     # close a game this device launched

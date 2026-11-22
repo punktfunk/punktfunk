@@ -18,6 +18,8 @@ mod hosts;
 // the QUIC layer in a browser, so quinn never builds for that target.
 #[cfg(not(target_family = "wasm"))]
 mod identity;
+#[cfg(desktop)]
+pub mod local;
 mod messages;
 #[cfg(not(target_family = "wasm"))]
 mod probe;

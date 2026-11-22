@@ -4,7 +4,7 @@
 //! the owner's host; a device's call about its own play goes, as that device, to the host
 //! [`DEVICE`] names. `mgmt::tests::routes` holds the tables against the API document.
 
-use super::auth::{AuthLane, PairedDevice};
+use super::auth::{AuthLane, Loopback, PairedDevice};
 use super::shared::*;
 use axum::body::Body;
 use axum::extract::Request;
@@ -64,14 +64,19 @@ pub(crate) enum Side {
     Seat,
     /// The owner's host, which runs the plugins.
     Owner,
+    /// The owner's host for a call from this machine: the box's own screen plays there.
+    /// [`Side::Seat`] for any other call.
+    Desk,
 }
 
 /// Routes a device may call about its own play, and the host each goes to as that device: its
 /// game, its screen and the compositors on its seat; its installs on the owner's host, whose
-/// plugins download into the box's shared game files, and a person's routes there too, which
-/// write the library. `mgmt::tests::routes` holds every other device route to the door.
+/// plugins download into the box's shared game files, a person's routes there too, which write
+/// the library, and a launch on the box's own screen, which that host plays.
+/// `mgmt::tests::routes` holds every other device route to the door.
 pub(crate) const DEVICE: &[(&str, &str, Side)] = &[
-    ("POST", "game/end", Side::Seat),
+    ("POST", "game/end", Side::Desk),
+    ("POST", "game/launch", Side::Owner),
     ("POST", "library/install/*", Side::Owner),
     ("DELETE", "library/install/*", Side::Owner),
     ("PUT", "library/hidden/*", Side::Owner),
@@ -162,6 +167,8 @@ pub(crate) struct Forwarded {
     pub device: Option<String>,
     /// The profile the door found `device` is the person of ([`super::person`]).
     pub person: Option<String>,
+    /// `device` called the door from this machine: the door's own [`Loopback`] for that call.
+    pub local: bool,
     /// Hand the body over as it arrives.
     pub stream: bool,
     /// Start a stopped seat; a check that must not wake anyone passes `false`.
@@ -178,9 +185,37 @@ impl Forwarded {
             body: Vec::new(),
             device: None,
             person: None,
+            local: false,
             stream: false,
             start: false,
         }
+    }
+
+    /// The request a seat host gets for this call at `uri`: `authorization`, the body's type, and
+    /// the door's word on the device, its call from this machine and its person. Built from
+    /// these fields alone, so no header of the caller's own passes.
+    pub(crate) fn request(
+        self,
+        uri: String,
+        authorization: &str,
+    ) -> axum::http::Result<axum::http::Request<Vec<u8>>> {
+        let mut req = axum::http::Request::builder()
+            .method(self.method.as_str())
+            .uri(uri)
+            .header(header::AUTHORIZATION, authorization);
+        if let Some(ct) = &self.content_type {
+            req = req.header(header::CONTENT_TYPE, ct);
+        }
+        if let Some(fp) = &self.device {
+            req = req.header(super::auth::VOUCH_HEADER, fp);
+            if self.local {
+                req = req.header(super::auth::LOOPBACK_HEADER, "1");
+            }
+        }
+        if let Some(id) = &self.person {
+            req = req.header(super::person::VOUCH_HEADER, id);
+        }
+        req.body(self.body)
     }
 }
 
@@ -291,6 +326,7 @@ impl MgmtState {
                 body: body.unwrap_or_default(),
                 device: None,
                 person: None,
+                local: false,
                 stream: false,
                 start,
             },
@@ -374,12 +410,12 @@ fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Opti
 }
 
 /// On a door: an admin call the door does not answer itself goes to the owner's host, and a
-/// device's call about its own play to the host [`device_route`] names, carrying the device so
-/// that host answers as it would the device. A person's call carries the profile the door found
-/// the device is the person of, and any other is refused here. A person session goes to the
-/// owner's host as its profile, with no device, where the admin call would. A device's or a
-/// person session's read wakes no seat. Every other lane, and every other host, is answered
-/// here.
+/// device's call about its own play to the host [`device_route`] names, carrying the device and
+/// whether it called from this machine, so that host answers as it would the device. A person's
+/// call carries the profile the door found the device is the person of, and any other is
+/// refused here. A person session goes to the owner's host as its profile, with no device,
+/// where the admin call would. A device's or a person session's read wakes no seat. Every other
+/// lane, and every other host, is answered here.
 pub(crate) async fn pass_on(
     State(st): State<Arc<MgmtState>>,
     req: Request,
@@ -395,6 +431,8 @@ pub(crate) async fn pass_on(
         .strip_prefix("/api/v1/")
         .unwrap_or_default()
         .to_string();
+    // `require_auth`'s loopback verdict for this call, stamped on the device lane alone.
+    let local = req.extensions().get::<Loopback>().is_some_and(|l| l.0);
     let mut person = None;
     let target = match (lane, device_route(req.method(), &rest)) {
         (Some(AuthLane::Admin), _) if classify(req.method(), &rest) == Verdict::Forward => {
@@ -420,7 +458,7 @@ pub(crate) async fn pass_on(
                     Err(refused) => return refused,
                 }
             }
-            if side == Side::Owner {
+            if side == Side::Owner || (side == Side::Desk && local) {
                 Target::Owner
             } else {
                 let snapshot = {
@@ -457,6 +495,7 @@ pub(crate) async fn pass_on(
         body: bytes.to_vec(),
         device: parts.extensions.get::<PairedDevice>().map(|d| d.0.clone()),
         person,
+        local,
         stream: tail(&rest),
         start: !matches!(lane, Some(AuthLane::Cert | AuthLane::PersonVouched))
             || parts.method != Method::GET,
@@ -526,12 +565,13 @@ mod tests {
         assert_eq!(get("plugins/steam/ui/%2E%2e/x"), Verdict::Door);
     }
 
-    /// A device's game goes to its seat and its installs to the owner's host; its reads of the
-    /// box stay on the door.
+    /// A device's game goes to its seat, or from this machine to the box's own screen; a launch
+    /// there and its installs go to the owner's host; its reads of the box stay on the door.
     #[test]
     fn a_device_s_own_play_has_its_host() {
         let route = |method, rest| device_route(&method, rest);
-        assert_eq!(route(Method::POST, "game/end"), Some(Side::Seat));
+        assert_eq!(route(Method::POST, "game/end"), Some(Side::Desk));
+        assert_eq!(route(Method::POST, "game/launch"), Some(Side::Owner));
         assert_eq!(route(Method::GET, "display/targets"), Some(Side::Seat));
         for rest in [
             "library/install/steam:570",

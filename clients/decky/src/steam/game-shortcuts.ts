@@ -5,7 +5,7 @@
 import { keys, write } from "../lib/storage";
 import { applyGameArtwork } from "./art";
 import type { SteamClientGlobal } from "./client";
-import { dropGamePairCache, GAME_CONFIG_PREFIX, gameArtKey, gameKey, gameShortcutPairs } from "./keys";
+import { dropPairCache, GAME_CONFIG_PREFIX, gameArtKey, gameKey, gameShortcutPairs } from "./keys";
 import { queryShortcutAlive } from "./readiness";
 import { notifyRunning, running } from "./running";
 import { type Ensured, ensureShortcut } from "./shortcuts";
@@ -58,7 +58,7 @@ export function removeGameShortcuts(): number {
   }
   // The per-game layouts are keyed by game name, so no appid can find them.
   removeByPrefix(GAME_CONFIG_PREFIX);
-  dropGamePairCache();
+  dropPairCache();
   notifyRunning();
   return removed;
 }

@@ -240,6 +240,16 @@ pub trait Overlay {
         false
     }
 
+    /// A title this device's own host started is up and the console has let go: the loop
+    /// asks for no frame, presents nothing, closes the pads and lets the screen saver run.
+    fn playing_here(&self) -> bool {
+        false
+    }
+
+    /// Once per pass in place of [`Self::frame`] while [`Self::playing_here`]: the console
+    /// keeps up with the host and draws nothing.
+    fn tick(&mut self) {}
+
     /// Drain one ring command. Each iteration while streaming.
     fn take_ring_command(&mut self) -> Option<RingCommand> {
         None

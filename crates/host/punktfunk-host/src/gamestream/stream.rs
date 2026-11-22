@@ -352,8 +352,10 @@ fn run(
             plane: crate::events::Plane::Gamestream,
             preset: None,
             profile: None,
-            pad: punktfunk_core::config::GamepadPref::Xbox360,
-            pad_slots: None,
+            pads: crate::session_launch::Pads::Session {
+                kind: punktfunk_core::config::GamepadPref::Xbox360,
+                slots: None,
+            },
         };
         // The entry's own `apps.json` prep, then its library entry's when that entry is what
         // launches: a hidden title's steps don't run. `PF_APP_TITLE` and the `PF_STREAM_*`
@@ -451,7 +453,10 @@ fn run(
                     gamescope_route.as_ref(),
                 ) && nested_launch_started,
                 seat: seat.as_deref(),
+                place: crate::library::Place::Stream,
             },
+            #[cfg(windows)]
+            &crate::library::View::here(),
         );
 
         // Exit ends the session; session end can end the game only if asked, and a drop waits

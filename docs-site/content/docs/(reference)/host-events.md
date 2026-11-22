@@ -60,7 +60,19 @@ KWin without its window-list permission or on GNOME without the Punktfunk extens
 
 [Scripts](/docs/automation#commands) read `PF_EVENT_GAME_TITLE`, `PF_EVENT_GAME_APP` and, on
 `game.exited`, `PF_EVENT_REASON`: `exited` when the player quit, `terminated` when the host closed
-it.
+it. `PF_EVENT_GAME_PLANE` says where the game was started: `local` at the desk.
+
+## A game at the desk
+
+A game the host starts on its own screen for an app on the same machine
+([Play on this device](/docs/play-on-this-device)) has no session and no device. Its
+`game.launching`, `game.running`, `game.window` and `game.exited` carry `plane: "local"`,
+`client: "desk"` and the owner's `profile`, and no `fingerprint` or `preset`. No `client.*`,
+`session.*` or `stream.*` event fires for it.
+
+A hook written for streams sees these `game.*` events too. Filter on `plane` to tell them apart
+([Events & hooks](/docs/automation#hooks)): `local` for the desk, `native` for a Punktfunk stream.
+A hook that filters on a `fingerprint` never matches one.
 
 ## The event stream
 

@@ -54,6 +54,8 @@ pub enum Plane {
     Gamestream,
     /// `punktfunk/1` from a browser, over WebTransport.
     Web,
+    /// No stream: a title the box's own client started on the box's own screen.
+    Local,
 }
 
 impl Plane {
@@ -63,6 +65,7 @@ impl Plane {
             Plane::Native => "native",
             Plane::Gamestream => "gamestream",
             Plane::Web => "web",
+            Plane::Local => "local",
         }
     }
 }
@@ -1073,6 +1076,33 @@ mod tests {
             r#"{"seq":6,"ts_ms":1700000000000,"schema":1,"kind":"game.exited","game":{"title":"Big Picture","client":"","plane":"gamestream"},"reason":"terminated"}"#
         );
 
+        // The desk's own launch: `local`, and no device behind it.
+        let ev = HostEvent {
+            seq: 6,
+            ts_ms: 1_700_000_000_000,
+            schema: 1,
+            seat: None,
+            kind: EventKind::GameRunning {
+                game: GameRefPayload {
+                    app: Some("steam:570".into()),
+                    title: "Dota 2".into(),
+                    store: Some("steam".into()),
+                    client: "desk".into(),
+                    fingerprint: None,
+                    plane: Plane::Local,
+                    preset: None,
+                    profile: Some(ProfileRef {
+                        id: "0f0f0f0f0f0f".into(),
+                        display_name: "Owner".into(),
+                    }),
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_string(&ev).unwrap(),
+            r#"{"seq":6,"ts_ms":1700000000000,"schema":1,"kind":"game.running","game":{"app":"steam:570","title":"Dota 2","store":"steam","client":"desk","plane":"local","profile":{"id":"0f0f0f0f0f0f","display_name":"Owner"}}}"#
+        );
+
         // Every field the summary claims, in order. The console card reads this shape, so a
         // renamed or dropped key is a console break as well as a schema bump.
         let ev = HostEvent {
@@ -1619,7 +1649,7 @@ mod tests {
     /// Stats recordings store the plane as text, and must spell it as the events do.
     #[test]
     fn plane_text_matches_the_wire() {
-        for plane in [Plane::Native, Plane::Gamestream, Plane::Web] {
+        for plane in [Plane::Native, Plane::Gamestream, Plane::Web, Plane::Local] {
             assert_eq!(serde_json::to_value(plane).unwrap(), plane.as_str());
         }
     }

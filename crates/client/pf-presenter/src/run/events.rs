@@ -672,13 +672,23 @@ impl Shell {
         }
     }
 
-    /// Who owns the pads: what their shortcuts fire, the ring, the mask. `want_mask_ui` is
-    /// [`Shell::ui_wants_mask`] from before the pump tick.
+    /// Who owns the pads: what their shortcuts fire, the ring, the mask, and a title playing
+    /// here, which takes them from the console. `want_mask_ui` is [`Shell::ui_wants_mask`]
+    /// from before the pump tick.
     pub(super) fn pad_owner_tick(&mut self, stream: &mut Option<StreamState>, want_mask_ui: bool) {
         // The worker reads the pads' shortcuts before the mask: the exit chord still works
         // with input released or the ring up.
         while let Ok((pad, action, phase)) = self.shortcut_rx.try_recv() {
             self.fire_action(stream, Some(pad), &action, phase);
+        }
+        // A pad the console holds open is shared with the game, and a second writer fights it
+        // for rumble and lights: closed while the title plays here.
+        let let_go = self.browse
+            && stream.is_none()
+            && self.overlay.as_ref().is_some_and(|o| o.playing_here());
+        if let_go != self.let_go {
+            self.let_go = let_go;
+            self.gamepad.set_menu_mode(!let_go);
         }
         // While the ring is up, or the console holds a launch over the live stream, the
         // pad belongs to the overlay: masked off the wire, polled into menu events. The
