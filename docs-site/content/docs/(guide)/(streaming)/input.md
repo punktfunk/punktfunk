@@ -129,6 +129,7 @@ Touch passthrough depends on the host:
 |---|---|
 | KDE Plasma, GNOME | Full multi-touch |
 | Windows 10 1809 and newer | Full multi-touch |
+| macOS | As Sidecar does it: a tap clicks, a pan scrolls with momentum, a long press right-clicks and drags, two fingers scroll or pinch and rotate |
 | Sway, Hyprland, niri, Umbriel and other wlroots compositors | Not supported: the client uses Trackpad and says so |
 | gamescope | One finger, as an absolute pointer ([gamescope](/docs/gamescope)) |
 
@@ -222,6 +223,7 @@ so drawing apps on the host see a real pen.
 |---|---|
 | Linux | A **Punktfunk Pen** tablet for the session, mapped by your compositor. Needs `/dev/uinput`, the `input` group step of your [install guide](/docs/install) |
 | Windows 10 1809 and newer | A system pen with pressure, tilt, rotation, barrel button and eraser |
+| macOS | A tablet pen with pressure, tilt, rotation, both barrel buttons and eraser |
 
 Without host support, the stylus works as a finger, without pressure or tilt. To turn pen off
 for every client, switch off **Pen input** in the web console under **Host → Input**,
