@@ -13,12 +13,14 @@
 //! recovery is a keyframe.
 //!
 //! Output arrives on VideoToolbox's own thread in submit order. The callback only queues the
-//! sample buffer; `poll` assembles it on the encode thread.
+//! sample buffer and rings the loop's AU wake; `poll` assembles it on the encode thread.
 
 use crate::cpu_ingest::{CpuIngest, Target};
 use crate::stall::poll_budget_ms;
 use crate::vt_au::annex_b;
-use crate::{ChromaFormat, Codec, CodecSupport, EncodedFrame, Encoder, EncoderCaps, OpenParams};
+use crate::{
+    AuWake, ChromaFormat, Codec, CodecSupport, EncodedFrame, Encoder, EncoderCaps, OpenParams,
+};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, Type,
@@ -140,11 +142,12 @@ struct Sample(CFRetained<CMSampleBuffer>);
 // after VideoToolbox has handed it over complete; nothing writes it after the callback.
 unsafe impl Send for Sample {}
 
-/// The queue the output callback fills and `poll` drains.
+/// The queue the output callback fills and `poll` drains, and the wake it rings.
 #[derive(Default)]
 struct Shared {
     q: Mutex<VecDeque<Output>>,
     ready: Condvar,
+    wake: AuWake,
 }
 
 impl Shared {
@@ -154,6 +157,7 @@ impl Shared {
             .unwrap_or_else(|e| e.into_inner())
             .push_back(out);
         self.ready.notify_one();
+        self.wake.ring();
     }
 
     /// The oldest output, waiting up to `budget` for one.
@@ -209,9 +213,9 @@ struct Session {
 }
 
 impl Session {
-    /// Create a hardware session for `cfg` and configure it; the profile, colour and rate must
-    /// all take, or the open fails.
-    fn open(cfg: &Config) -> Result<Session> {
+    /// Create a hardware session for `cfg` whose outputs ring `wake`, and configure it; the
+    /// profile, colour and rate must all take, or the open fails.
+    fn open(cfg: &Config, wake: &AuWake) -> Result<Session> {
         let codec = codec_type(cfg.codec)?;
         let profile = profile(cfg.codec, cfg.ten_bit, cfg.chroma)?;
         // SAFETY: an immutable key VideoToolbox exports.
@@ -219,7 +223,10 @@ impl Session {
             &[unsafe { kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder }],
             &[CFBoolean::new(true)],
         );
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            wake: wake.clone(),
+            ..Shared::default()
+        });
         let refcon = Arc::into_raw(shared.clone());
         let mut out: *mut VTCompressionSession = ptr::null_mut();
         // SAFETY: plain create with a specification dictionary of CFBoolean values, no source
@@ -391,6 +398,11 @@ pub(crate) struct VtEncoder {
     staging: Option<Staging>,
     /// The sample bytes of the AU being assembled, kept across frames.
     scratch: Vec<u8>,
+    /// The loop's AU wake ([`Encoder::set_au_wake`]), handed to every session a reset opens.
+    au_wake: AuWake,
+    wake_set: bool,
+    /// `poll` does not wait for a lone frame in flight: the wake brings the loop back for it.
+    pipelined: bool,
 }
 
 // SAFETY: the encoder is driven from one thread at a time. The session's callback reaches only
@@ -401,7 +413,8 @@ unsafe impl Send for VtEncoder {}
 impl VtEncoder {
     pub(crate) fn open(p: &OpenParams) -> Result<VtEncoder> {
         let cfg = Config::from_params(p);
-        let session = Session::open(&cfg).context("open a VideoToolbox session")?;
+        let au_wake = AuWake::default();
+        let session = Session::open(&cfg, &au_wake).context("open a VideoToolbox session")?;
         tracing::info!(
             codec = ?cfg.codec,
             width = cfg.width,
@@ -422,6 +435,9 @@ impl VtEncoder {
             cpu: CpuIngest::default(),
             staging: None,
             scratch: Vec::new(),
+            au_wake,
+            wake_set: false,
+            pipelined: false,
         })
     }
 
@@ -738,12 +754,18 @@ impl Encoder for VtEncoder {
         self.hdr_meta = meta;
     }
 
-    /// Wait up to [`poll_budget_ms`] for the oldest frame's output. Expiry is `Ok(None)`.
+    /// The oldest frame's output. Pipelined, a lone frame in flight is not waited for; a frame
+    /// queued behind it means the encoder is a frame behind, and that waits up to
+    /// [`poll_budget_ms`] as sync retrieve does. Expiry is `Ok(None)`.
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
         let Some(&meta) = self.pending.front() else {
             return Ok(None);
         };
-        let budget = Duration::from_millis(u64::from(poll_budget_ms(self.cfg.fps)));
+        let budget = if self.pipelined && self.pending.len() == 1 {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(u64::from(poll_budget_ms(self.cfg.fps)))
+        };
         let Some(out) = self.session.shared.take(budget) else {
             return Ok(None);
         };
@@ -753,9 +775,10 @@ impl Encoder for VtEncoder {
             .map(Some)
     }
 
-    /// Reopen the session in place: in-flight frames are forfeit and the next one is a keyframe.
+    /// Reopen the session in place, ringing the same wake: in-flight frames are forfeit and the
+    /// next one is a keyframe.
     fn reset(&mut self) -> bool {
-        match Session::open(&self.cfg) {
+        match Session::open(&self.cfg, &self.au_wake) {
             Ok(session) => {
                 self.session = session;
                 self.pending.clear();
@@ -767,6 +790,21 @@ impl Encoder for VtEncoder {
                 false
             }
         }
+    }
+
+    /// Every output rings it. A wake also turns pipelined retrieve on: nothing else would
+    /// bring the loop back for an AU `poll` did not wait for.
+    fn set_au_wake(&mut self, wake: Option<Arc<dyn Fn() + Send + Sync>>) {
+        self.wake_set = wake.is_some();
+        self.pipelined = self.wake_set;
+        self.au_wake.set(wake);
+    }
+
+    /// Takes effect at once, both ways; on only while a wake is set. The loop winds it back
+    /// before its drain, which waits for every frame.
+    fn set_pipelined(&mut self, on: bool) -> bool {
+        self.pipelined = on && self.wake_set;
+        self.pipelined
     }
 
     fn reconfigure_bitrate(&mut self, bps: u64) -> bool {
@@ -848,7 +886,7 @@ pub(crate) fn opens(codec: Codec, ten_bit: bool, chroma: ChromaFormat) -> bool {
         chroma,
         full_range: false,
     };
-    match Session::open(&cfg) {
+    match Session::open(&cfg, &AuWake::default()) {
         Ok(_) => true,
         Err(e) => {
             tracing::debug!(?codec, ten_bit, ?chroma, error = %format!("{e:#}"), "VideoToolbox refused a profile");
