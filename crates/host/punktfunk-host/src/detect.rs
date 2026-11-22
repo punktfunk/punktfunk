@@ -4,9 +4,9 @@
 //! virtual-display driver with Sunshine and its forks. Running another host
 //! alongside is unsupported.
 //!
-//! Fingerprint by name against [`KNOWN`]: processes, OS services/units, on-disk
-//! markers. Platform back-ends (`detect/windows.rs`, `detect/linux.rs`) supply
-//! facts; matching and rendering here are portable and unit-tested.
+//! Fingerprint by name against [`KNOWN`]: processes, OS services/units/launchd jobs,
+//! on-disk markers. Platform back-ends (`detect/windows.rs`, `detect/linux.rs`,
+//! `detect/macos.rs`) supply facts; matching and rendering here are portable and unit-tested.
 //!
 //! Only a host that is running or will start on its own can take ports or load
 //! a second driver. Leftover files and disabled services are dormant.
@@ -24,9 +24,12 @@ mod platform;
 #[cfg(target_os = "linux")]
 #[path = "detect/linux.rs"]
 mod platform;
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+#[path = "detect/macos.rs"]
+mod platform;
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 mod platform {
-    //! Stub: the host ships on Windows/Linux; macOS (dev builds) has nothing to scan.
+    //! No host ships here, so there is nothing to scan.
     pub fn running_processes() -> Vec<String> {
         Vec::new()
     }
@@ -59,15 +62,14 @@ impl Product {
 
 /// How a conflicting host was observed on this machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "macOS scans nothing"))]
 pub enum Evidence {
     /// Process basename observed live.
     Running { process: String },
-    /// Registered OS service/unit. `autostart` is load-bearing: boot/system/auto
-    /// (Windows) or an enabled systemd unit will clash; disabled/manual is inert
-    /// until someone starts it, then `Running` catches the next scan.
+    /// Registered OS service/unit/launchd job. `autostart` is load-bearing: boot/system/auto
+    /// (Windows), an enabled systemd unit or a launchd job plist will clash; disabled/manual is
+    /// inert until someone starts it, then `Running` catches the next scan.
     Service { name: String, autostart: bool },
-    /// On-disk marker (Program Files, flatpak id, `PATH` binary). Always dormant:
+    /// On-disk marker (Program Files, flatpak id, app bundle, `PATH` binary). Always dormant:
     /// files that nothing launches bind no ports.
     Installed { at: String },
 }
@@ -228,6 +230,17 @@ pub fn scan() -> Vec<Detection> {
         }
     }
     out
+}
+
+/// `bin` in a `PATH` dir or in `extra`, the platform's bindirs a narrow service `PATH` leaves
+/// out.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn find_on_path(bin: &str, path: Option<&std::ffi::OsStr>, extra: &[&str]) -> Option<String> {
+    let dirs = path.map(std::env::split_paths).into_iter().flatten();
+    dirs.chain(extra.iter().map(std::path::PathBuf::from))
+        .map(|dir| dir.join(bin))
+        .find(|cand| cand.is_file())
+        .map(|cand| cand.to_string_lossy().into_owned())
 }
 
 static SNAPSHOT: OnceLock<Vec<Detection>> = OnceLock::new();
