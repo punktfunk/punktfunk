@@ -48,8 +48,7 @@ fn is_agent(service: Option<&OsStr>) -> bool {
     service == Some(OsStr::new(AGENT_LABEL))
 }
 
-/// Set once `host.env` has been applied, so the host starts itself over only once. Its value
-/// lists the variables that came from the file.
+/// Lists the variables that came from `host.env`.
 const HOST_ENV_APPLIED: &str = "PUNKTFUNK_HOST_ENV_APPLIED";
 
 /// Whether `key` reached this process from `host.env`. A restart leaves those out, so the new
@@ -63,13 +62,15 @@ pub(crate) fn from_host_env(key: &OsStr) -> bool {
 }
 
 /// Give a serving Mac host the settings in `<config_dir>/host.env`: Finder and launchd start
-/// the app with no shell to export them from. The process replaces itself once with the file's
-/// variables added, before any thread or log line. A variable already set wins over the file.
-pub(crate) fn apply_host_env(args: &[String]) {
-    use std::os::unix::process::CommandExt;
-    if args.first().map(String::as_str) != Some("serve")
-        || std::env::var_os(HOST_ENV_APPLIED).is_some()
-    {
+/// the app with no shell to export them from. A variable already set wins over the file.
+///
+/// Sets them in this process, never by starting it over: macOS ties an app's menu bar item to
+/// the process image it launched, and an `exec` loses it.
+///
+/// # Safety
+/// The caller is `main`'s first statement: no other thread exists yet.
+pub(crate) unsafe fn apply_host_env(args: &[String]) {
+    if args.first().map(String::as_str) != Some("serve") {
         return;
     }
     let Ok(text) = std::fs::read_to_string(pf_paths::config_dir().join("host.env")) else {
@@ -79,21 +80,15 @@ pub(crate) fn apply_host_env(args: &[String]) {
     if adds.is_empty() {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let error = std::process::Command::new(exe)
-        .args(std::env::args_os().skip(1))
-        .env(
-            HOST_ENV_APPLIED,
-            adds.iter()
-                .map(|(key, _)| *key)
-                .collect::<Vec<_>>()
-                .join(","),
-        )
-        .envs(adds)
-        .exec();
-    eprintln!("punktfunk-host: apply host.env: {error}");
+    let keys = adds.iter().map(|(key, _)| *key).collect::<Vec<_>>();
+    // SAFETY: single-threaded, as this fn's contract says, so nothing reads the environment
+    // while it changes.
+    unsafe {
+        std::env::set_var(HOST_ENV_APPLIED, keys.join(","));
+        for (key, value) in adds {
+            std::env::set_var(key, value);
+        }
+    }
 }
 
 /// The `host.env` lines a host takes: `PUNKTFUNK_*` and `RUST_LOG`, never a credential (those

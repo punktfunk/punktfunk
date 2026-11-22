@@ -230,12 +230,15 @@ unsafe extern "C" {
 }
 
 fn main() {
-    // Before any `ureq` agent (cover-art, webhooks, catalog, updates).
-    punktfunk_core::tls::install_default_provider();
     #[cfg(target_os = "macos")]
     let args = launch_args();
+    // SAFETY: the first thing this process does: no other thread exists yet.
     #[cfg(target_os = "macos")]
-    hostsys::app_loop::apply_host_env(&args);
+    unsafe {
+        hostsys::app_loop::apply_host_env(&args)
+    };
+    // Before any `ureq` agent (cover-art, webhooks, catalog, updates).
+    punktfunk_core::tls::install_default_provider();
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into())
