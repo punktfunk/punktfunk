@@ -8,8 +8,9 @@
 //! released and the pointer where it started. Posting needs the Accessibility grant for the app
 //! that launches this (the terminal); without it, this asks once and exits.
 //!
-//! Usage: `mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons|pen|touch>...`, in
-//! one run. `pen` drives the stylus the host's pen plane drives, through `PenTracker`.
+//! Usage: `mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons|pen|touch|hid>...`,
+//! in one run. `pen` drives the stylus the host's pen plane drives, through `PenTracker`. `hid`
+//! runs against `mac_gc_reader.swift` instead of the sink ([`hid_run`]).
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -30,7 +31,7 @@ mod mac {
     };
     use pf_inject::{Backend, InputInjector};
     use punktfunk_core::input::scroll::{ScrollEvent, ScrollPhase, ScrollSource, SCROLL_SCALE};
-    use punktfunk_core::input::{InputEvent, InputKind};
+    use punktfunk_core::input::{mouse_counts_flags, InputEvent, InputKind};
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +46,7 @@ mod mac {
         let mut args = std::env::args().skip(1);
         let (Some(sink), scenarios) = (args.next(), args.collect::<Vec<_>>()) else {
             eprintln!(
-                "usage: mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons|pen|touch>..."
+                "usage: mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons|pen|touch|hid>..."
             );
             std::process::exit(2);
         };
@@ -134,6 +135,7 @@ mod mac {
                 "buttons" => buttons_run(&mut run, (sx, sy, sw, sh)),
                 "pen" => pen_run(&mut run, (sx, sy, sw, sh)),
                 "touch" => touch_run(&mut run, (sx, sy, sw, sh)),
+                "hid" => hid_run(&mut run, (sx, sy, sw, sh)),
                 other => println!("unknown scenario {other}"),
             }
         }
@@ -523,6 +525,30 @@ mod mac {
         }
         r.abs(c);
         r.wait(100);
+    }
+
+    /// The virtual HID device's paths, for `scripts/macos-hid-input-check.sh`: a mouse's counts, a
+    /// left click and the A key, with the reader `mac_gc_reader.swift` logging what AppKit and
+    /// GameController see. Needs `PUNKTFUNK_HID_INPUT=1` and the entitlement.
+    fn hid_run(r: &mut Run, view: Rect) {
+        println!("probe: {:?}", pf_inject::hid_device_probe());
+        r.abs(centre(view));
+        r.step("wait for GameController to see the device");
+        r.wait(1500);
+        r.step("40 moves of a mouse's counts, 8 ms apart");
+        for _ in 0..40 {
+            let flags = mouse_counts_flags(r.start.elapsed().as_micros() as u64);
+            r.post(ev(InputKind::MouseMove, 0, 4, 0, flags), false);
+            r.wait(8);
+        }
+        r.step("left click");
+        r.button(1, true);
+        r.wait(60);
+        r.button(1, false);
+        r.wait(200);
+        r.step("A");
+        r.tap(0x41);
+        r.wait(300);
     }
 
     fn pen_run(r: &mut Run, view: Rect) {
