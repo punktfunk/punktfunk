@@ -482,6 +482,8 @@ fn run_codec(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
     );
+    // Said for each decoder: the host may move the session to a codec whose decoder heals.
+    client.set_wave_heals(!state.one_slice);
     state.pixel_rate = opts.pixel_rate;
     if await_keyframe {
         client.recovery_lost();

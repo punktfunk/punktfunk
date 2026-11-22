@@ -1181,6 +1181,14 @@ impl NativeClient {
         self.shared.recovery.lock().unwrap().reset();
     }
 
+    /// Whether an intra-refresh wave heals the decoder in use; `true` until told otherwise.
+    /// `false` for one that shows nothing built on a damaged picture, or cannot take the
+    /// wave's pictures: the host then answers a loss it cannot anchor with a keyframe, and
+    /// a wave an older host still sends confirms nothing. Say it for each decoder opened.
+    pub fn set_wave_heals(&self, heals: bool) {
+        self.shared.feedback.lock().unwrap().no_wave(!heals);
+    }
+
     /// The freeze's arm count, `0` with none up. A move since the last look is a loss: a
     /// cadence loop re-anchors on it.
     pub fn recovery_arms(&self) -> u64 {
