@@ -543,7 +543,7 @@ pub(crate) fn sorted_games_for(view: &View) -> std::sync::Arc<Vec<GameEntry>> {
 /// made are left out ([`SteamEntries::hidden`]). Split out so the two public views differ only in
 /// how they apply the hidden set.
 fn collect_games(view: &View) -> Vec<GameEntry> {
-    let off = disabled_scanners(view);
+    let gate = Gate::of(view);
     let stats = game_stats();
     let overrides = Overrides::load(view);
     let fills = Fills::load(view);
@@ -552,7 +552,7 @@ fn collect_games(view: &View) -> Vec<GameEntry> {
     // profile's own titles are its account's: no rule for the box's rows applies to them.
     let mut games: Vec<GameEntry> = load_custom()
         .into_iter()
-        .filter(|e| !source_off(e, &off, view.reach))
+        .filter(|e| !source_off(e, &gate))
         .chain(own_entries(view))
         .map(GameEntry::from)
         .filter(|g| !synced_away(&g.id, &synced))

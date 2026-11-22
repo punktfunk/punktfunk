@@ -888,7 +888,12 @@ pub(super) fn rewrite_admitted(
 
 /// `bytes` as `name` in `dst` for `reader`, through a new file renamed over the old, when the
 /// file holds anything else. `true` when it changed.
-fn put_file(dst: &OwnedFd, name: &str, bytes: &[u8], reader: Reader) -> std::io::Result<bool> {
+pub(super) fn put_file(
+    dst: &OwnedFd,
+    name: &str,
+    bytes: &[u8],
+    reader: Reader,
+) -> std::io::Result<bool> {
     let current = safe_open::read_at(dst, name, MAX_TRUST_BYTES)
         .ok()
         .flatten();
@@ -1234,7 +1239,7 @@ fn open_source(dir: &Path) -> std::io::Result<Option<OwnedFd>> {
 }
 
 /// The names in `dir`, without `.` and `..`; a name that is not UTF-8 is left out.
-fn names(dir: &OwnedFd) -> std::io::Result<Vec<String>> {
+pub(super) fn names(dir: &OwnedFd) -> std::io::Result<Vec<String>> {
     let mut out = Vec::new();
     for entry in rustix::fs::Dir::read_from(dir)? {
         if let Ok(name) = entry?.file_name().to_str()

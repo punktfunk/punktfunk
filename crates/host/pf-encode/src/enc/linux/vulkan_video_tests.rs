@@ -59,9 +59,11 @@ fn rc_plan_prefers_offered_vbr_and_clamps_to_the_driver() {
     assert_eq!(rc_plan(both, None, 60, 20_000_000, u64::MAX), vbr);
     assert_eq!(rc_plan(both, Some("auto"), 60, 20_000_000, u64::MAX), vbr);
     assert_eq!(rc_plan(both, Some(" CBR "), 60, 20_000_000, u64::MAX), cbr);
-    // `vbr` is honoured only when advertised; a driver with neither still gets CBR.
+    // `vbr` is honoured only when advertised.
     assert_eq!(rc_plan(Rc::CBR, Some("vbr"), 60, 20_000_000, u64::MAX), cbr);
-    assert_eq!(rc_plan(Rc::empty(), None, 60, 20_000_000, u64::MAX), cbr);
+    // A driver with neither is not opened: Mesa 26.2's Intel driver lists DEFAULT and DISABLED.
+    assert!(super::rate_controlled(Rc::VBR) && super::rate_controlled(both));
+    assert!(!super::rate_controlled(Rc::DISABLED) && !super::rate_controlled(Rc::empty()));
     assert_eq!(
         rc_plan(both, None, 60, 900_000_000, 400_000_000).2,
         400_000_000
@@ -574,6 +576,24 @@ fn vulkan_anchor_soak() {
     soak.run("vulkan", &mut enc, |i| {
         cpu_frame_scroll(w, h, pts(i), i as u32)
     });
+}
+
+/// A planar offer on Intel is a video tiling the encode device imports, never LINEAR or
+/// X-tiled, and 8-bit has one; elsewhere it is LINEAR alone. On Intel, run with
+/// `ANV_DEBUG=video-encode`.
+#[test]
+#[ignore = "needs a real VK_KHR_video_encode_h265 device"]
+fn the_planar_offer_is_a_video_tiling_on_intel() {
+    for ten_bit in [false, true] {
+        let offer = super::vulkan_planar_capture_modifiers(Codec::H265, ten_bit);
+        eprintln!("planar offer, ten_bit={ten_bit}: {offer:#x?}");
+        if offer == [0] {
+            continue;
+        }
+        let video = crate::vaapi_native::INTEL_PLANAR_TILED;
+        assert!(offer.iter().all(|m| video.contains(m)), "{offer:#x?}");
+        assert!(ten_bit || !offer.is_empty(), "no 8-bit planar layout");
+    }
 }
 
 /// Packed 2:10:10:10 (`xRGB_210LE` / `PixelFormat::X2Rgb10`) CPU frame. Channels are 10-bit

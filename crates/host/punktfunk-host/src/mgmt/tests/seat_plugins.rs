@@ -61,7 +61,7 @@ async fn a_seat_s_plugins_publish_on_its_own_shelf() {
     assert!(own[0].get("launch").is_none(), "{own}");
 
     // The box keeps the names for the seat's profile, and starts none of them.
-    use super::profile_view::{profiles, profiles_state, write_fixture, SEAT_P};
+    use super::profile_view::{profiles, profiles_state, write_fixture, SEAT, SEAT_P};
     let tmp = ConfigDirOverride::new();
     write_fixture(tmp.path());
     let app = test_app(profiles_state(tmp.path(), profiles()), None);
@@ -75,7 +75,7 @@ async fn a_seat_s_plugins_publish_on_its_own_shelf() {
     let quake = rows.iter().find(|g| g["title"] == "Quake").expect("listed");
     assert_eq!((&quake["id"], &quake["own"]), (&own[0]["id"], &json!(true)));
     assert!(quake.get("launch").is_none(), "{quake}");
-    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false));
+    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false, SEAT));
     let id = quake["id"].as_str().unwrap();
     assert!(crate::library::resolve_launch(&view, id).is_none());
 }

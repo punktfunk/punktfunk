@@ -1,7 +1,6 @@
-// The two policy decisions of the device-change recovery, where a unit test can reach them
-// without a mic or a session: a voice-processing start that failed on an input device is not
-// retried on it, and rebuilds that keep retriggering each other back off. The wiring lives in
-// `SessionAudio`.
+// The policy decisions of the device-change recovery, where a unit test can reach them without
+// a mic or a session: voice processing that failed on an input device is not retried on it, and
+// rebuilds that keep retriggering each other back off. The wiring lives in `SessionAudio`.
 
 #if os(macOS)
 import CoreAudio
@@ -11,16 +10,28 @@ import Foundation
 #if os(macOS)
 /// Should a rebuild try the combined (voice-processing) topology again?
 ///
-/// A VPIO start failure is a property of the INPUT DEVICE (its channel count and format), not of
-/// the moment: retrying it on the same device fails the same way, and the attempt is not free —
-/// engaging and abandoning the voice processor churns the HAL hard enough to stop the healthy
-/// fallback engines. So a failure latches until the default input actually changes; a new device
-/// earns exactly one fresh attempt (it may well support VPIO), and its own failure latches again.
+/// A VPIO failure — a start that throws, or an engine that keeps stopping itself after it
+/// started — is a property of the INPUT DEVICE, not of the moment: retrying on the same device
+/// fails the same way, and the attempt is not free — engaging and abandoning the voice processor
+/// churns the HAL hard enough to stop the healthy fallback engines. So a failure latches until
+/// the default input actually changes; a new device earns exactly one fresh attempt (it may well
+/// support VPIO), and its own failure latches again.
 struct CombinedTopologyGate {
     private var failed = false
     /// The default input device the failure was observed on — nil is a real value here ("failed
     /// with no resolvable input device"), which is why `failed` is tracked separately.
     private var failedInput: AudioDeviceID?
+
+    /// Is the stopped combined engine a rebuild is replacing a failure? Only when it stopped on
+    /// the default devices it started on (`devicesMoved` false) and has had a second chance: it
+    /// died on a retry (`attempt > 0`), or within `RebuildBackoff.chainWindow` of the rebuild that
+    /// started it (`chain > 0`). A stop that follows a device switch is the hardware moving, and
+    /// the first stop after a fresh start earns one rebuild.
+    static func stoppedEngineFailed(
+        stopped: Bool, devicesMoved: Bool, attempt: Int, chain: Int
+    ) -> Bool {
+        stopped && !devicesMoved && (attempt > 0 || chain > 0)
+    }
 
     /// The combined topology failed with `input` as the default input device.
     mutating func noteFailure(input: AudioDeviceID?) {

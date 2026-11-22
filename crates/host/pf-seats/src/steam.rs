@@ -5,6 +5,8 @@
 //! of the box's client in its own profile and starts it only under [`ipc_name`]; the box keeps
 //! the default. The games stay the box's: the copy lists the box's library folders after its own.
 
+pub mod shortcuts;
+
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};

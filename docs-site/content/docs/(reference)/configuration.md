@@ -106,7 +106,7 @@ The table shows the Linux values. On Windows, **Encoder** takes `auto` · `nvenc
 | **Game frame limit** | gamescope only. Games also see the display as that many Hz; the stream still runs at the client's rate. |
 | **Display refresh multiple** | Runs the virtual display at a multiple of the stream rate, so a frame that just misses the desktop's next paint still shows. The stream stays at its own rate. `0` lets the host pick: 2× on Windows for streams up to 500 Hz, otherwise off. `1` turns it off. A game with V-Sync on renders at the display's rate unless something caps it. |
 | **Cursor capture** | A troubleshooting knob: which cursor mode the host asks the screen-cast portal for. `auto` settles on one the portal offers. |
-| **Vulkan encoding** | AMD and Intel: HEVC and AV1 through Vulkan Video, which recovers from loss without a full keyframe. Off uses VAAPI. |
+| **Vulkan encoding** | AMD: HEVC and AV1 through Vulkan Video. Intel: AV1 only, since its HEVC encodes in half the time through VAAPI. Off uses VAAPI, which has no AV1. |
 | **Direct capture** | wlroots, Hyprland and niri: capture the output directly instead of through the screen cast, on GPU sessions. A failure falls back to the screen cast. Umbriel and mango have no screen cast, so they can't stream with this off. |
 | **On-demand capture** | GNOME 49+: the virtual monitor paints once per streamed frame instead of on a timer. |
 | **KWin capture pacing** | KWin 6.7+: keep KWin's own recording throttle. |
@@ -142,7 +142,7 @@ Desktop) and rewrites them on every connect.
 | `PUNKTFUNK_CAPTURE_MONITOR` | connector name, e.g. `DP-2`; on Windows the display name, e.g. `\\.\DISPLAY1` | Linux and Windows: stream this physical monitor instead of a virtual display, overriding the console. On Linux, `punktfunk-host list-monitors` lists the names; one that matches nothing fails the session. See [Stream a real monitor](/docs/stream-a-monitor). |
 | `PUNKTFUNK_MONITOR_LINGER_MS` | ms | Keep a client's virtual display this long after it disconnects. Unset, the display is removed at once. **After a device disconnects** in [Virtual displays](/docs/virtual-displays#keep-alive) supersedes it. |
 | `PUNKTFUNK_ZEROCOPY` | `1` · `0` | Linux: zero-copy capture to encode, on by default with a CPU fallback. `0` forces the CPU path; `1` turns a failed zero-copy setup into an error. |
-| `PUNKTFUNK_RENDER_NODE` | path, e.g. `/dev/dri/renderD129` | Linux: the GPU to capture and encode on (default `/dev/dri/renderD128`). A GPU picked under **Host → GPUs** wins. |
+| `PUNKTFUNK_RENDER_NODE` | path, e.g. `/dev/dri/renderD129` | Linux: the GPU to capture and encode on, and the one a gamescope the host starts renders on (default: the GPU the computer boots its display on, unless it is NVIDIA's; else `/dev/dri/renderD128`). A GPU picked under **Host → GPUs** wins. |
 | `PUNKTFUNK_RENDER_ADAPTER` | name substring, e.g. `4090` | The GPU to encode on, by adapter name. A GPU picked under **Host → GPUs** wins. |
 | `PUNKTFUNK_VAAPI_LOW_POWER` | `0` | Intel on Linux: skip the low-power (VDEnc) encoder. Unset uses it wherever it exists and does bitrate control. |
 

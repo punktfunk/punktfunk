@@ -93,6 +93,12 @@ What turning it on does:
   runs Proton from them while the files stay yours. A library on a filesystem other than btrfs,
   ext4, xfs or f2fs stays hidden from seats. New games a seat installs go to
   `/var/lib/punktfunk-seats/games`.
+- **Seats get your non-Steam games.** Each seat's Steam lists the non-Steam games you added to
+  yours, with their art, launch options and the Proton you picked. A seat plays them from your
+  folder, and what a game writes there goes to a copy of the seat's own; your folder stays as it
+  is. A game inside a Steam library, or whose launch options name your home, plays on your desktop
+  only, and a seat on someone's own account keeps its own. A seat picks up a change when it next
+  starts.
 - **Your library is the box's.** Every profile's apps list the games your own host found. A
   profile with a desktop of its own plays your Steam games with its own Steam, and ROM Manager
   games with the box's emulators and its own saves. RPCS3, shadPS4, Supermodel, Vita3K and Xenia

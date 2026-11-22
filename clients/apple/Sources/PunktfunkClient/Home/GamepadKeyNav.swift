@@ -37,8 +37,17 @@ private struct GamepadKeyNav: ViewModifier {
     let onBack: (() -> Void)?
 
     @FocusState private var focused: Bool
+    /// Full Keyboard Access is on (`FullKeyboardAccess`). Its ring moves between the controls
+    /// inside, which a focusable parent would hide from it, and it keeps the arrows itself.
+    @AppStorage(DefaultsKey.fullKeyboardAccess) private var fullKeyboardAccess = false
 
-    func body(content: Content) -> some View {
+    /// Under Full Keyboard Access the content goes out bare: `focusable(false)` would still
+    /// keep its ring off everything inside.
+    @ViewBuilder func body(content: Content) -> some View {
+        if fullKeyboardAccess { content } else { keyed(content) }
+    }
+
+    private func keyed(_ content: Content) -> some View {
         content
             .focusable(active)
             // No focus ring: these screens draw their own cursor (the centred card, the focused

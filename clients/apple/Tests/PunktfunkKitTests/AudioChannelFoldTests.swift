@@ -1,4 +1,4 @@
-// Multi-channel input → mono fold (SessionAudio.foldToMono): the fix for a mic on one channel of
+// Multi-channel input → mono fold (MicChannelPlan.fold): the fix for a mic on one channel of
 // a multi-channel interface. AVAudioConverter's default N→stereo downmix grabs channels 0/1 — dead
 // silence when the mic sits higher up — so we fold ourselves. This pins the fiddly bits (the
 // interleaved stride, channel pinning, the sum-clamp) against regressions without needing hardware.
@@ -9,11 +9,12 @@ import XCTest
 @testable import PunktfunkKit
 
 final class AudioChannelFoldTests: XCTestCase {
-    /// Drive `foldToMono` over channel data expressed as `[[Float]]`, mirroring the two
+    /// Drive `MicChannelPlan.fold` over channel data expressed as `[[Float]]`, mirroring the two
     /// `floatChannelData` layouts:
     ///   - deinterleaved: each inner array is one channel (all `frames` long).
     ///   - interleaved: a single inner array already interleaved (c0f0, c1f0, …), with the real
     ///     channel count passed separately.
+    /// `pinned` is 0-based, as the fold indexes; the plan's pick is 1-based.
     private func fold(
         _ planes: [[Float]], frames: Int, channels: Int, interleaved: Bool, pinned: Int?,
         skip: [Int] = []
@@ -33,9 +34,8 @@ final class AudioChannelFoldTests: XCTestCase {
             table.deallocate()
             out.deallocate()
         }
-        SessionAudio.foldToMono(
-            input: table, frames: frames, channels: channels,
-            interleaved: interleaved, pinned: pinned, skip: skip, out: out)
+        MicChannelPlan(pick: pinned.map { $0 + 1 } ?? 0, loopback: skip).fold(
+            input: table, frames: frames, channels: channels, interleaved: interleaved, out: out)
         return (0..<frames).map { out[$0] }
     }
 
@@ -105,13 +105,29 @@ final class AudioChannelFoldTests: XCTestCase {
     }
 
     // Belt-and-suspenders: an out-of-range pin (the tap already guards, but the setting is
-    // persisted) is ignored by foldToMono's own `ch < channels` guard, which sums instead of
-    // reading past the buffer.
+    // persisted) is ignored by the plan's own range check, which sums instead of reading past
+    // the buffer.
     func testOutOfRangePinFallsBackToSum() {
         let result = fold(
             [[0, 0], [0.3, 0.3]],
             frames: 2, channels: 2, interleaved: false, pinned: 2)
         XCTAssertEqual(result, [0.3, 0.3])
+    }
+
+    // The log names the channels the fold takes, from the same rule.
+    func testTheLabelNamesWhatTheFoldTakes() {
+        let rows: [(plan: MicChannelPlan, channels: Int, label: String)] = [
+            (MicChannelPlan(pick: 2, loopback: []), 4, "channel 2/4"),
+            (MicChannelPlan(pick: 0, loopback: [2, 3]), 4, "mix 2/4ch→mono"),
+            (MicChannelPlan(pick: 0, loopback: [0, 1]), 2, "mix 2/2ch→mono"),
+            (MicChannelPlan(pick: 5, loopback: [3]), 4, "mix 3/4ch→mono"),
+            (MicChannelPlan(pick: 0, loopback: []), 1, "mono"),
+            (MicChannelPlan(pick: 1, loopback: []), 1, "channel 1/1"),
+        ]
+        for row in rows {
+            XCTAssertEqual(
+                row.plan.label(channels: row.channels), row.label, "\(row.plan) on \(row.channels)")
+        }
     }
 }
 #endif
