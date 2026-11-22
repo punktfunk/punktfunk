@@ -105,6 +105,7 @@ mod tests {
             gpu: String::new(),
             vulkan_row: false,
             nvidia: false,
+            intel: false,
             features: Features::BUILT,
         })
     }
