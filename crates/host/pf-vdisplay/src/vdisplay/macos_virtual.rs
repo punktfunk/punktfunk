@@ -6,7 +6,8 @@
 //! types, and nothing here runs until it has answered `true`.
 //!
 //! Selector names and property types follow Chromium's `virtual_display_mac_util.mm` and
-//! DeskPad's headers, checked against the runtime of macOS 27.
+//! DeskPad's headers, checked against the runtime of macOS 27. The mode initializer that takes
+//! a transfer function is in neither: it is read off that runtime, and [`hdr_modes`] checks it.
 
 use anyhow::{bail, Context, Result};
 use objc2::rc::{autoreleasepool, Allocated, Retained};
@@ -31,6 +32,21 @@ pub(crate) struct Spec<'a> {
     pub vendor: u32,
     pub product: u32,
     pub serial: u32,
+    /// Its modes are HDR: macOS gives the display headroom above white. Needs [`hdr_modes`].
+    pub hdr: bool,
+}
+
+/// Whether this macOS makes HDR displays: the mode initializer that takes a transfer function,
+/// with the types [`Display::apply`] sends.
+pub(crate) fn hdr_modes() -> bool {
+    static YES: OnceLock<bool> = OnceLock::new();
+    *YES.get_or_init(|| {
+        let sel = sel!(initWithWidth:height:refreshRate:transferFunction:);
+        available()
+            && AnyClass::get(MODE).is_some_and(|c| {
+                (c.verify_sel::<(u32, u32, f64, u32), *mut AnyObject>(sel)).is_ok()
+            })
+    })
 }
 
 /// Whether this macOS has the four classes, each method this file sends with the types it sends.
@@ -133,6 +149,8 @@ pub(crate) struct Display {
     id: u32,
     /// The size it was made at, the largest it takes.
     max: (u32, u32),
+    /// Every mode it takes is HDR.
+    hdr: bool,
 }
 
 // SAFETY: `Display` owns its object alone and reaches it only through borrows the caller
@@ -185,6 +203,7 @@ impl Display {
                 object: Some(object),
                 id,
                 max: (spec.width, spec.height),
+                hdr: spec.hdr && hdr_modes(),
             };
             if id == 0 {
                 bail!("the virtual display has no display id");
@@ -200,9 +219,14 @@ impl Display {
         self.id
     }
 
-    /// Set the display's one mode, one pixel to a point: `false` when macOS refuses it, or when
-    /// the mode is past `max`, which macOS refuses by dropping the display to 1x1. One mode
-    /// only: lists of two aborted the WindowServer, ending the desktop session (macOS 27.2).
+    pub(crate) fn hdr(&self) -> bool {
+        self.hdr
+    }
+
+    /// Set the display's one mode, one pixel to a point, HDR on an HDR display: `false` when
+    /// macOS refuses it, or when the mode is past `max`, which macOS refuses by dropping the
+    /// display to 1x1. One mode only: lists of two aborted the WindowServer, ending the desktop
+    /// session (macOS 27.2).
     pub(crate) fn apply(&self, width: u32, height: u32, refresh_hz: f64) -> Result<bool> {
         let object = self.object.as_deref().context("the display is gone")?;
         if width > self.max.0 || height > self.max.1 {
@@ -210,11 +234,22 @@ impl Display {
         }
         autoreleasepool(|_| {
             let mode_class = AnyClass::get(MODE).context("find CGVirtualDisplayMode")?;
-            // SAFETY: `alloc` on a class `available` found; the initializer takes the
-            // allocation and the verified `u32, u32, f64`, and answers nil on failure.
+            // SAFETY: `alloc` on a class `available` found; each initializer takes the
+            // allocation and its verified types (`hdr` is set only where `hdr_modes` checked
+            // the longer one), and answers nil on failure.
             let mode: Option<Retained<AnyObject>> = unsafe {
                 let raw: Allocated<AnyObject> = msg_send![mode_class, alloc];
-                msg_send![raw, initWithWidth: width, height: height, refreshRate: refresh_hz]
+                if self.hdr {
+                    msg_send![
+                        raw,
+                        initWithWidth: width,
+                        height: height,
+                        refreshRate: refresh_hz,
+                        transferFunction: HDR_TRANSFER
+                    ]
+                } else {
+                    msg_send![raw, initWithWidth: width, height: height, refreshRate: refresh_hz]
+                }
             };
             let mode = mode.context("make the display mode")?;
             let settings = new(SETTINGS).context("make the display settings")?;
@@ -242,7 +277,12 @@ impl Drop for Display {
 /// A desktop-size display reads as an ordinary monitor, not a high-density panel.
 const DPI: f64 = 96.0;
 
-/// BT.709 primaries and D65 white: the colour every capture of it converts to.
+/// The transfer function of an HDR mode: the screen then reports headroom of 5 above white.
+/// 0 and 2 to 6 make an SDR mode (macOS 27.2).
+const HDR_TRANSFER: u32 = 1;
+
+/// BT.709 primaries and D65 white: the colour an SDR capture of it converts to. An HDR capture
+/// carries colour past them.
 const SRGB: [CGPoint; 4] = [
     CGPoint { x: 0.64, y: 0.33 },
     CGPoint { x: 0.30, y: 0.60 },

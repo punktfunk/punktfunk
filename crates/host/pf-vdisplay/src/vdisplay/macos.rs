@@ -66,6 +66,12 @@ pub fn creates_displays() -> bool {
     crate::macos_virtual::available()
 }
 
+/// Whether a session's screen can be HDR. A virtual display needs an HDR mode; a mirrored
+/// display is captured as it stands.
+pub fn hdr_displays() -> bool {
+    !creates_displays() || crate::macos_virtual::hdr_modes()
+}
+
 fn online() -> Result<Vec<u32>> {
     list(|max, ids, count| {
         // SAFETY: `ids` has room for `max` entries and `count` is a live local; the call
@@ -163,12 +169,21 @@ pub(crate) struct OwnScreen {
     client: Option<[u8; 32]>,
     slot: Option<u32>,
     join: bool,
+    hdr: bool,
     live: Weak<Screen>,
 }
 
 impl VirtualDisplay for OwnScreen {
     fn name(&self) -> &'static str {
         "macos"
+    }
+
+    fn set_hdr(&mut self, on: bool) {
+        self.hdr = on;
+    }
+
+    fn hdr(&self) -> bool {
+        self.hdr
     }
 
     fn set_client_identity(&mut self, fingerprint: Option<[u8; 32]>) {
@@ -198,7 +213,9 @@ impl VirtualDisplay for OwnScreen {
     fn create(&mut self, mode: Mode) -> Result<VirtualOutput> {
         if let Some(screen) = self.live.upgrade() {
             let asked = (mode.width, mode.height, mode.refresh_hz);
-            if let Some(l) = live().into_iter().find(|l| l.entry == screen.entry) {
+            // An SDR display takes no HDR mode, nor the reverse: that one is made again.
+            let same_range = screen.hdr() == (self.hdr && crate::macos_virtual::hdr_modes());
+            if let Some(l) = (live().into_iter()).find(|l| l.entry == screen.entry && same_range) {
                 if l.mode == asked {
                     return Ok(output(screen, l.id, mode.millihz()));
                 }
@@ -261,7 +278,7 @@ impl OwnScreen {
             crate::policy::Identity::Shared,
         );
         let taken: Vec<u32> = live().iter().map(|l| l.serial).collect();
-        let serial = serial(self.slot, mode, &taken);
+        let serial = serial(self.slot, mode, self.hdr, &taken);
         let display = Display::create(&Spec {
             name: "Punktfunk",
             width,
@@ -270,6 +287,7 @@ impl OwnScreen {
             vendor: VENDOR,
             product: PRODUCT,
             serial,
+            hdr: self.hdr,
         })?;
         let id = display.id();
         settle(SETTLE, "come online", || {
@@ -295,9 +313,10 @@ impl OwnScreen {
             );
             None
         };
+        let hdr = display.hdr();
         let screen = Screen::new(display, restore, mode, self.slot, serial);
         let label = format!("{width}x{height}@{}", mode.refresh_hz);
-        tracing::info!(display_id = id, mode = %label, ?topology, "virtual display created");
+        tracing::info!(display_id = id, mode = %label, ?topology, hdr, "virtual display created");
         crate::emit_display_event(crate::DisplayEvent::Created {
             backend: self.name().into(),
             width,
@@ -328,11 +347,12 @@ fn output(screen: Arc<Screen>, id: u32, asked_mhz: u32) -> VirtualOutput {
 }
 
 /// The serial a display of `mode` for identity `slot` carries. macOS brings a display back at
-/// the mode it last ran under its identity whenever the new mode list holds it, so the mode is
-/// part of the identity. Live displays hold the `taken` ones: macOS refuses a repeat, so of two
-/// sessions making the same serial at once, one falls back to the mirror.
-fn serial(slot: Option<u32>, mode: Mode, taken: &[u32]) -> u32 {
-    let key = [slot.unwrap_or(0), mode.width, mode.height, mode.millihz()];
+/// the mode it last ran under its identity whenever the new mode list holds it, so the mode and
+/// its range are part of the identity. Live displays hold the `taken` ones: macOS refuses a
+/// repeat, so of two sessions making the same serial at once, one falls back to the mirror.
+fn serial(slot: Option<u32>, mode: Mode, hdr: bool, taken: &[u32]) -> u32 {
+    let (slot, hdr) = (slot.unwrap_or(0), u32::from(hdr));
+    let key = [slot, mode.width, mode.height, mode.millihz(), hdr];
     // FNV-1a: the same serial for the same key on every host build.
     let hash = (key.iter().flat_map(|k| k.to_le_bytes())).fold(0x811c_9dc5u32, |h, b| {
         (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
@@ -420,6 +440,12 @@ impl Screen {
             l.mode = (width, height, mode.refresh_hz);
         }
         Ok(())
+    }
+
+    /// Whether the display's modes are HDR. A retired screen is neither.
+    fn hdr(&self) -> bool {
+        let display = self.display.lock().unwrap_or_else(|e| e.into_inner());
+        display.as_ref().is_some_and(Display::hdr)
     }
 
     /// Put the arrangement back and remove the display now, while outputs may still hold the
@@ -731,8 +757,8 @@ mod tests {
         assert_eq!(primary_origins(&before, 7), None);
     }
 
-    /// A display's serial is the same for the same device and mode, differs by mode, and steps
-    /// past one a live display holds.
+    /// A display's serial is the same for the same device and mode, differs by mode or range,
+    /// and steps past one a live display holds.
     #[test]
     fn a_serial_names_the_device_and_the_mode() {
         let mode = |w, h, hz: u32| Mode {
@@ -741,13 +767,14 @@ mod tests {
             refresh_hz: hz,
             refresh_mhz: hz * 1000,
         };
-        let hd = serial(Some(1), mode(1920, 1080, 60), &[]);
-        assert_eq!(hd, serial(Some(1), mode(1920, 1080, 60), &[]));
-        assert_ne!(hd, serial(Some(1), mode(2560, 1440, 60), &[]));
-        assert_ne!(hd, serial(Some(2), mode(1920, 1080, 60), &[]));
-        assert_ne!(hd, serial(None, mode(1920, 1080, 60), &[]));
+        let hd = serial(Some(1), mode(1920, 1080, 60), false, &[]);
+        assert_eq!(hd, serial(Some(1), mode(1920, 1080, 60), false, &[]));
+        assert_ne!(hd, serial(Some(1), mode(2560, 1440, 60), false, &[]));
+        assert_ne!(hd, serial(Some(2), mode(1920, 1080, 60), false, &[]));
+        assert_ne!(hd, serial(None, mode(1920, 1080, 60), false, &[]));
+        assert_ne!(hd, serial(Some(1), mode(1920, 1080, 60), true, &[]));
         assert_eq!(
-            serial(Some(1), mode(1920, 1080, 60), &[hd]),
+            serial(Some(1), mode(1920, 1080, 60), false, &[hd]),
             hd.wrapping_add(1).max(1)
         );
         assert_ne!(hd, 0);

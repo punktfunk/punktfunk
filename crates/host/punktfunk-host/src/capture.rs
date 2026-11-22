@@ -382,6 +382,8 @@ pub fn capture_virtual_output(
 /// Linux — it depends on the resolved compositor and the installed gamescope.
 ///
 /// Windows: IDD-push enables advanced colour, so the platform answer.
+/// macOS: the capture composes PQ from any display, so the display decides: a virtual one
+/// must take an HDR mode, a mirrored one is captured as it stands.
 /// Linux + gamescope: host knob, `packaging/gamescope` 10-bit BT.2020/PQ, a
 /// spawned (not attached-foreign) sub-mode, and no earlier virtual-output HDR
 /// downgrade latched. Hyprland and wlroots: direct capture of a head lit in
@@ -408,6 +410,10 @@ pub fn capturer_supports_hdr_for(
         }
     }
     let _ = (compositor, gamescope_route, encoder);
+    #[cfg(target_os = "macos")]
+    if !pf_vdisplay::hdr_displays() {
+        return false;
+    }
     pf_capture::capturer_supports_hdr()
 }
 
