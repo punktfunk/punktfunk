@@ -5,8 +5,9 @@
 // `mac_input_live`, which reads its lines:
 // - `READY display= key= front= content= scroll= field=` once it is key and topmost;
 // - `STATE key= front=` on each change, and `FOREIGN` for input its parent did not post;
-// - `KEY`, `FLAGS`, `MOUSE`, `SCROLL` per event (`src=` is the posting pid), `VIEW` per scroll
-//   view move, and `FIELD` with the text field's contents when stdin closes.
+// - `KEY`, `FLAGS`, `MOUSE`, `SCROLL`, `PROX`, `GESTURE` per event (`src=` is the posting pid;
+//   a pen's `MOUSE` adds its tablet fields), `VIEW` per scroll view move, and `FIELD` with the
+//   text field's contents when stdin closes.
 // Responsive scrolling is off so every scroll event, phases included, reaches the main thread.
 import AppKit
 
@@ -21,12 +22,15 @@ final class Doc: NSView {
     override class var isCompatibleWithResponsiveScrolling: Bool { false }
 }
 
-/// Logs each scroll event the view handles; a gesture's events need not pass the queue.
+/// Logs each scroll and gesture event the view handles; a gesture's events need not pass the
+/// queue.
 final class Scroll: NSScrollView {
     override func scrollWheel(with e: NSEvent) {
         logEvent(e, via: "view")
         super.scrollWheel(with: e)
     }
+    override func magnify(with e: NSEvent) { logEvent(e, via: "view") }
+    override func rotate(with e: NSEvent) { logEvent(e, via: "view") }
 }
 
 /// Logs every event taken off the queue, tracking loops included.
@@ -104,9 +108,25 @@ func logEvent(_ e: NSEvent, via: String) {
         out("src=\(src) " + String(format: "FLAGS code=0x%02x flags=%@", e.keyCode, flagsHex(e)))
     case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
          .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
-        out("src=\(src) " + String(format: "MOUSE t=%@ btn=%lld at=%.1f,%.1f d=%lld,%lld clicks=%lld flags=%@",
+        // The tablet properties are valid only on a tablet-point event.
+        let pen = e.subtype == .tabletPoint
+            ? String(format: " TABLET p=%.3f tilt=%.3f,%.3f rot=%.1f bm=0x%lx abs=%ld,%ld dev=%lu",
+                     e.pressure, e.tilt.x, e.tilt.y, e.rotation, e.buttonMask.rawValue,
+                     e.absoluteX, e.absoluteY, e.deviceID)
+            : ""
+        out("src=\(src) via=\(via) " + String(format: "MOUSE t=%@ btn=%lld at=%.1f,%.1f d=%lld,%lld clicks=%lld flags=%@",
                    "\(e.type.rawValue)", f(.mouseEventButtonNumber), loc.x, loc.y,
-                   f(.mouseEventDeltaX), f(.mouseEventDeltaY), f(.mouseEventClickState), flagsHex(e)))
+                   f(.mouseEventDeltaX), f(.mouseEventDeltaY), f(.mouseEventClickState), flagsHex(e)) + pen)
+    case .tabletProximity:
+        out("src=\(src) via=\(via) " + String(format: "PROX enter=%d type=%lu caps=0x%lx dev=%lu vendor=0x%lx unique=%llu",
+                   e.isEnteringProximity ? 1 : 0, e.pointingDeviceType.rawValue, e.capabilityMask,
+                   e.deviceID, e.vendorPointingDeviceType, e.uniqueID))
+    case .magnify, .rotate:
+        out("src=\(src) via=\(via) " + String(format: "GESTURE t=%lu magnify=%.4f rotate=%.3f phase=%lu at=%.1f,%.1f",
+                   e.type.rawValue, e.type == .magnify ? e.magnification : 0,
+                   e.type == .rotate ? Double(e.rotation) : 0, e.phase.rawValue, loc.x, loc.y))
+    case .gesture, .beginGesture, .endGesture, .smartMagnify, .swipe:
+        out("src=\(src) via=\(via) GESTURE t=\(e.type.rawValue) phase=\(e.phase.rawValue)")
     case .scrollWheel:
         out("src=\(src) via=\(via) " + String(format: "SCROLL sdx=%.2f sdy=%.2f precise=%d phase=%lu momentum=%lu inverted=%d line=%lld,%lld pt=%lld,%lld cont=%lld",
                    e.scrollingDeltaX, e.scrollingDeltaY, e.hasPreciseScrollingDeltas ? 1 : 0,

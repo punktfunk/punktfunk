@@ -8,7 +8,8 @@
 //! released and the pointer where it started. Posting needs the Accessibility grant for the app
 //! that launches this (the terminal); without it, this asks once and exits.
 //!
-//! Usage: `mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons>...`, in one run
+//! Usage: `mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons|pen|touch>...`, in
+//! one run. `pen` drives the stylus the host's pen plane drives, through `PenTracker`.
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -43,7 +44,9 @@ mod mac {
     pub fn main() {
         let mut args = std::env::args().skip(1);
         let (Some(sink), scenarios) = (args.next(), args.collect::<Vec<_>>()) else {
-            eprintln!("usage: mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons>...");
+            eprintln!(
+                "usage: mac_input_live <sink binary> <scroll|motion|keys|repeat|buttons|pen|touch>..."
+            );
             std::process::exit(2);
         };
         if !pf_inject::post_event_access() {
@@ -129,6 +132,8 @@ mod mac {
                 "keys" => keys_run(&mut run),
                 "repeat" => repeat_run(&mut run),
                 "buttons" => buttons_run(&mut run, (sx, sy, sw, sh)),
+                "pen" => pen_run(&mut run, (sx, sy, sw, sh)),
+                "touch" => touch_run(&mut run, (sx, sy, sw, sh)),
                 other => println!("unknown scenario {other}"),
             }
         }
@@ -258,6 +263,39 @@ mod mac {
 
         fn step(&mut self, name: &str) {
             println!("step {name}");
+        }
+
+        /// Whether the run may still post, as [`Self::post`] checks.
+        fn may_post(&mut self) -> bool {
+            if !self.aborted && (self.start.elapsed() > LIMIT || !self.ok.load(Ordering::SeqCst)) {
+                println!("abort: time is up, or the sink is not key and topmost");
+                self.aborted = true;
+            }
+            !self.aborted
+        }
+
+        /// A touch at global point `p`, in the stream display's own extent.
+        fn touch(&mut self, kind: InputKind, id: u32, (x, y): (f64, f64)) {
+            let (bx, by, bw, bh) = self.bounds;
+            let flags = ((bw as u32) << 16) | bh as u32;
+            let e = ev(
+                kind,
+                id,
+                (x - bx).round() as i32,
+                (y - by).round() as i32,
+                flags,
+            );
+            self.send(e);
+        }
+
+        /// A finger from `a` to `b` in `n` moves `gap_ms` apart.
+        fn drag(&mut self, id: u32, a: (f64, f64), b: (f64, f64), n: u32, gap_ms: u64) {
+            for i in 1..=n {
+                let k = f64::from(i) / f64::from(n);
+                self.wait(gap_ms);
+                let p = (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k);
+                self.touch(InputKind::TouchMove, id, p);
+            }
         }
 
         fn key(&mut self, vk: u32, down: bool) {
@@ -485,5 +523,143 @@ mod mac {
         }
         r.abs(c);
         r.wait(100);
+    }
+
+    fn pen_run(r: &mut Run, view: Rect) {
+        use punktfunk_core::quic::{
+            PenBatch, PenSample, PenTool, PenTracker, PEN_BARREL1, PEN_IN_RANGE, PEN_TOUCHING,
+        };
+        let mut pen = pf_inject::pen::VirtualPen::create().expect("create the pen");
+        let mut tracker = PenTracker::default();
+        let mut seq = 0u16;
+        let (bx, by, bw, bh) = r.bounds;
+        let (cx, cy) = centre(view);
+        let mut send = |r: &mut Run, s: PenSample| {
+            if !r.may_post() {
+                return;
+            }
+            let mut t = Vec::new();
+            tracker.apply(&PenBatch::new(seq, &[s]), &mut t);
+            seq = seq.wrapping_add(1);
+            println!(
+                "send pen state={:#x} tool={:?} at={:.3},{:.3} p={} tilt={} az={} roll={} -> {t:?}",
+                s.state, s.tool, s.x, s.y, s.pressure, s.tilt_deg, s.azimuth_deg, s.roll_deg
+            );
+            pen.apply_batch(&t);
+            r.wait(16);
+        };
+        let at = |dx: f64, dy: f64| (((cx + dx - bx) / bw) as f32, ((cy + dy - by) / bh) as f32);
+        let sample = |state, (x, y): (f32, f32), pressure| PenSample {
+            state,
+            x,
+            y,
+            pressure,
+            ..Default::default()
+        };
+        let (hover, touch) = (PEN_IN_RANGE, PEN_IN_RANGE | PEN_TOUCHING);
+        r.step("hover");
+        for i in 0..5 {
+            send(r, sample(hover, at(f64::from(i) * 10.0, 0.0), 0));
+        }
+        r.step("stroke with rising pressure");
+        for i in 0..8u16 {
+            let p = 8000 + i * 7000;
+            send(r, sample(touch, at(40.0 + f64::from(i) * 10.0, 0.0), p));
+        }
+        send(r, sample(hover, at(110.0, 0.0), 0));
+        r.step("tilt east 30, north 45, roll 90");
+        for (tilt_deg, azimuth_deg) in [(30, 90), (45, 0)] {
+            send(
+                r,
+                PenSample {
+                    tilt_deg,
+                    azimuth_deg,
+                    roll_deg: 90,
+                    ..sample(touch, at(0.0, 30.0), 30000)
+                },
+            );
+        }
+        send(r, sample(hover, at(0.0, 30.0), 0));
+        r.step("barrel button");
+        send(r, sample(hover | PEN_BARREL1, at(0.0, 60.0), 0));
+        send(r, sample(touch | PEN_BARREL1, at(0.0, 60.0), 30000));
+        send(r, sample(touch, at(10.0, 60.0), 30000));
+        send(r, sample(hover, at(10.0, 60.0), 0));
+        r.step("eraser");
+        for i in 0..3 {
+            let s = PenSample {
+                tool: PenTool::Eraser,
+                ..sample(touch, at(f64::from(i) * 10.0, 90.0), 40000)
+            };
+            send(r, s);
+        }
+        r.step("out of range");
+        send(r, PenSample::default());
+        drop(pen);
+        r.wait(100);
+    }
+
+    fn touch_run(r: &mut Run, view: Rect) {
+        use InputKind::{TouchDown, TouchMove, TouchUp};
+        let c = centre(view);
+        let off = |dx: f64, dy: f64| (c.0 + dx, c.1 + dy);
+        r.step("tap");
+        r.touch(TouchDown, 1, c);
+        r.wait(60);
+        r.touch(TouchUp, 1, c);
+        r.wait(400);
+        for (name, d) in [
+            ("pan down", (0.0, 120.0)),
+            ("pan up", (0.0, -120.0)),
+            ("pan right", (120.0, 0.0)),
+            ("pan left", (-120.0, 0.0)),
+        ] {
+            r.step(name);
+            r.touch(TouchDown, 2, c);
+            r.drag(2, c, off(d.0, d.1), 8, 30);
+            r.wait(200);
+            r.touch(TouchUp, 2, off(d.0, d.1));
+            r.wait(150);
+        }
+        r.step("flick up, then momentum");
+        r.touch(TouchDown, 3, off(0.0, 100.0));
+        r.drag(3, off(0.0, 100.0), off(0.0, -60.0), 6, 10);
+        r.touch(TouchUp, 3, off(0.0, -60.0));
+        r.wait(1500);
+        r.step("long press, right drag");
+        r.touch(TouchDown, 4, c);
+        r.wait(650);
+        r.drag(4, c, off(40.0, 0.0), 4, 20);
+        r.touch(TouchUp, 4, off(40.0, 0.0));
+        r.wait(200);
+        for (name, a, b) in [
+            ("pinch out", (-50.0, 50.0), (-120.0, 120.0)),
+            ("pinch in", (-120.0, 120.0), (-50.0, 50.0)),
+        ] {
+            r.step(name);
+            r.touch(TouchDown, 5, off(a.0, 0.0));
+            r.touch(TouchDown, 6, off(a.1, 0.0));
+            for i in 1..=6 {
+                let k = f64::from(i) / 6.0;
+                r.wait(20);
+                r.touch(TouchMove, 5, off(a.0 + (b.0 - a.0) * k, 0.0));
+                r.touch(TouchMove, 6, off(a.1 + (b.1 - a.1) * k, 0.0));
+            }
+            r.touch(TouchUp, 5, off(b.0, 0.0));
+            r.touch(TouchUp, 6, off(b.1, 0.0));
+            r.wait(200);
+        }
+        r.step("rotate counter-clockwise");
+        r.touch(TouchDown, 7, off(-80.0, 0.0));
+        r.touch(TouchDown, 8, off(80.0, 0.0));
+        for i in 1..=6 {
+            let a = f64::from(i) * 5.0_f64.to_radians();
+            r.wait(20);
+            r.touch(TouchMove, 7, off(-80.0 * a.cos(), 80.0 * a.sin()));
+            r.touch(TouchMove, 8, off(80.0 * a.cos(), -80.0 * a.sin()));
+        }
+        r.touch(TouchUp, 7, c);
+        r.touch(TouchUp, 8, c);
+        r.wait(200);
     }
 }
