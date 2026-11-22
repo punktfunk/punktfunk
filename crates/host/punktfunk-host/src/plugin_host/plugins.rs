@@ -818,12 +818,13 @@ pub(crate) fn publish_sandbox_override() {
 /// Give the runner every root a plugin declared or was granted: on Linux the unit's drop-in,
 /// which bwrap binds from and whose empty home hides the rest, restarting the runner when the
 /// set changed; on Windows an ACE per root for the runner's account, stripped when its plugin
-/// goes. On Linux a declared write outside `/tmp` first files the request the operator answers.
-/// The macOS runner runs unconfined as this account and reads `plugin-grants.json` itself.
+/// goes. The macOS runner needs neither: it is unconfined, each plugin's profile names its roots,
+/// and it reads `plugin-grants.json` itself.
+/// Off Windows a declared write outside `/tmp` first files the request the operator answers.
 /// `true` when a root or ACE changed.
 pub(crate) fn converge_runner_roots() -> bool {
     // Tests never touch the operator's systemd config or a folder's ACL.
-    if cfg!(test) || !(cfg!(target_os = "linux") || cfg!(windows)) || !runtime_status().installed {
+    if cfg!(test) || !runtime_status().installed {
         return false;
     }
     // Two quick decisions must not race: the later one reads the grants the earlier wrote.
@@ -834,7 +835,7 @@ pub(crate) fn converge_runner_roots() -> bool {
     };
     let manifests = manifest::runner_plugins();
     let store = access::AccessStore::open(pf_paths::config_dir());
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     if let Err(e) = store.request_declared_writes(&manifests) {
         tracing::warn!(error = %e, "declared plugin writes not filed as requests");
     }

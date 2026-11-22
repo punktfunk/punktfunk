@@ -1259,8 +1259,8 @@ impl AccessStore {
     /// operator answers, unless the path is refused, granted, pending or denied, or a cap is
     /// reached. Writes the pending file only when a row is new. `true` then.
     #[cfg_attr(
-        not(target_os = "linux"),
-        allow(dead_code, reason = "Linux binds declared writes")
+        not(unix),
+        allow(dead_code, reason = "a POSIX sandbox binds declared writes")
     )]
     pub fn request_declared_writes(
         &self,
