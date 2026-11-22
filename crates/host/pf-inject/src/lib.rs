@@ -1292,6 +1292,10 @@ mod cgevent;
 #[cfg(any(target_os = "macos", test))]
 #[path = "inject/macos/cgevent_plan.rs"]
 mod cgevent_plan;
+/// The virtual HID mouse and keyboard in front of CGEvent, behind `PUNKTFUNK_HID_INPUT=1`.
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/hid_input.rs"]
+mod hid_input;
 #[cfg(any(target_os = "macos", test))]
 #[path = "inject/macos/pen_plan.rs"]
 mod pen_plan;

@@ -44,12 +44,16 @@ speed there; no client has a sensitivity setting.
 | GNOME | **Settings → Mouse & Touchpad**: the speed and acceleration every mouse shares |
 | Sway, Hyprland | The compositor's input settings for the device named `Punktfunk Mouse` (Sway: `4617:20557:Punktfunk_Mouse`) |
 | gamescope, a headless Linux session | One pixel a count, as gamescope moves a plugged-in mouse. No setting |
+| macOS | One point a count, with no acceleration. With the virtual mouse on: **System Settings → Mouse** |
 
 - On Linux the **Punktfunk Mouse** appears with the first input a client sends and stays until
   the host stops. Its buttons and wheel follow the host's mouse settings too: left-handed
   buttons, natural scrolling.
 - Out of the box KDE Plasma moves it one pixel a count, with no acceleration. GNOME, Sway and
   Hyprland accelerate it like any mouse: a fast stroke travels up to twice as far.
+- A Mac host started with `PUNKTFUNK_HID_INPUT=1` in its environment adds a virtual mouse and
+  keyboard, which games that read input through Apple's GameController also see. The host's
+  signature needs the HID virtual device entitlement; without it, input works as before.
 - A game that reads the mouse directly gets the counts untouched on every host, so its own
   sensitivity applies, as it does to a mouse on the host.
 - The Linux, Windows, Mac, iPhone, iPad and Android clients send counts. A TV's or a console's

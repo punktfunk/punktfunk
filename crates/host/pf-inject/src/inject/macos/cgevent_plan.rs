@@ -201,6 +201,8 @@ struct Press {
 pub(crate) struct Planner {
     /// Keys (low-byte VKs) and wire buttons pressed and not released.
     held: HeldInput,
+    /// Keys the HID keyboard holds ([`Self::shadow`]).
+    shadow: HeldInput,
     /// Caps Lock's lock, flipped by each press.
     caps: bool,
     /// `CGMouseButton`s down, one bit each.
@@ -225,6 +227,7 @@ impl Planner {
     pub fn new(double_click: Duration) -> Self {
         Planner {
             held: HeldInput::default(),
+            shadow: HeldInput::default(),
             caps: false,
             buttons: 0,
             press: None,
@@ -391,10 +394,25 @@ impl Planner {
         })
     }
 
-    /// The modifier flags of every held key and the Caps Lock lock.
+    /// Note a key the HID keyboard took. Events posted here carry its modifier and its Caps
+    /// Lock flip; it posts nothing, and [`Self::release`] leaves it to that keyboard.
+    pub fn shadow(&mut self, ev: &InputEvent) {
+        let vk = ev.code & 0xff;
+        let changed = self.shadow.note(&InputEvent { code: vk, ..*ev });
+        if changed && ev.kind == InputKind::KeyDown && mac_key(vk as u8) == Some(KVK_CAPS_LOCK) {
+            self.caps = !self.caps;
+        }
+    }
+
+    /// The HID keyboard is gone, and the keys it held with it.
+    pub fn unshadow(&mut self) {
+        self.shadow = HeldInput::default();
+    }
+
+    /// The modifier flags of every held key, the HID keyboard's too, and the Caps Lock lock.
     fn flags(&self) -> u64 {
         let caps = if self.caps { flag::ALPHA_SHIFT } else { 0 };
-        (self.held.keys())
+        (self.held.keys().chain(self.shadow.keys()))
             .filter_map(|vk| modifier(mac_key(vk as u8)?))
             .fold(caps, |f, m| f | m)
     }
@@ -899,6 +917,35 @@ mod tests {
                 key(ty::KEY_UP, KVK_A, SHIFTED, false),
                 key(ty::FLAGS_CHANGED, KVK_SHIFT, 0, false),
             ]
+        );
+    }
+
+    /// A Shift the HID keyboard holds rides a click posted here, and release leaves it alone.
+    #[test]
+    fn a_hid_keyboard_modifier_rides_posted_events() {
+        let mut p = planner();
+        p.shadow(&down(VK_LSHIFT));
+        let posts = run(&mut p, &[ev(InputKind::MouseButtonDown, 1)]);
+        let Post::Mouse { flags, .. } = posts[0] else {
+            panic!("{posts:?}");
+        };
+        assert_eq!(flags, SHIFTED);
+        p.shadow(&down(VK_CAPITAL));
+        p.shadow(&down(VK_CAPITAL));
+        assert_eq!(p.flags(), SHIFTED | flag::ALPHA_SHIFT, "one flip per press");
+        let ups = p.release(Instant::now(), &|| DESK);
+        assert!(
+            ups.iter().all(|p| !matches!(p, Post::Key { .. })),
+            "{ups:?}"
+        );
+        p.shadow(&up(VK_LSHIFT));
+        assert_eq!(p.flags(), flag::ALPHA_SHIFT);
+        p.shadow(&down(VK_LSHIFT));
+        p.unshadow();
+        assert_eq!(
+            p.flags(),
+            flag::ALPHA_SHIFT,
+            "a gone keyboard holds nothing"
         );
     }
 

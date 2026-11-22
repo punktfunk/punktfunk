@@ -3,11 +3,14 @@
 //! [`crate::cgevent_plan`] decides every event. This file reads the desktop a pointer event
 //! needs (the cursor, the stream display's bounds) and builds and posts what the plan lists.
 //! Posting needs the Accessibility grant ([`post_event_access`]); without it
-//! [`CgEventInjector::open`] fails and the injector service retries on its backoff.
+//! [`CgEventInjector::open`] fails and the injector service retries on its backoff. With
+//! `PUNKTFUNK_HID_INPUT=1` the virtual HID device ([`crate::hid_input`]) takes what it can
+//! say first.
 
 use crate::cgevent_plan::{
     pick_bounds, ty, BoundsCache, Desk, Planner, Post, Rect, KVK_SPACE, SCREENS,
 };
+use crate::hid_input::HidInput;
 use crate::pen_plan::{tablet, PenPlanner};
 use crate::touch_plan::gesture;
 use crate::InputInjector;
@@ -22,7 +25,7 @@ use objc2_core_graphics::{
     CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton, CGPreflightPostEventAccess,
     CGRequestPostEventAccess, CGScrollEventUnit,
 };
-use punktfunk_core::input::InputEvent;
+use punktfunk_core::input::{InputEvent, InputKind};
 use punktfunk_core::quic::PenTransition;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -101,6 +104,8 @@ pub fn request_post_event_access() -> bool {
 
 pub struct CgEventInjector {
     plan: Planner,
+    /// The virtual HID mouse and keyboard, which take what they can say first.
+    hid: Option<HidInput>,
 }
 
 impl CgEventInjector {
@@ -110,12 +115,25 @@ impl CgEventInjector {
         }
         Ok(Self {
             plan: Planner::new(double_click_interval()),
+            hid: HidInput::open(),
         })
     }
 }
 
 impl InputInjector for CgEventInjector {
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
+        if let Some(hid) = self.hid.as_mut() {
+            if hid.take(event) {
+                if matches!(event.kind, InputKind::KeyDown | InputKind::KeyUp) {
+                    self.plan.shadow(event);
+                }
+                return Ok(());
+            }
+            if !hid.alive() {
+                self.hid = None;
+                self.plan.unshadow();
+            }
+        }
         post(self.plan.plan(event, Instant::now(), &desk))
     }
 
