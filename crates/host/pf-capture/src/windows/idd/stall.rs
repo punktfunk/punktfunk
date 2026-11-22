@@ -126,14 +126,12 @@ impl StallWatch {
                     rt_gpu_driver = rt_gpu_driver_posture(),
                     rt_gpu_host = rt_gpu_host_posture(),
                     verdicts = %self.verdict_tally(),
-                    "capture stalls are REPEATING without a stable period — same triage as the \
-                     metronomic arm: a connected-but-inactive display's standby servicing \
-                     (see connected_inactive), then display-poller software (the SteelSeries \
-                     GG / SignalRGB class). Lowering the GPU-priority defaults \
-                     (setx /M PFVD_NO_RT_GPU 1 / PUNKTFUNK_GPU_PRIORITY_CLASS=high) has \
-                     quieted some AMD boxes but masks this class at most — attenuation, not \
-                     attribution. A compose-silence tally does NOT exonerate the display \
-                     stack — a frozen presenter reads identically"
+                    "capture stalls repeat without a stable period — suspect a connected-but-\
+                     inactive display's standby servicing (connected_inactive), then \
+                     display-poller software (SteelSeries GG, SignalRGB). Lowering the GPU \
+                     priority (setx /M PFVD_NO_RT_GPU 1, PUNKTFUNK_GPU_PRIORITY_CLASS=high) \
+                     has quieted some AMD boxes without finding the cause. A compose-silence \
+                     tally doesn't clear the display stack: a frozen presenter reads the same"
                 );
             }
         }
@@ -154,15 +152,12 @@ impl StallWatch {
                     os_correlated = correlated,
                     connected_inactive = %suspects,
                     verdicts = %verdict_tally,
-                    "capture stalls are METRONOMIC and coincide with Windows monitor \
-                     hot-plug/re-enumeration events — a connected display (or its \
-                     cable/switch/AVR) re-probes the link on a timer and Windows re-reacts \
-                     each time. Cures, best-first: that display's OSD 'auto input \
-                     scan/detect' OFF (and on TVs: instant-on/quick-start + CEC off), \
-                     unplug its cable at the GPU, an HPD-holding adapter/dummy plug, or \
-                     keep it active while streaming; the pnp_disable_monitors policy axis \
-                     suppresses the Windows-side reaction (see connected_inactive for the \
-                     suspects)"
+                    "capture stalls repeat on a fixed period and coincide with Windows monitor \
+                     hot-plug events — a connected display (or its cable, switch or AVR) \
+                     re-probes the link on a timer. Turn off its auto input scan (TVs: \
+                     instant-on and CEC), unplug it at the GPU, use an HPD-holding adapter or \
+                     dummy plug, or keep it active while streaming; the pnp_disable_monitors \
+                     policy suppresses Windows' reaction. connected_inactive lists the suspects"
                 );
             } else {
                 // Both REALTIME GPU-priority levers (default on). The line
@@ -176,27 +171,17 @@ impl StallWatch {
                     rt_gpu_driver,
                     rt_gpu_host,
                     verdicts = %verdict_tally,
-                    "capture stalls are METRONOMIC with NO coinciding OS display event — \
-                     the disturbance is BELOW Windows (damage-idle holes — the cursor \
-                     stationary through the hole, i.e. input pauses — are already \
-                     excluded from this beat; see cursor_moved_px_during_gap on the \
-                     per-stall lines). Suspects: the GPU driver servicing a \
-                     connected-but-asleep sink (standby HPD/DDC/link probing), \
-                     display-poller software (the SteelSeries-GG/SignalRGB class — \
-                     correlate 'slow display-descriptor poll' lines), or the DWM present \
-                     clock (try a different refresh rate). Lowering the GPU-priority \
-                     defaults (setx /M PFVD_NO_RT_GPU 1 / \
-                     PUNKTFUNK_GPU_PRIORITY_CLASS=high) has quieted some AMD boxes but \
-                     masks this class at most — a quiet A/B is attenuation, not \
-                     attribution. If connected_inactive lists a \
-                     display, its standby servicing is a suspect — cursor motion through \
-                     the holes is what convicts the display stack. For an external \
-                     display: keep it active while streaming, disable its OSD auto input \
-                     scan (TVs: instant-on/quick-start + CEC off), unplug it at the GPU, \
-                     or use an HPD-holding adapter/dummy. For a LAPTOP PANEL: keep it \
-                     active with `topology: primary` (the dark-but-connected-head \
-                     hypothesis has no confirmed post-0.28 case — verify with the cursor \
-                     witness before chasing it)"
+                    "capture stalls repeat on a fixed period with no Windows display event — \
+                     the cause is below Windows: the GPU driver servicing a connected-but-\
+                     asleep display, display-poller software (SteelSeries GG, SignalRGB; \
+                     look for 'slow display-descriptor poll' lines), or the DWM present clock \
+                     (try another refresh rate). Cursor motion through the holes \
+                     (cursor_moved_px_during_gap) convicts the display stack. If \
+                     connected_inactive lists a display, keep it active while streaming (a \
+                     laptop panel: `topology: primary`), turn off \
+                     its auto input scan, or unplug it at the GPU. Lowering the GPU priority \
+                     (setx /M PFVD_NO_RT_GPU 1, PUNKTFUNK_GPU_PRIORITY_CLASS=high) has quieted \
+                     some AMD boxes without finding the cause"
                 );
             }
         }

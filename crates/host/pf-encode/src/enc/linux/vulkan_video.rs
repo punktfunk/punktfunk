@@ -360,7 +360,7 @@ fn log_rgb_direct_source(
             (Err(e), _, None) => e,
             (Ok(_), true, None) => unreachable!("rgb gate and cfg disagree"),
         },
-        "vulkan-encode: EFC RGB-direct encode source (design/vulkan-rgb-direct-encode.md)"
+        "vulkan-encode: EFC RGB-direct encode source"
     );
 }
 
@@ -440,7 +440,7 @@ unsafe fn query_encode_caps(
             Ok(c) => format!("available(row-based, max cycle {} frames)", c.max_cycle),
             Err(e) => (*e).to_string(),
         },
-        "vulkan-encode: VK_KHR_video_encode_intra_refresh (design/vulkan-intra-refresh.md)"
+        "vulkan-encode: VK_KHR_video_encode_intra_refresh"
     );
     let intra_refresh = intra_refresh.ok();
     // Copy needed caps now: `caps` holds `&mut` borrows of the chained structs.

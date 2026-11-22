@@ -836,8 +836,8 @@ impl Encoder for NativeVaapiEncoder {
                 }
             }
             FramePayload::Cuda(_) => bail!(
-                "a CUDA frame reached the VAAPI encoder — that payload is NVENC-only; unset \
-                 PUNKTFUNK_ZEROCOPY or do not pin PUNKTFUNK_ENCODER=vaapi-native on an NVIDIA host"
+                "a CUDA frame reached the VAAPI encoder — that payload is NVENC-only; set \
+                 PUNKTFUNK_ZEROCOPY=0 or don't pin PUNKTFUNK_ENCODER=vaapi-native on an NVIDIA host"
             ),
             FramePayload::Pixelless => {
                 bail!("the VAAPI encoder needs pixels; got a pixel-less frame")

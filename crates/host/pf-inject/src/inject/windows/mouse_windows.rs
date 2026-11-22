@@ -637,15 +637,15 @@ pub fn channel_proof_probe() -> Result<()> {
         PROBE_INDEX as u32,
     ) {
         Ok(pid) => println!(
-            "RESULT: the devnode proved its driver is pid {pid} — the HID channel proof WORKS on \
+            "result: the devnode proved its driver is pid {pid} — the HID channel proof works on \
              this build of Windows, so the pad channel never has to trust the mailbox."
         ),
         Err(e) => println!(
-            "RESULT: no usable channel proof ({e:#}).\n\
-             If BOTH HID lines above say \"call failed\", hidclass on this build forwards neither \
+            "result: no usable channel proof ({e:#}).\n\
+             If both HID lines above say \"call failed\", hidclass on this build forwards neither \
              IOCTL to a UMDF minidriver and the HID pads/mouse need a different transport (the \
              xusb leg is unaffected — it owns its own device interface). If one says \"answered, \
-             but not a proof\", an OLD pf_mouse driver is installed: reinstall it by \
+             but not a proof\", an old pf_mouse driver is installed: reinstall it by \
              running the Punktfunk installer again."
         ),
     }

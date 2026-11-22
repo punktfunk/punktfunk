@@ -217,21 +217,21 @@ impl AppState {
 /// Native punktfunk/2 (QUIC on `native.port`) and the management API always run and
 /// share one [`crate::native_pairing`] handle. `gamestream` additionally brings up
 /// nvhttp pairing, RTSP, ENet control, and `_nvstream` mDNS. Those planes pair over
-/// plain HTTP and can reuse GCM nonces, so they are opt-in (`serve --gamestream`)
+/// plain HTTP, so they are opt-in (the `gamestream` setting or `serve --gamestream`)
 /// and for a trusted LAN only.
 pub fn serve(
     mgmt: crate::mgmt::Options,
     native: crate::native::NativeServe,
     gamestream: bool,
 ) -> Result<()> {
-    // `serve --gamestream` against a native-only binary is an explicit ask this build
-    // cannot honor — refuse rather than quietly serve less than configured.
+    // GameStream asked for (setting or `--gamestream`) against a native-only binary is an ask
+    // this build can't honor — refuse rather than quietly serve less than configured.
     #[cfg(not(feature = "gamestream"))]
     if gamestream {
         anyhow::bail!(
-            "this punktfunk-host was built WITHOUT the 'gamestream' feature — stock-Moonlight \
-             compat is unavailable in this binary. Remove --gamestream / PUNKTFUNK_GAMESTREAM \
-             from the configuration, or install a standard (GameStream-featured) build."
+            "this punktfunk-host was built without the 'gamestream' feature, so Moonlight compat \
+             is unavailable. Turn the GameStream setting off (and drop --gamestream), or install \
+             a standard build"
         );
     }
     let host = Host::detect()?;
@@ -330,10 +330,8 @@ pub fn serve(
     }
     if gamestream {
         tracing::warn!(
-            "GameStream/Moonlight compat ENABLED (--gamestream): its pairing runs over plain HTTP and \
-             its legacy control encryption can reuse GCM nonces (security-review #5/#9) — an on-path \
-             LAN attacker could MITM pairing or recover input. Enable only on a TRUSTED network; prefer \
-             the native punktfunk/2 plane + clients for untrusted/WAN use."
+            "GameStream/Moonlight compat is on: its pairing runs over plain HTTP, so an on-path \
+             attacker can intercept a Moonlight pairing. Keep it to a trusted LAN"
         );
     }
     if let Some(bind) = native
@@ -342,9 +340,8 @@ pub fn serve(
     {
         tracing::warn!(
             %bind,
-            "WebTransport browser plane ENABLED (--webtransport): a second, externally-reachable \
-             transport whose certificate hash is published unauthenticated. A browser pairs over \
-             PAKE with its own device key, which is what proves it — the published hash does not."
+            "browser streaming is on: a second network-reachable listener whose certificate hash \
+             is published unauthenticated; PAKE pairing, not that hash, proves each browser"
         );
     }
     // Input, QUIC datagrams and control messages cross these threads on their way to the
@@ -417,7 +414,7 @@ pub fn serve(
             // `gamestream` is only true when the feature is compiled in; serve() bails otherwise.
             #[cfg(not(feature = "gamestream"))]
             {
-                unreachable!("serve() refuses --gamestream in a native-only build")
+                unreachable!("serve() refuses GameStream in a native-only build")
             }
             #[cfg(feature = "gamestream")]
             {
@@ -453,7 +450,7 @@ pub fn serve(
             tracing::info!(
                 port = native.port,
                 "secure host: native punktfunk/2 (QUIC) + management API \
-                 (GameStream OFF — pass --gamestream for stock-Moonlight compat)"
+                 (GameStream off — the GameStream setting turns on stock-Moonlight compat)"
             );
             tokio::try_join!(
                 crate::mgmt::run(

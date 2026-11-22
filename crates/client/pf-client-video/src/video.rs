@@ -783,7 +783,7 @@ fn report_au_fault_env(native_rung: bool) {
         Some(_) if native_rung => {}
         Some(_) => tracing::warn!(
             value = %spec,
-            "PUNKTFUNK_AU_FAULT is armed, but this session is NOT on the native \
+            "PUNKTFUNK_AU_FAULT is armed, but this session isn't on the native \
              Vulkan rung — no AU will be corrupted and no detector will fire"
         ),
         None => tracing::warn!(
@@ -891,7 +891,7 @@ impl Decoder {
                 stored,
                 using = choice,
                 "the decoder preference named libavcodec's rung, which no longer exists \
-                 (M10 removed FFmpeg from the client) — using the native rung for the \
+                 (the client no longer ships FFmpeg) — using the native rung for the \
                  same hardware path"
             );
         }

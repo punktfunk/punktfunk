@@ -259,7 +259,7 @@ impl<T: Transport> RemoteSource<T> {
                 if applied {
                     "reloaded the adapter"
                 } else {
-                    "FAILED (adapter not reloaded)"
+                    "failed (adapter not reloaded)"
                 }
             ));
         }

@@ -345,8 +345,8 @@ fn write(body: serde_json::Map<String, serde_json::Value>) -> Option<Response> {
             if let Some(dropped) = p.screen.take().and_then(DisplayTarget::into_monitor) {
                 p.capture_monitor = None;
                 tracing::warn!(
-                    "management API: ignoring screen={dropped:?} — this host cannot \
-                     stream a chosen physical monitor; the pin was NOT stored"
+                    "management API: ignoring screen={dropped:?} — this host can't \
+                     stream a chosen physical monitor; the pin was not stored"
                 );
             }
             true

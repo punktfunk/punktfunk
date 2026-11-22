@@ -518,17 +518,17 @@ extension ConsoleModel {
         bridge.push(.profiles, ConsoleJSON.string(["fp_hex": fp, "answer": answer]))
     }
 
+    /// The console's entry goes through the form's rules: the address is stored bare, and a
+    /// pasted port wins over the field.
     private func saveHost(name: String, addr: String, port: UInt16) {
         var host = StoredHost(name: name, address: addr)
-        host.port = port
+        HostFormDraft(name: name, address: addr, port: String(port)).apply(to: &host)
         store.add(host)
     }
 
     private func updateHost(key: String, name: String, addr: String, port: UInt16) {
         guard var host = host(key: key) else { return }
-        host.name = name
-        host.address = addr
-        host.port = port
+        HostFormDraft(name: name, address: addr, port: String(port)).apply(to: &host)
         store.update(host)
     }
 

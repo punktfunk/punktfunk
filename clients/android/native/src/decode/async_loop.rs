@@ -21,8 +21,8 @@ use super::display::{
 use super::latency::{note_decoded_pts, note_received_frame, now_realtime_ns};
 use super::realtek;
 use super::setup::{
-    boost_hot_threads, boost_thread_priority, create_codec, hdr_static, low_latency_format,
-    try_set_frame_rate,
+    boost_hot_threads, boost_thread_priority, create_codec, hdr_static, keyless_box,
+    low_latency_format, try_set_frame_rate,
 };
 use super::sink::{self, asc_backend_selected, AscSink, PresentMeter, Sink};
 use super::surface_control::{Layer, PresentComplete};
@@ -763,11 +763,14 @@ fn teardown(
 /// The bring-up ladder for this stream ([`bring_up_rungs`]), with the backend pick
 /// ([`asc_backend_selected`]) and the layer's colour tag it follows. Below Android 12 the tag
 /// is `None` for any colour but sRGB and full-range PQ ([`layer_dataspace`]), and that session
-/// presents through the SurfaceView (its decoder tags its own buffers).
+/// presents through the SurfaceView (its decoder tags its own buffers). A box that decodes this
+/// codec without low-latency keys ([`keyless_box`]) gets a ladder with none.
 fn ladder_for(client: &NativeClient, opts: &DecodeOptions) -> (Vec<Rung>, bool, Option<i32>) {
-    let dataspace = layer_dataspace(&client.video_format().color, crate::sys::sdk_int());
+    let format = client.video_format();
+    let dataspace = layer_dataspace(&format.color, crate::sys::sdk_int());
     let selected = asc_backend_selected(opts.chromeos);
-    let rungs = bring_up_rungs(selected && dataspace.is_some(), opts.low_latency_mode);
+    let keys = (!keyless_box(format.codec)).then_some(opts.low_latency_mode);
+    let rungs = bring_up_rungs(selected && dataspace.is_some(), keys);
     (rungs, selected, dataspace)
 }
 

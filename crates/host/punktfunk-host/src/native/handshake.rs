@@ -43,7 +43,7 @@ pub(super) fn audio_budget(
             WARNED.call_once(|| {
                 tracing::warn!(
                     value = %s,
-                    "audio.quality (PUNKTFUNK_AUDIO_QUALITY) is not one of low/standard/high — \
+                    "audio_quality (PUNKTFUNK_AUDIO_QUALITY) is not one of low/standard/high — \
                      using the default"
                 );
             });
@@ -271,11 +271,9 @@ pub(super) fn resolve_audio_plane(
     }
     if !operator_allows {
         tracing::info!(
-            // Reaching here means PUNKTFUNK_AUDIO_HIRES=0. Name the variable so the operator finds it.
-            "hi-res audio requested by the client but it is disabled on this host by \
-             PUNKTFUNK_AUDIO_HIRES=0 — the session uses Opus 48 kHz (remove that line, or set it \
-             to 1, to allow the lossless plane; it costs 1.4–8.5 Mbps in stereo and up to 33.9 in \
-             7.1, off the top of the link and outside the ABR loop)"
+            // The `audio_hires` row is off, from the console or PUNKTFUNK_AUDIO_HIRES=0.
+            "hi-res audio requested but Lossless audio is off on this host \
+             (PUNKTFUNK_AUDIO_HIRES) — the session uses Opus 48 kHz"
         );
         return AudioPlane::opus();
     }
@@ -295,13 +293,10 @@ pub(super) fn resolve_audio_plane(
             requested_rate_hz,
             requested_bits,
             ?capture_rate,
-            "hi-res audio was requested but this host's capture path cannot honestly deliver \
-             that rate — the session uses Opus 48 kHz. On Windows the endpoint's own engine rate \
-             is authoritative (autoconvert would silently hand us an upsampled copy), so set the \
-             rate in that device's Windows properties; on Linux the default stream-sink mode \
-             delivers any supported rate, while PUNKTFUNK_STREAM_SINK=0 can only offer the rate \
-             the monitored sink itself runs at — and declines outright when that sink is idle or \
-             cannot be read"
+            "hi-res audio was requested but this host's capture path can't deliver that rate — \
+             the session uses Opus 48 kHz. On Windows, set the rate in the device's sound \
+             properties; on Linux, capture of the host's own output (Where audio plays, or \
+             PUNKTFUNK_STREAM_SINK=0) offers only that sink's running rate"
         );
         return AudioPlane::opus();
     }

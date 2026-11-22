@@ -250,10 +250,9 @@ impl PadChannel {
                     tracing::warn!(
                         mailbox = %self.boot_name,
                         reason = NO_DEVNODE,
-                        "delivering this pad channel on the UNVERIFIED mailbox pid — a local \
+                        "delivering this pad channel on the unverified mailbox pid — a local \
                          service that wins the startup race can redirect this pad's input section \
-                         (forged gamepad input + a read of pad state). Documented residual; the \
-                         virtual MOUSE and the XUSB pad are both proved."
+                         (forged gamepad input, a read of pad state)"
                     );
                 }
                 self.deliver(pid);
@@ -267,7 +266,7 @@ impl PadChannel {
                         mailbox = %self.boot_name,
                         devnode = %devnode,
                         error = %error,
-                        "the pad's devnode has not answered a channel proof — the host will NOT \
+                        "the pad's devnode has not answered a channel proof — the host won't \
                          hand the DATA section to a pid it cannot verify, so this pad stays \
                          unattached (an old driver? reinstall: run the Punktfunk \
                          installer again)"

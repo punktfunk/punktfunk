@@ -850,7 +850,7 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
         let node = find_gamescope_node(Scope::Box).ok_or_else(|| {
             anyhow!(
                 "the box drives a physical display, so its game-mode session is mirrored at its \
-                 OWN mode — and it publishes no gamescope Video/Source node right now. Refusing to \
+                 own mode — and it publishes no gamescope Video/Source node right now. Refusing to \
                  re-mode it to {}x{}: that would flip the screen someone is looking at and, on a \
                  DM-driven box, bounce the login session with it",
                 mode.width,
@@ -1170,8 +1170,8 @@ pub(crate) fn stream_existing_output(
 fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Result<u32> {
     if !std::path::Path::new(SESSION_PLUS_BIN).exists() {
         anyhow::bail!(
-            "PUNKTFUNK_GAMESCOPE_SESSION is set but {SESSION_PLUS_BIN} is missing — the host-managed \
-             session needs gamescope-session-plus (a Bazzite / SteamOS-like host)"
+            "{SESSION_PLUS_BIN} is missing — the host-managed session needs gamescope-session-plus \
+             (a Bazzite or SteamOS-like host)"
         );
     }
     let wrapper = write_gamescope_bin_wrapper()?;
@@ -1189,22 +1189,16 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
     if wsi == WsiPlan::DistroDisabled {
         tracing::warn!(
             "gamescope: this box's VkLayer_FROG_gamescope_wsi was built for a different gamescope \
-             than the one we run, and no punktfunk layer is installed to use instead — disabling \
-             it for this session (DISABLE_GAMESCOPE_WSI=1, which the session script cannot clobber \
-             the way it clobbers ENABLE_GAMESCOPE_WSI). Left enabled it rejects the client's \
-             swapchain_feedback and every Vulkan client dies; Steam's own UI is not one, so what \
-             you see is a game that runs with sound and input on a black screen, with no other \
-             symptom. Upgrading the punktfunk-gamescope package fixes this properly — it ships a \
-             layer built from the same tree as the compositor."
+             than the one we run, and no punktfunk layer is installed — disabling it for this \
+             session (DISABLE_GAMESCOPE_WSI=1), because a mismatched layer kills every Vulkan \
+             client. Install the punktfunk-gamescope package, which ships a matching layer"
         );
         // `hdr_args` never consults the layer plan — say so when we advertise HDR with no game HDR.
         if hdr {
             tracing::warn!(
                 "gamescope: this session negotiated HDR, but with the WSI layer disabled no game \
-                 in it can get an HDR10 swapchain — that layer is the only route to one. The \
-                 stream itself stays HDR (the capture really is PQ/BT.2020, and Steam's UI and the \
-                 desktop ride the same container), so what breaks is GAME HDR specifically: a \
-                 title told to render HDR renders it into an SDR swapchain and looks washed out."
+                 can get an HDR10 swapchain. The stream stays HDR; a game told to render HDR \
+                 renders into an SDR swapchain and looks washed out"
             );
         }
     }

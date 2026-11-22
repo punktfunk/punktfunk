@@ -561,7 +561,7 @@ pub(crate) fn reconcile_at_boot() {
                 from = %record.from,
                 to = %record.to,
                 error = record.error.as_deref().unwrap_or(""),
-                "host update did NOT stick"
+                "host update did not stick"
             );
             let _ = jobs::write_json_atomic(&jobs::result_path(), &record);
             let _ = std::fs::remove_file(&path);

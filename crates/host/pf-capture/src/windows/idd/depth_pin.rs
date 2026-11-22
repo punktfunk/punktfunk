@@ -339,7 +339,7 @@ pub(crate) fn reassert_hdr(
             want_hdr = want,
             observed_hdr = ?observed,
             set_advanced_color_returned = set,
-            "IDD push: the re-arrived monitor would NOT take the negotiated depth - the \
+            "IDD push: the re-arrived monitor would not take the negotiated depth - the \
              encoder opens for what it actually composes, so the stream's depth will not \
              match the negotiation"
         );
@@ -388,7 +388,7 @@ pub(crate) fn pin_wcg(
     tracing::error!(
         target_id,
         set_wcg_returned = set,
-        "IDD push: SDR wide colour could NOT be turned off on the virtual display — the \
+        "IDD push: SDR wide colour could not be turned off on the virtual display — the \
          encoder reads the FP16 desktop it composes"
     );
     (got, None)

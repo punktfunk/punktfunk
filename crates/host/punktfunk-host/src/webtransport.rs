@@ -383,9 +383,10 @@ pub(crate) struct UnadmittedSlot {
 }
 
 impl Unadmitted {
-    /// A slot for a session from `ip`, or `None` when that address or the plane is full.
+    /// A slot for a session from `ip`, or `None` when that source or the plane is full. A
+    /// public IPv6 peer's source is its /64.
     fn take(self: &Arc<Self>, ip: std::net::IpAddr) -> Option<UnadmittedSlot> {
-        let ip = ip.to_canonical();
+        let ip = punktfunk_core::provenance::limit_key(ip);
         let mut held = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let mine = held.get(&ip).copied().unwrap_or(0);
         if mine >= UNADMITTED_PER_ADDR || held.values().sum::<usize>() >= UNADMITTED_TOTAL {
@@ -719,6 +720,8 @@ mod tests {
             browser,
             browser_origins: vec!["https://box:47992".into()],
             background_input: true,
+            ipv6: false,
+            ipv6_public: false,
         };
         let own = |on: bool| pf_host_config::HostConfig {
             webtransport: on,

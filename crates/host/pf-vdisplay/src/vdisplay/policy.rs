@@ -963,7 +963,7 @@ impl DisplayPolicyStore {
             Err(e) => {
                 tracing::warn!(path = %path.display(),
                     "display-settings.json exists but could not be read ({e}) — this host is \
-                     running on BUILT-IN DEFAULTS, not on its configured policy");
+                     running on built-in defaults, not on its configured policy");
                 None
             }
         };
@@ -1058,7 +1058,7 @@ impl DisplayPolicyStore {
             Err(e) => {
                 tracing::warn!(path = %path.display(),
                     "display-settings.json is not valid JSON ({e}) — this host is running on \
-                     BUILT-IN DEFAULTS, not on its configured policy");
+                     built-in defaults, not on its configured policy");
                 return None;
             }
         };
@@ -1087,7 +1087,7 @@ impl DisplayPolicyStore {
                     _ => {
                         tracing::warn!(path = %path.display(),
                             "display-settings.json is not a JSON object ({e}) — this host is running \
-                             on BUILT-IN DEFAULTS, not on its configured policy");
+                             on built-in defaults, not on its configured policy");
                         return None;
                     }
                 };
@@ -1103,10 +1103,9 @@ impl DisplayPolicyStore {
                 if let Some(preset) = obj.get("preset") {
                     if !probe("preset", preset) {
                         tracing::warn!(path = %path.display(), preset = %preset,
-                            "display-settings.json names a preset this host does not know — the \
-                             preset SELECTS the other settings, so falling back to its default \
-                             would silently activate whatever explicit fields the file happens to \
-                             carry; this host is running on BUILT-IN DEFAULTS instead");
+                            "display-settings.json names a preset this host does not know — a \
+                             preset selects the other settings, so this host is running on \
+                             built-in defaults rather than guess at them");
                         return None;
                     }
                 }
@@ -1134,7 +1133,7 @@ impl DisplayPolicyStore {
                         if dropped > 0 && nothing.is_ok_and(|nothing| nothing == p) {
                             tracing::warn!(path = %path.display(),
                                 "display-settings.json had no setting this host could read — this \
-                                 host is running on BUILT-IN DEFAULTS, not on its configured policy");
+                                 host is running on built-in defaults, not on its configured policy");
                             return None;
                         }
                         Some(p)
@@ -1142,7 +1141,7 @@ impl DisplayPolicyStore {
                     Err(e) => {
                         tracing::warn!(path = %path.display(),
                             "display-settings.json unreadable even per-setting ({e}) — this host is \
-                             running on BUILT-IN DEFAULTS, not on its configured policy");
+                             running on built-in defaults, not on its configured policy");
                         None
                     }
                 }

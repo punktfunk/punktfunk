@@ -163,6 +163,19 @@ fn half_rate_tv() -> bool {
         .any(|(m, d)| maker.eq_ignore_ascii_case(m) && device == *d)
 }
 
+/// Whether this box decodes `codec` with no low-latency key ([`crate::codec_format::keyless`]).
+/// A profile named in [`LOW_LATENCY_KEY_PROP`] puts the keys back.
+pub(super) fn keyless_box(codec: u8) -> bool {
+    let prop = |name| sysprop(name).unwrap_or_default();
+    sysprop(LOW_LATENCY_KEY_PROP).is_none()
+        && crate::codec_format::keyless(
+            codec,
+            &prop(c"ro.product.manufacturer"),
+            &prop(c"ro.product.device"),
+            &prop(c"ro.product.model"),
+        )
+}
+
 /// The decoder's configure format: the mode, the stream rate (`frame-rate`, the standard key a
 /// decoder's clock table may read), an input buffer generous enough that a large keyframe AU is
 /// never truncated, the HDR static info, and the low-latency keys for `codec_name`.

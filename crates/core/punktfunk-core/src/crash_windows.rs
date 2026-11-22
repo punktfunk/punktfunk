@@ -66,7 +66,7 @@ unsafe extern "system" fn on_unhandled(info: *const EXCEPTION_POINTERS) -> i32 {
             _ => "other",
         }),
         av_target = av_target.map(|t| format!("0x{t:016x}")),
-        "FATAL: unhandled native exception — the process is about to die"
+        "unhandled native exception — the process is about to die"
     );
     EXCEPTION_CONTINUE_SEARCH
 }

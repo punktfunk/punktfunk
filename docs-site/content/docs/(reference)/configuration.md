@@ -77,6 +77,7 @@ restart*.
 | Bind patched gamescope (Linux) | `PUNKTFUNK_GAMESCOPE_BIND` | `auto` · `on` · `off` | `auto` | next session |
 | Follow mode switches (Linux) | `PUNKTFUNK_SESSION_WATCH` | `auto` · `on` · `off` | `auto` | next session |
 | Local discovery | `PUNKTFUNK_MDNS` | `on` · `off` | `on` | after a restart |
+| IPv6 | `PUNKTFUNK_IPV6` | `on` · `off` | `off` | after a restart |
 | Disconnect timeout | `PUNKTFUNK_IDLE_TIMEOUT_MS` | 1000–120000 ms | `8000` | after a restart |
 | Seats kept warm (Linux, Windows) | `PUNKTFUNK_STEAM_PREWARM` | 0–8 seats | `1` | after a restart |
 | Stop idle seats (Linux, Windows) | `PUNKTFUNK_SEAT_IDLE_STOP_MIN` | 0–1440 min | `240` | after a restart |

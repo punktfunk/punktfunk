@@ -12,6 +12,7 @@ export const PLANE_SETTINGS = [
 	"webtransport_origins",
 	"gamestream_encrypt",
 	"clipboard",
+	"ipv6",
 ] as const;
 
 /** Whether a host-settings patch changes a plane setting. */

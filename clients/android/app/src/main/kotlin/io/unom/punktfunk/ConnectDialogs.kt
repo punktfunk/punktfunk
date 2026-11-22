@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.asciiDigits
+import io.unom.punktfunk.kit.link.DeepLinks
 import io.unom.punktfunk.kit.security.ClientIdentity
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.kit.security.KnownHostStore
@@ -108,8 +109,8 @@ internal fun AddHostSheet(
             Button(
                 enabled = !connecting && host.isNotBlank() && port.isNotBlank(),
                 onClick = {
-                    val h = host.trim()
-                    val p = port.toIntOrNull() ?: 9777
+                    // Stored bare, and a pasted port wins: a bracketed IPv6 address dials as typed.
+                    val (h, p) = DeepLinks.typedHost(host, port.toIntOrNull() ?: 9777)
                     val n = hostName
                     scope.launch { sheetState.hide() }.invokeOnCompletion {
                         onDismiss()
@@ -254,11 +255,12 @@ internal fun EditHostDialog(
             TextButton(
                 enabled = address.isNotBlank(),
                 onClick = {
+                    val (addr, at) = DeepLinks.typedHost(address, port.toIntOrNull() ?: target.port)
                     onSave(
                         target.copy(
                             name = name.trim().ifEmpty { target.address },
-                            address = address.trim(),
-                            port = port.toIntOrNull() ?: target.port,
+                            address = addr,
+                            port = at,
                             mac = KnownHostStore.parseMacs(mac),
                         ),
                     )

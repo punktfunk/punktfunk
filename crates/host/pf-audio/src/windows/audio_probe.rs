@@ -94,7 +94,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 println!("  VERDICT: pitch-true — the minted pair is innocent; the shift lives elsewhere.");
             } else if (hz - 220.0).abs() < 30.0 {
                 println!(
-                    "  VERDICT: OCTAVE DOWN — the driver forwards the stereo render stream \
+                    "  VERDICT: octave down — the driver forwards the stereo render stream \
                      into the mono capture raw; the render side must run MONO."
                 );
             } else {
@@ -168,8 +168,8 @@ fn probe_ssm(keep: bool) -> Result<()> {
         Err(e) => {
             println!("audio-probe ssm: render endpoint {render_ep} appeared, but:");
             println!("  {e:#}");
-            println!("  VERDICT: FAIL (S3) — the minted SSM instance has NO capture endpoint;");
-            println!("  a punktfunk-owned virtual mic cannot come from this driver.");
+            println!("  VERDICT: FAIL — the minted microphone instance has no capture endpoint;");
+            println!("  a Punktfunk-owned virtual mic can't come from this driver.");
             restore_defaults(prev_render, prev_capture);
             if !keep {
                 remove_devnode(&inst);
@@ -190,15 +190,14 @@ fn probe_ssm(keep: bool) -> Result<()> {
     );
     if peak > SIGNAL_FLOOR {
         println!(
-            "  VERDICT: PASS (S3) — the minted Steam Streaming Microphone instance carries \
-             audio render→capture; a punktfunk-owned virtual mic needs no VB-Cable where \
-             Steam is installed."
+            "  VERDICT: PASS — the minted Steam Streaming Microphone instance carries \
+             audio render→capture; the virtual mic needs no VB-Cable where Steam is \
+             installed."
         );
     } else {
         println!(
-            "  VERDICT: FAIL (S3) — both endpoints minted but no audio crossed the pair \
-             (peak {peak:.4} ≤ {SIGNAL_FLOOR}); the drop-VB-Cable decision reverts to \
-             cable-for-mic-only."
+            "  VERDICT: FAIL — both endpoints minted but no audio crossed the pair \
+             (peak {peak:.4} ≤ {SIGNAL_FLOOR}); the virtual mic still needs a cable."
         );
     }
 
@@ -236,15 +235,15 @@ fn probe_sink(keep: bool) -> Result<()> {
     );
     if peak > SIGNAL_FLOOR {
         println!(
-            "  VERDICT: PASS (S2) — default-routed audio reaches the minted Speakers instance \
-             and its WASAPI loopback carries it; \"Punktfunk Speakers\" can be the canonical \
+            "  VERDICT: PASS — default-routed audio reaches the minted Speakers instance \
+             and its WASAPI loopback carries it; \"Punktfunk Speakers\" can be the \
              client-only sink."
         );
     } else {
         println!(
-            "  VERDICT: FAIL (S2) — the minted instance's loopback stayed silent \
-             (peak {peak:.4} ≤ {SIGNAL_FLOOR}) despite default routing; the speakers leg of \
-             Phase 2 dies and Phase 1 remains the fix."
+            "  VERDICT: FAIL — the minted instance's loopback stayed silent \
+             (peak {peak:.4} ≤ {SIGNAL_FLOOR}) despite default routing; it can't be the \
+             client-only sink."
         );
     }
 
@@ -303,13 +302,13 @@ fn probe_sss_primary(secs: u32) -> Result<()> {
     println!("audio-probe sss-primary: loopback peak over {secs}s = {peak:.4}, tone 440 Hz read back as {hz:.0} Hz");
     if peak > SIGNAL_FLOOR {
         println!(
-            "  VERDICT: the primary SSS loopback CARRIES audio here (steam.exe running: \
+            "  VERDICT: the primary SSS loopback carries audio here (steam.exe running: \
              {steam_running}) — the \"validated silent\" verdict does not reproduce in this \
              state; record the state alongside."
         );
     } else {
         println!(
-            "  VERDICT: the primary SSS loopback is SILENT (steam.exe running: \
+            "  VERDICT: the primary SSS loopback is silent (steam.exe running: \
              {steam_running}) — consistent with the wiring plan's last-resort tier."
         );
     }

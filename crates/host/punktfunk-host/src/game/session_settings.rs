@@ -334,6 +334,8 @@ mod tests {
                 browser: false,
                 browser_origins: Vec::new(),
                 background_input: false,
+                ipv6: false,
+                ipv6_public: false,
             })
         };
         assert!(contract_settings(None, None, false).session_on_game_exit);
@@ -356,6 +358,8 @@ mod tests {
             browser: false,
             browser_origins: Vec::new(),
             background_input: false,
+            ipv6: false,
+            ipv6_public: false,
         });
         let own = SessionSettings {
             session_on_game_exit: false,

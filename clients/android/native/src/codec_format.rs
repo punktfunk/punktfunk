@@ -167,6 +167,20 @@ fn vendor_keys(codec_name: &str, aggressive: bool) -> Vec<(&'static str, i32)> {
     keys
 }
 
+/// Boxes that show HEVC about once a second under a low-latency key while the decoder reports
+/// the stream rate, as (`ro.product.manufacturer`, `ro.product.device` or `ro.product.model`):
+/// the Xiaomi TV Box S (3rd Gen).
+const KEYLESS_HEVC_BOXES: &[(&str, &[&str])] = &[("Xiaomi", &["twilight", "MiTV-AFMU0"])];
+
+/// Whether this box decodes `codec` with no low-latency key at all ([`KEYLESS_HEVC_BOXES`]).
+/// Its other codecs keep their keys.
+pub(crate) fn keyless(codec: u8, maker: &str, device: &str, model: &str) -> bool {
+    codec_mime(codec) == "video/hevc"
+        && KEYLESS_HEVC_BOXES.iter().any(|(m, names)| {
+            maker.eq_ignore_ascii_case(m) && names.iter().any(|&n| n == device || n == model)
+        })
+}
+
 /// A Realtek decoder, by its OMX or Codec2 name.
 pub(crate) fn is_realtek(codec_name: &str) -> bool {
     let name = codec_name.to_ascii_lowercase();
@@ -345,6 +359,26 @@ mod tests {
             super::marked_strings(lib, &marks, 1),
             ["video-lowdelay-mode"]
         );
+    }
+
+    #[test]
+    fn only_hevc_on_a_listed_box_goes_keyless() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+        // (name, codec, maker, device, model, keyless)
+        let rows = [
+            ("by device", CODEC_HEVC, "Xiaomi", "twilight", "", true),
+            ("by model", CODEC_HEVC, "Xiaomi", "", "MiTV-AFMU0", true),
+            ("maker case", CODEC_HEVC, "XIAOMI", "twilight", "", true),
+            ("H.264", CODEC_H264, "Xiaomi", "twilight", "", false),
+            ("AV1", CODEC_AV1, "Xiaomi", "twilight", "", false),
+            ("another Xiaomi", CODEC_HEVC, "Xiaomi", "jaws", "", false),
+            ("another maker", CODEC_HEVC, "Google", "twilight", "", false),
+            ("a Chromecast", CODEC_HEVC, "Google", "sabrina", "", false),
+            ("no identity", CODEC_HEVC, "", "", "", false),
+        ];
+        for (name, codec, maker, device, model, want) in rows {
+            assert_eq!(super::keyless(codec, maker, device, model), want, "{name}");
+        }
     }
 
     #[test]

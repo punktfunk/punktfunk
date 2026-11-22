@@ -71,7 +71,7 @@ impl Shell {
             } else {
                 tracing::warn!(
                     card,
-                    "PUNKTFUNK_DRM_CARD must be a card NUMBER (e.g. 0) — ignoring"
+                    "PUNKTFUNK_DRM_CARD must be a card number such as 0 — ignoring"
                 );
             }
         }

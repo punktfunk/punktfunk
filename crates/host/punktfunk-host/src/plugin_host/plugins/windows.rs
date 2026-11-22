@@ -400,8 +400,8 @@ pub(super) fn powershell(command: &str) -> Result<()> {
         .context("run powershell")?;
     if !status.success() {
         bail!(
-            "the {TASK} scheduled task couldn't be changed — is punktfunk installed with the \
-             scripting component, and is this prompt elevated?"
+            "the {TASK} scheduled task couldn't be changed — is the plugin runner installed, and \
+             is this prompt elevated?"
         );
     }
     Ok(())
@@ -489,7 +489,7 @@ const TASK: &str = "PunktfunkScripting";
 
 pub(super) fn usage_note() {
     eprintln!(
-        "    On Windows, `add`/`remove`/`enable`/`disable` need an ELEVATED prompt (the plugins\n    \
+        "    On Windows, `add`/`remove`/`enable`/`disable` need an elevated prompt (the plugins\n    \
          directory and the runner task are admin-owned)."
     );
 }
@@ -505,8 +505,7 @@ pub(super) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
     let runner = app.join("scripting").join("runner-cli.js");
     if !bun.exists() || !runner.exists() {
         bail!(
-            "the plugin runner isn't installed (looked for {} and {}) — reinstall punktfunk \
-             with the scripting component",
+            "the plugin runner isn't installed (looked for {} and {}) — reinstall punktfunk",
             bun.display(),
             runner.display()
         );

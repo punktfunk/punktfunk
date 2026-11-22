@@ -267,6 +267,10 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_mdns,
 		hint: m.setting_mdns_hint,
 	},
+	ipv6: {
+		label: m.setting_ipv6,
+		hint: m.setting_ipv6_hint,
+	},
 	idle_timeout_ms: {
 		label: m.setting_idle_timeout_ms,
 		hint: m.setting_idle_timeout_ms_hint,

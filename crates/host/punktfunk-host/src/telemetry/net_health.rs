@@ -234,10 +234,9 @@ pub fn log_addresses() {
                 iface = %i.name,
                 a = %v4.ip,
                 b = %twin.ip(),
-                "one interface holds two addresses in the same subnet — two DHCP clients on it \
-                 (NetworkManager plus dhcpcd/networkd) is the usual cause; each renewal re-commits \
-                 addresses and routes under a live stream, and clients pin whichever address \
-                 answered first"
+                "one interface holds two addresses in the same subnet — usually two DHCP clients \
+                 on it (NetworkManager plus dhcpcd or networkd); run one, since each renewal \
+                 re-commits addresses and routes under a live stream"
             );
         }
     }

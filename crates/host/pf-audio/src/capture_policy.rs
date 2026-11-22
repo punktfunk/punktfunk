@@ -235,8 +235,8 @@ impl CaptureStats {
             tracing::warn!(
                 device,
                 dropped_chunks = self.dropped_chunks,
-                "the audio encode thread could not keep up — captured audio was DROPPED; the \
-                 stream will click and everything after it shifts"
+                "the audio encode thread fell behind — captured audio was dropped, so the \
+                 stream clicks"
             );
         }
         tracing::info!(

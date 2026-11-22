@@ -1196,7 +1196,7 @@ fn health_changed() {
 /// [`ensure_provisioned`] re-enters this from a live session.
 pub fn provision_at_startup(startup: bool) {
     if !pad_audio_enabled() {
-        tracing::info!("pad audio disabled (PUNKTFUNK_PAD_AUDIO=0)");
+        tracing::info!("pad audio is off (the pad_audio setting)");
         // Previous-run endpoints persist and stay visible; idle libScePad
         // titles stall on them. Turning the feature off must park leftovers.
         hide_leftover_endpoints();

@@ -569,7 +569,9 @@ impl DefaultWatch {
             return None;
         }
         if keep_default {
-            tracing::info!("default render device changed (PUNKTFUNK_KEEP_DEFAULT) — following it");
+            tracing::info!(
+                "default render device changed while the host default is kept — following it"
+            );
             return Some(Next::Reopen(TargetMode::Follow));
         }
         match judge_default(wiring, &nid) {
@@ -827,8 +829,9 @@ fn host_output(
         NOTED.call_once(|| {
             tracing::warn!(
                 "voice chat on the host is set, but this capture parked no host output to pin \
-                 voice apps to (PUNKTFUNK_KEEP_DEFAULT, a seat, or the default already was the \
-                 sink) — voice apps stay on the default and reach the stream"
+                 voice apps to (follow_default mode, a session's keep-host-audio ask, a seat, \
+                 or the default already was the sink) — voice apps stay on the default and \
+                 reach the stream"
             )
         });
     }
@@ -977,7 +980,7 @@ fn run_loop(
             silence_noted = true;
             if open.last_resort {
                 tracing::warn!(device = %opened.dev_name,
-                    "no audio captured in the first 30 s from the LAST-RESORT loopback — the \
+                    "no audio captured in the first 30 s from the last-resort loopback — the \
                      Steam Streaming Speakers' loopback is known-silent, so desktop audio is \
                      most likely not reaching the client; attach any output device to give the \
                      plan a working endpoint (it re-plans on the change)");
@@ -985,7 +988,7 @@ fn run_loop(
                 tracing::info!(device = %opened.dev_name,
                     "no audio captured in the first 30 s — fine if the host is quiet; if it \
                      should be playing audio, this endpoint's loopback may be broken (set \
-                     PUNKTFUNK_HOST_AUDIO=1 to prefer real hardware)");
+                     audio_output_mode = host_and_client to prefer real hardware)");
             }
         }
         let whole = (bytes.len() / block_align) * block_align;

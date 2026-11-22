@@ -815,6 +815,11 @@ fn stream_config(
         tracing::info!(
             "RTSP ANNOUNCE: client enabled SS_ENC_CONTROL_V2 — control nonces are per-direction"
         );
+    } else {
+        tracing::warn!(
+            "RTSP ANNOUNCE: client did not enable SS_ENC_CONTROL_V2 — its control nonces share one \
+             space with the host's, so an on-path attacker could recover input"
+        );
     }
     Some(StreamConfig {
         width,

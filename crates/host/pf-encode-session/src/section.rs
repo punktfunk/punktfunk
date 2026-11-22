@@ -56,7 +56,7 @@ impl AuSection {
     ) -> Result<Self, Fail> {
         // The header read below needs the whole fixed layout to be there.
         if (section_bytes as usize) < au::HEAP_OFFSET {
-            tracing::info!("encode: AU section of {section_bytes} B is shorter than its layout");
+            tracing::warn!("encode: AU section of {section_bytes} B is shorter than its layout");
             return Err((-9, "section"));
         }
         let mut raw = [0u8; au::AU_HEADER_SIZE];
@@ -65,7 +65,7 @@ impl AuSection {
         let fits =
             au::au_readable(&header) && au::section_bytes(header.heap_bytes) <= section_bytes;
         if !fits {
-            tracing::info!("encode: AU section unreadable: {header:?} in {section_bytes} B");
+            tracing::warn!("encode: AU section unreadable: {header:?} in {section_bytes} B");
             return Err((-9, "section"));
         }
         // SAFETY: the caller's contract — `event` is ours alone to close from here on.

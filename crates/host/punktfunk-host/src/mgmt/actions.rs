@@ -475,7 +475,7 @@ pub(crate) async fn invoke_action(
             // Reboot/shutdown ends this process shortly; sleep resumes here on wake.
             Ok(()) => tracing::info!(action = %id_owned, "host power action handed to the OS"),
             Err(e) => {
-                tracing::warn!(action = %id_owned, error = %e, "host power action FAILED");
+                tracing::warn!(action = %id_owned, error = %e, "host power action failed");
                 crate::events::emit(crate::events::EventKind::ActionInvoked {
                     id: id_owned,
                     device,

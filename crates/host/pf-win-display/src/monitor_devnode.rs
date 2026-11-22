@@ -377,7 +377,7 @@ pub fn enable_instances(ids: &[String]) -> u32 {
         } else {
             tracing::warn!(
                 id,
-                "PnP-disable: monitor devnode re-enable FAILED — keeping its crash-journal \
+                "PnP-disable: monitor devnode re-enable failed — keeping its crash-journal \
                  entry so the next host start retries (until then this monitor stays disabled)"
             );
         }

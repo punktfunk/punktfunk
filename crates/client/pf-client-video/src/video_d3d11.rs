@@ -452,7 +452,7 @@ pub fn pq_tonemap_supported(luid: Option<[u8; 8]>) -> bool {
         Ok(supported) => {
             if !supported {
                 tracing::warn!(
-                    "video processor reports NO P010 PQ→sRGB conversion — a PQ stream on the \
+                    "video processor reports no P010 PQ→sRGB conversion — a PQ stream on the \
                      D3D11VA rung would render garbage (green) instead of tone-mapping"
                 );
             }

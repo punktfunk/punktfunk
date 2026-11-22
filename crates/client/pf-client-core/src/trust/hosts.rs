@@ -338,6 +338,22 @@ impl HostEdit {
         })
     }
 
+    /// A console form's entry, whose port is already a number. The address is stored bare, as
+    /// [`Self::parse`] stores it, and a pasted port wins. Text that reads as no host stays as
+    /// typed.
+    pub fn typed(name: String, addr: String, port: u16) -> HostEdit {
+        let (addr, port) = match Self::parse_address(&addr) {
+            Ok((addr, spelled)) => (addr, spelled.unwrap_or(port)),
+            Err(_) => (addr, port),
+        };
+        HostEdit {
+            name: Some(name),
+            addr: Some(addr),
+            port: Some(port),
+            ..Default::default()
+        }
+    }
+
     /// The address field: trimmed, a pasted `host:port` split. `Err` is the sentence to show.
     pub fn parse_address(text: &str) -> Result<(String, Option<u16>), String> {
         let addr = text.trim();
@@ -2196,6 +2212,21 @@ mod tests {
         // A bare IPv6 keeps its colons.
         let edit = HostEdit::parse("::1", "9777", "").unwrap();
         assert_eq!((edit.addr.as_deref(), edit.port), (Some("::1"), Some(9777)));
+    }
+
+    /// The console's form stores an address as the dialogs do: bare, a pasted port taken off.
+    #[test]
+    fn a_console_entry_is_stored_bare() {
+        let typed = |addr: &str| {
+            let edit = HostEdit::typed("Desk".into(), addr.into(), 9777);
+            (edit.addr.unwrap(), edit.port.unwrap())
+        };
+        assert_eq!(typed("[200:abcd::1]"), ("200:abcd::1".into(), 9777));
+        assert_eq!(typed("[200:abcd::1]:9800"), ("200:abcd::1".into(), 9800));
+        assert_eq!(typed("200:abcd::1"), ("200:abcd::1".into(), 9777));
+        assert_eq!(typed(" desk.lan:9800 "), ("desk.lan".into(), 9800));
+        // What reads as no host stays as typed, for the form to refuse.
+        assert_eq!(typed("[::1"), ("[::1".into(), 9777));
     }
 
     #[test]

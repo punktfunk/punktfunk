@@ -270,7 +270,7 @@ impl Rungs {
                 tracing::error!(
                     slot,
                     error = %format!("{e:#}"),
-                    "re-arrival rollback ADD also failed — the slot now has NO monitor"
+                    "re-arrival rollback ADD also failed — the slot now has no monitor"
                 );
                 first.context(format!("rollback also failed: {e:#}"))
             }
@@ -406,7 +406,7 @@ fn warn_outside_console_session() {
         tracing::error!(
             own_session = own,
             console_session = console,
-            "punktfunk-host is NOT in the active console session — display activation, \
+            "punktfunk-host is not in the active console session — display activation, \
              mode-set and capture will fail (disconnected RDP session?). Reconnect the \
              console (`tscon {own} /dest:console`) or run the host via the installed \
              service, which follows the console session"
@@ -1601,7 +1601,7 @@ impl VirtualDisplayManager {
                         slot,
                         refs = life.refs(),
                         backend = self.driver.name(),
-                        "virtual monitor resized IN PLACE (identity + swap-chain kept)"
+                        "virtual monitor resized in place (identity + swap-chain kept)"
                     );
                 } else {
                     tracing::info!(
@@ -1803,7 +1803,7 @@ impl VirtualDisplayManager {
                                 rounds,
                                 "exclusive topology keeps being re-activated (4 re-asserts in a \
                                  row or within a minute) — something on this host is fighting \
-                                 the isolate; CONCEDING for this session: the display stays \
+                                 the isolate; conceding for this session: the display stays \
                                  active, the stream continues on the shared desktop, no further \
                                  re-assert"
                             );
@@ -2343,7 +2343,7 @@ impl VirtualDisplayManager {
                         tracing::error!(
                             target_ids = ?targets,
                             "virtual-display teardown still running after 10s — the driver \
-                             REMOVE/CCD restore looks WEDGED; new sessions will block until it returns"
+                             REMOVE/CCD restore looks wedged; new sessions will block until it returns"
                         );
                     }
                 })
@@ -2449,7 +2449,7 @@ impl VirtualDisplayManager {
             Release::Decref | Release::Noop => {}
             Release::Pin => tracing::info!(
                 slot,
-                "virtual-display: last session left — PINNED (keep_alive=forever); free via /display/release"
+                "virtual-display: last session left — pinned (keep_alive=forever); free via /display/release"
             ),
             Release::Linger => {
                 if let Linger::For(window) = linger {

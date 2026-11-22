@@ -306,18 +306,16 @@ impl SessionPlan {
                 // passthrough.
                 if self.codec == crate::encode::Codec::PyroWave {
                     tracing::warn!(
-                        "4:4:4 PyroWave session with PUNKTFUNK_ZEROCOPY off: zero-copy GPU \
-                         capture DISABLED — the wavelet encoder loses its raw-dmabuf passthrough \
-                         and every frame becomes a full-resolution CPU readback plus an upload \
-                         into its own Vulkan device; expect a materially lower fps ceiling (set \
-                         PUNKTFUNK_ZEROCOPY=1 to restore the passthrough)"
+                        "4:4:4 PyroWave session with PUNKTFUNK_ZEROCOPY off: every frame is a \
+                         full-resolution CPU readback plus an upload instead of the raw-dmabuf \
+                         passthrough, so expect a lower fps ceiling (unset PUNKTFUNK_ZEROCOPY \
+                         to restore it)"
                     );
                 } else {
                     tracing::warn!(
-                        "4:4:4 session on the NVENC path without PUNKTFUNK_ZEROCOPY: zero-copy \
-                         GPU capture DISABLED — every frame is CPU RGB + swscale RGB→YUV444P; \
-                         expect a lower fps ceiling than 4:2:0 at this mode (set \
-                         PUNKTFUNK_ZEROCOPY=1 for the GPU 4:4:4 convert)"
+                        "4:4:4 NVENC session with PUNKTFUNK_ZEROCOPY off: every frame is CPU RGB \
+                         the encoder converts itself, so expect a lower fps ceiling than 4:2:0 \
+                         (unset PUNKTFUNK_ZEROCOPY for the GPU 4:4:4 convert)"
                     );
                 }
             }

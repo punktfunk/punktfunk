@@ -736,8 +736,8 @@ impl NativeVulkanDecoder {
             tracing::warn!(
                 "native decode: this device's decode queue family does not support \
                  RESULT_STATUS queries — driver-reported corruption is not \
-                 observable on this session (decode status degrades to timeline \
-                 completion — the only signal libavcodec's rungs ever had)"
+                 observable on this session (decode status falls back to timeline \
+                 completion)"
             );
         }
         // `PUNKTFUNK_AU_FAULT=<mode>[:<period>]`. Unset is normal; a spec that does

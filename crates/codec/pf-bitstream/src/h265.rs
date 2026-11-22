@@ -1809,7 +1809,7 @@ mod tests {
         /// `(negatives, inter_sets)`: `st_ref_pic_set(0)` is explicit with that many
         /// negative pictures, then each of `inter_sets` sets predicts from the one
         /// before it and keeps every entry, so each holds one picture more.
-        chained_inter_rps: Option<(u32, u32)>,
+        pub(super) chained_inter_rps: Option<(u32, u32)>,
     }
 
     impl Default for SpsOpts {
@@ -1975,6 +1975,10 @@ mod tests {
     }
 
     fn synth_pps(dependent_slice_segments: bool) -> Vec<u8> {
+        synth_pps_with(dependent_slice_segments, false)
+    }
+
+    fn synth_pps_with(dependent_slice_segments: bool, lists_modification: bool) -> Vec<u8> {
         let mut s = BitSink::new();
         s.ue(0); // pps_pic_parameter_set_id
         s.ue(0); // pps_seq_parameter_set_id
@@ -2000,7 +2004,7 @@ mod tests {
         s.bit(0); // pps_loop_filter_across_slices_enabled_flag
         s.bit(0); // deblocking_filter_control_present_flag
         s.bit(0); // pps_scaling_list_data_present_flag
-        s.bit(0); // lists_modification_present_flag
+        s.bit(u32::from(lists_modification)); // lists_modification_present_flag
         s.ue(0); // log2_parallel_merge_level_minus2
         s.bit(0); // slice_segment_header_extension_present_flag
         s.bit(0); // pps_extension_present_flag
@@ -2025,12 +2029,20 @@ mod tests {
         /// Short-term RPS: (delta_poc_sX_minus1, used_by_curr_pic) pairs.
         pub(super) neg: Vec<(u32, bool)>,
         pub(super) pos: Vec<(u32, bool)>,
+        /// The set predicted from the SPS's last one, one picture earlier, instead of
+        /// `neg` and `pos`: (used_by_curr_pic_flag, use_delta_flag) per entry of that set,
+        /// then one for the delta itself. Needs an SPS with a set.
+        pub(super) inter_rps: Option<Vec<(bool, bool)>>,
         /// When the SPS set long_term_ref_pics_present_flag:
         /// (poc_lsb_lt, used_by_curr_pic_lt, delta_poc_msb_cycle_lt).
         pub(super) lt: Vec<(u32, bool, Option<u32>)>,
         pub(super) sps_long_term: bool,
         pub(super) num_ref_idx_l0: u32,
         pub(super) num_ref_idx_l1: u32,
+        /// The PPS sets lists_modification_present_flag: a P slice with more than one current
+        /// picture then codes the flag, and `list_entry_l0[0]` when this is `Some`.
+        pub(super) pps_lists_modification: bool,
+        pub(super) list_entry_l0: Option<u32>,
         pub(super) no_output_of_prior_pics: bool,
     }
 
@@ -2045,10 +2057,13 @@ mod tests {
                 poc_lsb: 0,
                 neg: Vec::new(),
                 pos: Vec::new(),
+                inter_rps: None,
                 lt: Vec::new(),
                 sps_long_term: false,
                 num_ref_idx_l0: 1,
                 num_ref_idx_l1: 1,
+                pps_lists_modification: false,
+                list_entry_l0: None,
                 no_output_of_prior_pics: false,
             }
         }
@@ -2076,16 +2091,29 @@ mod tests {
             if !is_idr {
                 s.bits(4, o.poc_lsb);
                 s.bit(0); // short_term_ref_pic_set_sps_flag
-                          // st_ref_pic_set(stRpsIdx = 0): no inter-RPS prediction flag.
-                s.ue(o.neg.len() as u32);
-                s.ue(o.pos.len() as u32);
-                for &(delta_minus1, used) in &o.neg {
-                    s.ue(delta_minus1);
-                    s.bit(u32::from(used));
-                }
-                for &(delta_minus1, used) in &o.pos {
-                    s.ue(delta_minus1);
-                    s.bit(u32::from(used));
+                if let Some(flags) = &o.inter_rps {
+                    s.bit(1); // inter_ref_pic_set_prediction_flag
+                    s.ue(0); // delta_idx_minus1
+                    s.bit(1); // delta_rps_sign
+                    s.ue(0); // abs_delta_rps_minus1
+                    for &(used, use_delta) in flags {
+                        s.bit(u32::from(used));
+                        if !used {
+                            s.bit(u32::from(use_delta));
+                        }
+                    }
+                } else {
+                    // st_ref_pic_set(stRpsIdx = 0): no inter-RPS prediction flag.
+                    s.ue(o.neg.len() as u32);
+                    s.ue(o.pos.len() as u32);
+                    for &(delta_minus1, used) in &o.neg {
+                        s.ue(delta_minus1);
+                        s.bit(u32::from(used));
+                    }
+                    for &(delta_minus1, used) in &o.pos {
+                        s.ue(delta_minus1);
+                        s.bit(u32::from(used));
+                    }
                 }
                 if o.sps_long_term {
                     s.ue(o.lt.len() as u32); // num_long_term_pics
@@ -2105,6 +2133,14 @@ mod tests {
             if o.slice_type != 2 {
                 s.bit(1); // num_ref_idx_active_override_flag
                 s.ue(o.num_ref_idx_l0 - 1);
+                let current = (o.neg.iter().chain(&o.pos).filter(|e| e.1).count()
+                    + o.lt.iter().filter(|e| e.1).count()) as u32;
+                if o.pps_lists_modification && o.slice_type == 1 && current > 1 {
+                    s.bit(u32::from(o.list_entry_l0.is_some())); // ref_pic_list_modification_flag_l0
+                    if let Some(entry) = o.list_entry_l0 {
+                        s.bits(super::conceal::ceil_log2(current) as usize, entry);
+                    }
+                }
                 if o.slice_type == 0 {
                     s.ue(o.num_ref_idx_l1 - 1);
                     s.bit(0); // mvd_l1_zero_flag
@@ -2136,6 +2172,13 @@ mod tests {
     pub(super) fn param_sets(sps: &SpsOpts) -> Vec<u8> {
         let mut au = synth_sps(sps);
         au.extend(synth_pps(false));
+        au
+    }
+
+    /// [`param_sets`] with a PPS that lets a slice modify its reference list.
+    pub(super) fn param_sets_lists(sps: &SpsOpts) -> Vec<u8> {
+        let mut au = synth_sps(sps);
+        au.extend(synth_pps_with(false, true));
         au
     }
 

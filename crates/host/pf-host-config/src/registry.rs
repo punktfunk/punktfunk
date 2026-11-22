@@ -557,6 +557,8 @@ pub static SETTINGS: &[Setting] = &[
         .spellings(TRI_SPELLINGS),
     // --- Network
     row("mdns", "PUNKTFUNK_MDNS", Kind::Bool, D::Bool(true), Network, Restart, "Local discovery", "troubleshooting-connect").advanced(),
+    // Default OFF: without NAT a router decides who reaches an IPv6 listener.
+    row("ipv6", "PUNKTFUNK_IPV6", Kind::Bool, D::Bool(false), Network, Restart, "IPv6", "ports").advanced(),
     row("idle_timeout_ms", "PUNKTFUNK_IDLE_TIMEOUT_MS", Kind::Int { min: 1_000, max: 120_000, unit: "ms" }, D::Int(8_000), Network, Restart, "Disconnect timeout", "configuration").advanced(),
     // --- Seats: what every seat shares (design/web-console-structure-2026-10.md §2.1)
     row("steam_prewarm", "PUNKTFUNK_STEAM_PREWARM", Kind::Int { min: 0, max: 8, unit: "seats" }, D::Int(1), Seats, Restart, "Seats kept warm", "profiles").only(LINUX_WINDOWS),

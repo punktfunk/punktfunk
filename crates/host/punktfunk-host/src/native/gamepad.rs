@@ -430,7 +430,7 @@ fn xbox_backend_hid(env: Option<&str>, xinputhid: bool) -> bool {
     }
 }
 
-/// Env/logging shell around [`pick_gamepad`]. Always concrete: `Welcome` reports what we drive.
+/// Settings/logging shell around [`pick_gamepad`]. Always concrete: `Welcome` reports what we drive.
 /// `steam_force` is the session's `PUNKTFUNK_STEAM_FORCE`.
 pub(super) fn resolve_gamepad(pref: GamepadPref, steam_force: bool) -> GamepadPref {
     let env = pf_host_config::config().gamepad.clone();
@@ -448,13 +448,15 @@ pub(super) fn resolve_gamepad(pref: GamepadPref, steam_force: bool) -> GamepadPr
     warn_if_ds_inhibit_storm(chosen);
     match pref {
         GamepadPref::Auto => {
-            // Env did not produce `chosen` (typo, or a DualSense wish with no UHID): log it.
+            // The Default gamepad row did not produce `chosen` (typo, or a DualSense wish with
+            // no UHID): log it.
             if let Some(env) = env.as_deref() {
                 if GamepadPref::from_name(env) != Some(chosen) {
                     tracing::warn!(
                         env,
                         chosen = chosen.as_str(),
-                        "PUNKTFUNK_GAMEPAD unrecognized or unavailable — falling back"
+                        "Default gamepad (PUNKTFUNK_GAMEPAD) unrecognized or unavailable — \
+                         falling back"
                     );
                 }
             }

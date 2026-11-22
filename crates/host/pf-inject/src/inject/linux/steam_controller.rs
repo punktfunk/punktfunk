@@ -255,7 +255,7 @@ fn open_transport(idx: u8) -> Result<DeckTransport> {
     let p = SteamDeckPad::open(idx)?;
     tracing::warn!(
         index = idx,
-        "virtual Steam Deck created as UHID hid-steam — Steam Input WON'T promote it (no USB \
+        "virtual Steam Deck created as UHID hid-steam — Steam Input doesn't promote it (no USB \
          interface), so it won't appear in Game Mode. Load vhci_hcd (usbip) so the pad arrives as a \
          real USB device: `sudo modprobe vhci_hcd`, and ensure it loads at boot."
     );
@@ -363,7 +363,7 @@ impl ScTransport {
         let p = SteamDeckPad::open_model(idx, SteamModel::Controller)?;
         tracing::warn!(
             index = idx,
-            "virtual Steam Controller created as UHID hid-steam — Steam WON'T list it (no USB \
+            "virtual Steam Controller created as UHID hid-steam — Steam doesn't list it (no USB \
              interface). Load vhci_hcd (usbip) so the pad arrives as a real USB device: `sudo \
              modprobe vhci_hcd`, and ensure it loads at boot."
         );

@@ -1924,8 +1924,8 @@ impl GsLoop<'_> {
                     to = %format!("{}x{} {:?}", to.1, to.2, to.0),
                     negotiated = ?(self.cfg.width, self.cfg.height),
                     "gamestream: the capture source changed mode mid-stream — reopened the \
-                     encoder at the delivered size (the client is not told; a strict decoder \
-                     may not follow — see the note at this guard)"
+                     encoder at the delivered size (the client is not told, and a strict \
+                     decoder may not follow)"
                 );
                 Ok(true)
             }

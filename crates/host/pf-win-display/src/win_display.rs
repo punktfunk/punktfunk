@@ -175,8 +175,8 @@ pub fn force_extend_topology() {
     });
     if rc == 0 {
         tracing::info!(
-            "display topology forced to EXTEND (a new IddCx monitor would otherwise be CLONED onto the \
-             existing panel -> no distinct source -> no frames)"
+            "display topology forced to extend (a new IddCx monitor would otherwise be cloned onto the \
+             existing panel, with no distinct source and no frames)"
         );
     } else {
         tracing::warn!("display force-EXTEND topology: SetDisplayConfig rc={rc:#x}");
@@ -844,13 +844,13 @@ pub fn set_active_mode(gdi_name: &str, mode: Mode) -> bool {
 fn disp_change_reason(rc: i32) -> &'static str {
     match rc {
         -1 if crate::input_desktop::input_desktop_is_secure() => {
-            "DISP_CHANGE_FAILED: the SECURE desktop owns input — a UAC consent prompt, the lock \
+            "DISP_CHANGE_FAILED: the secure desktop owns input — a UAC consent prompt, the lock \
              screen or the logon screen is up, and display writes are refused off it. Dismiss the \
              prompt on the host"
         }
         -1 => {
             "DISP_CHANGE_FAILED: the display write was rejected — a host without console-session \
-             access (disconnected RDP session / non-console session) fails ALL display writes \
+             access (disconnected RDP session / non-console session) fails every display write \
              this way"
         }
         -2 => "DISP_CHANGE_BADMODE: the display does not advertise this mode",
@@ -869,7 +869,7 @@ fn sdc_access_denied_hint(rc: i32) -> &'static str {
         return "";
     }
     if crate::input_desktop::input_desktop_is_secure() {
-        " (ERROR_ACCESS_DENIED: the SECURE desktop owns input — a UAC consent prompt, the lock \
+        " (ERROR_ACCESS_DENIED: the secure desktop owns input — a UAC consent prompt, the lock \
          screen or the logon screen is up, and display writes are refused off it. Dismiss the \
          prompt on the host)"
     } else {
@@ -1123,7 +1123,7 @@ pub mod isolate_journal {
         tracing::warn!(
             deactivated = ?targets,
             "display isolate: a previous host exited with the operator's display(s) deactivated for \
-             an EXCLUSIVE session and never restored them — forcing the EXTEND preset so the desk is \
+             an exclusive session and never restored them — forcing the extend preset so the desk is \
              not left dark"
         );
         super::force_extend_topology();
@@ -1345,7 +1345,7 @@ pub fn isolate_displays_ccd_checked(
         // failed re-query: the churn it caused is why this loop retries at all.
         let Some((mut paths, mut modes)) = query_active_config() else {
             tracing::warn!(
-                "display isolate (CCD): re-query FAILED before attempt {attempt}/4 — retrying"
+                "display isolate (CCD): re-query failed before attempt {attempt}/4 — retrying"
             );
             std::thread::sleep(std::time::Duration::from_millis(250));
             continue;
@@ -1412,7 +1412,7 @@ pub fn isolate_displays_ccd_checked(
         // still has to drive COMMIT_MODES.
         if rc != 0 {
             tracing::warn!(
-                "display isolate (CCD): SetDisplayConfig rc={rc:#x}{} — the re-commit did NOT \
+                "display isolate (CCD): SetDisplayConfig rc={rc:#x}{} — the re-commit didn't \
                  apply (COMMIT_MODES/ASSIGN_SWAPCHAIN may not fire for the virtual display)",
                 sdc_access_denied_hint(rc)
             );
@@ -1424,7 +1424,7 @@ pub fn isolate_displays_ccd_checked(
         match count_other_active(keep) {
             Some(0) => {
                 tracing::info!(
-                    "display isolate (CCD): target set {keep:?} is the SOLE active desktop (attempt {attempt}/4, deactivated {others}, rc={rc:#x})"
+                    "display isolate (CCD): target set {keep:?} is the only active desktop (attempt {attempt}/4, deactivated {others}, rc={rc:#x})"
                 );
                 return Some((
                     saved,
@@ -1435,10 +1435,10 @@ pub fn isolate_displays_ccd_checked(
                 ));
             }
             Some(survivors) => tracing::warn!(
-                "display isolate (CCD): {survivors} display(s) STILL active after attempt {attempt}/4 (deactivated {others}, rc={rc:#x}) — re-querying + retrying"
+                "display isolate (CCD): {survivors} display(s) still active after attempt {attempt}/4 (deactivated {others}, rc={rc:#x}) — re-querying + retrying"
             ),
             None => tracing::warn!(
-                "display isolate (CCD): verification query FAILED after attempt {attempt}/4 (rc={rc:#x}) — isolation state UNKNOWN, retrying"
+                "display isolate (CCD): verification query failed after attempt {attempt}/4 (rc={rc:#x}) — isolation state unknown, retrying"
             ),
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -1450,7 +1450,7 @@ pub fn isolate_displays_ccd_checked(
         .map(|t| format!("{} {} \"{}\"", t.key, t.tech, t.friendly))
         .collect();
     tracing::error!(
-        "display isolate (CCD): target set {keep:?} not isolated after 4 attempts — still active or unverifiable: [{}] (field-reported exclusive-mode bug)",
+        "display isolate (CCD): target set {keep:?} not isolated after 4 attempts — still active or unverifiable: [{}]",
         survivors.join(", ")
     );
     Some((saved, IsolateOutcome::Unverified { attempts: 4 }))
@@ -1732,7 +1732,7 @@ pub fn set_virtual_primary_ccd(keep: CcdTargetKey) -> Option<SavedConfig> {
     });
     if rc == 0 {
         tracing::info!(
-            "display primary (CCD): virtual target {keep} set PRIMARY at (0,0); {others} other display(s) kept ACTIVE + packed to its right"
+            "display primary (CCD): virtual target {keep} set primary at (0,0); {others} other display(s) kept active and packed to its right"
         );
     } else {
         tracing::warn!(
@@ -1763,7 +1763,7 @@ pub fn restore_displays_ccd(saved: &SavedConfig) {
     } else {
         tracing::warn!(
             "display isolate (CCD): the restore left every external display dark — keeping the \
-             crash-recovery marker so the next host start forces EXTEND"
+             crash-recovery marker so the next host start forces extend"
         );
     }
 }
@@ -1934,7 +1934,7 @@ fn restore_displays_ccd_inner(saved: &SavedConfig, store: bool) -> bool {
             return false;
         }
         tracing::warn!(
-            "display isolate (CCD): no external physical display active after the restore (rc={apply_rc:#x}, connected={connected}) — forcing the EXTEND preset so the desk is not left dark"
+            "display isolate (CCD): no external physical display active after the restore (rc={apply_rc:#x}, connected={connected}) — forcing the extend preset so the desk is not left dark"
         );
         force_extend_topology();
         // Still dark after EXTEND: remember the set and stop re-forcing.
