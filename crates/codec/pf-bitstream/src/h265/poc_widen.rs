@@ -252,8 +252,9 @@ fn short_term_set<'a>(hdr: &'a SliceHeader, sps: &'a Sps) -> Option<&'a ShortTer
     }
 }
 
-/// Slice segment NALs in the access unit.
-fn vcl_nals(au: &[u8]) -> usize {
+/// Slice segment NALs in the access unit. An intra-refresh wave from NVENC codes its
+/// stripe as a slice of its own, so each of its pictures has two or three.
+pub fn vcl_nals(au: &[u8]) -> usize {
     let mut cursor = Cursor::new(au);
     let mut n = 0;
     while let Ok(nalu) = Nalu::next(&mut cursor) {
@@ -707,6 +708,14 @@ mod tests {
         );
         assert_eq!(current(&h[4]), (vec![true], true, 2), "two slices");
         assert_eq!((h[3].pic_order_cnt_lsb, h[3].poc_lsb_lt[0]), (3, 0));
+    }
+
+    /// Parameter sets around a picture are no slices; each slice NAL of a wave picture is.
+    #[test]
+    fn a_picture_counts_its_slice_nals() {
+        assert_eq!(vcl_nals(&opening()), 1);
+        let wave: Vec<u8> = (0..3).flat_map(|_| p(1, 0, 0)).collect();
+        assert_eq!(vcl_nals(&wave), 3);
     }
 
     /// An end-of-sequence or end-of-bitstream NAL is its two header bytes. One whose second

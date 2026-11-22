@@ -225,12 +225,24 @@ pub(crate) fn marked_strings(bytes: &[u8], marks: &[&str], cap: usize) -> Vec<St
     out
 }
 
+/// An Amlogic decoder, by its OMX or Codec2 name.
+fn is_amlogic(codec_name: &str) -> bool {
+    let name = codec_name.to_ascii_lowercase();
+    name.starts_with("omx.amlogic") || name.starts_with("c2.amlogic")
+}
+
 /// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
 /// long-term references fail behind a POC lsb wrap. `forced` is the debug override.
 pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> bool {
-    let name = codec_name.to_ascii_lowercase();
-    let amlogic = name.starts_with("omx.amlogic") || name.starts_with("c2.amlogic");
-    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(amlogic)
+    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(is_amlogic(codec_name))
+}
+
+/// Whether a picture in several slices stays off the decoder: HEVC on an Amlogic one, which
+/// takes the whole device down decoding it. The host sends such a client one slice a picture,
+/// but an intra-refresh wave from NVENC has two or three, and so has a keyframe forced
+/// during one. No wave heals this decoder.
+pub(crate) fn one_slice_only(codec: u8, codec_name: &str) -> bool {
+    codec == punktfunk_core::quic::CODEC_HEVC && is_amlogic(codec_name)
 }
 
 /// Whether each fed AU goes through the concealer first. HEVC on a Realtek decoder, which keeps
@@ -416,6 +428,21 @@ mod tests {
             "c2.amlogic.av1.decoder",
             Some(true)
         ));
+    }
+
+    #[test]
+    fn only_amlogic_hevc_is_kept_to_one_slice() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+        for (codec, name, want) in [
+            (CODEC_HEVC, "c2.amlogic.hevc.decoder", true),
+            (CODEC_HEVC, "OMX.amlogic.hevc.decoder.awesome2", true),
+            (CODEC_HEVC, "c2.qti.hevc.decoder", false),
+            (CODEC_HEVC, "c2.mtk.hevc.decoder", false),
+            (CODEC_H264, "c2.amlogic.avc.decoder", false),
+            (CODEC_AV1, "c2.amlogic.av1.decoder", false),
+        ] {
+            assert_eq!(super::one_slice_only(codec, name), want, "{name}");
+        }
     }
 
     #[test]
