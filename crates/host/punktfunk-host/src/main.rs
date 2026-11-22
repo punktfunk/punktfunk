@@ -236,6 +236,8 @@ unsafe extern "C" {
 fn main() {
     // Before any `ureq` agent (cover-art, webhooks, catalog, updates).
     punktfunk_core::tls::install_default_provider();
+    #[cfg(target_os = "macos")]
+    let args = launch_args();
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
     // SCM `service run` has no console; log to a file, not stderr.
@@ -297,10 +299,16 @@ fn main() {
     windows::entry::install_crash_handler();
 
     #[cfg(target_os = "macos")]
-    if hostsys::app_loop::wanted() {
-        hostsys::app_loop::run_beside(run);
-    }
+    hostsys::app_loop::start(&args, run);
     run();
+}
+
+/// The command line this process runs: argv, except that a bare launch of the Mac app serves.
+fn launch_args() -> Vec<String> {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(target_os = "macos")]
+    let argv = hostsys::app_loop::launch_args(argv, &std::env::current_exe().unwrap_or_default());
+    argv
 }
 
 fn run() {
@@ -488,7 +496,7 @@ fn startup(args: &[String]) {
 
 fn real_main() -> Result<()> {
     take_env_credentials();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = launch_args();
     // `play`'s environment is the game's: no encoder opt-in of the host's in it.
     #[cfg(target_os = "linux")]
     let play = args.first().is_some_and(|a| a == "play");
@@ -616,7 +624,7 @@ fn real_main() -> Result<()> {
             print_usage();
             Ok(())
         }
-        // No implicit `serve`; bare invocation is `None` above and prints help.
+        // A bare launch prints help above, unless `launch_args` made it the Mac app's `serve`.
         Some(other) => match windows::entry::subcommand(other, &args) {
             Some(result) => result,
             None => bail!("unknown command '{other}' (try --help)"),
