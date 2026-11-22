@@ -13,16 +13,20 @@ pub(crate) type Rung = (Option<bool>, Option<bool>);
 /// key profile, `None` for no low-latency key at all. See `bring_up` for why these axes, and why
 /// in this order.
 ///
-/// Consecutive duplicates are collapsed: the `present_backend` sysprop and the low-latency toggle
-/// may each already have shed what a rung was going to shed, and re-running a configuration the
-/// codec just refused buys nothing but another failed `start`. The first rung is always exactly
-/// what the session asked for, so a device that works is never charged for this ladder.
-pub(crate) fn bring_up_rungs(asc_wanted: bool, low_latency: bool) -> Vec<Rung> {
+/// `keys` is the first rung's: the low-latency toggle, or `None` on a box that decodes this
+/// codec without any key ([`crate::codec_format::keyless`]), whose ladder then sheds backends
+/// only.
+///
+/// Consecutive duplicates are collapsed: the `present_backend` sysprop and `keys` may each
+/// already have shed what a rung was going to shed, and re-running a configuration the codec
+/// just refused buys nothing but another failed `start`. The first rung is always exactly what
+/// the session asked for, so a device that works is never charged for this ladder.
+pub(crate) fn bring_up_rungs(asc_wanted: bool, keys: Option<bool>) -> Vec<Rung> {
     let mut rungs = vec![
-        (asc_wanted.then_some(true), Some(low_latency)),
-        (asc_wanted.then_some(false), Some(low_latency)),
-        (None, Some(low_latency)),
-        (None, Some(false)),
+        (asc_wanted.then_some(true), keys),
+        (asc_wanted.then_some(false), keys),
+        (None, keys),
+        (None, keys.map(|_| false)),
         (None, None),
     ];
     rungs.dedup();
@@ -68,7 +72,7 @@ mod tests {
         // point of the middle rung), then the `AImageReader` entirely, then the aggressive keys,
         // then every low-latency key.
         assert_eq!(
-            bring_up_rungs(true, true),
+            bring_up_rungs(true, Some(true)),
             [
                 (Some(true), Some(true)),
                 (Some(false), Some(true)),
@@ -79,12 +83,12 @@ mod tests {
         );
         // `present_backend=surfaceview` already shed ASC — both ASC rungs collapse away.
         assert_eq!(
-            bring_up_rungs(false, true),
+            bring_up_rungs(false, Some(true)),
             [(None, Some(true)), (None, Some(false)), (None, None)]
         );
         // Low-latency mode off ⇒ the keys are already the plain set; the aggressive rung collapses.
         assert_eq!(
-            bring_up_rungs(true, false),
+            bring_up_rungs(true, Some(false)),
             [
                 (Some(true), Some(false)),
                 (Some(false), Some(false)),
@@ -94,13 +98,21 @@ mod tests {
         );
         // Only the keys left to shed: one retry, and no second `start` of the same thing.
         assert_eq!(
-            bring_up_rungs(false, false),
+            bring_up_rungs(false, Some(false)),
             [(None, Some(false)), (None, None)]
         );
+        // A box that takes no key sheds backends only, and has a label of its own.
+        let keyless = bring_up_rungs(true, None);
+        assert_eq!(
+            keyless,
+            [(Some(true), None), (Some(false), None), (None, None)]
+        );
+        assert_eq!(ladder_label(&keyless), "on-gn-sn");
+        assert_eq!(bring_up_rungs(false, None), [(None, None)]);
 
         for asc in [true, false] {
             for ll in [true, false] {
-                let rungs = bring_up_rungs(asc, ll);
+                let rungs = bring_up_rungs(asc, Some(ll));
                 // A device that works must pay nothing for this ladder: rung 0 is always exactly
                 // what the session asked for.
                 assert_eq!(rungs[0], (asc.then_some(true), Some(ll)));
@@ -119,7 +131,7 @@ mod tests {
     #[test]
     fn each_ladder_has_its_own_label() {
         let labels = [(true, true), (false, true), (true, false), (false, false)]
-            .map(|(asc, ll)| ladder_label(&bring_up_rungs(asc, ll)));
+            .map(|(asc, ll)| ladder_label(&bring_up_rungs(asc, Some(ll))));
         assert_eq!(
             labels,
             ["oa-ga-sa-sp-sn", "sa-sp-sn", "op-gp-sp-sn", "sp-sn"]
