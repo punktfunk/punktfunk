@@ -56,9 +56,9 @@ The stream is HDR while a game shows HDR and SDR the rest of the time: the Steam
 games stream as SDR, and the picture pauses for a moment when a game turns HDR on or off. The
 Steam UI over a running HDR game stays HDR.
 
-Two kinds of session stay HDR from connect to disconnect instead: one from a client that can't
-switch during a session, and every session on a host that lets devices
-[share one screen](/docs/play-together).
+A session from a client that can't switch during a session stays HDR from connect to disconnect
+instead. On a host that lets devices [share one screen](/docs/play-together), the stream is HDR
+for as long as a second device is connected, and switches again once one device is left.
 
 SDR content in an HDR picture (the Steam overlay, or everything in a session that stays HDR)
 starts at **Host → Game Mode → SDR brightness** (advanced, `PUNKTFUNK_GAMESCOPE_SDR_NITS`):

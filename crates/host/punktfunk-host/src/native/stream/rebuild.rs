@@ -514,6 +514,7 @@ impl StreamState {
             bit_depth: self.bit_depth,
             chroma_444: self.plan.chroma.is_444(),
             full_range: self.plan.full_range(self.plan.hdr, self.bit_depth),
+            hdr: self.plan.hdr,
         }
     }
 
@@ -919,7 +920,9 @@ impl StreamState {
 
     /// The content on the session's gamescope turned HDR or SDR: stop the capture and attach
     /// it again in that range, the display lit as it is. `Err` when no capture comes back up.
-    /// A display that is not lit in HDR streams SDR whatever it shows, and is left alone.
+    /// A display that is not lit in HDR streams SDR whatever it shows, and is left alone. A
+    /// screen with company streams as it is lit, and a capture a joiner is on stays as it is:
+    /// the watcher's next look asks again.
     #[cfg(target_os = "linux")]
     pub(super) fn on_content(&mut self) -> Result<()> {
         let streamed = (self.facts.format_facts.content_hdr).filter(|_| self.display.vd_params.hdr);
@@ -928,7 +931,16 @@ impl StreamState {
             return Ok(());
         };
         follow.point(streamed.is_some(), generation);
-        let Some(hdr) = streamed.and_then(|s| follow.wants(s)) else {
+        let Some((streamed, look)) = streamed.zip(follow.look()) else {
+            return Ok(());
+        };
+        let stop = self.facts.life.stop_flag();
+        let hdr = look || crate::vdisplay::admission::company(stop);
+        if hdr == streamed {
+            return Ok(());
+        }
+        // Held until the new range is published: a join in between reads neither.
+        let Some(_claim) = crate::vdisplay::admission::move_format(stop) else {
             return Ok(());
         };
         self.rebuild(RebuildAsk::Content(hdr))
@@ -2398,6 +2410,7 @@ pub(crate) mod tests {
                 bit_depth: st.bit_depth,
                 chroma_444: st.plan.chroma.is_444(),
                 full_range: st.plan.full_range(st.plan.hdr, st.bit_depth),
+                hdr: st.plan.hdr,
             });
             let d = &st.display;
             let runs = (

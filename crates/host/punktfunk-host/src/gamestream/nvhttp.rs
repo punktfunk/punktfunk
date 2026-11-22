@@ -387,7 +387,7 @@ async fn admit_native(
     match native {
         Admission::Separate => {}
         Admission::Join(_, d)
-            if d.isolation.is_none() && joined_hdr(d.hdr, hdr_asked).is_none() =>
+            if d.isolation.is_none() && joined_hdr(d.stream_hdr(), hdr_asked).is_none() =>
         {
             tracing::warn!(
                 "GameStream launch rejected — the display to share is HDR and this client asked for none"
