@@ -646,3 +646,48 @@ describe("access classification", () => {
 		}
 	});
 });
+
+describe.skipIf(process.platform === "win32")("steamRoots on macOS", () => {
+	test("finds Steam.app's data and the libraries it lists", () => {
+		const home = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pf-steam-mac-")),
+		);
+		try {
+			const root = path.join(home, "Library", "Application Support", "Steam");
+			const extra = path.join(home, "Games", "SteamLibrary");
+			fs.mkdirSync(path.join(root, "steamapps"), { recursive: true });
+			fs.mkdirSync(path.join(extra, "steamapps"), { recursive: true });
+			fs.mkdirSync(path.join(root, "userdata", "1234", "config"), {
+				recursive: true,
+			});
+			fs.writeFileSync(
+				path.join(root, "steamapps", "libraryfolders.vdf"),
+				`"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"${root}"\n\t}\n\t"1"\n\t{\n\t\t"path"\t\t"${extra}"\n\t}\n}\n`,
+			);
+			// A child with that HOME: this runtime's os.homedir() ignores a changed process.env.
+			const parsers = path.join(
+				import.meta.dir,
+				"..",
+				"src",
+				"library",
+				"parsers",
+				"index.ts",
+			);
+			const child = Bun.spawnSync(
+				[
+					process.execPath,
+					"-e",
+					`const p = await import(${JSON.stringify(parsers)}); console.log(JSON.stringify([p.steamRoots(), p.steamLibraryDirs(), p.steamUserConfigDirs()]));`,
+				],
+				{ env: { ...process.env, HOME: home } },
+			);
+			expect(JSON.parse(child.stdout.toString())).toEqual([
+				[root],
+				[path.join(root, "steamapps"), path.join(extra, "steamapps")],
+				[path.join(root, "userdata", "1234", "config")],
+			]);
+		} finally {
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	});
+});
