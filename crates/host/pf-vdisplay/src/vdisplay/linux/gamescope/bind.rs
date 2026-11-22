@@ -315,21 +315,20 @@ fn bind_survives_namespace(bind: &SessionBind) -> bool {
                 }
                 Some(uid) => {
                     tracing::warn!(
-                    uid,
-                    ours,
-                    "gamescope: probed the session unit's namespace and {X11_SOCKET_DIR} reads as \
-                     uid {uid} inside it, not ours — gamescope's Xwayland would refuse it and the \
-                     session would never start. NOT redirecting {DISTRO_GAMESCOPE_PATH}; the \
-                     session runs the distro's stock gamescope instead (no HDR, no in-node cursor, \
-                     games see 60 Hz) but it starts."
-                );
+                        uid,
+                        ours,
+                        "gamescope: {X11_SOCKET_DIR} reads as uid {uid} inside the session unit's \
+                     namespace, not ours — Xwayland would refuse it and the session would never \
+                     start. Not redirecting {DISTRO_GAMESCOPE_PATH}: the session runs the distro's \
+                     stock gamescope (no HDR, no in-node cursor, games see 60 Hz)"
+                    );
                     Some(false)
                 }
                 None if out.is_err() => {
                     tracing::warn!(
                         error = ?out.as_ref().err(),
                         "gamescope: the session-namespace probe did not run (systemd-run --user \
-                         failed or passed its budget) — NOT redirecting {DISTRO_GAMESCOPE_PATH} \
+                         failed or passed its budget) — not redirecting {DISTRO_GAMESCOPE_PATH} \
                          for this launch; asked again at the next one"
                     );
                     None
@@ -338,8 +337,8 @@ fn bind_survives_namespace(bind: &SessionBind) -> bool {
                     tracing::warn!(
                         error = ?out.as_ref().err(),
                         status = ?out.as_ref().ok().map(|o| o.status),
-                        "gamescope: could not probe the session unit's namespace (systemd-run --user \
-                         failed, or it rejected one of the bind properties) — NOT redirecting \
+                        "gamescope: the session-namespace probe failed (systemd-run --user failed, \
+                         or it rejected one of the bind properties) — not redirecting \
                          {DISTRO_GAMESCOPE_PATH}, since whatever stopped the probe would have stopped \
                          the session too"
                     );
@@ -378,21 +377,18 @@ pub(super) fn note_bind_hazard(failed_unit: &str) {
             unit = failed_unit,
             evidence = marker,
             "gamescope: the session did not come up with the {DISTRO_GAMESCOPE_PATH} bind armed, \
-             and its log carries the signature of the reason — a mount namespace in a systemd USER \
-             unit is also a USER namespace, in which only this uid is mapped, so root-owned \
-             {X11_SOCKET_DIR} reads as `nobody` and gamescope's Xwayland refuses to open a display. \
-             Disarming the bind and relaunching without it: the session runs the distro's stock \
-             gamescope (no HDR, no in-node cursor, games see 60 Hz) but it STARTS. The bind stays \
-             off until this host process restarts."
+             and its log shows why — a mount namespace in a systemd user unit is also a user \
+             namespace, where root-owned {X11_SOCKET_DIR} reads as `nobody` and Xwayland refuses \
+             to open a display. Relaunching without the bind: the session runs the distro's stock \
+             gamescope (no HDR, no in-node cursor, games see 60 Hz). The bind stays off until \
+             the host restarts"
         ),
         None => tracing::warn!(
             unit = failed_unit,
-            "gamescope: the session did not come up with the {DISTRO_GAMESCOPE_PATH} bind armed. \
-             Nothing in the session log names the known cause (the user namespace that comes with \
-             the unit's mount namespace, which makes root-owned {X11_SOCKET_DIR} read as `nobody` \
-             to gamescope's Xwayland), so this may be an unrelated failure — disarming and \
-             relaunching without the bind anyway, because a session that will not start is worse \
-             than one without our flags. The bind stays off until this host process restarts."
+            "gamescope: the session did not come up with the {DISTRO_GAMESCOPE_PATH} bind armed, \
+             and its log names no known cause (the bind's user namespace hides root-owned \
+             {X11_SOCKET_DIR} from Xwayland) — relaunching without the bind anyway. The bind \
+             stays off until the host restarts"
         ),
     }
 }
@@ -513,10 +509,10 @@ pub(super) fn arm_session_bind(wrapper: &std::path::Path) -> Option<SessionBind>
             Err(e) => {
                 tracing::warn!(
                     error = %format!("{e:#}"),
-                    "gamescope: could not prepare a user-owned {X11_SOCKET_DIR} for the session's \
-                     mount namespace — NOT redirecting {DISTRO_GAMESCOPE_PATH}, because the \
-                     namespace alone would stop gamescope's Xwayland from opening a display. The \
-                     session runs the distro's stock gamescope instead."
+                    "gamescope: no user-owned {X11_SOCKET_DIR} for the session's mount namespace \
+                     — not redirecting {DISTRO_GAMESCOPE_PATH}, because the namespace alone would \
+                     stop Xwayland opening a display. The session runs the distro's stock \
+                     gamescope instead"
                 );
                 return None;
             }
@@ -539,19 +535,17 @@ pub(super) fn arm_session_bind(wrapper: &std::path::Path) -> Option<SessionBind>
             bin = %gamescope_bin(),
             x11_dir = %dir.display(),
             "gamescope: binding the patched build over {DISTRO_GAMESCOPE_PATH} inside the session \
-             unit — this box's gamescope-session-plus hardcodes that path and reads GAMESCOPE_BIN \
-             nowhere (Nobara), so nothing else reaches it. Nothing outside this unit is affected. A \
-             user-owned {X11_SOCKET_DIR} rides along because the mount namespace that redirect \
-             costs brings a USER namespace with it, in which the real (root-owned) socket directory \
-             reads as `nobody` and gamescope's Xwayland refuses to open a display."
+             unit — this box's gamescope-session-plus hardcodes that path and ignores \
+             GAMESCOPE_BIN (Nobara). Nothing outside the unit is affected. A user-owned \
+             {X11_SOCKET_DIR} rides along, because the bind's user namespace hides the \
+             root-owned one from Xwayland"
         ),
         None => tracing::info!(
             bin = %gamescope_bin(),
             "gamescope: binding the patched build over {DISTRO_GAMESCOPE_PATH} inside the session \
-             unit — this box's gamescope-session-plus hardcodes that path and reads GAMESCOPE_BIN \
-             nowhere (Nobara), so nothing else reaches it. Nothing outside this unit is affected. \
-             {X11_SOCKET_DIR} is already ours, so the unit's user namespace maps it unchanged and \
-             it needs no replacing."
+             unit — this box's gamescope-session-plus hardcodes that path and ignores \
+             GAMESCOPE_BIN (Nobara). Nothing outside the unit is affected. {X11_SOCKET_DIR} is \
+             already ours, so the unit's user namespace maps it unchanged"
         ),
     }
     Some(bind)

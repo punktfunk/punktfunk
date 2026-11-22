@@ -28,9 +28,8 @@ pub fn open_video(resolved: &Resolved, params: OpenParams) -> Result<Box<dyn Enc
     if params.cursor_blend && !inner.caps().blends_cursor {
         tracing::warn!(
             backend,
-            "session negotiated a composited cursor but this encode backend does not blend \
-             CapturedFrame::cursor — the pointer will be MISSING from the stream unless the \
-             capturer composites it"
+            "session negotiated a composited cursor but this encode backend can't blend one — \
+             the pointer is missing from the stream unless the capturer composites it"
         );
     }
     Ok(track_session(inner, backend))

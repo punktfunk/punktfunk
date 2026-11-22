@@ -394,7 +394,7 @@ pub(crate) async fn serve(
         tracing::info!(
             paired = st.paired_clients,
             require = opts.require_pairing,
-            "pairing armed — enter the PIN shown on the console to pair a client"
+            "pairing armed — enter the PIN printed on stderr to pair a client"
         );
         // Shared secret: print to the operator's terminal, not tracing — GET /api/v1/logs
         // ships the DEBUG ring.
@@ -1189,9 +1189,7 @@ where
         crate::native_pairing::PinAttempt::Pin(pin) => pin,
         crate::native_pairing::PinAttempt::Disarmed => {
             close_rejected(conn, punktfunk_core::reject::RejectReason::PairingNotArmed).await;
-            anyhow::bail!(
-                "pairing not armed (arm it in the console, or start with --allow-pairing)"
-            )
+            anyhow::bail!("pairing not armed (arm it in the console or with `ctl pair arm`)")
         }
         // Armed for a different device: reject without the ceremony so this does not burn the window.
         crate::native_pairing::PinAttempt::BoundToOther => {
@@ -2093,9 +2091,8 @@ async fn stream_session(
         () = stop_overdue(scope.life().stop_flag()) => {
             tracing::error!(
                 grace_s = STREAM_STOP_GRACE.as_secs(),
-                "stream thread has not returned since the session was stopped — abandoning it so \
-                 the session slot is freed. Its capture/encoder stay held until the stuck call \
-                 returns; this is a HOST WEDGE — please report it with the log above"
+                "stream thread wedged after stop: abandoned to free the session slot, its capture \
+                 and encoder held until the stuck call returns — report this with the log above"
             );
             anyhow::bail!("stream thread wedged after stop");
         }

@@ -482,11 +482,9 @@ impl PlaneFormat {
             tracing::warn!(
                 promised_hz = self.rate_hz,
                 capture_hz = live_rate,
-                "the capture path changed rate under a session the hi-res gate had already \
-                 vetted — ending the lossless audio plane rather than sending samples under \
-                 a label that is not theirs (video continues). Reconnect: the gate re-runs \
-                 against the capture path as it now is, and resolves either the real rate or \
-                 Opus 48 kHz"
+                "the capture path changed rate under the lossless plane — ending it rather than \
+                 mislabel the samples; video continues, and audio goes on as 48 kHz Opus where \
+                 the client takes an audio change, else after a reconnect"
             );
             return false;
         }

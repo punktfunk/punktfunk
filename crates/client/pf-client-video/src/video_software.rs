@@ -349,7 +349,7 @@ impl Av1Software {
             bail!(
                 "rav1d would run with {delay} frame context(s) (n_threads={}, \
                  max_frame_delay={}); anything below {AV1_MIN_FRAME_CONTEXTS} takes the \
-                 single-frame-context path, which ABORTS the process on any decode error",
+                 single-frame-context path, which aborts the process on any decode error",
                 settings.n_threads,
                 settings.max_frame_delay,
             );

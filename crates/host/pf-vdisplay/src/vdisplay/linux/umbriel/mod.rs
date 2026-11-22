@@ -51,7 +51,7 @@ pub(crate) fn is_available() -> bool {
 pub(crate) fn probe() -> Result<()> {
     ipc::outputs().context("ask umbriel over its IPC socket")?;
     if !ipc::has_virtual_outputs()? {
-        bail!("umbriel has no output-destroy: it predates virtual outputs (2026-09-28); update it")
+        bail!("umbriel has no output-destroy: it predates virtual outputs; update it")
     }
     Ok(())
 }

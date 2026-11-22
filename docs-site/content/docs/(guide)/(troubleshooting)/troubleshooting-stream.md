@@ -68,20 +68,20 @@ encoder sharing**.
 A freeze on a steady rhythm is a display or driver disturbance, not bandwidth. While it happens,
 the session's row on **Home** → **Details** → **Capture health** reads `stalled`.
 
-Search the log on the console's **Troubleshooting** page for `METRONOMIC`. The line names the cause
-and its cures:
+Search the log on the console's **Troubleshooting** page for `capture stalls repeat`. The line
+names the cause and its cures:
 
-- **…coincide with Windows monitor hot-plug/re-enumeration events**: a display, cable, switch or
+- **…coincide with Windows monitor hot-plug events**: a display, cable, switch or
   AVR re-probes its link. Turn off the display's auto input scan (on a TV also instant-on and CEC),
   unplug it at the GPU, or fit a dummy plug.
   [Disable monitor devices (PnP)](/docs/virtual-displays#disable-monitor-devices-pnp) stops
   Windows reacting.
-- **…with NO coinciding OS display event**: the cause is below Windows, such as a sleeping screen the
+- **…with no Windows display event**: the cause is below Windows, such as a sleeping screen the
   GPU driver services, display-poller software (SteelSeries GG, SignalRGB) or the refresh rate. Try
   another refresh rate. A laptop panel settles with **Displays** → **Customise** → **Your monitors
   while streaming** → **Stay on, stream is main**.
 
-A freeze with no steady rhythm logs `REPEATING without a stable period` with the same fields.
+A freeze with no steady rhythm logs `repeat without a stable period` with the same fields.
 
 ## Any host
 

@@ -449,10 +449,8 @@ pub fn resolve_split_subframe(
         if subframe_forced {
             tracing::warn!(
                 split_mode,
-                "PUNKTFUNK_NVENC_SUBFRAME=1 cannot be honoured on AV1 — its sub-frame units are \
-                 TILES and the chunked reader cuts on Annex-B slice boundaries, so arming the \
-                 writer would ship only the first tile of every frame; sub-frame readback \
-                 disabled for this session (split encode is unaffected)"
+                "PUNKTFUNK_NVENC_SUBFRAME=1 ignored on AV1: its sub-frame units are tiles, not \
+                 slices, so sub-frame readback is off for this session (split encode is unaffected)"
             );
         } else {
             tracing::debug!(
@@ -488,9 +486,9 @@ pub fn resolve_split_subframe(
     // the ceiling-cache key matches the session.
     if codec == Codec::H265 && subframe && split_mode == M::NV_ENC_SPLIT_AUTO_MODE as u32 {
         tracing::debug!(
-            "NVENC: split-encode AUTO with sub-frame readback on — the driver cannot split HEVC \
-             in this combination, so this session runs SINGLE-ENGINE (measured). Set \
-             PUNKTFUNK_NVENC_SUBFRAME=0 to trade sub-frame for a real split."
+            "NVENC: split-encode auto with sub-frame readback on — the driver can't split HEVC \
+             in this combination, so the session runs on one engine; set \
+             PUNKTFUNK_NVENC_SUBFRAME=0 for a real split"
         );
     }
     (split_mode, subframe)

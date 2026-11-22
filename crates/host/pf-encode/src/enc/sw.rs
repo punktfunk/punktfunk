@@ -195,10 +195,11 @@ impl Encoder for OpenH264Encoder {
                     self.src_format
                 )
             }
-            // NV12/P010/YUV444 are GPU outputs for NVENC; this path only sees CPU RGB.
+            // NV12/P010/YUV444 are GPU outputs; this path only sees CPU RGB.
             PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::Yuv444 => {
                 anyhow::bail!(
-                    "software encoder cannot encode YUV GPU frames (NV12/P010/YUV444 → NVENC only)"
+                    "software encoder takes CPU RGB frames only, got {:?}",
+                    self.src_format
                 )
             }
         };

@@ -57,7 +57,7 @@ impl PadCreateFault {
     pub fn hint(self) -> &'static str {
         match self {
             PadCreateFault::IndexOwnedElsewhere => {
-                " — this pad index is already owned by another LIVE process (on a Windows host \
+                " — this pad index is already owned by another live process (on a Windows host \
                  that is the LocalSystem PunktfunkHost service, whose session still holds the \
                  pad). The drivers are not the problem and reinstalling them will not help: the \
                  retry succeeds on its own once that process releases the index (end its session, \

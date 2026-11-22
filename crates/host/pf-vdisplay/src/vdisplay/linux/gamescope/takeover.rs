@@ -502,7 +502,7 @@ pub fn restore_takeover_on_startup() {
     if remove_session_plus_dropin() {
         tracing::warn!(
             "gamescope: removed a leftover gamescope-session-plus bind drop-in from a previous \
-             host instance — it asks the box's OWN Game Mode session for a mount namespace, and \
+             host instance — it asks the box's own Game Mode session for a mount namespace, and \
              everything it binds lives in tmpfs, so after a reboot that unit could not start at all"
         );
         systemctl_user(&["daemon-reload"]);
@@ -897,14 +897,12 @@ pub fn preflight_takeover_privilege() {
         %dm,
         helper,
         group,
-        "gamescope: the managed takeover on this box has to stop {dm} for a stream, which runs \
-         through {helper} — and that helper only serves members of the '{group}' group, which \
-         '{user}' is not in. Every takeover will degrade silently: the stream mirrors the box's \
-         own session instead, which with the panel off looks like a black screen on every \
-         connect. Fix it once with `sudo usermod -aG {group} {user}`, then restart the computer — \
-         a lingering `systemd --user` keeps the group set it started with, and the same group gates \
-         the virtual Steam Deck pad's usbip nodes. It can present arbitrary emulated USB devices, \
-         so join it only on a machine you trust."
+        "gamescope: the managed takeover has to stop {dm} through {helper}, which only serves \
+         members of the '{group}' group, and '{user}' is not one — every takeover falls back to \
+         mirroring the box's own session, a black screen when the panel is off. Run `sudo usermod \
+         -aG {group} {user}` and restart the computer (a lingering `systemd --user` keeps its old \
+         group set). The group also gates the virtual Steam Deck pad's usbip nodes, which can \
+         present arbitrary emulated USB devices, so join it only on a machine you trust"
     );
 }
 
@@ -1294,14 +1292,13 @@ fn watch_for_relogin_storm(before: Option<u64>) {
             logins,
             window_s = STORM_PROBE_WINDOW.as_secs(),
             rate = %format!("{per_sec:.1}/s"),
-            "this box is in a display-manager RELOGIN STORM — logind is opening sessions faster \
-             than once a second. Every udev consumer on the box is drowning in the fallout: \
-             expect the gamepad to read at a few Hz instead of 250, WirePlumber to burn CPU \
-             re-enumerating, and iio-sensor-proxy to crash-loop. NO audio, input or PipeWire \
-             measurement taken now is valid — find what is relogging first. Usual cause: a \
-             gamescope session unit left masked while the display manager is running, so every \
-             autologin fails instantly (`systemctl --user list-unit-files 'gamescope-session*'`); \
-             `systemctl --user unmask --runtime <unit>` clears it, a reboot clears it too"
+            "this box is in a display-manager relogin storm — logind is opening sessions faster \
+             than once a second. The gamepad reads at a few Hz instead of 250, WirePlumber burns \
+             CPU and iio-sensor-proxy crash-loops, so audio, input and PipeWire measurements \
+             taken now are invalid. Usual cause: a gamescope session unit left masked while the \
+             display manager runs, so every autologin fails instantly (`systemctl --user \
+             list-unit-files 'gamescope-session*'`); `systemctl --user unmask --runtime <unit>` \
+             or a reboot clears it"
         );
     });
 }
@@ -1384,7 +1381,7 @@ pub fn schedule_restore_tv_session(quit: bool, slept: Duration) {
     match delay {
         None => tracing::info!(
             "gamescope: keep-alive=forever — managed session held (no TV-restore scheduled; \
-             return to gaming mode or restart the host to free it)"
+             free it with /display/release, by returning to gaming mode or by restarting the host)"
         ),
         Some(delay) => tracing::info!(
             secs = delay.as_secs(),
@@ -1695,7 +1692,7 @@ fn handback_watch(units: &[String]) {
     tracing::warn!(
         secs = HANDBACK_GRACE.as_secs(),
         units = ?units,
-        "gamescope: NOTHING is driving the box's panel {}s after the hand-back — its screen is \
+        "gamescope: nothing is driving the box's panel {}s after the hand-back — its screen is \
          dark. Escalating: stopping the autologin unit so the display manager relogins into a \
          session with a seat",
         HANDBACK_GRACE.as_secs()
@@ -1746,7 +1743,7 @@ fn handback_watch(units: &[String]) {
     }
     tracing::error!(
         units = ?units,
-        "gamescope: the box has NO session driving its panel and every automatic remedy failed — \
+        "gamescope: the box has no session driving its panel and every automatic remedy failed — \
          its screen stays dark until someone runs `systemctl --user restart <unit>` for one of \
          these, or `sudo systemctl restart display-manager.service`. Set \
          PUNKTFUNK_RECOVER_SESSION_CMD to let the host do this itself"

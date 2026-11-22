@@ -1145,7 +1145,7 @@ PAIRING
     approve <ID> [--name N] [--preset P] [--expires-in S]
     deny <ID>
     pin <PIN> <UNIQUEID> <FP> <PEER_IP>
-                                 submit to the exact ceremony shown by `status`
+                                 submit to the exact ceremony shown by `pair status`
 
 DEVICES
     clients                      paired devices on both planes

@@ -628,7 +628,7 @@ fn run(
                 root = %format!("{}x{}", d.root_size.0, d.root_size.1),
                 negotiated = %format!("{}x{}", frame.0, frame.1),
                 "gamescope cursor: the nested root and the captured frame are different sizes \
-                 (gamescope -w/-h vs -W/-H) — scaling the pointer POSITION into frame space; the \
+                 (gamescope -w/-h vs -W/-H) — scaling the pointer position into frame space; the \
                  cursor bitmap stays at root scale"
             );
         }

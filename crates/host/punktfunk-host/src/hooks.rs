@@ -529,7 +529,7 @@ pub(crate) fn hold(h: &HookEntry, ev: &crate::events::HostEvent) {
     if let Some(cmd) = h.run.as_deref().filter(|c| !c.trim().is_empty()) {
         let label = cmd_label(cmd);
         match exec_path_check(cmd) {
-            Err(e) => tracing::error!(cmd = %label, "REFUSING hook command — {e}"),
+            Err(e) => tracing::error!(cmd = %label, reason = %e, "hook command refused"),
             Ok(()) => {
                 tracing::info!(cmd = %label, kind = ev.kind.name(), "hook: holding the launch");
                 run_hook_process(cmd, &json, &flatten_env(ev), timeout, h.elevated);
@@ -578,7 +578,7 @@ fn fire_exec(
         return;
     };
     if let Err(e) = exec_path_check(&cmd) {
-        tracing::error!(cmd = %label, "REFUSING hook command — {e}");
+        tracing::error!(cmd = %label, reason = %e, "hook command refused");
         return;
     }
     let json = serde_json::to_string(ev).unwrap_or_else(|_| "{}".to_string());
@@ -1113,7 +1113,7 @@ fn post_webhook(url: &str, json: &str, secret_file: Option<&std::path::Path>, ti
             Err(e) => {
                 // Configured but unreadable: the operator wants signing. Do not POST unsigned.
                 tracing::error!(path = %path.display(), error = %e,
-                    "webhook HMAC secret unreadable — NOT posting unsigned");
+                    "webhook HMAC secret unreadable — not posting unsigned");
                 return;
             }
         }
@@ -1205,7 +1205,7 @@ fn run_prep_on(
         }
         let label = cmd_label(cmd);
         if let Err(e) = exec_path_check(cmd) {
-            tracing::error!(cmd = %label, "REFUSING prep command — {e}");
+            tracing::error!(cmd = %label, reason = %e, "prep command refused");
             continue;
         }
         tracing::info!(cmd = %label, "prep: running");
@@ -1239,7 +1239,7 @@ impl Drop for PrepGuard {
                 for (cmd, elevated) in undo.iter().rev() {
                     let label = cmd_label(cmd);
                     if let Err(e) = exec_path_check(cmd) {
-                        tracing::error!(cmd = %label, "REFUSING prep undo command — {e}");
+                        tracing::error!(cmd = %label, reason = %e, "prep undo command refused");
                         continue;
                     }
                     tracing::info!(cmd = %label, "prep: running undo");

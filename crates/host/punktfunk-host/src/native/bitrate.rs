@@ -180,7 +180,8 @@ pub(super) fn resolve_bitrate_kbps_for(
                 tracing::warn!(
                     pin_kbps = pin,
                     ceiling_kbps = ceiling,
-                    "PyroWave bitrate pin exceeds PUNKTFUNK_PYROWAVE_MAX_MBPS — capping to it"
+                    "PyroWave bitrate pin exceeds the PyroWave bitrate cap \
+                     (PUNKTFUNK_PYROWAVE_MAX_MBPS) — capping to it"
                 );
                 return ceiling.max(MIN_BITRATE_KBPS);
             }

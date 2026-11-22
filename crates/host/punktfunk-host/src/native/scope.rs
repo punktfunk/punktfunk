@@ -155,10 +155,9 @@ impl Held {
             // The next create on that index fails as already-owned until this thread returns.
             tracing::warn!(
                 grace_s = SIDE_THREAD_JOIN_GRACE.as_secs(),
-                "audio/input threads did not exit after the session stopped — detaching them. \
-                 This session's virtual gamepads are STILL HELD by the detached input thread \
-                 (devnode + pad-index mailbox on Windows), so a pad create on the same index \
-                 will be refused as already-owned until it returns"
+                "audio/input threads did not exit after the session stopped — detaching them; \
+                 the input thread still holds this session's virtual pads, so a new pad on the \
+                 same index is refused until it returns"
             );
         }
         for thread in threads.into_iter().filter(|t| t.is_finished()) {

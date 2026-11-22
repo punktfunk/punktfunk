@@ -222,12 +222,11 @@ fn load_factory() -> std::result::Result<AmfLib, String> {
             tracing::warn!(
                 amf_version = %amf_version_str(version),
                 dll = %dll_desc,
-                "AMF runtime is older than the validated 1.4.36 baseline — accepted (the core \
-                 encode ABI is stable), but advanced features (LTR / intra-refresh recovery, AV1 \
-                 coded-size alignment, in-band HDR metadata) validated on 1.4.36 may be \
-                 unavailable on this driver and will degrade individually (see the per-property \
-                 logs below). Update to AMD Adrenalin 25.1.1+ for the fully-validated path \
-                 (Polaris/Vega drivers stay on 1.4.31 and only get the core path)."
+                "AMF runtime is older than the validated 1.4.36 — the core encode works, but LTR \
+                 and intra-refresh recovery, AV1 coded-size alignment and in-band HDR metadata \
+                 may be unavailable (the per-property logs below say which). Update to AMD \
+                 Adrenalin 25.1.1 or newer; Polaris and Vega drivers stay on 1.4.31 and only get \
+                 the core path"
             );
         }
         Ok(AmfLib { factory, version })
@@ -1146,7 +1145,7 @@ impl AmfEncoder {
             );
         }
         if ten_bit && codec == Codec::H264 {
-            bail!("native AMF: 10-bit is HEVC-only (H.264 High10 is not a VCN mode)");
+            bail!("native AMF: 10-bit is HEVC/AV1-only (H.264 High10 is not a VCN mode)");
         }
         // VCN does not encode 4:4:4. `can_encode_444` is already false; degrade, don't fail.
         if chroma.is_444() {

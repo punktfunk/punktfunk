@@ -943,7 +943,7 @@ impl NvencCudaEncoder {
         });
         match fresh {
             Ok(nv::NVENCSTATUS::NV_ENC_SUCCESS) => tracing::error!(
-                "NVENC self-diagnosis: the session opens FINE on a fresh CUDA context — the \
+                "NVENC self-diagnosis: the session opens fine on a fresh CUDA context — the \
                  host's shared CUDA context is in a bad state (host bug; please report this log)"
             ),
             Ok(st) => tracing::error!(

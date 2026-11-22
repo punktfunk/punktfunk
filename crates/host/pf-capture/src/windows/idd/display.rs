@@ -107,7 +107,7 @@ impl IddPushCapturer {
                         observed = ?observed,
                         set_returned = set,
                         pyrowave = wanted.pyrowave,
-                        "IDD push: could not pin the display to the NEGOTIATED depth — following what \
+                        "IDD push: could not pin the display to the negotiated depth — following what \
                          it actually composes instead (a physical display forcing HDR, or a driver that \
                          refuses the flip). The stream's depth will not match the negotiation, \
                          and nothing tells the client"

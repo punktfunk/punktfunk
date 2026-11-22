@@ -108,7 +108,7 @@ unsafe fn patch_hybrid_query() {
     let Ok(lib) = (unsafe { LoadLibraryA(s!("win32u.dll")) }) else {
         tracing::warn!(
             "GPU-pref hook: win32u.dll not loadable — skipping (on a hybrid-GPU box DXGI may \
-             reparent the virtual display off the pinned render adapter → TEX_FAIL rebinds)"
+             reparent the virtual display off the pinned render adapter)"
         );
         return;
     };
@@ -161,7 +161,7 @@ unsafe fn patch_hybrid_query() {
             found = %format!("{found:02x?}"),
             "GPU-pref hook: the export does not start with the win32u syscall stub — skipping \
              (on a hybrid-GPU box DXGI may reparent the virtual display off the pinned render \
-             adapter → TEX_FAIL rebinds)"
+             adapter)"
         );
         return;
     };
@@ -177,8 +177,8 @@ unsafe fn patch_hybrid_query() {
     } else {
         tracing::error!(
             want = %format!("{patch:02x?}"), got = %format!("{readback:02x?}"),
-            "GPU-pref hook patch did NOT land — hook is DEAD (on a hybrid-GPU box DXGI can \
-             still reparent the virtual display off the pinned render adapter)"
+            "GPU-pref hook patch did not apply (on a hybrid-GPU box DXGI can still \
+             reparent the virtual display off the pinned render adapter)"
         );
     }
 }

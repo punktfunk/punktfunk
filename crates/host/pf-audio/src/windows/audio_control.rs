@@ -431,7 +431,7 @@ pub fn wire_now_full(park_defaults: bool) -> WiredPlan {
                 device = %name,
                 "the desktop-audio loopback endpoint {why} — streamed audio will sound worse \
                  than it does on the host. Attach or select a 48 kHz stereo output device, or \
-                 set audio.output_mode = host_and_client (PUNKTFUNK_HOST_AUDIO=1) to prefer \
+                 set audio_output_mode = host_and_client to prefer \
                  real hardware"
             );
         }
