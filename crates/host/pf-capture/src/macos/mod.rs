@@ -516,7 +516,9 @@ fn host_ns(t: CMTime) -> Option<u64> {
 }
 
 /// The wire stamp of a frame presented at `pts_host` on the host clock: realtime at delivery
-/// less the frame's age, as Linux rebases a compositor stamp.
+/// less the frame's age, as Linux rebases a compositor stamp. ScreenCaptureKit stamps the
+/// refresh a frame is shown at, about a millisecond after it delivers it: a stamp past
+/// delivery is delivery, or the loop reads the frame as not yet captured.
 fn wire_pts(pts_host: Option<u64>) -> u64 {
     let delivery_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -525,7 +527,9 @@ fn wire_pts(pts_host: Option<u64>) -> u64 {
     // SAFETY: a read of Core Media's process-wide host clock.
     let now = unsafe { host_ns(CMClock::host_time_clock().time()) }.unwrap_or(0);
     let rt_minus_host = delivery_ns as i64 - now as i64;
-    crate::pts_provenance::wire_pts(pts_host.map(|p| p as i64), delivery_ns, rt_minus_host).pts_ns
+    let rebased =
+        crate::pts_provenance::wire_pts(pts_host.map(|p| p as i64), delivery_ns, rt_minus_host);
+    rebased.pts_ns.min(delivery_ns)
 }
 
 fn fourcc(code: u32) -> String {
