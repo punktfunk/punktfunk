@@ -224,8 +224,7 @@ pub fn sanitize_os(raw: &str) -> String {
 
 /// Bracket a bare IPv6 literal so `SocketAddr` parse succeeds (`fd00::1` → `[fd00::1]:4770`).
 /// Without brackets the joined string never parses and the error blames the caller's input.
-/// V4, hostnames, and already-bracketed input pass through. A v6 dial still fails at connect
-/// while the sockets are IPv4-bound.
+/// V4, hostnames, and already-bracketed input pass through.
 pub fn join_host_port(host: &str, port: u16) -> String {
     if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]:{port}")

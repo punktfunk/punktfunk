@@ -105,10 +105,14 @@ pub(crate) fn client_label() -> String {
 pub use crate::discovery::join_host_port;
 
 /// The address to dial: an IP literal as written, else the name's first IPv4 answer (MagicDNS,
-/// `.local`). The client endpoint binds IPv4, so a v6 answer is the fallback only.
+/// `.local`), else its first IPv6 one. IPv4 goes first because a host may listen there alone.
 async fn dial_addr(host: &str, port: u16) -> Result<std::net::SocketAddr> {
-    if let Ok(addr) = join_host_port(host, port).parse() {
-        return Ok(addr);
+    if let Ok(addr) = join_host_port(host, port).parse::<std::net::SocketAddr>() {
+        // `::ffff:a.b.c.d` is that IPv4 host, and an IPv4 socket dials it.
+        return Ok(match addr.ip().to_canonical() {
+            ip @ std::net::IpAddr::V4(_) => (ip, port).into(),
+            std::net::IpAddr::V6(_) => addr,
+        });
     }
     let mut first = None;
     for addr in tokio::net::lookup_host((host, port)).await? {
@@ -964,7 +968,7 @@ impl NativeClient {
             };
             // pin = None accepts any cert and records it. Failures are DNS / no route /
             // connect timeout.
-            let (ep, observed) = endpoint::client_pinned_with_identity(None, None);
+            let (ep, observed) = endpoint::client_pinned_with_identity(None, None, remote.ip());
             let Ok(ep) = ep else {
                 return verdict(None);
             };
@@ -2667,7 +2671,59 @@ mod host_port_tests {
                 dial_addr("192.168.1.9", 9777).await.unwrap(),
                 at("192.168.1.9:9777")
             );
+            assert_eq!(
+                dial_addr("[fd00::1]", 9777).await.unwrap(),
+                at("[fd00::1]:9777")
+            );
+            assert_eq!(
+                dial_addr("::ffff:192.168.1.9", 9777).await.unwrap(),
+                at("192.168.1.9:9777"),
+                "a v4-mapped literal is its IPv4 host"
+            );
+            let zone = |a: std::net::SocketAddr| match a {
+                std::net::SocketAddr::V6(a) => a.scope_id(),
+                std::net::SocketAddr::V4(_) => 0,
+            };
+            assert_eq!(zone(dial_addr("fe80::1%3", 9777).await.unwrap()), 3);
+            // A named zone goes to the OS resolver, which gives its interface's index.
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let lo = if cfg!(target_os = "linux") {
+                    "lo"
+                } else {
+                    "lo0"
+                };
+                let named = dial_addr(&format!("fe80::1%{lo}"), 9777).await.unwrap();
+                assert_ne!(zone(named), 0);
+            }
+            assert!(dial_addr("[fd00::1", 9777).await.is_err());
         });
+    }
+
+    /// A probe reads the certificate of the host answering on IPv6.
+    #[test]
+    fn a_probe_reaches_an_ipv6_host() {
+        use crate::quic::endpoint;
+        let Some(v6) = crate::quic::test_util::loopback_v6("a_probe_reaches_an_ipv6_host") else {
+            return;
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let idle = std::time::Duration::from_secs(8);
+        let alpns = [crate::quic::v2::registry::ALPN];
+        let (host, _media) = {
+            let _in_rt = rt.enter();
+            endpoint::server_shared((v6, 0).into(), &cert, &key, idle, &alpns).unwrap()
+        };
+        let port = host.local_addr().unwrap().port();
+        rt.spawn(async move {
+            while let Some(incoming) = host.accept().await {
+                let _ = incoming.await;
+            }
+        });
+        let fp =
+            super::NativeClient::probe_identity("::1", port, std::time::Duration::from_secs(5));
+        assert_eq!(fp, Some(endpoint::fingerprint_of_pem(&cert).unwrap()));
     }
 
     #[test]

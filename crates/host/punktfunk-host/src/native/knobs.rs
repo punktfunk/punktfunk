@@ -7,8 +7,35 @@
 use super::Punktfunk1Source;
 use std::time::Duration;
 
+/// Whether the native plane listens on IPv6, and whom it answers there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ipv6 {
+    Off,
+    /// A peer the public internet cannot have carried: both ends outside 2000::/3.
+    Private,
+    /// Every peer, as the IPv4 listener does.
+    Public,
+}
+
+impl Ipv6 {
+    /// The `ipv6` row, then `PUNKTFUNK_IPV6_PUBLIC` as set. Only `1`, `true`, `on` or `yes`
+    /// opens the listener to public addresses: a blank or misspelt value never does. A box
+    /// with seats stays on IPv4: its seat hosts do not take this row, so a client the door
+    /// redirects over IPv6 would find nobody.
+    fn resolve(row: bool, public: Option<&str>, seats: bool) -> Ipv6 {
+        let public = public.map(|v| v.trim().to_ascii_lowercase());
+        match (row && !seats, public.as_deref()) {
+            (false, _) => Ipv6::Off,
+            (true, Some("1" | "true" | "on" | "yes")) => Ipv6::Public,
+            (true, _) => Ipv6::Private,
+        }
+    }
+}
+
 /// The knobs the process reads once.
 pub(crate) struct HostKnobs {
+    /// Row `ipv6` and `PUNKTFUNK_IPV6_PUBLIC` ([`Ipv6::resolve`]).
+    pub(crate) ipv6: Ipv6,
     /// `PUNKTFUNK_SOURCE=software`: a software-encoded test picture instead of a display, so a
     /// headless box with the management API can prove a client end to end. Anything else is the
     /// display.
@@ -33,6 +60,16 @@ impl HostKnobs {
     pub(crate) fn get() -> &'static HostKnobs {
         static KNOBS: std::sync::OnceLock<HostKnobs> = std::sync::OnceLock::new();
         KNOBS.get_or_init(|| HostKnobs {
+            ipv6: {
+                let role = pf_paths::seat::role();
+                let seats = role.is_door() || role.is_seat_host();
+                let row = pf_host_config::row_bool("PUNKTFUNK_IPV6");
+                if row && seats {
+                    tracing::warn!("IPv6 is on but a box with seats serves IPv4 only");
+                }
+                let public = std::env::var("PUNKTFUNK_IPV6_PUBLIC").ok();
+                Ipv6::resolve(row, public.as_deref(), seats)
+            },
             source: match std::env::var("PUNKTFUNK_SOURCE").as_deref() {
                 Ok("software") => Punktfunk1Source::Software,
                 _ => Punktfunk1Source::Virtual,
@@ -113,5 +150,26 @@ impl SessionKnobs {
             pad_audio: pf_host_config::row_bool("PUNKTFUNK_PAD_AUDIO"),
             session_watch: pf_host_config::row_tri("PUNKTFUNK_SESSION_WATCH"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Ipv6;
+
+    /// The row turns the listener on; only an explicit yes opens it to public addresses.
+    #[test]
+    fn ipv6_answers_public_addresses_only_on_an_explicit_yes() {
+        assert_eq!(Ipv6::resolve(false, Some("1"), false), Ipv6::Off);
+        assert_eq!(Ipv6::resolve(true, None, false), Ipv6::Private);
+        for yes in ["1", "true", "on", "yes", " ON "] {
+            assert_eq!(Ipv6::resolve(true, Some(yes), false), Ipv6::Public, "{yes}");
+        }
+        for not_yes in ["", "0", "off", "no", "false", "2", "public"] {
+            let got = Ipv6::resolve(true, Some(not_yes), false);
+            assert_eq!(got, Ipv6::Private, "{not_yes:?}");
+        }
+        // A door and its seat hosts stay on IPv4.
+        assert_eq!(Ipv6::resolve(true, Some("1"), true), Ipv6::Off);
     }
 }

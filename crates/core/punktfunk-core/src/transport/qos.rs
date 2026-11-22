@@ -173,8 +173,18 @@ pub fn set_media_qos_to(
 fn apply_media_qos(socket: &UdpSocket, class: Option<MediaClass>) {
     let sock = socket2::SockRef::from(socket);
     // DSCP occupies the high 6 bits of the TOS byte → shift left 2.
-    if let Err(e) = sock.set_tos_v4(class.map_or(0, |c| c.dscp() << 2)) {
-        tracing::debug!(error = %e, ?class, "set IP_TOS (DSCP) failed — QoS marking skipped");
+    let tos = class.map_or(0, |c| c.dscp() << 2);
+    // XNU refuses IP_TOS on an IPv6 socket. socket2 0.6 has no IPV6_TCLASS setter for iOS or
+    // tvOS, so an IPv6 socket there stays unmarked.
+    #[cfg(target_os = "macos")]
+    let set = match socket.local_addr() {
+        Ok(a) if a.is_ipv6() => sock.set_tclass_v6(tos),
+        _ => sock.set_tos_v4(tos),
+    };
+    #[cfg(not(target_os = "macos"))]
+    let set = sock.set_tos_v4(tos);
+    if let Err(e) = set {
+        tracing::debug!(error = %e, ?class, "DSCP mark not set");
     }
     // SO_PRIORITY after IP_TOS (TOS resets it to 0 on Linux). 6 is the max without
     // CAP_NET_ADMIN, so video=5 / audio=6.
@@ -288,6 +298,20 @@ mod tests {
         set_media_qos_to(&sock, wan, MediaClass::Video);
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         assert_eq!(socket2::SockRef::from(&sock).tos_v4().unwrap(), 0);
+    }
+
+    /// An IPv6 socket carries the mark in its traffic class.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apply_qos_tags_an_ipv6_socket() {
+        let Ok(sock) = UdpSocket::bind("[::1]:0") else {
+            eprintln!("apply_qos_tags_an_ipv6_socket: skipped, no IPv6 loopback");
+            return;
+        };
+        apply_media_qos(&sock, Some(MediaClass::Video));
+        assert_eq!(socket2::SockRef::from(&sock).tclass_v6().unwrap(), 0xA0);
+        apply_media_qos(&sock, None);
+        assert_eq!(socket2::SockRef::from(&sock).tclass_v6().unwrap(), 0);
     }
 
     #[test]

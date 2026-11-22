@@ -1425,6 +1425,8 @@
 	"setting_session_watch_hint": "Streamt weiter, wenn der Host zwischen Spielmodus und Desktop wechselt.",
 	"setting_mdns": "Lokale Erkennung",
 	"setting_mdns_hint": "Kündigt den Host im lokalen Netz an. Aus heißt, ihn per Adresse hinzuzufügen.",
+	"setting_ipv6": "IPv6",
+	"setting_ipv6_hint": "Geräte im eigenen Netz oder in einem VPN können sich über IPv6 verbinden.",
 	"setting_idle_timeout_ms": "Trennungs-Timeout",
 	"setting_idle_timeout_ms_hint": "Wie lange ein stummes Gerät seine Sitzung behält, bevor der Host sie freigibt.",
 	"setting_update_check": "Nach Updates suchen",

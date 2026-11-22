@@ -73,6 +73,21 @@ limits them to one interface.
 NetBird counts on its default interface, `wt0`. Any other VPN that hands out 100.64/10 addresses
 counts as the internet, here and for [pairing](/docs/pairing).
 
+## IPv6
+
+A host listens on IPv4 only. Turn on **IPv6** under the console's advanced network settings
+(`PUNKTFUNK_IPV6=on`) to add an IPv6 listener on the native port, for a client on an IPv6-only
+network such as Yggdrasil. It takes effect at **Restart Punktfunk**. A host with seats stays on
+IPv4.
+
+Over IPv6 the host answers private, link-local and mesh addresses. A peer on a public address
+(`2000::/3`), or one that reached the host's own public address, gets no answer: without NAT, the
+router alone would decide whether the internet reaches the host. `PUNKTFUNK_IPV6_PUBLIC=1` in
+[`host.env`](/docs/configuration) answers those peers too. Set it only behind a firewall you
+control, as you would forward a port.
+
+Add an IPv6 host by address or name. Discovery announces its IPv4 address.
+
 ## Moving a port
 
 Set these in [`host.env`](/docs/configuration). Moving the management port is how you share a

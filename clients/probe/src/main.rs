@@ -822,7 +822,8 @@ async fn connect(
         args.pin,
         identity,
         &[punktfunk_core::quic::v2::registry::ALPN],
-        Some(remote.ip()),
+        remote.ip(),
+        true,
     );
     let (ep, media) = r.map_err(|e| anyhow!("QUIC client endpoint: {e}"))?;
     let conn = ep

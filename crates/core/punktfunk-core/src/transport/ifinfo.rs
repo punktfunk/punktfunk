@@ -39,10 +39,17 @@ pub fn link_facts(ip: IpAddr) -> LinkFacts {
 }
 
 /// Facts of the interface this device reaches `toward` through, or its default route's when
-/// `None`.
+/// `None`: the IPv4 one, else the IPv6 one of a device with no IPv4 route.
 pub fn local_link_facts(toward: Option<IpAddr>) -> LinkFacts {
-    let to = toward.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8)));
-    local_ip_toward(to).map_or(LinkFacts::default(), link_facts)
+    let ip = match toward {
+        Some(to) => local_ip_toward(to),
+        None => local_ip_toward(std::net::Ipv4Addr::new(8, 8, 8, 8).into()).or_else(|| {
+            local_ip_toward(
+                std::net::Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888).into(),
+            )
+        }),
+    };
+    ip.map_or(LinkFacts::default(), link_facts)
 }
 
 /// MTU of the interface this device reaches `peer` through; `0` when the OS did not say.

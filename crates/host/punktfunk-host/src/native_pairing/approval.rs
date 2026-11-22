@@ -10,7 +10,7 @@
 //! clears the entry ([`ApprovalQueue::admit_and_clear`]).
 
 pub use punktfunk_core::provenance::KnockSource;
-use punktfunk_core::provenance::{classify_with, is_mesh_iface};
+use punktfunk_core::provenance::{classify_with, is_mesh_iface, limit_key};
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -193,8 +193,9 @@ pub enum PairingDecision {
 const PENDING_TTL: Duration = Duration::from_secs(10 * 60);
 /// Hard cap on the pending list so a LAN scanner cannot grow it unboundedly.
 pub(super) const PENDING_CAP: usize = 32;
-/// Max pending knocks one source IP may occupy so one host cannot fill the queue.
-/// QUIC address-validates the source, so this is not off-path spoofable.
+/// Max pending knocks one source may occupy so one host cannot fill the queue. A source is
+/// [`limit_key`]'s: a public IPv6 peer's /64, any other address itself. QUIC
+/// address-validates the source, so this is not off-path spoofable.
 pub(super) const MAX_PENDING_PER_IP: usize = 4;
 /// Ceiling on the test-only ready wait. A spawn that panics before parking must fail
 /// the test, not stall the job until CI times out.
@@ -261,14 +262,14 @@ impl ApprovalQueue {
             .retain(|(_, _, at)| at.elapsed() < PENDING_TTL);
     }
 
-    /// Index of the entry to evict, optionally restricted to one source IP:
+    /// Index of the entry to evict, optionally restricted to one source ([`limit_key`]):
     /// least-recently-active non-parked, else oldest parked. `None` if empty.
     fn evict_index(items: &[Pending], only_ip: Option<IpAddr>) -> Option<usize> {
         let pick = |allow_parked: bool| {
             items
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| only_ip.is_none_or(|ip| p.src_ip == Some(ip)))
+                .filter(|(_, p)| only_ip.is_none_or(|ip| p.src_ip.map(limit_key) == Some(ip)))
                 .filter(|(_, p)| allow_parked || !p.parked)
                 .min_by_key(|(_, p)| p.requested_at)
                 .map(|(i, _)| i)
@@ -328,11 +329,11 @@ impl ApprovalQueue {
             let excess = pending.evicted.len().saturating_sub(PENDING_CAP);
             pending.evicted.drain(..excess);
         };
-        if let Some(ip) = src_ip {
+        if let Some(ip) = src_ip.map(limit_key) {
             if pending
                 .items
                 .iter()
-                .filter(|p| p.src_ip == Some(ip))
+                .filter(|p| p.src_ip.map(limit_key) == Some(ip))
                 .count()
                 >= MAX_PENDING_PER_IP
             {

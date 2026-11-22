@@ -1,6 +1,9 @@
 use super::*;
 use punktfunk_core::quic::v2::msg::V2Message;
 
+/// Where these tests dial: the family a client endpoint binds follows it.
+const LOOPBACK: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
 /// A dial holds on the seat its unlock started until that seat runs with its host's pin, and
 /// lets go once a seat it saw starting is down again.
 #[test]
@@ -405,6 +408,7 @@ fn c_abi_connection_roundtrip() {
             paired_store: None,
             idle_timeout: None,
             mdns: false, // tests must not advertise on the LAN
+            ipv6: Ipv6::Off,
         })
     });
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -572,6 +576,7 @@ fn a_synthetic_abr_session_registers_while_it_streams() {
             paired_store: None,
             idle_timeout: None,
             mdns: false,
+            ipv6: Ipv6::Off,
         })
     });
     let host = up(19782, spawned);
@@ -675,6 +680,7 @@ fn clipboard_control_and_fetch_decline_over_session() {
             paired_store: None,
             idle_timeout: None,
             mdns: false,
+            ipv6: Ipv6::Off,
         })
     });
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -776,6 +782,7 @@ fn synthetic_session(
             paired_store: None,
             idle_timeout: None,
             mdns: false,
+            ipv6: Ipv6::Off,
         })
     });
     let host = up(port, spawned);
@@ -940,6 +947,7 @@ fn a_reconnect_waits_for_the_release_not_a_timer() {
             paired_store: None,
             idle_timeout: None,
             mdns: false,
+            ipv6: Ipv6::Off,
         })
     });
     let host = up(19793, spawned);
@@ -1211,6 +1219,7 @@ fn delegated_approval_admits_after_knock() {
                 paired_store: None,
                 idle_timeout: None,
                 mdns: false,
+                ipv6: Ipv6::Off,
             },
             0,
             np_host,
@@ -1353,6 +1362,7 @@ fn access_request_pairs_without_a_session() {
                 paired_store: None,
                 idle_timeout: None,
                 mdns: false,
+                ipv6: Ipv6::Off,
             },
             0,
             np_host,
@@ -1454,6 +1464,7 @@ fn pairing_ceremony_and_gate() {
             paired_store,
             idle_timeout: None,
             mdns: false,
+            ipv6: Ipv6::Off,
         })
     });
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -1497,6 +1508,109 @@ fn pairing_ceremony_and_gate() {
         "the PIN window must be single-use (one online guess)"
     );
 
+    host.join().unwrap().unwrap();
+}
+
+/// A host holds no IPv6 socket until its operator turns IPv6 on: `::1` on its port stays free.
+#[test]
+fn a_host_listens_on_ipv4_alone_by_default() {
+    if std::net::UdpSocket::bind("[::1]:0").is_err() {
+        eprintln!("skipped: no IPv6 loopback on this machine");
+        return;
+    }
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let store = crate::test_support::scratch().join("punktfunk-paired-ipv4-only.json");
+    let paired_store = Some(store.clone());
+    let spawned = std::thread::spawn(move || {
+        run_ephemeral(Punktfunk1Options {
+            port: 19850,
+            source: Punktfunk1Source::Synthetic,
+            seconds: 0,
+            frames: 0,
+            max_sessions: 1, // the pairing that ends it
+            max_concurrent: 1,
+            require_pairing: true,
+            allow_pairing: false,
+            pairing_pin: Some("4321".into()),
+            paired_store,
+            idle_timeout: None,
+            mdns: false,
+            ipv6: Ipv6::Off,
+        })
+    });
+    let host = up(19850, spawned);
+    assert!(
+        std::net::UdpSocket::bind("[::1]:19850").is_ok(),
+        "the host bound IPv6 without being asked"
+    );
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    punktfunk_core::client::NativeClient::pair(
+        "127.0.0.1",
+        19850,
+        (&cert, &key),
+        "4321",
+        "v4",
+        HANG,
+    )
+    .expect("pairing over IPv4");
+    let _ = std::fs::remove_file(&store);
+    host.join().unwrap().unwrap();
+}
+
+/// A host with IPv6 on serves both families on its port: a client pairs and streams over
+/// `::1`, which only the IPv6 socket's media reaches, then streams over `127.0.0.1`.
+#[test]
+fn one_host_pairs_and_streams_over_ipv6_and_ipv4() {
+    if std::net::UdpSocket::bind("[::1]:0").is_err() {
+        eprintln!("skipped: no IPv6 loopback on this machine");
+        return;
+    }
+    let _registry = crate::session_status::tests::registry_lock();
+    let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    use punktfunk_core::client::{ConnectParams, NativeClient};
+
+    let store = crate::test_support::scratch().join("punktfunk-paired-ipv6.json");
+    let paired_store = Some(store.clone());
+    let spawned = std::thread::spawn(move || {
+        run_ephemeral(Punktfunk1Options {
+            port: 19800,
+            source: Punktfunk1Source::Synthetic,
+            seconds: 0,
+            frames: u32::MAX, // until each client leaves
+            max_sessions: 3,  // the pairing, then one session per family
+            max_concurrent: 1,
+            require_pairing: true,
+            allow_pairing: false,
+            pairing_pin: Some("4321".into()),
+            paired_store,
+            idle_timeout: None,
+            mdns: false,
+            ipv6: Ipv6::Private,
+        })
+    });
+    let host = up(19800, spawned);
+    let (cert, key) = endpoint::generate_identity().unwrap();
+    let host_fp = NativeClient::pair("::1", 19800, (&cert, &key), "4321", "ipv6-client", HANG)
+        .expect("pairing over IPv6");
+    let mode = punktfunk_core::Mode {
+        width: 1280,
+        height: 720,
+        refresh_hz: 60,
+        refresh_mhz: 0,
+    };
+    for addr in ["::1", "127.0.0.1"] {
+        let client = NativeClient::connect(ConnectParams {
+            pin: Some(host_fp),
+            identity: Some((cert.clone(), key.clone())),
+            ..ConnectParams::new(addr, 19800, mode, HANG)
+        })
+        .unwrap_or_else(|e| panic!("session over {addr}: {e:?}"));
+        client
+            .next_frame(HANG)
+            .unwrap_or_else(|e| panic!("video over {addr}: {e:?}"));
+    }
+    let _ = std::fs::remove_file(&store);
     host.join().unwrap().unwrap();
 }
 
@@ -1605,6 +1719,7 @@ fn spawn_logged_host(
                 paired_store: None,
                 idle_timeout: None,
                 mdns: false,
+                ipv6: Ipv6::Off,
             },
             0,
             np,
@@ -1649,7 +1764,8 @@ async fn raw_session(
 /// The QUIC handshake and the control stream, up to the `ClientHello`.
 async fn raw_dial(port: u16, identity: (&str, &str)) -> RawDial {
     use punktfunk_core::quic::v2::{io as v2io, registry};
-    let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
+    let (ep, _observed) =
+        endpoint::client_shared(None, Some(identity), &[registry::ALPN], LOOPBACK, false);
     let (ep, media) = ep.expect("client endpoint");
     let conn = ep
         .connect(format!("127.0.0.1:{port}").parse().unwrap(), "punktfunk")
@@ -1777,6 +1893,7 @@ fn a_pkf1_client_pairs_and_is_told_to_update() {
                 paired_store: Some(store),
                 idle_timeout: None,
                 mdns: false,
+                ipv6: Ipv6::Off,
             })
         }
     });
@@ -1793,6 +1910,7 @@ fn a_pkf1_client_pairs_and_is_told_to_update() {
             None,
             Some((cert.as_str(), key.as_str())),
             &[endpoint::QUIC_ALPN],
+            LOOPBACK,
         );
         let ep = ep.expect("client endpoint");
 
@@ -2475,6 +2593,7 @@ fn a_session_that_fails_after_its_planes_start() {
             paired_store: None,
             idle_timeout: None,
             mdns: false,
+            ipv6: Ipv6::Off,
         })
     });
     let host = up(19796, spawned);
@@ -2558,7 +2677,8 @@ async fn dial_until(
     held_ends: bool,
 ) -> (usize, Heard) {
     use punktfunk_core::quic::v2::{io as v2io, msg, registry};
-    let (ep, observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
+    let (ep, observed) =
+        endpoint::client_shared(None, Some(identity), &[registry::ALPN], LOOPBACK, false);
     let (ep, _media) = ep.expect("client endpoint");
     // The client's close leaves only while its endpoint is polled, and this runtime stops
     // with the dial: without the wait the host streams to nobody until its idle timeout.
