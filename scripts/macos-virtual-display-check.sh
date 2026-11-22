@@ -100,7 +100,8 @@ start_host() {
     done
 }
 
-# Session `n` of the running host: the probe asks for `mode`, then the arguments after it.
+# Session `n` of the running host: the probe asks for `mode`, then the arguments after it,
+# and for HDR while `HDR` is set.
 # Records the displays macOS lists once the host has made the session's display.
 session() {
     n=$1 mode=$2
@@ -110,6 +111,7 @@ session() {
         export XDG_CONFIG_HOME="$S/probe/config" XDG_DATA_HOME="$S/probe/data"
         export XDG_STATE_HOME="$S/probe/state" XDG_CACHE_HOME="$S/probe/cache"
         export TMPDIR="$S/probe/tmp" RUST_LOG=info
+        [ -n "${HDR:-}" ] && export PUNKTFUNK_CLIENT_HDR=1
         exec "$PROBE" --connect "127.0.0.1:$PORT" --mode "$mode" --codec hevc --quit "$@"
     ) >"$S/probe-$n.log" 2>&1 &
     probepid=$!
@@ -248,6 +250,21 @@ checks 1 1920x1080 60
 checks 2 1920x1080 60
 changed 1 2 1280x720
 ends 2
+
+echo "an HDR session at 1920x1080, default topology, with a resize"
+start_host hdr 1 20 default
+HDR=1
+session 1 1920x1080x60 --seconds 10 --remode 1600x900x60:5
+HDR=
+finish_host
+checks 1 1920x1080 60
+check "the display is HDR" "grep 'virtual display created' '$S/host.txt' | grep -q 'hdr=true'"
+check "capture is PQ before and after the resize" \
+    "[ \"\$(grep 'screencapturekit first frame' '$S/host.txt' | grep -c SMPTE_ST_2084_PQ)\" -eq 2 ]"
+check "the encoder is 10-bit" \
+    "! grep 'VideoToolbox encoder open' '$S/host.txt' | grep -q 'ten_bit=false'"
+changed 1 1 1600x900
+ends 1
 
 if [ -n "$(our_displays)" ]; then
     echo "WARNING: a Punktfunk display is still listed; quit the host to remove it"
