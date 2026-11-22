@@ -105,10 +105,14 @@ pub(crate) fn client_label() -> String {
 pub use crate::discovery::join_host_port;
 
 /// The address to dial: an IP literal as written, else the name's first IPv4 answer (MagicDNS,
-/// `.local`). The client endpoint binds IPv4, so a v6 answer is the fallback only.
+/// `.local`), else its first IPv6 one. IPv4 goes first because a host may listen there alone.
 async fn dial_addr(host: &str, port: u16) -> Result<std::net::SocketAddr> {
-    if let Ok(addr) = join_host_port(host, port).parse() {
-        return Ok(addr);
+    if let Ok(addr) = join_host_port(host, port).parse::<std::net::SocketAddr>() {
+        // `::ffff:a.b.c.d` is that IPv4 host, and an IPv4 socket dials it.
+        return Ok(match addr.ip().to_canonical() {
+            ip @ std::net::IpAddr::V4(_) => (ip, port).into(),
+            std::net::IpAddr::V6(_) => addr,
+        });
     }
     let mut first = None;
     for addr in tokio::net::lookup_host((host, port)).await? {
@@ -946,7 +950,7 @@ impl NativeClient {
             let remote = dial_addr(&host, port).await.ok()?;
             // pin = None accepts any cert and records it. Failures are DNS / no route /
             // connect timeout.
-            let (ep, observed) = endpoint::client_pinned_with_identity(None, None);
+            let (ep, observed) = endpoint::client_pinned_with_identity(None, None, remote.ip());
             let ep = ep.ok()?;
             let reachable = match ep.connect(remote, "punktfunk") {
                 Ok(connecting) => {

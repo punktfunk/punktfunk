@@ -1,6 +1,9 @@
 use super::*;
 use punktfunk_core::quic::v2::msg::V2Message;
 
+/// Where these tests dial: the family a client endpoint binds follows it.
+const LOOPBACK: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
 /// A dial holds on the seat its unlock started until that seat runs with its host's pin, and
 /// lets go once a seat it saw starting is down again.
 #[test]
@@ -1649,7 +1652,8 @@ async fn raw_session(
 /// The QUIC handshake and the control stream, up to the `ClientHello`.
 async fn raw_dial(port: u16, identity: (&str, &str)) -> RawDial {
     use punktfunk_core::quic::v2::{io as v2io, registry};
-    let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
+    let (ep, _observed) =
+        endpoint::client_shared(None, Some(identity), &[registry::ALPN], LOOPBACK, false);
     let (ep, media) = ep.expect("client endpoint");
     let conn = ep
         .connect(format!("127.0.0.1:{port}").parse().unwrap(), "punktfunk")
@@ -1793,6 +1797,7 @@ fn a_pkf1_client_pairs_and_is_told_to_update() {
             None,
             Some((cert.as_str(), key.as_str())),
             &[endpoint::QUIC_ALPN],
+            LOOPBACK,
         );
         let ep = ep.expect("client endpoint");
 
@@ -2556,7 +2561,8 @@ async fn dial_until(
     held_ends: bool,
 ) -> (usize, Heard) {
     use punktfunk_core::quic::v2::{io as v2io, msg, registry};
-    let (ep, observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN], None);
+    let (ep, observed) =
+        endpoint::client_shared(None, Some(identity), &[registry::ALPN], LOOPBACK, false);
     let (ep, _media) = ep.expect("client endpoint");
     // The client's close leaves only while its endpoint is polled, and this runtime stops
     // with the dial: without the wait the host streams to nobody until its idle timeout.

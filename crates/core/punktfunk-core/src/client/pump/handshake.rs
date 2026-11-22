@@ -153,7 +153,8 @@ async fn dial(
         pin,
         identity,
         &[crate::quic::v2::registry::ALPN],
-        Some(remote.ip()),
+        remote.ip(),
+        true,
     );
     let (ep, media) = r.map_err(io_err)?;
     // Retry silence across the connect budget. One quinn dial dies after the ~8 s idle

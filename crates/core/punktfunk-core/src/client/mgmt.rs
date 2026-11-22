@@ -65,7 +65,7 @@ impl MgmtTunnel {
         runtime()?.block_on(async {
             let addr = super::dial_addr(host, port).await?;
             let (made, observed) =
-                endpoint::client_shared(pin, Some(identity), &[registry::ALPN], None);
+                endpoint::client_shared(pin, Some(identity), &[registry::ALPN], addr.ip(), false);
             let (ep, _media) = made.map_err(|e| io_err(&e))?;
             let connecting = ep.connect(addr, "punktfunk").map_err(|e| io_err(&e))?;
             match tokio::time::timeout(timeout, connecting).await {

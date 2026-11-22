@@ -141,10 +141,24 @@ fn server_from_der(
     Ok(quinn::Endpoint::server(server_config, addr)?)
 }
 
+/// The host's socket at `addr`. An IPv6 one hears IPv6 only: it binds beside the IPv4 socket
+/// on the same port, and an IPv4 peer never arrives v4-mapped.
+fn bind_host_udp(addr: std::net::SocketAddr) -> std::io::Result<std::net::UdpSocket> {
+    if addr.is_ipv4() {
+        return std::net::UdpSocket::bind(addr);
+    }
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_only_v6(true)?;
+    socket.bind(&addr.into())?;
+    Ok(socket.into())
+}
+
 /// A host endpoint answering `alpns`, and a clone of its socket for
 /// [`MediaSender`](crate::transport::shared::MediaSender). TLS takes the first of the host's
 /// ALPNs the client offers, so listing `pkf2` first picks it wherever both ends speak it.
-/// Its QUIC packets carry the video mark, as the media does.
+/// Its QUIC packets carry the video mark, as the media does. A host serves each family from
+/// an endpoint of its own ([`bind_host_udp`]).
 pub fn server_shared(
     addr: std::net::SocketAddr,
     cert_pem: &str,
@@ -158,7 +172,7 @@ pub fn server_shared(
     let key_der = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
         .map_err(|e| anyhow_result::Error::msg(format!("key pem: {e}")))?;
     let server_config = server_config(cert_der, key_der, idle, alpns)?;
-    let socket = std::net::UdpSocket::bind(addr)?;
+    let socket = bind_host_udp(addr)?;
     crate::transport::grow_socket_buffers(&socket);
     let media = socket.try_clone()?;
     let runtime = quinn::default_runtime()
@@ -241,18 +255,30 @@ pub type PinnedClient = (
     Arc<Mutex<Option<[u8; 32]>>>,
 );
 
-/// Host-leaf pin. `Some(sha256)` rejects a mismatch; `None` is TOFU. Either way
-/// the observed fingerprint is written to the returned slot during the handshake.
-pub fn client_pinned(pin: Option<[u8; 32]>) -> PinnedClient {
-    client_pinned_with_identity(pin, None)
+/// The wildcard a client socket binds to reach `remote`: its family, any port. A client
+/// socket carries one family, so an IPv4 dial runs as it does without IPv6.
+fn client_bind(remote: std::net::IpAddr) -> std::net::SocketAddr {
+    match remote {
+        std::net::IpAddr::V4(_) => (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
+        std::net::IpAddr::V6(_) => (std::net::Ipv6Addr::UNSPECIFIED, 0).into(),
+    }
 }
 
-/// [`client_pinned`] plus optional PEM client identity (TLS client auth).
+/// Host-leaf pin. `Some(sha256)` rejects a mismatch; `None` is TOFU. Either way
+/// the observed fingerprint is written to the returned slot during the handshake.
+/// An IPv4 endpoint: tests and tools dial loopback.
+pub fn client_pinned(pin: Option<[u8; 32]>) -> PinnedClient {
+    client_pinned_with_identity(pin, None, std::net::Ipv4Addr::LOCALHOST.into())
+}
+
+/// [`client_pinned`] plus optional PEM client identity (TLS client auth), on a socket of
+/// `remote`'s family.
 pub fn client_pinned_with_identity(
     pin: Option<[u8; 32]>,
     identity: Option<(&str, &str)>,
+    remote: std::net::IpAddr,
 ) -> PinnedClient {
-    client_pinned_offering(pin, identity, &[super::v2::registry::ALPN])
+    client_pinned_offering(pin, identity, &[super::v2::registry::ALPN], remote)
 }
 
 /// [`client_pinned_with_identity`] offering `alpns`, in order.
@@ -260,6 +286,7 @@ pub fn client_pinned_offering(
     pin: Option<[u8; 32]>,
     identity: Option<(&str, &str)>,
     alpns: &[&[u8]],
+    remote: std::net::IpAddr,
 ) -> PinnedClient {
     let observed = Arc::new(Mutex::new(None));
     let ep = (|| {
@@ -267,7 +294,7 @@ pub fn client_pinned_offering(
         // `Endpoint::client` hardcodes `EndpointConfig::default()` (1472-byte
         // `max_udp_payload_size`), which would cap the host's MTU search. Build by
         // hand so [`endpoint_config`] can advertise jumbo.
-        let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        let socket = std::net::UdpSocket::bind(client_bind(remote))?;
         let runtime = quinn::default_runtime()
             .ok_or_else(|| anyhow_result::Error::msg("no async runtime found".into()))?;
         let mut ep = quinn::Endpoint::new(endpoint_config(None), None, socket, runtime)?;
@@ -287,22 +314,22 @@ pub type SharedClient = (
 /// [`client_pinned_with_identity`] on one socket for QUIC and media, offering `alpns` in
 /// order. The endpoint never lets the host grease the QUIC fixed bit, which is what keeps a
 /// QUIC packet from reading as media. The media side is the session's transport once the host
-/// answers `pkf2`. `host` is the streaming host, whose adapter decides jumbo
-/// ([`endpoint_config`]); `None` for a dial that carries no video.
+/// answers `pkf2`. The socket takes `remote`'s family. `video` is a dial that streams: the
+/// adapter toward `remote` then decides jumbo ([`endpoint_config`]).
 pub fn client_shared(
     pin: Option<[u8; 32]>,
     identity: Option<(&str, &str)>,
     alpns: &[&[u8]],
-    host: Option<std::net::IpAddr>,
+    remote: std::net::IpAddr,
+    video: bool,
 ) -> SharedClient {
     let observed = Arc::new(Mutex::new(None));
     let ep = (|| {
         let client_cfg = client_config(pin, identity, &observed, alpns)?;
-        let (socket, media) =
-            crate::transport::shared::client_socket("0.0.0.0:0".parse().unwrap())?;
+        let (socket, media) = crate::transport::shared::client_socket(client_bind(remote))?;
         let runtime = quinn::default_runtime()
             .ok_or_else(|| anyhow_result::Error::msg("no async runtime found".into()))?;
-        let mut cfg = endpoint_config(host);
+        let mut cfg = endpoint_config(video.then_some(remote));
         cfg.grease_quic_bit(false);
         let mut ep = quinn::Endpoint::new_with_abstract_socket(cfg, None, socket, runtime)?;
         ep.set_default_client_config(client_cfg);

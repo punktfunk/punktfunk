@@ -35,7 +35,8 @@ impl NativeClient {
         rt.block_on(async move {
             let remote = dial_addr(host, port).await?;
             // quinn's driver is spawned on the current runtime.
-            let (ep, observed) = endpoint::client_pinned_with_identity(None, Some(identity));
+            let (ep, observed) =
+                endpoint::client_pinned_with_identity(None, Some(identity), remote.ip());
             let ep = ep.map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
 
             // Never close here; the caller does, then flushes, so an early
@@ -148,7 +149,7 @@ impl NativeClient {
             .map_err(PunktfunkError::Io)?;
         rt.block_on(async move {
             let remote = dial_addr(host, port).await?;
-            let (ep, observed) = endpoint::client_pinned_with_identity(Some(pin), Some(identity));
+            let (ep, observed) = endpoint::client_pinned_with_identity(Some(pin), Some(identity), remote.ip());
             let ep = ep.map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
             let knock = async {
                 let conn = ep

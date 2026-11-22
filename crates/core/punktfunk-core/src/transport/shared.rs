@@ -1015,7 +1015,8 @@ mod tests {
             None,
             None,
             &[crate::quic::v2::registry::ALPN, b"pkf1"],
-            None,
+            addr.ip(),
+            false,
         );
         let (client, media) = client.unwrap();
         let accept = tokio::spawn({

@@ -812,8 +812,13 @@ mod tests {
             let _ = tunnel_quic(conn, (tx, rx), router, bind).await;
         });
         let (me_cert, me_key) = endpoint::generate_identity().unwrap();
-        let (client, _) =
-            endpoint::client_shared(None, Some((&me_cert, &me_key)), &[registry::ALPN], None);
+        let (client, _) = endpoint::client_shared(
+            None,
+            Some((&me_cert, &me_key)),
+            &[registry::ALPN],
+            bind.ip(),
+            false,
+        );
         let (client, _media) = client.unwrap();
         let conn = client.connect(bind, "punktfunk").unwrap().await.unwrap();
         let call = |ty: u64, path: &'static str| {
