@@ -37,6 +37,7 @@ import { connect, type PluginDef, type Punktfunk } from "./index.js";
 import { grantedPorts, grantedRoots, type PluginManifest, sandboxProbe } from "./sandbox.js";
 import { pluginToken, runSandboxed } from "./runner-linux.js";
 import { defaultLog, type LogSink, type RunnerLogLevel } from "./runner-log.js";
+import { runSeatbelt } from "./runner-macos.js";
 import { runInContainer, runInOwnProcess } from "./runner-windows.js";
 
 export interface RunnerOptions {
@@ -52,7 +53,7 @@ export interface RunnerOptions {
 	/** Restart backoff base (test seam). Default 1 s, capped at 60 s, jittered. */
 	restartBase?: Duration.Input;
 	/**
-	 * `"off"` runs plugins unsandboxed. Default: `sandboxMode()` on Linux and Windows, off
+	 * `"off"` runs plugins unsandboxed. Default: `sandboxMode()` on Linux, Windows and macOS, off
 	 * elsewhere.
 	 */
 	sandbox?: "on" | "off";
@@ -192,8 +193,13 @@ const attemptUnit = (
 		// operator's own code and stays here.
 		const id = unit.manifest?.id ?? unit.name;
 		if (unit.manifest && options.sandbox !== "off") {
-			const run =
-				options.sandboxRun ?? (process.platform === "win32" ? runInContainer : runSandboxed);
+			const native =
+				process.platform === "win32"
+					? runInContainer
+					: process.platform === "darwin"
+						? runSeatbelt
+						: runSandboxed;
+			const run = options.sandboxRun ?? native;
 			return yield* leased(unit, id, options, run(unit, unit.manifest, options, log));
 		}
 		if (unit.manifest && (options.ownProcess ?? process.platform === "win32")) {
@@ -470,8 +476,8 @@ export const runner = (
 	const log = options.log ?? defaultLog;
 	return Effect.scoped(
 		Effect.gen(function* () {
-			// bwrap is the Linux sandbox, an AppContainer the Windows one; macOS has neither.
-			const confines = process.platform === "linux" || process.platform === "win32";
+			// bwrap is the Linux sandbox, an AppContainer the Windows one, Seatbelt the macOS one.
+			const confines = ["linux", "win32", "darwin"].includes(process.platform);
 			const sandbox = options.sandbox ?? (confines ? sandboxMode() : "off");
 			if (sandbox === "off" && confines) {
 				log(

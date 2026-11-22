@@ -118,7 +118,9 @@ Each plugin runs in a sandbox of its own: no network unless it declared one, and
 it declared plus the ones you allowed. It can change only its own library entries. On **Linux** the
 sandbox needs `bubblewrap`, which the packages install, and unprivileged user namespaces. A plugin
 that uses the network also needs `passt`, which the packages install too; it reaches the internet
-and your LAN, and of this computer's own `localhost` only the ports you allowed. On **Windows** it is an AppContainer under the `NT AUTHORITY\LocalService` account, which can read
+and your LAN, and of this computer's own `localhost` only the ports you allowed. On **macOS** the
+sandbox is part of the system, and a plugin that uses the network reaches the same, plus servers on
+this computer that listen on its network address. On **Windows** it is an AppContainer under the `NT AUTHORITY\LocalService` account, which can read
 Program Files but not user profiles or other drives. Still, a plugin is code on your host: install
 only plugins you trust.
 

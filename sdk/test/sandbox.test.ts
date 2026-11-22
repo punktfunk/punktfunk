@@ -635,7 +635,7 @@ describe("expandHome", () => {
 
 describe("sandboxProbe", () => {
 	test("says which of the two ways it is unavailable", () => {
-		expect(sandboxProbe(() => ({ status: 0 }), "darwin").ok).toBe(false);
+		expect(sandboxProbe(() => ({ status: 0 }), "freebsd").ok).toBe(false);
 		expect(sandboxProbe(() => ({ status: 0 }), "linux")).toEqual({ ok: true });
 		// The probe must ask for what bwrapArgv asks for, or it calls a box capable that then
 		// refuses every plugin.

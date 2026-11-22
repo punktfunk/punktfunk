@@ -305,8 +305,9 @@ struct PathPolicy {
     home: PathBuf,
     config_dir: PathBuf,
     runtime_dir: Option<PathBuf>,
-    /// `/tmp`, the one tree a manifest's write binds in without a grant. Spelled as the SDK
-    /// spells it; a test's own files sit under `/tmp` on Linux, so a test moves it.
+    /// `/tmp` as it resolves (`/private/tmp` on macOS), the one tree a manifest's write binds in
+    /// without a grant. The rules compare canonical paths. A test's own files sit under `/tmp` on
+    /// Linux, so a test moves it.
     tmp: PathBuf,
 }
 
@@ -323,7 +324,7 @@ impl PathPolicy {
             },
             config_dir: real(config_dir),
             runtime_dir: runtime_dir.map(real),
-            tmp: PathBuf::from("/tmp"),
+            tmp: real(PathBuf::from("/tmp")),
         }
     }
 }
@@ -694,10 +695,14 @@ const STARTUP_PATHS: &[&str] = &[
     ".config/i3",
     ".config/labwc",
     ".xsession",
+    "Library/LaunchAgents",
+    "Library/Preferences",
+    "Library/Application Support/com.apple.backgroundtaskmanagementagent",
 ];
 
-/// Under the home: browser profiles, keyrings, cloud credentials and the display's cookies. No
-/// root holds one or a parent of one. The SDK's `SECRETS` is the same list.
+/// Under the home: browser profiles, keyrings, other apps' containers, macOS's privacy grants,
+/// cloud credentials and the display's cookies. No root holds one or a parent of one. The SDK's
+/// `SECRETS` is the same list.
 #[cfg(unix)]
 const SECRET_PATHS: &[&str] = &[
     ".Xauthority",
@@ -726,6 +731,18 @@ const SECRET_PATHS: &[&str] = &[
     ".docker",
     ".config/gcloud",
     ".config/gh",
+    "Library/Keychains",
+    "Library/Cookies",
+    "Library/Safari",
+    "Library/Containers",
+    "Library/Group Containers",
+    "Library/Application Support/com.apple.TCC",
+    "Library/Application Support/Google/Chrome",
+    "Library/Application Support/Chromium",
+    "Library/Application Support/BraveSoftware",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Application Support/Vivaldi",
+    "Library/Application Support/Firefox",
 ];
 
 /// Names directly under `/tmp` that hold a desktop's display, session, agent or terminal sockets,
@@ -751,6 +768,7 @@ const TMP_SOCKETS: &[&str] = &[
     "emacs*",
     "xauth*",
     ".Xauth*",
+    "com.apple.launchd.*",
 ];
 
 /// `p` is `tmp` itself or lies in one of its [`TMP_SOCKETS`].
