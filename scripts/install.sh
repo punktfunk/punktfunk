@@ -69,7 +69,11 @@ cat <<EOF
 
 EOF
 
-[ "$(uname -s)" = Linux ] || die "this installer is for Linux hosts — Windows: $DOCS/windows-host"
+case "$(uname -s)" in
+    Linux) ;;
+    Darwin) die "this installer is for Linux hosts — macOS: $DOCS/macos-host" ;;
+    *) die "this installer is for Linux hosts — Windows: $DOCS/windows-host" ;;
+esac
 
 case "$(uname -m)" in
     x86_64|amd64)   ARCH=x86_64 ;;
