@@ -13,6 +13,9 @@ use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
 use std::ffi::OsStr;
 use std::path::Path;
 
+/// The login agent's launchd label, which launchd hands its instance as `XPC_SERVICE_NAME`.
+const AGENT_LABEL: &str = "io.unom.punktfunk.host";
+
 /// The command line a launch runs: `argv`, except that a bare launch of the app serves.
 pub(crate) fn launch_args(argv: Vec<String>, exe: &Path) -> Vec<String> {
     if argv.is_empty() && bundle_of(exe).is_some() {
@@ -34,13 +37,28 @@ pub(crate) fn bundle_of(exe: &Path) -> Option<&Path> {
         .filter(|d| d.extension() == Some(OsStr::new("app")))
 }
 
-/// What a Mac launch does before `work`. Returns only when the loop is not wanted: the command
-/// serves no streams, or no desktop session is there to connect to. The caller then runs `work`
-/// on this thread.
+/// Whether launchd started this process as the login agent.
+pub(crate) fn login_agent() -> bool {
+    is_agent(std::env::var_os("XPC_SERVICE_NAME").as_deref())
+}
+
+fn is_agent(service: Option<&OsStr>) -> bool {
+    service == Some(OsStr::new(AGENT_LABEL))
+}
+
+/// What a Mac launch does before `work`: a `serve` takes the instance lock. Returns only when
+/// the loop is not wanted: the command serves no streams, or no desktop session is there to
+/// connect to. The caller then runs `work` on this thread.
 pub(crate) fn start(args: &[String], work: fn()) {
     let first = args.first().map(String::as_str);
     let looped = matches!(first, Some("serve" | "punktfunk1-host"))
         && objc2_core_graphics::CGSessionCopyCurrentDictionary().is_some();
+    if first == Some("serve") {
+        // SAFETY: SIG_IGN installs no handler code, and the host thread has not started yet.
+        // A second launch sends SIGUSR1 to ask for the window; it must not end the host.
+        unsafe { libc::signal(libc::SIGUSR1, libc::SIG_IGN) };
+        super::instance::take(login_agent());
+    }
     if looped {
         run_beside(work);
     }
@@ -101,5 +119,13 @@ mod tests {
             bundle_of(app),
             Some(Path::new("/Applications/Punktfunk Host.app"))
         );
+        assert!(is_agent(Some(OsStr::new(AGENT_LABEL))));
+        for other in [
+            None,
+            Some("application.io.unom.punktfunk.host.1234"),
+            Some(""),
+        ] {
+            assert!(!is_agent(other.map(OsStr::new)), "{other:?}");
+        }
     }
 }
