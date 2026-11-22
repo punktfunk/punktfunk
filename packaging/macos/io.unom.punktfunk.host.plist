@@ -4,6 +4,10 @@
 <dict>
 	<key>Label</key>
 	<string>io.unom.punktfunk.host</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>io.unom.punktfunk.host</string>
+	</array>
 	<key>BundleProgram</key>
 	<string>Contents/MacOS/punktfunk-host</string>
 	<key>ProgramArguments</key>
