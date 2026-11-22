@@ -1,8 +1,8 @@
 # The macOS host on the self-hosted `macos-arm64` runner (home-mac-mini-1;
 # scripts/ci/setup-macos-runner.sh), in dependency order:
 #
-#   check    — `punktfunk-host` compiles for Apple silicon, and the installer engine's tests pass.
-#              Pushes and pull requests.
+#   check    — `punktfunk-host` compiles for Apple silicon, and the installer engine's and the menu
+#              bar UI's tests pass. Pushes and pull requests.
 #   package  — needs: check. The release build, the web console and runner payloads, the menu bar
 #              UI, "Punktfunk Host.app" and its disk image (packaging/macos/README.md). Never on a
 #              pull request. A stable tag, or a dispatch with `dmg`, signs with Developer ID,
@@ -65,6 +65,7 @@ on:
       - 'scripts/ci/mac-cargo-target.sh'
       - 'scripts/ci/pf-version.sh'
       - 'scripts/ci/gitea-release.sh'
+      - 'scripts/gen-l10n-hostui.sh'
       - 'ci/install-rustup.sh'
       - 'ci/rustup.env'
       - '.gitea/workflows/macos-host.yml'
@@ -111,6 +112,7 @@ on:
       - 'scripts/ci/mac-cargo-target.sh'
       - 'scripts/ci/pf-version.sh'
       - 'scripts/ci/gitea-release.sh'
+      - 'scripts/gen-l10n-hostui.sh'
       - 'ci/install-rustup.sh'
       - 'ci/rustup.env'
       - '.gitea/workflows/macos-host.yml'
@@ -191,6 +193,214 @@ jobs:
       # type. This runner is what enforces it — the suite is pure and needs no Linux.
       - name: Test (punktfunk-setup, the installer engine)
         run: cargo test -p punktfunk-setup --locked
+
+      # The menu bar UI's strings, library and tests. xcstringstool ships with Xcode only.
+      - name: Select release Xcode
+        run: |
+          DEV_DIR=""
+          for app in /Applications/Xcode.app /Applications/Xcode_*.app /Applications/Xcode-*.app; do
+            case "$app" in *beta*|*Beta*) continue;; esac
+            [ -x "$app/Contents/Developer/usr/bin/xcodebuild" ] && DEV_DIR="$app/Contents/Developer" && break
+          done
+          [ -n "$DEV_DIR" ] || { echo "::error::no release Xcode on the runner"; exit 1; }
+          echo "XCODE_DEV_DIR=$DEV_DIR" >> "$GITHUB_ENV"
+
+      - name: Menu bar UI strings
+        run: DEVELOPER_DIR="$XCODE_DEV_DIR" sh scripts/gen-l10n-hostui.sh
+
+      - name: Build (menu bar UI)
+        run: DEVELOPER_DIR="$XCODE_DEV_DIR" swift build --package-path packaging/macos/HostUI
+
+      - name: Test (menu bar UI)
+        run: DEVELOPER_DIR="$XCODE_DEV_DIR" swift test --package-path packaging/macos/HostUI
+
+      - name: sccache stats (visibility only)
+        if: always()
+        run: sccache --show-stats
+
+  # Never on a pull request: a release run loads signing material on this shared runner.
+  package:
+    needs: check
+    if: gitea.event_name != 'pull_request'
+    runs-on: macos-arm64
+    timeout-minutes: 120
+    env:
+      TEAM_ID: F4H37KF6WC
+      RELEASE: ${{ startsWith(gitea.ref, 'refs/tags/v') || inputs.dmg == 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Xcode for the UI build, actool and notarytool only; cargo keeps the system linker, as in
+      # apple.yml.
+      - name: Select release Xcode
+        run: |
+          DEV_DIR=""
+          for app in /Applications/Xcode.app /Applications/Xcode_*.app /Applications/Xcode-*.app; do
+            case "$app" in *beta*|*Beta*) continue;; esac
+            [ -x "$app/Contents/Developer/usr/bin/xcodebuild" ] && DEV_DIR="$app/Contents/Developer" && break
+          done
+          [ -n "$DEV_DIR" ] || { echo "::error::no release Xcode on the runner"; exit 1; }
+          echo "XCODE_DEV_DIR=$DEV_DIR" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$DEV_DIR" xcodebuild -version
+
+      - name: Version
+        run: |
+          eval "$(bash scripts/ci/pf-version.sh)"
+          case "$GITHUB_REF" in
+            refs/tags/v*) V="${GITHUB_REF_NAME#v}"; V="${V%%-*}" ;;
+            *)            V="$PF_BASE" ;;
+          esac
+          printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must be X.Y.Z, got '$V'"; exit 1; }
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Rust toolchain
+        run: |
+          RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
+          dirname "$RUSTUP" >> "$GITHUB_PATH"
+
+      # The cargo target dir, bun and dmgbuild (both pinned by hash) outlive the job here.
+      - name: Persistent dirs
+        run: |
+          dir="$(sh scripts/ci/mac-cargo-target.sh macos-host)"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "PF_CACHE=$HOME/ci/packaging-cache" >> "$GITHUB_ENV"
+
+      - name: Carry source mtimes (unchanged crates stay fresh)
+        continue-on-error: true
+        run: |
+          rustc -O scripts/ci/src-mtimes.rs -o "$RUNNER_TEMP/src-mtimes"
+          "$RUNNER_TEMP/src-mtimes" "$CARGO_TARGET_DIR"
+
+      - name: sccache (self-healing install)
+        run: sh scripts/ci/ensure-sccache.sh
+
+      # CMake for the vendored libopus; Python 3.10 or later for dmgbuild.
+      - name: CMake + Python (self-healing install)
+        run: |
+          for B in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$B" ] && BREW="$B" && break; done
+          if [ -z "$BREW" ]; then echo "::error::Homebrew not found on the runner"; exit 1; fi
+          BREW_BIN="$(dirname "$BREW")"; export PATH="$BREW_BIN:$PATH"
+          command -v cmake >/dev/null || "$BREW" install cmake
+          echo "$BREW_BIN" >> "$GITHUB_PATH"
+          PY="$BREW_BIN/python3.13"
+          [ -x "$PY" ] || "$BREW" install python@3.13
+          echo "PF_PYTHON=$PY" >> "$GITHUB_ENV"
+
+      - name: Build the host (release)
+        env:
+          PUNKTFUNK_BUILD_VERSION: ${{ env.VERSION }}
+        run: cargo build --release -p punktfunk-host --locked
+
+      - name: bun, the web console and the plugin runner
+        run: |
+          BUN="$(sh packaging/macos/fetch-bun.sh "$PF_CACHE")"
+          echo "BUN=$BUN" >> "$GITHUB_ENV"
+          bash scripts/ci/retry.sh 3 sh packaging/macos/build-payloads.sh -u "$BUN" -o "$RUNNER_TEMP/payloads"
+
+      # A release signs with Developer ID and the host's Developer ID profile; any other run signs
+      # ad hoc, which needs neither.
+      - name: Bundle
+        env:
+          HOST_PROFILE: ${{ secrets.MACOS_HOST_PROFILE }}
+        run: |
+          if [ "$RELEASE" = true ]; then
+            if [ -z "$HOST_PROFILE" ]; then
+              echo "::error::MACOS_HOST_PROFILE is empty: a release needs the host's Developer ID profile (packaging/macos/README.md)"
+              exit 1
+            fi
+            printf '%s' "$HOST_PROFILE" | base64 -D > "$RUNNER_TEMP/host.provisionprofile"
+            export PF_IDENTITY="Developer ID Application" PF_PROFILE="$RUNNER_TEMP/host.provisionprofile" PF_TEAM_ID="$TEAM_ID"
+          else
+            export PF_IDENTITY=-
+          fi
+          APP="$(DEVELOPER_DIR="$XCODE_DEV_DIR" sh packaging/macos/bundle.sh \
+            -b "$CARGO_TARGET_DIR/release/punktfunk-host" -v "$VERSION" -o "$RUNNER_TEMP/dist" \
+            -u "$BUN" -w "$RUNNER_TEMP/payloads")"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "IDENTITY=$PF_IDENTITY" >> "$GITHUB_ENV"
+
+      # Everything runs from inside the signed bundle: the profile matches the host's
+      # entitlements, bun's JIT entitlements hold, and the console boots on the bundled bun.
+      - name: Smoke the bundle
+        run: |
+          "$APP/Contents/MacOS/punktfunk-host" --version
+          "$APP/Contents/Helpers/bun" --version
+          "$APP/Contents/Helpers/bun" -e 'let s = 0; for (let i = 0; i < 1e8; i++) s += i % 7; console.log(s)'
+          mkdir -p "$RUNNER_TEMP/web-smoke"
+          PORT=3019 HOST=127.0.0.1 PUNKTFUNK_UI_PASSWORD=ci PUNKTFUNK_CONFIG_DIR="$RUNNER_TEMP/web-smoke" \
+            "$APP/Contents/Helpers/bun" "$APP/Contents/Resources/web/.output/server/index.mjs" &
+          NP=$!; sleep 4
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3019/login || echo 000)
+          kill "$NP" 2>/dev/null || true
+          echo "web console from the bundle: /login -> $code"
+          [ "$code" = 200 ] || { echo "::error::the bundled web console didn't boot"; exit 1; }
+
+      - name: Stage App Store Connect API key
+        if: startsWith(gitea.ref, 'refs/tags/v') || inputs.dmg == 'true'
+        env:
+          ASC_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          printf '%s' "$ASC_P8" > "$RUNNER_TEMP/asc.p8"
+          chmod 600 "$RUNNER_TEMP/asc.p8"
+
+      # Release order: notarize the app and staple it, then build, sign and notarize the image.
+      - name: Notarize the app
+        if: startsWith(gitea.ref, 'refs/tags/v') || inputs.dmg == 'true'
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          export ASC_API_KEY_PATH="$RUNNER_TEMP/asc.p8" DEVELOPER_DIR="$XCODE_DEV_DIR"
+          sh packaging/macos/notarize.sh "$APP"
+
+      - name: Disk image
+        run: |
+          DMG="$(sh packaging/macos/dmg.sh -a "$APP" -v "$VERSION" -i "$IDENTITY" -o "$RUNNER_TEMP/dist")"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Notarize the disk image
+        if: startsWith(gitea.ref, 'refs/tags/v') || inputs.dmg == 'true'
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          export ASC_API_KEY_PATH="$RUNNER_TEMP/asc.p8" DEVELOPER_DIR="$XCODE_DEV_DIR"
+          sh packaging/macos/notarize.sh "$DMG"
+
+      - name: Attach the image to the Gitea release (stable tags only)
+        if: startsWith(gitea.ref, 'refs/tags/v')
+        env:
+          GITEA_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          . scripts/ci/gitea-release.sh
+          RID=$(ensure_release "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" auto)
+          upsert_asset "$RID" "$DMG" "Punktfunk-Host-$VERSION.dmg"
+
+      # As apple.yml: a tag fills the immutable versioned path and latest/, a dispatch canary/.
+      - name: Publish the image to the generic registry
+        if: startsWith(gitea.ref, 'refs/tags/v') || inputs.dmg == 'true'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          BASE="https://git.unom.io/api/packages/unom/generic/punktfunk-host-macos"
+          put() {
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --user "enricobuehler:$REGISTRY_TOKEN" --upload-file "$1" "$2")
+            case "$code" in
+              2*|409) echo "published ($code): $2" ;;
+              *) echo "upload failed (HTTP $code): $2"; exit 1 ;;
+            esac
+          }
+          case "$GITHUB_REF" in
+            refs/tags/v*) put "$DMG" "$BASE/$VERSION/Punktfunk-Host-$VERSION.dmg"; ALIAS=latest ;;
+            *) ALIAS=canary ;;
+          esac
+          curl -sS -o /dev/null --user "enricobuehler:$REGISTRY_TOKEN" -X DELETE "$BASE/$ALIAS/Punktfunk-Host.dmg" || true
+          put "$DMG" "$BASE/$ALIAS/Punktfunk-Host.dmg"
+
+      - name: Drop the signing inputs
+        if: always()
+        run: rm -f "$RUNNER_TEMP/asc.p8" "$RUNNER_TEMP/host.provisionprofile"
 
       - name: sccache stats (visibility only)
         if: always()
