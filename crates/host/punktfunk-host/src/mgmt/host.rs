@@ -45,7 +45,8 @@ pub(crate) struct HostInfo {
     /// `linux[/<family>][/<id>]`). Walk most-specific-first; an unknown distro still matches its family.
     #[schema(example = "linux/fedora/bazzite")]
     os: String,
-    /// Human-readable OS name (os-release `PRETTY_NAME`; `"Windows"`/`"macOS"` elsewhere).
+    /// Human-readable OS name: os-release `PRETTY_NAME`, `"Windows"`, or macOS with its version
+    /// and build (`"macOS 27.0.1 (27A123)"`).
     #[schema(example = "Bazzite 42 (Kinoite)")]
     os_name: String,
     /// Codecs this host can encode (`Resolved::wire_caps`, not the compile-time list). Empty
