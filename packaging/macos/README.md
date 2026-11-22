@@ -17,7 +17,24 @@ macOS 15 or later.
 | `bun.entitlements` | bun's: the two a JIT runtime needs |
 | `io.unom.punktfunk.host.plist` | The LaunchAgent: starts `punktfunk-host serve` at login, restarts it after a crash |
 | `AppIcon.icon` | The app icon (Icon Composer); `actool` compiles it at build |
-| `HostUI/` | The menu bar UI, a SwiftPM library the host loads; `bundle.sh` builds it when present |
+| `HostUI/` | The menu bar item and permission setup: a SwiftPM library the host loads; `bundle.sh` builds it |
+
+## Menu bar UI
+
+`HostUI` builds `libPunktfunkHostUI.dylib`, which the host loads from `Contents/Frameworks/` and
+runs on its main thread (C ABI in `HostUI/Sources/CPunktfunkHostUI/include/pf_host_ui.h`), and
+its resource bundle, which goes to `Contents/Resources/`. `bundle.sh` generates its texts,
+builds it and signs it before the app: under the hardened runtime the host loads only its own
+team's code.
+
+```sh
+scripts/gen-l10n-hostui.sh
+swift build -c release --package-path packaging/macos/HostUI
+swift test --package-path packaging/macos/HostUI
+```
+
+`HostUIPreview --render <dir>` writes every screen as PNG, light and dark, English and German,
+without showing anything. Run without `--render` it puts the menu bar item on screen.
 
 ## Build
 
