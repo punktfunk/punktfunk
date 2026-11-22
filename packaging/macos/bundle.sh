@@ -114,6 +114,15 @@ cp "$here/Info.plist" "$contents/Info.plist"
 "$plistbuddy" -c "Set :CFBundleShortVersionString $version" -c "Set :CFBundleVersion $version" \
     "$contents/Info.plist"
 cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$root/THIRD-PARTY-NOTICES.txt" "$contents/Resources/licenses/"
+# Assets.car carries the layered icon for macOS 26, AppIcon.icns the flat one for macOS 15.
+if xcrun -f actool >/dev/null 2>&1; then
+    xcrun actool --compile "$contents/Resources" --output-partial-info-plist "$work/icon.plist" \
+        --app-icon AppIcon --include-all-app-icons --enable-on-demand-resources NO \
+        --development-region en --target-device mac --minimum-deployment-target 15.0 \
+        --platform macosx "$here/AppIcon.icon" >/dev/null || die "the icon didn't compile"
+else
+    note "no actool (Xcode): the bundle has no icon"
+fi
 
 if [ -n "$bun" ]; then
     mkdir -p "$contents/Helpers"
