@@ -147,24 +147,42 @@ public enum Preview {
 }
 
 /// Every glyph state at menu bar size, then its 36 px (Retina) and 18 px rasters enlarged
-/// Every glyph state, at menu bar size and four times larger, on the panel's background.
+/// pixel for pixel.
 private struct GlyphSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach([1.0, 4.0], id: \.self) { scale in
-                HStack(spacing: 16 * scale) {
-                    ForEach(GlyphState.allCases, id: \.self) { state in
-                        Image(nsImage: Glyph.image(state))
-                            .renderingMode(.template)
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: Glyph.size * scale, height: Glyph.size * scale)
-                            .foregroundStyle(.primary)
-                    }
-                }
-            }
+            row(px: nil)
+            row(px: 36)
+            row(px: 18)
             BrandMark(size: 64)
         }
         .padding(16)
+    }
+
+    private func row(px: Int?) -> some View {
+        HStack(spacing: px == nil ? 16 : 24) {
+            ForEach(GlyphState.allCases, id: \.self) { state in
+                Image(nsImage: px.map { raster(Glyph.image(state), px: $0) } ?? Glyph.image(state))
+                    .renderingMode(.template)
+                    .resizable()
+                    .interpolation(.none)
+                    .frame(width: px == nil ? Glyph.size : 72, height: px == nil ? Glyph.size : 72)
+                    .foregroundStyle(.primary)
+            }
+        }
+    }
+
+    private func raster(_ image: NSImage, px: Int) -> NSImage {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: px, height: px))
+        NSGraphicsContext.restoreGraphicsState()
+        let out = NSImage(size: NSSize(width: px, height: px))
+        out.addRepresentation(rep)
+        out.isTemplate = true
+        return out
     }
 }
