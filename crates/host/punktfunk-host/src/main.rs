@@ -62,10 +62,6 @@ mod windows {
         pub(crate) fn topology_reassert_gen() -> u64 {
             0
         }
-        #[cfg_attr(target_os = "linux", allow(dead_code, reason = "macOS reads it"))]
-        pub(crate) fn hw_cursor_capable() -> bool {
-            false
-        }
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn open_driver_encoder(
             _plan: &crate::session_plan::SessionPlan,

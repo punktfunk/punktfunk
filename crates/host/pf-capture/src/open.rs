@@ -25,7 +25,8 @@ pub struct DisplayCaptureOpts {
     pub stream_hz: u32,
     /// The session's negotiated format: `hdr`, `ten_bit_sdr`, `chroma_444`, `full_range`.
     pub output: pf_frame::OutputFormat,
-    /// The client draws the pointer: frames leave it out and [`crate::CursorSource`] reports it.
+    /// The session forwards the pointer: [`crate::CursorSource`] reports it, and frames leave
+    /// it out while the client draws it.
     pub metadata_cursor: bool,
     /// Held for the capture's life: the display's lease.
     pub keepalive: Box<dyn Send>,
@@ -35,6 +36,13 @@ pub struct DisplayCaptureOpts {
 #[cfg(target_os = "macos")]
 pub fn open_display(opts: DisplayCaptureOpts) -> anyhow::Result<Box<dyn crate::Capturer>> {
     crate::macos::open(opts)
+}
+
+/// Whether the system reports the pointer's image now, so a capture can leave the pointer out
+/// of its frames for the client to draw.
+#[cfg(target_os = "macos")]
+pub fn pointer_image_readable() -> bool {
+    crate::macos::pointer_image_readable()
 }
 
 /// Whether this process holds the Screen Recording grant. Never prompts.

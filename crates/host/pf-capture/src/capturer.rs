@@ -259,6 +259,8 @@ pub enum Paced {
     Poked,
     /// [`Feed::au_wake`]: the loop collects the access unit and waits on.
     Encoded,
+    /// The pointer moved with no frame to carry it: the loop forwards it and waits on.
+    Pointer,
 }
 
 /// A producer pool's spend since the last [`Feed::pool_use`]. A peak at the depth left the

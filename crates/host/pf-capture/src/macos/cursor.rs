@@ -1,7 +1,10 @@
 //! The pointer apart from the frames: its image from AppKit's system cursor and the display's
 //! bounds, read on a thread of their own, and its place from a Core Graphics event on every
-//! call. Both map into the frame the way the stream draws the display.
+//! call. Both map into the frame the way the stream draws the display. While the client draws
+//! it, a second thread reads the place at the stream rate and rings on each move, so a move
+//! over a still desktop, which brings no frame, still reaches the client.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,8 +26,10 @@ const SHAPE_EVERY: Duration = Duration::from_millis(33);
 /// [`crate::CursorSource`] for a display whose frames leave the pointer out.
 pub(super) struct Pointer {
     latest: Arc<Mutex<Latest>>,
-    /// Dropping it ends the image reader.
-    _stop: mpsc::Sender<()>,
+    /// The client draws the pointer: the place reader runs.
+    forwarding: Arc<AtomicBool>,
+    /// Dropping them ends the image and place readers.
+    _stop: [mpsc::Sender<()>; 2],
 }
 
 #[derive(Clone)]
@@ -50,7 +55,13 @@ struct Shape {
 
 impl Pointer {
     /// `None` when the system reports no cursor image; the frames must carry the pointer then.
-    pub(super) fn open(display_id: u32, frame: (u32, u32)) -> Option<Pointer> {
+    /// While forwarding, the place is read every `period` and `moved` rings when it changed.
+    pub(super) fn open(
+        display_id: u32,
+        frame: (u32, u32),
+        period: Duration,
+        moved: Arc<dyn Fn() + Send + Sync>,
+    ) -> Option<Pointer> {
         let (bounds, content) = place(display_id, frame);
         let latest = Arc::new(Mutex::new(Latest {
             shape: system_cursor(content[2] / bounds[2])?,
@@ -60,6 +71,31 @@ impl Pointer {
         }));
         // The first event read sets up the window-server connection: milliseconds, once.
         let _ = CGEvent::new(None);
+        let forwarding = Arc::new(AtomicBool::new(false));
+        let (stop_moves, moves_stopped) = mpsc::channel();
+        let on = forwarding.clone();
+        let mover = move || {
+            let mut last = location();
+            loop {
+                let wait = if on.load(Ordering::Relaxed) {
+                    period
+                } else {
+                    SHAPE_EVERY
+                };
+                if moves_stopped.recv_timeout(wait) != Err(RecvTimeoutError::Timeout) {
+                    return;
+                }
+                let at = location();
+                if at != last && on.load(Ordering::Relaxed) {
+                    moved();
+                }
+                last = at;
+            }
+        };
+        std::thread::Builder::new()
+            .name("punktfunk-sck-pointer".into())
+            .spawn(mover)
+            .ok()?;
         let (stop, stopped) = mpsc::channel();
         let shared = latest.clone();
         let reader = move || {
@@ -80,14 +116,26 @@ impl Pointer {
             .ok()?;
         Some(Pointer {
             latest,
-            _stop: stop,
+            forwarding,
+            _stop: [stop, stop_moves],
         })
     }
 }
 
+/// Whether the system reports a cursor image now: the frames can leave the pointer out.
+pub(crate) fn readable() -> bool {
+    system_cursor(1.0).is_some()
+}
+
+/// The pointer in global points.
+fn location() -> (f64, f64) {
+    let at = CGEvent::location(CGEvent::new(None).as_deref());
+    (at.x, at.y)
+}
+
 impl crate::CursorSource for Pointer {
     fn overlay(&mut self) -> Option<CursorOverlay> {
-        let at = CGEvent::location(CGEvent::new(None).as_deref());
+        let at = location();
         let latest = self
             .latest
             .lock()
@@ -99,7 +147,7 @@ impl crate::CursorSource for Pointer {
             bounds,
             content,
         } = latest;
-        let on = plan::to_frame((at.x, at.y), bounds, content);
+        let on = plan::to_frame(at, bounds, content);
         let (x, y) = on.unwrap_or_default();
         Some(CursorOverlay {
             x: x.round() as i32 - s.hot_x as i32,
@@ -114,8 +162,11 @@ impl crate::CursorSource for Pointer {
         })
     }
 
-    /// The frames leave the pointer out for this source's life: the host places it either way.
-    fn set_forward(&mut self, _client_draws: bool) {}
+    /// Starts or stops the place reader. Whether the frames carry the pointer is the stream's
+    /// configuration, which the capturer switches.
+    fn set_forward(&mut self, client_draws: bool) {
+        self.forwarding.store(client_draws, Ordering::Relaxed);
+    }
 }
 
 /// The display's bounds in global points and where they land in the frame. A mode change moves

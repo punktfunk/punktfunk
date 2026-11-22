@@ -926,9 +926,9 @@ impl StreamState {
 
     /// Wait for the next tick ([`crate::send_pacing::wait_tick_or_au`]) on this session's
     /// measured source cadence. An access unit the encoder finishes first goes to the send
-    /// thread at once, under this tick's stamps and with no submit, and the wait goes on.
-    /// While the encoder owes one that will ring, the keep-alive repeat holds off.
-    /// `Break` = the send thread is gone.
+    /// thread at once, under this tick's stamps and with no submit, and a pointer move goes to
+    /// the client; either way the wait goes on. While the encoder owes an AU that will ring,
+    /// the keep-alive repeat holds off. `Break` = the send thread is gone.
     pub(super) fn sleep_to_next(
         &mut self,
         t_cap: std::time::Instant,
@@ -947,13 +947,23 @@ impl StreamState {
             self.src_period_ns,
             owed,
         );
-        while let Waited::AuReady(gate) = waited {
-            self.au_rings = true;
-            if let Some(stamps) = self.tick_stamps {
-                if let Flow::Break = self.drain_ready(&stamps)? {
-                    return Ok(Flow::Break);
+        loop {
+            let gate = match waited {
+                Waited::Tick => break,
+                Waited::Pointer(gate) => {
+                    self.forward_pointer();
+                    gate
                 }
-            }
+                Waited::AuReady(gate) => {
+                    self.au_rings = true;
+                    if let Some(stamps) = self.tick_stamps {
+                        if let Flow::Break = self.drain_ready(&stamps)? {
+                            return Ok(Flow::Break);
+                        }
+                    }
+                    gate
+                }
+            };
             let owed = self.au_owed();
             waited = gate.resume(&mut *self.live.capturer, &self.pace, &mut self.next, owed);
         }
