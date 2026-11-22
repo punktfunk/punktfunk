@@ -229,7 +229,7 @@ pub(crate) struct Spawned {
     pub pid: Option<u32>,
     /// The launch child and whether it leads its process group: the liveness signal and the
     /// termination ladder's handle.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub child: Option<(std::process::Child, bool)>,
     /// Workspace this launch owns on the streamed head; the lease releases it.
     #[cfg(target_os = "linux")]
@@ -280,6 +280,22 @@ pub(crate) fn spawn(
             }
             Err(e) => tracing::warn!(
                 title = %t.game.title,
+                plane = owner.plane.as_str(),
+                error = %format!("{e:#}"),
+                "requested title not launched"
+            ),
+        }
+    }
+    // macOS starts the command on the logged-in desktop; `open` hands a link or a bundle over.
+    #[cfg(target_os = "macos")]
+    if let Some(cmd) = t.command.as_deref().filter(|_| !adopt) {
+        match crate::library::launch_mac_command(cmd) {
+            Ok(child) => {
+                out.now = true;
+                out.child = Some((child, true));
+            }
+            Err(e) => tracing::warn!(
+                command = %cmd,
                 plane = owner.plane.as_str(),
                 error = %format!("{e:#}"),
                 "requested title not launched"
@@ -367,9 +383,9 @@ pub(crate) fn lease(
     extras: LeaseExtras,
     on_exit: crate::gamelease::OnExit,
 ) -> crate::gamelease::GameLease {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let child = spawned.child;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
     let child = None;
     crate::gamelease::open(
         crate::gamelease::LeaseRequest {
@@ -416,7 +432,7 @@ where
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
     use crate::gamelease::{GameRef, GameState, LeaseKind, EXIT_CONFIRM, SHIM_WINDOW};
