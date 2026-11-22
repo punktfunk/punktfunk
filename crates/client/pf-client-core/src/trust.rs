@@ -63,7 +63,7 @@ pub(crate) fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T
     read_json(path).unwrap_or_else(|e| {
         tracing::warn!(
             error = %format!("{e:#}"),
-            "config file not read — every setting in it is being IGNORED"
+            "config file not read — its settings are ignored"
         );
         None
     })
@@ -93,9 +93,8 @@ pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<O
             tracing::warn!(
                 path = %path.display(),
                 error = %e,
-                "config file did not parse — falling back to defaults for it, and the \
-                 settings in it are being IGNORED (fix or delete the file; a UTF-16 file \
-                 is not UTF-8, re-save it as UTF-8)"
+                "config file did not parse — its settings are ignored and the defaults \
+                 apply (fix or delete the file; a UTF-16 file must be re-saved as UTF-8)"
             );
             set_aside(path, &bytes);
             Ok(None)

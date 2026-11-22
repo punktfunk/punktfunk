@@ -172,10 +172,9 @@ pub(crate) fn resolve_compositor(
                         .compositor
                         .as_deref()
                         .unwrap_or("-"),
-                    "game_session=dedicated asked for this launch's OWN headless gamescope, but \
-                     PUNKTFUNK_COMPOSITOR pins this host to a backend — the operator pin wins and \
-                     the game launches into the pinned session instead. Unset PUNKTFUNK_COMPOSITOR \
-                     to get dedicated game sessions."
+                    "dedicated game session skipped: PUNKTFUNK_COMPOSITOR pins this host to a \
+                     backend, so the game launches into the pinned session. Unset it for \
+                     dedicated sessions"
                 );
             } else {
                 let route = crate::vdisplay::resolve_gamescope_route(Compositor::Gamescope, true);

@@ -103,7 +103,7 @@ where
     tracing::info!(
         name = %name,
         client = %client_fp_hex,
-        "PAIRING REQUEST — verifying against the armed PIN"
+        "pairing request — verifying against the armed PIN"
     );
 
     // `false` = SPAKE2 role B. Identities are the cert we presented and the cert we received.

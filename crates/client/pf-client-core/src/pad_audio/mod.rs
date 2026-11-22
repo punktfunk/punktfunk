@@ -43,10 +43,7 @@ pub fn speaker_active(mode: &str) -> bool {
         "mix" => {
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| {
-                tracing::info!(
-                    "pad_speaker=\"mix\" is not implemented yet (TODO: fold the DS5 speaker \
-                     stream into the main session audio) — treating it as \"off\""
-                );
+                tracing::info!("pad_speaker=\"mix\" is not implemented — treating it as \"off\"");
             });
             false
         }
@@ -399,7 +396,7 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
                     tracing::info!(
                         rendered = p,
                         ignored = f.pad,
-                        "pad audio from a second pad — v1 renders one physical DualSense"
+                        "pad audio from a second pad — only one DualSense renders"
                     );
                 }
                 continue;

@@ -1649,9 +1649,9 @@ fn set_monitor_rule(
         // points at the compositor failing to back the mode.
         _ => bail!(
             "headless output {name} never got a framebuffer (stayed 0x0) after the monitor rule for \
-             {}x{}@{hz}. hyprctl said: {said}. If a form was accepted, the compositor could not back \
-             the mode — likely a headless GBM/dmabuf allocation failure (GPU driver; cf. \
-             Sunshine#4197). Check the Hyprland log.",
+             {}x{}@{hz}. hyprctl said: {said}. If a form was accepted, the compositor couldn't back \
+             the mode — likely a headless GBM/dmabuf allocation failure in the GPU driver. Check \
+             the Hyprland log.",
             mode.width,
             mode.height
         ),
@@ -1713,9 +1713,10 @@ fn warn_if_permissions_enforced() {
         .is_some_and(|v| v != 0);
     if on {
         tracing::warn!(
-            "Hyprland ecosystem.enforce_permissions is ON — screencopy/virtual-input may be denied \
-             as SILENT black frames / dropped input. Grant the host with hl.permission rules \
-             (screencopy + virtual pointer/keyboard) — see docs/hyprland."
+            "Hyprland ecosystem.enforce_permissions is on — a denied screencopy or virtual input \
+             shows up as black frames or dropped input, with no error. Grant the host with \
+             hl.permission rules (screencopy, virtual pointer and keyboard); see \
+             https://docs.punktfunk.unom.io/docs/hyprland#permission-system"
         );
     }
 }

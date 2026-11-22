@@ -136,7 +136,7 @@ pub(super) fn add_firewall_rules(allow_public: bool) {
         println!(
             "Note: streaming ports are open on Private/Domain networks only. On a network Windows \
              classifies as Public, clients won't connect — set that network to Private, or reinstall \
-             with the 'Allow connections on Public networks' option."
+             with 'Public-network firewall rules' on."
         );
     }
 }
@@ -271,11 +271,10 @@ pub(super) fn warn_if_public_network() {
     }
     if active_network_is_public() == Some(true) {
         tracing::warn!(
-            "this machine's current network is classified Public (an untrusted-network profile), so \
-             punktfunk's streaming ports are firewalled off here and clients on this network can't \
-             reach the host. Fix: set the network to Private (Windows Settings > Network > \
-             properties) — or, only for a network you trust, reinstall with the 'Allow connections \
-             on Public networks' option."
+            "this machine's network is classified Public, so the firewall blocks punktfunk's streaming \
+             ports and clients on it can't reach the host — set the network to Private (Windows \
+             Settings > Network > properties), or for a network you trust, reinstall with \
+             'Public-network firewall rules' on"
         );
     }
 }

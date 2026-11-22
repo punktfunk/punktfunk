@@ -295,9 +295,8 @@ unsafe fn create_device(
                 // the worker binary — do not `setcap` the host.
                 tracing::warn!(
                     "pyrowave: every global queue priority class was refused — encoding \
-                     at default priority. The GPU-preemption lever is INERT without \
-                     CAP_SYS_NICE on the host binary (measured on both NVIDIA and RADV); \
-                     PYROWAVE_QUEUE_PRIORITY=off silences this"
+                     at default priority; only the encode worker should carry CAP_SYS_NICE, \
+                     never punktfunk-host; PYROWAVE_QUEUE_PRIORITY=off silences this"
                 );
             }
             instance
@@ -461,7 +460,7 @@ fn check_wire_sequence(bitstream: &[u8], offset: usize, seq: u8) {
         tracing::error!(
             expected = seq,
             got = ?got,
-            "pyrowave: the wire sequence counter is NOT what we stamped — \
+            "pyrowave: the wire sequence counter isn't what we stamped — \
              patches/0007-encoder-sequence-override.patch is missing or ineffective. \
              With two alternating encoder handles this silently halves the frame rate \
              on every client"
@@ -881,7 +880,7 @@ impl PyroWaveEncoder {
         if !crate::pyrowave_mode_fits_rdo(width, height, chroma444) {
             bail!(
                 "pyrowave {} at {width}x{height} exceeds the rate controller's 16-bit block \
-                 index (see pyrowave-sys patches/0002 note) — lower the resolution",
+                 index — lower the resolution",
                 if chroma444 { "4:4:4" } else { "4:2:0" }
             );
         }

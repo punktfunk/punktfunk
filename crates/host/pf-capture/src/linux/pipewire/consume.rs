@@ -140,7 +140,7 @@ fn handle_passthrough_fallback(ud: &mut UserData, reason: PassthroughFallback) -
                      de-pad plus the encoder's own upload on every such frame"
                 }
                 PassthroughFallbackAction::Drop => {
-                    "the frame is DROPPED — the CPU de-pad path needs the negotiated format \
+                    "the frame is dropped — the CPU de-pad path needs the negotiated format \
                      too, so nothing streams while this persists"
                 }
                 PassthroughFallbackAction::DropTiledAndRebuild => {

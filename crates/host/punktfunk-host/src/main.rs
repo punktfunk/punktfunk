@@ -742,7 +742,7 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
 
 fn print_usage() {
     eprintln!(
-        "punktfunk-host — Linux streaming host
+        "punktfunk-host — Punktfunk streaming host
 
 USAGE:
     punktfunk-host serve [OPTIONS]            native punktfunk host + management REST API
@@ -774,9 +774,8 @@ SERVE OPTIONS:
                                  machine with Sunshine/Apollo/Vibeshine, whose web UI owns 47990 —
                                  clients follow via mDNS and the console via mgmt-endpoint
     --gamestream  (--moonlight)  ALSO run the GameStream/Moonlight-compat planes (nvhttp pairing,
-                                 RTSP, ENet control, _nvstream mDNS). OFF by default — they carry
-                                 inherent on-path weaknesses (plain-HTTP pairing + legacy GCM nonce
-                                 reuse, security-review #5/#9); enable only on a TRUSTED LAN.
+                                 RTSP, ENet control, _nvstream mDNS). Off by default — Moonlight
+                                 pairs over plain HTTP; enable only on a trusted LAN.
                                  The flag locks the console's GameStream setting; an install sets
                                  that setting instead (`settings set gamestream true`)
     --native                     no-op (the native plane always runs in `serve`)
@@ -796,8 +795,8 @@ PUNKTFUNK1-HOST OPTIONS:
     --port <N>                   QUIC listen port (default: 9777)
     --source <synthetic|synthetic-abr|virtual>
                                  test frames, frames sized from the live Automatic rate, or a
-                                 virtual display + NVENC (default: synthetic). synthetic-abr
-                                 needs no display and no GPU
+                                 virtual display + this host's encoder (default: synthetic).
+                                 synthetic-abr needs no display and no GPU
     --content <SCRIPT>           what synthetic-abr encodes: steady, idle-then-motion,
                                  frame-driven:<fps> for a source slower than the session, or
                                  motion-then-still:<fps> for a minute of motion, then <fps>
@@ -860,8 +859,8 @@ SPIKE OPTIONS:
     -h, --help                   this help
 
 NOTES:
-    'portal' needs headless Sway + xdg-desktop-portal-wlr running in this session
-    (see design/linux-setup.md). 'synthetic' needs no capture session and always runs.
+    'portal' needs an xdg-desktop-portal ScreenCast backend and PipeWire running in this
+    session. 'synthetic' needs no capture session and always runs.
     Encoded AUs are written to a playable file AND (unless --no-loopback) fed through a
     punktfunk_core host→client loopback that reassembles and byte-verifies each one.
     Both 'serve' and 'punktfunk1-host' advertise the native service over mDNS

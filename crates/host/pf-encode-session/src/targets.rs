@@ -81,7 +81,7 @@ pub fn make_tex(
     match (hr, t) {
         (Ok(()), Some(t)) => Ok(t),
         (r, _) => {
-            tracing::info!("encode: CreateTexture2D({format:?}) failed: {r:?}");
+            tracing::warn!("encode: CreateTexture2D({format:?}) failed: {r:?}");
             Err((-2, "pool"))
         }
     }
@@ -91,7 +91,7 @@ fn rtv(dev: &d3d::ID3D11Device, t: &Tex) -> Result<Rtv, Fail> {
     let mut v = None;
     // SAFETY: `t` is a live render-target texture on `dev`; `v` a valid out-param.
     unsafe { dev.CreateRenderTargetView(t, None, Some(&mut v)) }.map_err(|e| {
-        tracing::info!("encode: CreateRenderTargetView failed: {e:?}");
+        tracing::warn!("encode: CreateRenderTargetView failed: {e:?}");
         (-2, "rtv")
     })?;
     v.ok_or((-2, "rtv"))
@@ -101,7 +101,7 @@ fn srv(dev: &d3d::ID3D11Device, t: &Tex) -> Result<Srv, Fail> {
     let mut v = None;
     // SAFETY: `t` is a live shader-resource texture on `dev`; `v` a valid out-param.
     unsafe { dev.CreateShaderResourceView(t, None, Some(&mut v)) }.map_err(|e| {
-        tracing::info!("encode: CreateShaderResourceView failed: {e:?}");
+        tracing::warn!("encode: CreateShaderResourceView failed: {e:?}");
         (-2, "srv")
     })?;
     v.ok_or((-2, "srv"))
@@ -119,7 +119,7 @@ pub struct SharedFence {
 impl SharedFence {
     pub fn new(dev: &d3d::ID3D11Device, ctx: &d3d::ID3D11DeviceContext) -> Result<Self, Fail> {
         let fail = |what: &str, e: windows::core::Error| {
-            tracing::info!("encode: {what} failed: {e:?}");
+            tracing::warn!("encode: {what} failed: {e:?}");
             (-2, "fence")
         };
         let dev5: d3d::ID3D11Device5 = dev.cast().map_err(|e| fail("ID3D11Device5", e))?;
@@ -284,7 +284,7 @@ impl Targets {
         full_range: bool,
     ) -> Result<Self, Fail> {
         let convert_err = |e: anyhow::Error| {
-            tracing::info!("encode: converter build failed: {e:#}");
+            tracing::warn!("encode: converter build failed: {e:#}");
             (-2, "convert")
         };
         let rt = d3d::D3D11_BIND_RENDER_TARGET.0 as u32;
@@ -409,7 +409,7 @@ impl Targets {
             return Err((-2, "scale"));
         }
         let fail = |e: anyhow::Error| {
-            tracing::info!("encode: scale pass build failed: {e:#}");
+            tracing::warn!("encode: scale pass build failed: {e:#}");
             (-2, "scale")
         };
         let fp16 = source_format(self.kind) == dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -616,7 +616,7 @@ impl Targets {
     /// The converter for slot `i` from `src`; `view` is its cached SRV, else one is made.
     fn convert_from(&self, src: &Tex, view: Option<&Srv>, i: usize) -> Result<(), Fail> {
         let convert_err = |e: anyhow::Error| {
-            tracing::info!("encode: convert failed: {e:#}");
+            tracing::warn!("encode: convert failed: {e:#}");
             (-2, "convert")
         };
         let view = || match view {
@@ -670,7 +670,7 @@ impl Targets {
                 Ok(p) => self.blend = Some(p),
                 Err(e) => {
                     self.blend_failed = true;
-                    tracing::info!("encode: cursor blend pass did not build: {e:#}");
+                    tracing::warn!("encode: cursor blend pass did not build: {e:#}");
                 }
             }
         }
@@ -696,7 +696,7 @@ impl Targets {
             && !self.blend_failed
         {
             self.blend_failed = true;
-            tracing::info!("encode: cursor blend draw failed: {e:#}");
+            tracing::warn!("encode: cursor blend draw failed: {e:#}");
         }
     }
 

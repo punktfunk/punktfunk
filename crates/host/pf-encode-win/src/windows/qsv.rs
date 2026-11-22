@@ -1673,8 +1673,8 @@ impl Inner {
                     self.array_warned = true;
                     tracing::warn!(
                         array_size = desc.ArraySize,
-                        "QSV runtime handed out an ARRAY texture — subresource-0 copy may \
-                         target the wrong slice (needs the on-glass check, design §3.4)"
+                        "QSV runtime handed out an array texture — the subresource-0 copy \
+                         may target the wrong slice"
                     );
                 }
             }

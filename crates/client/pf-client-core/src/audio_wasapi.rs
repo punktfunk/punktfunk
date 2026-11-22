@@ -442,7 +442,7 @@ fn open_render(fmt: PlaybackFormat, channels: u8) -> Result<Endpoint> {
                 engine_hz = hz,
                 stream_hz = fmt.rate_hz,
                 endpoint = %name,
-                "the render endpoint's audio engine runs BELOW this session's negotiated \
+                "the render endpoint's audio engine runs below this session's negotiated \
                  rate — WASAPI's shared-mode autoconvert is downsampling every frame on \
                  arrival, so the extra bandwidth is being spent for nothing (raise the rate \
                  in Windows' Sound → Device properties → Advanced, then reconnect)"

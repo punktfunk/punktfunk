@@ -565,7 +565,7 @@ fn bounded_probe(budget: Duration, probe: fn() -> Probe) -> Probe {
             WEDGED_PROBES.fetch_add(1, Ordering::SeqCst);
             tracing::error!(
                 budget_s = budget.as_secs(),
-                "pf-vdisplay control device did not answer — WUDFHost is WEDGED; sessions get \
+                "pf-vdisplay control device did not answer — WUDFHost is wedged; sessions get \
                  audio and no video until the adapter reloads"
             );
             Probe::wedged()
@@ -919,7 +919,7 @@ impl VdisplayDriver for PfVdisplayDriver {
                 Err(e) => tracing::error!(
                     session_id,
                     error = %format!("{e:#}"),
-                    "pf-vdisplay ADD returned a short reply AND the compensating REMOVE failed — \
+                    "pf-vdisplay ADD returned a short reply and the compensating REMOVE failed — \
                      this monitor's IddCx slot is leaked until the driver is cycled"
                 ),
             }
@@ -957,7 +957,7 @@ impl VdisplayDriver for PfVdisplayDriver {
                 tracing::warn!(
                     preferred = preferred_monitor_id,
                     resolved = reply.resolved_monitor_id,
-                    "pf-vdisplay: preferred monitor id NOT honored (live-id collision) — \
+                    "pf-vdisplay: preferred monitor id not honored (live-id collision) — \
                      per-client config persistence degraded to auto identity this session"
                 );
             }

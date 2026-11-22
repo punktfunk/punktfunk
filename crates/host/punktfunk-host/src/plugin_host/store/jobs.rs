@@ -485,7 +485,7 @@ fn run_install(id: &str, plan: Plan, plugin_tokens: &PluginTokens) -> Result<()>
         match super::capturing_ancestor(&dir) {
             Some(p) => format!(
                 "the runner reported success but {pkg} is not in {} — `{}` is capturing the \
-                 install (bun installs into the nearest package.json ABOVE the working directory). \
+                 install (bun installs into the nearest package.json above the working directory). \
                  Move or delete it, or add a package.json to the plugins dir.",
                 dir.display(),
                 p.display()

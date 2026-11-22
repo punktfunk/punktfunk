@@ -249,8 +249,9 @@ pub fn open_virtual_output(
 ) -> Result<Box<dyn Capturer>> {
     let knobs = Knobs::from_env();
     let try_direct = opts.allow_zerocopy && knobs.direct_capture;
-    let mut refused =
-        anyhow::anyhow!("direct capture off (software encoder or PUNKTFUNK_DIRECT_CAPTURE=0)");
+    let mut refused = anyhow::anyhow!(
+        "direct capture off (software encoder, or the direct_capture setting is off)"
+    );
     if let Some(direct) = opts.direct.take().filter(|_| try_direct) {
         let name = direct.output_name;
         let policy = (direct.policy)();

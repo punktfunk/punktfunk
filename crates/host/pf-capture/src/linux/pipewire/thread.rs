@@ -477,12 +477,11 @@ fn log_resolved_arm(cfg: &StreamConfig, offer: &Offer, ladder: &Ladder) {
         tracing::warn!(
             consumer = consumer.as_str(),
             "{} encode with the CPU capture path (per-frame de-pad + CSC + upload) — \
-             zero-copy is off for this capture ({}); set PUNKTFUNK_ZEROCOPY=1 to restore the \
-             dmabuf default",
+             zero-copy is off for this capture ({})",
             consumer.as_str(),
             // The knob's own grammar decided (`pf_zerocopy`); a set-but-on value is not the cause.
             if !pf_zerocopy::enabled() {
-                "PUNKTFUNK_ZEROCOPY is off"
+                "PUNKTFUNK_ZEROCOPY is off; set it to 1 to restore the dmabuf default"
             } else if opts.want_hdr && !policy.hdr_cuda_ok {
                 // `build_importer` drops HDR when the encoder cannot take packed 10-bit
                 // CUDA. Naming the output format would send the reader to the wrong knob.
@@ -520,7 +519,7 @@ fn log_format_offer(opts: &CaptureOpts) {
     if opts.want_hdr {
         tracing::info!(
             "HDR capture: offering xBGR_210LE/xRGB_210LE DMA-BUF modifiers (LINEAR always) \
-             with MANDATORY BT.2020 + SMPTE-2084 (PQ) colorimetry"
+             with mandatory BT.2020 + SMPTE-2084 (PQ) colorimetry"
         );
     }
 }
@@ -814,7 +813,7 @@ fn on_process(stream: &dyn StreamBuffers, ud: &mut UserData) {
             pool_depth = depth,
             high_water = ud.pool.high_water,
             drained,
-            "pipewire buffer pool negotiated — the producer's ACTUAL count \
+            "pipewire buffer pool negotiated — the producer's actual count \
              (add_buffer/remove_buffer): the deferred-requeue budget, and the rewrite \
              window for any frame published without a hold"
         );

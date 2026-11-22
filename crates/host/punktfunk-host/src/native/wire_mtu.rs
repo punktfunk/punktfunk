@@ -246,8 +246,8 @@ fn resolve(
             default,
             live_udp_mtu = jumbo.live_udp_mtu,
             proven_udp_budget = jumbo.proven_udp_budget,
-            "wire MTU: session starts at the JUMBO shard — this path proved it in a previous \
-             session AND re-proved it live on this connection (~6× fewer datagrams per frame)"
+            "wire MTU: session starts at the jumbo shard — this path proved it in a previous \
+             session and re-proved it live on this connection (~6× fewer datagrams per frame)"
         );
         return p;
     }
@@ -433,7 +433,7 @@ impl Watch {
                 },
             );
             tracing::info!(peer = %peer, discovered_udp_mtu = settled, goal,
-                "wire MTU: this path carries JUMBO video datagrams — the next session over \
+                "wire MTU: this path carries jumbo video datagrams — the next session over \
                  it starts at the big shard (it still has to re-prove the path live)");
         } else if jumbo_verdicts().lock().unwrap().remove(&key).is_some() {
             tracing::info!(peer = %peer, discovered_udp_mtu = settled, goal,
@@ -479,24 +479,21 @@ impl Watch {
                 peer = %peer,
                 discovered_udp_mtu = settled,
                 shard_payload = self.current,
-                "wire MTU: this session started at a JUMBO shard but the path does not \
-                 carry it — video datagrams are oversized for a hop, which streams as a \
-                 black screen with zero reported loss. The jumbo verdict for this path is \
-                 cleared: the next connect starts at the standard 1500-byte wire."
+                "wire MTU: this session started at a jumbo shard the path doesn't carry — the \
+                 path's jumbo verdict is cleared and the next connect starts at the standard \
+                 1500-byte wire"
             );
         } else {
             tracing::warn!(
                 peer = %peer,
                 discovered_udp_mtu = settled,
                 needed_udp_mtu = ceiling,
-                "wire MTU: this path CANNOT carry full-size video datagrams — the control \
-                 plane works but every video packet is oversized for a hop, which streams as \
-                 an endless black screen with zero reported loss. Typical cause: a VPN/overlay \
-                 adapter (Tailscale / Cloudflare WARP / ZeroTier) claiming the LAN route, or a \
-                 lowered NIC MTU — compare `ping <client> -f -l 1450` vs `-l 1200` and check \
-                 `netsh interface ipv4 show subinterfaces` (Windows) / `ip link` (Linux). The \
-                 measured budget is recorded: the NEXT session from this client sizes video to \
-                 fit automatically. To pin it for all sessions set PUNKTFUNK_WIRE_MTU."
+                "wire MTU: this path can't carry full-size video datagrams — usually a VPN or \
+                 overlay adapter (Tailscale, Cloudflare WARP, ZeroTier) holding the LAN route, \
+                 or a lowered NIC MTU (compare `ping <client> -f -l 1450` with `-l 1200`; \
+                 `netsh interface ipv4 show subinterfaces` on Windows, `ip link` on Linux). \
+                 Video is resized to the measured path; \
+                 PUNKTFUNK_WIRE_MTU pins a size for every session"
             );
         }
         if self.reneg.is_some() {

@@ -189,8 +189,8 @@ fn open_transport(
     let p = TritonPad::open(idx)?;
     tracing::warn!(
         index = idx,
-        "virtual Steam Controller 2 created as UHID — Steam WON'T list it (no USB interface; \
-         confirmed on-glass). Load vhci_hcd (usbip) so the pad arrives as a real USB device: \
+        "virtual Steam Controller 2 created as UHID — Steam doesn't list it (no USB \
+         interface). Load vhci_hcd (usbip) so the pad arrives as a real USB device: \
          `sudo modprobe vhci_hcd`, and ensure it loads at boot."
     );
     Ok(TritonTransport::Uhid(p))

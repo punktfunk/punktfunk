@@ -451,7 +451,7 @@ NAMES:
     A bare first-party name resolves into the @punktfunk scope: `playnite` installs
     @punktfunk/plugin-playnite, `rom-manager` installs @punktfunk/plugin-rom-manager —
     always from Punktfunk's own package registry. Any other name (`punktfunk-plugin-*`,
-    a foreign @scope) installs from the PUBLIC npm registry and is refused unless you
+    a foreign @scope) installs from the public npm registry and is refused unless you
     pass --allow-public-registry.
 
 NOTES:

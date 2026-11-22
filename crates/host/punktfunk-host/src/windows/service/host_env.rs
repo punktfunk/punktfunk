@@ -75,12 +75,12 @@ pub(super) fn ensure_default_host_env() -> Result<()> {
         #   punktfunk-host service stop && punktfunk-host service start\n\
         \n\
         # Encode backend: auto (default) detects the GPU vendor — NVIDIA->nvenc, AMD->amf, Intel->qsv.\n\
-        # Force one with nvenc | amf | qsv | mf (no software encoder: the driver encodes). amf/qsv need an FFmpeg-built\n\
-        # host; mf is Media Foundation, any vendor's hardware encoder, 8-bit 4:2:0 only.\n\
+        # Force one with nvenc | amf | qsv | mf (no software encoder: the driver encodes).\n\
+        # mf is Media Foundation, any vendor's hardware encoder, 8-bit 4:2:0 only.\n\
         PUNKTFUNK_ENCODER=auto\n\
         PUNKTFUNK_VIDEO_SOURCE=virtual\n\
-        # The virtual display is the bundled pf-vdisplay driver, which also encodes; there is no\n\
-        # other capture path, and the secure desktop (UAC / lock / login) is always captured.\n\
+        # The virtual display is the bundled pf-vdisplay driver, which also encodes. The secure\n\
+        # desktop (UAC / lock / login) is always captured.\n\
         RUST_LOG=info\n\
         \n\
         # The host subcommand the service launches. GameStream (Moonlight) is a setting in the web\n\

@@ -605,7 +605,7 @@ fn pad_audio_test_inner(seconds: u64, coils: bool, speaker: bool) -> anyhow::Res
     println!(
         "playing {seconds}s: {} — the coils are channels 3/4, the speaker 1/2",
         match (coils, speaker) {
-            (true, true) => "a tone on BOTH pairs",
+            (true, true) => "a tone on both pairs",
             (true, false) => "a tone on the voice coils only",
             (false, true) => "a tone on the speaker only",
             (false, false) => "silence (both pairs off)",

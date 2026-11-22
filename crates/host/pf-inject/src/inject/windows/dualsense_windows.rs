@@ -210,8 +210,7 @@ pub fn deck_spike_hold(index: u8, secs: u64) -> Result<()> {
         "virtual Steam Deck devnode up (28DE:1205, device_type 3) — holding {secs}s.\n\
          Observe: Get-PnpDevice -PresentOnly | findstr 1205; Steam logs\\controller.txt for a\n\
          detect/promote line; Steam Settings > Controller for a 'Steam Deck' entry.\n\
-         GO = Steam lists/promotes it; NO-GO = it never appears (the Linux `Interface: -1` gap\n\
-         applies verbatim — document and keep the SteamDeck->DualSense Windows fold)."
+         Steam should list or promote it."
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let mut last_out_seq = 0u32;
