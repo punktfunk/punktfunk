@@ -152,5 +152,24 @@
 	"decky_launch_failed_preset": "Start fehlgeschlagen („{preset}“)",
 	"decky_end_game_unresolved": "Unklar, welches Spiel beendet werden soll.",
 	"decky_trust_request_failed": "Zugriff bei {host} konnte nicht angefordert werden",
-	"decky_trust_bad_fingerprint": "Die Identität von {host} ist nicht lesbar – kopple stattdessen mit einer PIN."
+	"decky_trust_bad_fingerprint": "Die Identität von {host} ist nicht lesbar – kopple stattdessen mit einer PIN.",
+	"decky_local_title": "Spiele in Steam",
+	"decky_local_source_hint": "Fügt die Spiele dieser Quelle deiner Steam-Bibliothek hinzu, um sie auf diesem Gerät zu spielen.",
+	"decky_local_progress": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Deine Steam-Bibliothek wird aktualisiert – noch {count} Spiel",
+			"n=other": "Deine Steam-Bibliothek wird aktualisiert – noch {count} Spiele"
+		}
+	}],
+	"decky_local_gone_hint": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} zu Steam hinzugefügtes Spiel ist nicht mehr in der Bibliothek dieses Geräts.",
+			"n=other": "{count} zu Steam hinzugefügte Spiele sind nicht mehr in der Bibliothek dieses Geräts."
+		}
+	}],
+	"decky_local_shared_layout_hint": "Trägt denselben Namen wie ein Spiel, das du streamst, und nutzt deshalb dessen Controller-Layout."
 }

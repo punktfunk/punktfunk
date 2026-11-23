@@ -134,5 +134,26 @@
 	"decky_launch_failed_preset": "No se pudo iniciar (“{preset}”)",
 	"decky_end_game_unresolved": "No se pudo determinar qué juego finalizar.",
 	"decky_trust_request_failed": "No se pudo solicitar acceso a {host}",
-	"decky_trust_bad_fingerprint": "No se pudo leer la identidad de {host} — empareja con un PIN en su lugar."
+	"decky_trust_bad_fingerprint": "No se pudo leer la identidad de {host} — empareja con un PIN en su lugar.",
+	"decky_local_title": "Juegos en Steam",
+	"decky_local_source_hint": "Añade los juegos de esta fuente a tu biblioteca de Steam, para jugar en este dispositivo.",
+	"decky_local_progress": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Actualizando tu biblioteca de Steam — falta {count} juego",
+			"n=many": "Actualizando tu biblioteca de Steam — faltan {count} juegos",
+			"n=other": "Actualizando tu biblioteca de Steam — faltan {count} juegos"
+		}
+	}],
+	"decky_local_gone_hint": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} juego añadido a Steam ya no está en la biblioteca de este dispositivo.",
+			"n=many": "{count} juegos añadidos a Steam ya no están en la biblioteca de este dispositivo.",
+			"n=other": "{count} juegos añadidos a Steam ya no están en la biblioteca de este dispositivo."
+		}
+	}],
+	"decky_local_shared_layout_hint": "Tiene el mismo nombre que un juego que transmites, así que usa el diseño de mando de esa transmisión."
 }

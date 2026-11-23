@@ -134,5 +134,26 @@
 	"decky_launch_failed_preset": "Échec du lancement (« {preset} »)",
 	"decky_end_game_unresolved": "Impossible de savoir quel jeu terminer.",
 	"decky_trust_request_failed": "Impossible de demander l’accès à l’hôte {host}",
-	"decky_trust_bad_fingerprint": "Impossible de lire l’identité de l’hôte {host} — associez-vous plutôt avec un PIN."
+	"decky_trust_bad_fingerprint": "Impossible de lire l’identité de l’hôte {host} — associez-vous plutôt avec un PIN.",
+	"decky_local_title": "Jeux dans Steam",
+	"decky_local_source_hint": "Ajoute les jeux de cette source à votre bibliothèque Steam, pour y jouer sur cet appareil.",
+	"decky_local_progress": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Mise à jour de votre bibliothèque Steam — encore {count} jeu",
+			"n=many": "Mise à jour de votre bibliothèque Steam — encore {count} jeux",
+			"n=other": "Mise à jour de votre bibliothèque Steam — encore {count} jeux"
+		}
+	}],
+	"decky_local_gone_hint": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} jeu ajouté à Steam n’est plus dans la bibliothèque de cet appareil.",
+			"n=many": "{count} jeux ajoutés à Steam ne sont plus dans la bibliothèque de cet appareil.",
+			"n=other": "{count} jeux ajoutés à Steam ne sont plus dans la bibliothèque de cet appareil."
+		}
+	}],
+	"decky_local_shared_layout_hint": "Porte le même nom qu’un jeu que vous diffusez, donc utilise la disposition de manette de ce streaming."
 }

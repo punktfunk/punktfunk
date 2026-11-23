@@ -265,5 +265,7 @@
 	"apple_usage_microphone": "Tu micrófono se transmite al host de Punktfunk conectado, donde aparece como micrófono virtual.",
 	"apple_usage_face_id": "Face ID abre tu propia cuenta en un host sin necesidad de su contraseña.",
 	"apple_usage_bluetooth": "Bluetooth permite a Punktfunk leer tu Steam Controller y reenviarlo a tu host.",
+	"apple_usage_host_audio_capture": "Punktfunk Host transmite el sonido de este dispositivo junto con la imagen.",
+	"apple_usage_host_local_network": "Punktfunk Host permite que los dispositivos de tu red lo encuentren y se conecten a él para transmitir.",
 	"apple_pad_rumble_failed": "No se pudo ejecutar la prueba de vibración — {error}"
 }

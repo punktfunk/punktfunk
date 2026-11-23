@@ -134,5 +134,26 @@
 	"decky_launch_failed_preset": "Avvio non riuscito (“{preset}”)",
 	"decky_end_game_unresolved": "Impossibile capire quale gioco terminare.",
 	"decky_trust_request_failed": "Impossibile richiedere l’accesso a {host}",
-	"decky_trust_bad_fingerprint": "Impossibile leggere l’identità di {host} — associa con un PIN."
+	"decky_trust_bad_fingerprint": "Impossibile leggere l’identità di {host} — associa con un PIN.",
+	"decky_local_title": "Giochi in Steam",
+	"decky_local_source_hint": "Aggiunge i giochi di questa fonte alla tua libreria Steam, da giocare su questo dispositivo.",
+	"decky_local_progress": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Aggiornamento della tua libreria Steam — manca {count} gioco",
+			"n=many": "Aggiornamento della tua libreria Steam — mancano {count} giochi",
+			"n=other": "Aggiornamento della tua libreria Steam — mancano {count} giochi"
+		}
+	}],
+	"decky_local_gone_hint": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} gioco aggiunto a Steam non è più nella libreria di questo dispositivo.",
+			"n=many": "{count} giochi aggiunti a Steam non sono più nella libreria di questo dispositivo.",
+			"n=other": "{count} giochi aggiunti a Steam non sono più nella libreria di questo dispositivo."
+		}
+	}],
+	"decky_local_shared_layout_hint": "Ha lo stesso nome di un gioco che trasmetti, quindi usa il layout del controller di quello streaming."
 }
