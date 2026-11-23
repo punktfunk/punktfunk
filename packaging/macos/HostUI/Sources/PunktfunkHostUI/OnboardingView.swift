@@ -70,9 +70,19 @@ struct OnboardingView: View {
             }
         case .input:
             Page(symbol: "keyboard", title: L10n.setupMacInputTitle, text: L10n.setupMacInputBody) {
-                GrantState(grant: model.grants.input ? .allowed : .denied)
-                grantButton(GrantAction.of(granted: model.grants.input, asked: model.inputAsked),
-                            ask: L10n.setupMacInputAllow) { model.inputAction() }
+                if model.grants.input {
+                    GrantState(grant: .allowed)
+                } else if model.inputAsked {
+                    // As with screen recording, the grant reads as allowed only after a restart.
+                    StateLine(text: String(localized: L10n.setupMacScreenReopenHint), icon: "arrow.clockwise.circle", tint: .secondary)
+                    HStack {
+                        Button(L10n.setupMacOpenSettings) { model.inputAction() }
+                        Button(L10n.setupMacScreenReopen) { model.reopen() }.buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    GrantState(grant: .denied)
+                    Button(L10n.setupMacInputAllow) { model.inputAction() }.buttonStyle(.borderedProminent)
+                }
             }
         case .audio:
             Page(symbol: "speaker.wave.2", title: L10n.setupMacAudioTitle, text: L10n.setupMacAudioBody) {

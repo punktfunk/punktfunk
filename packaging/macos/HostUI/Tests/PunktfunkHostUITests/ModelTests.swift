@@ -157,10 +157,10 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
     }
 
     @Test func finishing() {
-        #expect(Finish.of(want: true, isOn: false, available: true, screenAskedThisRun: true) == .register)
-        #expect(Finish.of(want: true, isOn: true, available: true, screenAskedThisRun: true) == .restart)
-        #expect(Finish.of(want: false, isOn: true, available: true, screenAskedThisRun: false) == .unregister)
-        #expect(Finish.of(want: true, isOn: false, available: false, screenAskedThisRun: false) == .close)
+        #expect(Finish.of(want: true, isOn: false, available: true, grantAskedThisRun: true) == .register)
+        #expect(Finish.of(want: true, isOn: true, available: true, grantAskedThisRun: true) == .restart)
+        #expect(Finish.of(want: false, isOn: true, available: true, grantAskedThisRun: false) == .unregister)
+        #expect(Finish.of(want: true, isOn: false, available: false, grantAskedThisRun: false) == .close)
     }
 
     /// A hand-over's note opens the panel once, and only while it is fresh.

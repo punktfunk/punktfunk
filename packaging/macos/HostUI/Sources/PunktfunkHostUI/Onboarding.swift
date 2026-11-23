@@ -29,15 +29,16 @@ enum GrantAction: Equatable {
     }
 }
 
-/// How finishing ends. Registering hands over to the agent's fresh process, where a screen
-/// grant from this run applies; otherwise such a grant needs a restart.
+/// How finishing ends. macOS applies a screen recording or control grant only to a process
+/// started after it. Registering hands over to the agent's fresh process; otherwise a grant
+/// asked for in this run needs a restart.
 enum Finish: Equatable {
     case register, unregister, restart, close
 
-    static func of(want: Bool, isOn: Bool, available: Bool, screenAskedThisRun: Bool) -> Finish {
+    static func of(want: Bool, isOn: Bool, available: Bool, grantAskedThisRun: Bool) -> Finish {
         if available, want, !isOn { return .register }
         if available, !want, isOn { return .unregister }
-        return screenAskedThisRun ? .restart : .close
+        return grantAskedThisRun ? .restart : .close
     }
 }
 
@@ -159,7 +160,7 @@ final class Onboarding {
     func finish() {
         let plan = Finish.of(want: startAtLogin, isOn: loginOn,
                              available: store.inApplications && store.login != .unavailable,
-                             screenAskedThisRun: screenAsked)
+                             grantAskedThisRun: screenAsked || inputAsked)
         onClose?()
         guard live else { return }
         switch plan {
