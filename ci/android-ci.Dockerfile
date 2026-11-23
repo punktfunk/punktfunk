@@ -47,7 +47,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 COPY rustup.env install-rustup.sh /tmp/
+# docker.yml passes rust-toolchain.toml's channel; the targets below land on that toolchain.
+ARG RUST_TOOLCHAIN=stable
 RUN sh /tmp/install-rustup.sh -y --no-modify-path --profile minimal \
+        --default-toolchain "$RUST_TOOLCHAIN" --component rustfmt,clippy \
     && rm /tmp/rustup.env /tmp/install-rustup.sh \
     && rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android \
     # Version-pinned like every other tool baked in here: unpinned, a rebuild months apart

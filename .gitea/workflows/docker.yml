@@ -4,8 +4,8 @@
 #
 #   BUILDER images (every image in the `builders` matrix and `builders-arm64cross` below)
 #     live on the LAN registry (home-ci-core — unom/infra runners/ci-core/) and are
-#     CONTENT-KEYED: the tag is a hash of what they are built from (the ci/ tree, +
-#     rust-toolchain.toml for the cross image), and a build only happens when that key
+#     CONTENT-KEYED: the tag is a hash of what they are built from (the ci/ tree +
+#     rust-toolchain.toml), and a build only happens when that key
 #     has no manifest yet. An app-only push costs one curl per builder image, pushes
 #     no builder bytes, and mints no per-SHA tag debris on the runners. `:latest` is
 #     re-pushed alongside every new key and is what the consuming workflows pin.
@@ -132,14 +132,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The key is the git TREE HASH of ci/ — every byte any of these Dockerfiles can see
-      # (they all use ci/ as build context). One key for the whole family on purpose: a
-      # change to any of them re-keys all of them, and a spurious rebuild of a sibling is
-      # cheap, rare, and infinitely better than a stale one.
+      # The key hashes the ci/ tree (the build context) and rust-toolchain.toml (baked in as
+      # the default toolchain). One key for the whole family on purpose: a spurious rebuild of
+      # a sibling is cheap and rare, a stale one is not.
       - name: Content key
         run: |
           git config --global --add safe.directory "$PWD"
-          echo "KEY=ck-$(git rev-parse HEAD:ci | cut -c1-12)${{ matrix.keysuffix }}" >> "$GITHUB_ENV"
+          echo "KEY=ck-$(printf '%s%s' "$(git rev-parse HEAD:ci)" "$(git rev-parse HEAD:rust-toolchain.toml)" | sha256sum | cut -c1-12)${{ matrix.keysuffix }}" >> "$GITHUB_ENV"
 
       - name: Check whether this key already exists
         id: exists
@@ -157,9 +156,12 @@ jobs:
       # can only fail. Consumers still pull the identical image from :5010.
       - name: Build
         if: steps.exists.outputs.hit == 'false'
-        # --pull is cheap now: base images come through the ci-core pull-through mirror.
+        # --pull is cheap: base images come through the ci-core pull-through mirror. The pinned
+        # channel is baked in so a job's rustup never downloads it.
         run: |
-          docker build --pull ${{ matrix.buildargs }} \
+          TC=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          test -n "$TC"
+          docker build --pull ${{ matrix.buildargs }} --build-arg RUST_TOOLCHAIN="$TC" \
             -f "${{ matrix.dockerfile }}" \
             -t "$CI_REGISTRY_PUSH/${{ matrix.image }}:$KEY" \
             -t "$CI_REGISTRY_PUSH/${{ matrix.image }}:latest" \
