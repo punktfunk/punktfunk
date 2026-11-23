@@ -248,7 +248,8 @@ fs.writeFileSync(process.env.PUNKTFUNK_CONFIG_DIR + "/plugin-state/" + P.id + "/
 `;
 
 describe.skipIf(process.platform !== "darwin")("a plugin under sandbox-exec", () => {
-	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pf-seatbelt-")));
+	// Not os.tmpdir(): that is under /var/folders, which no root may lie in.
+	const root = fs.realpathSync(fs.mkdtempSync(path.join("/tmp", "pf-seatbelt-")));
 	const config = path.join(root, "cfg");
 	const pluginsDir = path.join(config, "plugins");
 	const at = (rel: string) => path.join(root, rel);
