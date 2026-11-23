@@ -32,9 +32,10 @@ pub(super) struct SessionFacts {
 /// What the control task, the send and input threads, the clipboard and `/status` read while the
 /// loop writes it, or the other way round.
 pub(super) struct Shared {
-    /// [`crate::native::wiring::SessionShared::acked`] and `lossy_window`.
+    /// [`crate::native::wiring::SessionShared::acked`], `lossy_window` and `no_wave`.
     pub(super) acked: Arc<AtomicU64>,
     pub(super) lossy_window: Arc<AtomicBool>,
+    pub(super) no_wave: Arc<AtomicBool>,
     /// [`crate::native::wiring::SessionShared::arrival_poke`]: the running capturer's, for
     /// the control task.
     pub(super) arrival_poke: crate::native::wiring::ArrivalPoke,

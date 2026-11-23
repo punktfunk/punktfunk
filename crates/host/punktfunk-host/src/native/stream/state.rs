@@ -1028,6 +1028,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
     let shared = Shared {
         acked: s.acked.clone(),
         lossy_window: s.lossy_window.clone(),
+        no_wave: s.no_wave.clone(),
         arrival_poke: s.arrival_poke.clone(),
         driver_dropped: Default::default(),
         screen_wire: s.screens.clone(),
@@ -1796,6 +1797,7 @@ mod tests {
             resend: Arc::default(),
             acked: Arc::default(),
             lossy_window: Arc::default(),
+            no_wave: Arc::default(),
             ramp_open: Arc::default(),
             cursor_client_draws: Arc::default(),
             arrival_poke: Arc::default(),

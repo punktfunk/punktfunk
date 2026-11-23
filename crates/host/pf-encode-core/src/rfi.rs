@@ -107,12 +107,13 @@ pub fn pick_anchor(refs: &[(usize, i64)], loss_first: i64) -> Option<(usize, i64
 pub const LTR_ACKED_REACH: i64 = 8;
 
 /// One frame's long-term step while the encoder holds confirmed references: force the newest
-/// slot the client confirmed within [`LTR_ACKED_REACH`], and mark this frame into a free slot,
-/// round robin from `next`, so a later frame has a newer candidate once the client confirms
-/// it. A slot is free when empty, out of reach, or at or below the newest confirmed frame
-/// and not the forced one: superseded, or lost. A frame still awaiting its confirmation keeps
-/// its slot. `slots` holds each slot's wire, `None` when empty or tainted. Returns the slot to
-/// mark and the `(slot, wire)` to force.
+/// slot the client confirmed when it lies within [`LTR_ACKED_REACH`], and mark this frame into
+/// a free slot, round robin from `next`, so a later frame has a newer candidate once the
+/// client confirms it. The newest confirmed slot is not free within [`KEEP_REACH`]: it anchors
+/// a loss whose report comes later than the reach. Another slot is free when empty, out of
+/// reach, or at or below the newest confirmed frame: superseded, or lost. A frame still
+/// awaiting its confirmation keeps its slot. `slots` holds each slot's wire, `None` when
+/// empty or tainted. Returns the slot to mark and the `(slot, wire)` to force.
 pub fn ltr_acked_step(
     slots: &[Option<i64>],
     acked: &crate::codec::Acked,
@@ -120,15 +121,16 @@ pub fn ltr_acked_step(
     next: usize,
 ) -> (Option<usize>, Option<(usize, i64)>) {
     let reach = |w: i64| cur - w <= LTR_ACKED_REACH;
-    let refs: Vec<(usize, i64)> = slots
+    let held: Vec<(usize, i64)> = slots
         .iter()
         .enumerate()
-        .filter_map(|(s, w)| w.filter(|&w| reach(w)).map(|w| (s, w)))
+        .filter_map(|(s, w)| w.map(|w| (s, w)))
         .collect();
-    let force = pick_acked(&refs, acked);
+    let pin = pick_acked(&held, acked).filter(|&(_, w)| cur - w < KEEP_REACH);
+    let force = pin.filter(|&(_, w)| reach(w));
     let free = |s: usize| match slots[s] {
         None => true,
-        Some(w) => !reach(w) || (w <= acked.last && force.is_none_or(|(f, _)| f != s)),
+        Some(w) => pin.is_none_or(|(p, _)| p != s) && (!reach(w) || w <= acked.last),
     };
     let n = slots.len();
     let mark = (0..n).map(|k| (next + k) % n).find(|&s| free(s));
@@ -463,8 +465,8 @@ pub(crate) mod plan_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ltr_acked_step, mark_slot, pick_acked, pick_anchor, plan_slot_recovery, wave_cycle, Kept,
-        Wave, KEEP_REACH, KEEP_ROTATE,
+        ltr_acked_step, mark_slot, pick_acked, pick_anchor, pick_recovery, plan_slot_recovery,
+        wave_cycle, Kept, Wave, KEEP_REACH, KEEP_ROTATE, LTR_ACKED_REACH,
     };
 
     /// Two LTR slots marked at 840 and 870. A loss at 869 anchors on 840 and empties 870's
@@ -615,8 +617,8 @@ mod tests {
         );
         assert_eq!(
             ltr_acked_step(&[Some(9), None], &all(9), 18, 0),
-            (Some(0), None),
-            "past the reach: the chain"
+            (Some(1), None),
+            "past the reach: the chain, and the confirmed slot stays"
         );
         assert_eq!(
             ltr_acked_step(&[Some(12), Some(13)], &all(9), 14, 1),
@@ -626,6 +628,37 @@ mod tests {
             ltr_acked_step(&[Some(9), Some(10)], &acked(11, 0b10), 12, 0),
             (Some(1), Some((0, 9))),
             "10 was lost: never forced, and its slot is free"
+        );
+    }
+
+    /// A link that goes dark for longer than the reach: the confirmations stop at frame 20,
+    /// the frames past the reach take the chain, and the loss reported at 30 still finds 20.
+    #[test]
+    fn the_newest_confirmed_slot_outlives_the_reach_for_a_late_loss() {
+        let stalled = acked(20, 0xffff);
+        let mut slots = [Some(20), Some(21), Some(22)];
+        for cur in 23..=29i64 {
+            let (mark, force) = ltr_acked_step(&slots, &stalled, cur, 0);
+            assert_eq!(mark, None, "frame {cur}: one slot anchors, two wait");
+            assert_eq!(force.is_some(), cur - 20 <= LTR_ACKED_REACH, "frame {cur}");
+        }
+        // Past the reach a waiting slot is recycled, the confirmed one never.
+        assert_eq!(ltr_acked_step(&slots, &stalled, 30, 0), (Some(1), None));
+        slots[1] = Some(30);
+        // The client lost 21..=28 and confirms 29 and 30.
+        let back = acked(30, 0b10_0000_0001);
+        assert!(back.contains(29) && back.contains(20) && !back.contains(21));
+        let held: Vec<(usize, i64)> = slots.iter().flatten().copied().enumerate().collect();
+        assert_eq!(pick_recovery(&held, 21, Some(&back)), Some((0, 20)));
+        // It reaches no further back than any other kept picture.
+        let lone = [Some(20), None, None];
+        assert_eq!(
+            ltr_acked_step(&lone, &stalled, 19 + KEEP_REACH, 0).0,
+            Some(1)
+        );
+        assert_eq!(
+            ltr_acked_step(&lone, &stalled, 20 + KEEP_REACH, 0).0,
+            Some(0)
         );
     }
 

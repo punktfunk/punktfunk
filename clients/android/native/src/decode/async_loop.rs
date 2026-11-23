@@ -4,7 +4,7 @@ use ndk::media::media_codec::{AsyncNotifyCallback, MediaCodec, MediaCodecDirecti
 use ndk::native_window::NativeWindow;
 use pf_bitstream::av1::conceal::Av1Concealer;
 use pf_bitstream::h265::conceal::{Concealment, H265Concealer};
-use pf_bitstream::h265::poc_widen::PocWidener;
+use pf_bitstream::h265::poc_widen::{vcl_nals, PocWidener};
 use punktfunk_core::client::{Decoded, NativeClient};
 use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::reanchor::{self, AnchorEvidence, DecoderClass, LocalRecovery};
@@ -31,7 +31,7 @@ use super::{Backstops, DecodeOptions, IN_FLIGHT_CAP};
 use crate::au_intake::{Delivery, Intake};
 use crate::bring_up::{bring_up_rungs, ladder_label, Rung};
 use crate::codec_format::{codec_mime, has_spare_capacity, is_realtek, take_by_pts, take_flags};
-use crate::feed_rules::{colour_after, render_after, Cause, Piece, Spoiled};
+use crate::feed_rules::{colour_after, one_slice, render_after, Cause, Piece, Sliced, Spoiled};
 use crate::feed_step::{Feed, Handoff, Step, OVERSIZE_RUN};
 use crate::hold::{Tail, Trial};
 use crate::input_stall::{
@@ -478,6 +478,12 @@ fn run_codec(
         client.video_format().codec,
         &ctx.codec.name().unwrap_or_default(),
     );
+    state.one_slice = crate::codec_format::one_slice_only(
+        client.video_format().codec,
+        &ctx.codec.name().unwrap_or_default(),
+    );
+    // Said for each decoder: the host may move the session to a codec whose decoder heals.
+    client.set_wave_heals(!state.one_slice);
     state.pixel_rate = opts.pixel_rate;
     if await_keyframe {
         client.recovery_lost();
@@ -1065,6 +1071,11 @@ struct State {
     /// Points a fed AU's lost reference at a held picture ([`concealer`]). `None` on other
     /// decoders.
     conceal: Option<Concealer>,
+    /// A picture in several slices never reaches this decoder
+    /// ([`crate::codec_format::one_slice_only`]). `sliced`: the last AU was such a one
+    /// ([`one_slice`]).
+    one_slice: bool,
+    sliced: bool,
     /// The tail each whole AU is fed with, and the trial that picks it ([`hold_trial`]).
     trial: Trial,
     /// The most pixels a second the decoder declares ([`DecodeOptions::pixel_rate`]).
@@ -1317,6 +1328,8 @@ impl State {
             sink,
             widen: None,
             conceal: None,
+            one_slice: false,
+            sliced: false,
             trial: Trial::fixed(Tail::None),
             pixel_rate: 0,
             last_queued: None,
@@ -1541,6 +1554,29 @@ impl State {
                 self.inputs.no_buffer(idx, frame);
                 break;
             };
+            if self.one_slice && frame.part.is_none() {
+                let first = !self.sliced;
+                match one_slice(&mut self.sliced, vcl_nals(&frame.data), piece.keyframe) {
+                    Sliced::Drop => {
+                        if first {
+                            log::info!(
+                                "decode: frame {} has several slices, which {} cannot take — \
+                                 dropping them, a keyframe is asked for behind them",
+                                frame.frame_index,
+                                codec.name().unwrap_or_default()
+                            );
+                        }
+                        let _ = self.inputs.spoil(idx, &piece, Cause::Unrecoverable);
+                        self.loss_open = true;
+                        pass.lost = true;
+                        continue;
+                    }
+                    Sliced::AskAndFeed => {
+                        let _ = ctx.client.request_keyframe();
+                    }
+                    Sliced::Feed => {}
+                }
+            }
             // The concealer, then the widener, see exactly what the codec is fed, in feed order.
             let mut concealed = None;
             if frame.part.is_some() && self.conceal.take().is_some() {

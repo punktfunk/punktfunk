@@ -346,6 +346,7 @@ impl Drive<'_> {
                             mask,
                         }));
                 }
+                Ctl::SetWaveHeals(heals) => self.enc.set_wave_heals(heals),
                 Ctl::NoteConfirmed(acked) => {
                     self.enc
                         .note_confirmed(acked.map(|(last, mask)| pf_encode_win::Acked {

@@ -345,6 +345,27 @@ mod tests {
         assert_eq!((step.mark_slot, step.force), (None, None));
     }
 
+    /// A link that goes dark past the reach, on AMF's slots and on QSV's: the confirmations
+    /// stop at 10, the frames beyond take the chain, and the loss reported at 30 is forced
+    /// on the confirmed slot.
+    #[test]
+    fn a_confirmed_slot_outlives_a_dark_stretch() {
+        for keep in [false, true] {
+            let mut m = LtrMirror {
+                slots: [Some(10), Some(11)],
+                ..LtrMirror::default()
+            };
+            for cur in 12..=30 {
+                let step = amf(&mut m, cur, floor(10), keep);
+                let reaches = cur - 10 <= rfi::LTR_ACKED_REACH;
+                assert_eq!(step.force.is_some(), reaches, "frame {cur}, keep {keep}");
+                assert!(m.slots.contains(&Some(10)), "frame {cur}, keep {keep}");
+            }
+            assert_eq!(m.invalidate(11, floor(10).as_ref()), Some((0, 10)));
+            assert_eq!(amf(&mut m, 31, floor(10), keep).force, Some((0, 10)));
+        }
+    }
+
     /// A driver that keeps unforced slots keeps a mark awaiting confirmation: the frame
     /// marks only a free slot, and the next one forces the newer confirmed frame.
     #[test]

@@ -999,6 +999,10 @@ impl Encoder for NativeVaapiEncoder {
         self.reference_floor = acked;
     }
 
+    fn set_wave_heals(&mut self, heals: bool) {
+        self.waves.enabled = heals && rfi::wave_enabled();
+    }
+
     fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
         self.confirmed = acked;
     }

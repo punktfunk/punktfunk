@@ -281,6 +281,10 @@ pub trait Encoder: Send {
     /// loss finds an anchor however long its report took. `None` before the first
     /// confirmation. Default: no-op.
     fn note_confirmed(&mut self, _acked: Option<Acked>) {}
+    /// Whether an intra-refresh wave heals this client's decoder; `true` until told. `false`:
+    /// the backend starts no wave, so a loss it cannot anchor is the caller's keyframe. Set
+    /// before each submit. Default: no-op, for a backend without waves.
+    fn set_wave_heals(&mut self, _heals: bool) {}
     /// Escalate to pipelined retrieve under GPU contention: `poll` stops waiting
     /// on the newest in-flight AU (a retrieve thread on NVENC, a completion probe
     /// on Vulkan/VA-API). An AU reaches the loop when [`set_au_wake`](Self::set_au_wake)'s
