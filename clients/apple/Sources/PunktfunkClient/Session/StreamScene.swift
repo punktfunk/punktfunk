@@ -340,7 +340,7 @@ extension SessionModel {
     /// A shortcut fired (design/client-shortcuts.md §4) on wire pad `pad`, `nil` for the keyboard
     /// or a captured Steam Controller. It runs as the dial's slot would, at once: only the host's
     /// danger actions and End game ask for a second press. A held key-like action stays down on
-    /// the host until its `.up`.
+    /// the host until its `.up`. An open ring shows a toggle's new state, as a tap on it would.
     func runShortcut(_ action: Shortcuts.Action, _ phase: Shortcuts.Phase, pad: UInt32?, ring: RingState) {
         guard let conn = connection, self.phase == .streaming else { return }
         guard case .slot(let slot) = action else {
@@ -362,6 +362,11 @@ extension SessionModel {
         guard s.enabled else { return }
         if s.armed, slot != .endStream, !confirmShortcut(s.id, prompt: confirmHint(s)) { return }
         perform(slot, cfg, a, ring, pad: pad)
+        // The ring reads slot state through closures it doesn't observe; the hint redraws it.
+        if s.toggle, ring.visible {
+            let after = spec(slot, cfg, a)
+            ring.hint = "\(after.label): \(after.state)"
+        }
     }
 
     /// The session's live state and commands behind each ring slot.
