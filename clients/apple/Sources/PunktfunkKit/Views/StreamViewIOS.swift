@@ -1630,6 +1630,9 @@ final class StreamLayerUIView: UIView {
         let pencilHover = UIHoverGestureRecognizer(
             target: self, action: #selector(handlePencilHover))
         pencilHover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+        #if os(iOS)
+        pencilHover.delegate = self // runs beside a pointer that is already hovering
+        #endif
         addGestureRecognizer(pencilHover)
         // Trackpad two-finger / wheel scroll → scroll-ONLY pans: allowedTouchTypes = []
         // rejects finger drags (those stay host touches). One recognizer per scroll type so
@@ -2182,13 +2185,13 @@ extension StreamLayerUIView: UIKeyInput {
 
 #if os(iOS)
 extension StreamLayerUIView: UIGestureRecognizerDelegate {
-    /// The pinch and rotation recognizers see the trackpad's transform events alone (iPadOS
-    /// 13.4+), and only toward a touchpad host. Finger touches never reach them.
+    /// The Pencil's hover recognizer takes every event. The pinch and rotation recognizers see
+    /// the trackpad's transform events alone (iPadOS 13.4+), and only toward a touchpad host.
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
-        frames.touchpad.presents && event.type == .transform
+        g is UIHoverGestureRecognizer || (frames.touchpad.presents && event.type == .transform)
     }
 
-    /// Pinch and rotation run together, and beside every other recognizer on the view.
+    /// Pinch, rotation and the Pencil's hover run beside every other recognizer on the view.
     func gestureRecognizer(
         _ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
     ) -> Bool { true }
