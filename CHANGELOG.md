@@ -16,7 +16,7 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.48.0
 
-589 commits since v0.47.0. ALPN `pkf2` stays; driver protocol 11 with floor 9; **C ABI 75**. The
+595 commits since v0.47.0. ALPN `pkf2` stays; driver protocol 11 with floor 9; **C ABI 75**. The
 host runs on macOS. A mode carries its exact rate in millihertz, a client's fingers reach a host
 touchpad, and a relative move can carry a mouse's own counts. A client on the host's own machine
 starts games there with no stream. The native plane serves IPv6 behind a setting. gamescope moves
