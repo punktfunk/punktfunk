@@ -300,9 +300,9 @@ public final class StreamViewController: StreamViewControllerBase {
         pointerInteraction = interaction
         #endif
         #if os(iOS) || os(visionOS)
-        // The pad is the game's: every press goes to GameController alone. Otherwise visionOS
-        // turns a press into a pinch, and iPadOS moves focus onto the stream view, which raises
-        // the soft keyboard or takes it down.
+        // The pad is the game's: on iOS 18+ and visionOS every press goes to GameController
+        // alone. Otherwise visionOS turns a press into a pinch, and iPadOS moves focus onto the
+        // stream view, which raises the soft keyboard or takes it down.
         if #available(iOS 18.0, *) {
             let pad = GCEventInteraction()
             pad.handledEventTypes = .gamepad
