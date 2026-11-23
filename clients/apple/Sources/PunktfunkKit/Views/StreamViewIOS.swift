@@ -299,12 +299,15 @@ public final class StreamViewController: StreamViewControllerBase {
         view.addInteraction(interaction)
         pointerInteraction = interaction
         #endif
-        #if os(visionOS)
-        // visionOS turns a pad press into a pinch on whatever the eyes rest on. The pad is the
-        // game's: every press goes to GameController, so GamepadCapture forwards all of it.
-        let pad = GCEventInteraction()
-        pad.handledEventTypes = .gamepad
-        view.addInteraction(pad)
+        #if os(iOS) || os(visionOS)
+        // The pad is the game's: every press goes to GameController alone. Otherwise visionOS
+        // turns a press into a pinch, and iPadOS moves focus onto the stream view, which raises
+        // the soft keyboard or takes it down.
+        if #available(iOS 18.0, *) {
+            let pad = GCEventInteraction()
+            pad.handledEventTypes = .gamepad
+            view.addInteraction(pad)
+        }
         #endif
     }
 
