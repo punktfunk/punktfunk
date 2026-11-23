@@ -58,6 +58,10 @@ const GS_MOUSE_FOCUS: &str = "GAMESCOPE_MOUSE_FOCUS_DISPLAY";
 /// One `GetProperty` per display per interval vs the 250 Hz pointer poll.
 const FEEDBACK_RESYNC: Duration = Duration::from_millis(250);
 
+/// A mode change resizes the root and the PipeWire frame a moment apart. Only a
+/// mismatch that outlasts this is the `-w/-h` vs `-W/-H` split worth a warning.
+const SCALE_SETTLE: Duration = Duration::from_secs(2);
+
 /// Running XFixes cursor reader. Drop stops the worker and waits — bounded —
 /// for it to release the X connections.
 pub(super) struct XFixesCursorSource {
@@ -211,10 +215,10 @@ fn connect(dpy: &str, xauthority: Option<&str>) -> Result<Connected, String> {
         .and_then(|c| c.check())
         .map_err(|e| format!("SelectCursorInput: {e}"))?;
 
-    // Intern with `only_if_exists=false` so we have an id if gamescope sets
-    // the property later. PROPERTY_CHANGE failure is not fatal: resync still
-    // tracks it at [`FEEDBACK_RESYNC`]. STRUCTURE_NOTIFY brings the root's
-    // ConfigureNotify when gamescope changes mode mid-session.
+    // Intern with `only_if_exists=false` so we have an id if gamescope sets the
+    // property later; resync tracks the atoms at [`FEEDBACK_RESYNC`] if
+    // PROPERTY_CHANGE fails. STRUCTURE_NOTIFY brings the root's ConfigureNotify
+    // when gamescope changes mode mid-session.
     let atoms = [GS_CURSOR_FEEDBACK, GS_MOUSE_FOCUS].map(|name| {
         conn.intern_atom(false, name.as_bytes())
             .map_err(ReplyError::from)
@@ -229,6 +233,12 @@ fn connect(dpy: &str, xauthority: Option<&str>) -> Result<Connected, String> {
     ) {
         let _ = c.check();
     }
+    // A resize between the setup reply and the selection sent us no event.
+    let root_size = conn
+        .get_geometry(root)
+        .map_err(ReplyError::from)
+        .and_then(|c| c.reply())
+        .map_or(root_size, |g| (g.width, g.height));
     let _ = conn.flush();
     Ok((conn, root, root_size, atoms))
 }
@@ -546,6 +556,7 @@ fn run(
 ) {
     let mut last_discover = std::time::Instant::now();
     let mut warned_scale = false;
+    let mut mismatch_since: Option<std::time::Instant> = None;
     let mut active = 0usize;
     let mut serial = OverlaySerial::default();
     let mut warned_image = false;
@@ -624,9 +635,15 @@ fn run(
             .unwrap_or_else(|e| e.into_inner())
             .fixated;
         let frame = fixated.map_or((0, 0), |f| f.size);
-        if !warned_scale
-            && frame.0 != 0
-            && (u32::from(d.root_size.0), u32::from(d.root_size.1)) != frame
+        let mismatched =
+            frame.0 != 0 && (u32::from(d.root_size.0), u32::from(d.root_size.1)) != frame;
+        if !mismatched {
+            mismatch_since = None;
+        } else if !warned_scale
+            && mismatch_since
+                .get_or_insert_with(std::time::Instant::now)
+                .elapsed()
+                >= SCALE_SETTLE
         {
             warned_scale = true;
             tracing::warn!(
