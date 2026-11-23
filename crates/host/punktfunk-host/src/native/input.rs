@@ -1391,7 +1391,12 @@ impl InputLoop {
         };
         let (hub, id) = (self.pads.buddy.hub(), self.pads.buddy.id);
         if self.wire.mask & (1 << idx) != 0 {
-            hub.post(slot, id, idx as u8, self.wire.frame(idx));
+            hub.post(
+                slot,
+                id,
+                idx as u8,
+                shared_frame(self.wire.frame(idx), self.granted),
+            );
         } else {
             hub.withdraw(id, Some(idx as u8));
         }
@@ -1469,6 +1474,10 @@ impl InputLoop {
             }
             if lost & GRANT_GAMEPAD != 0 {
                 for idx in self.wire.rest_all() {
+                    self.apply(idx);
+                }
+            } else if lost & GRANT_POINTER != 0 && self.joined.is_some() {
+                for idx in self.wire.attached().collect::<Vec<_>>() {
                     self.apply(idx);
                 }
             }
@@ -1846,11 +1855,42 @@ pub(super) fn input_thread(
     lp.finish();
 }
 
+/// What a pad that shares a player posts. On Linux the lead's touchpad clicks the desktop, so
+/// a session without the pointer grant shares no touchpad click.
+fn shared_frame(
+    mut f: punktfunk_core::input::GamepadFrame,
+    granted: u32,
+) -> punktfunk_core::input::GamepadFrame {
+    if cfg!(target_os = "linux") && granted & punktfunk_core::quic::GRANT_POINTER == 0 {
+        f.buttons &= !punktfunk_core::input::gamepad::BTN_TOUCHPAD;
+    }
+    f
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::inject::pad_pool::PadIdentity;
     use punktfunk_core::input::{InputEvent, InputKind};
+
+    #[test]
+    fn a_shared_pad_without_the_pointer_clicks_no_touchpad() {
+        use punktfunk_core::input::gamepad::{BTN_A, BTN_TOUCHPAD};
+        use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_POINTER};
+        let f = punktfunk_core::input::GamepadFrame {
+            buttons: BTN_A | BTN_TOUCHPAD,
+            ..Default::default()
+        };
+        let pointed = shared_frame(f, GRANT_GAMEPAD | GRANT_POINTER).buttons;
+        assert_eq!(pointed, BTN_A | BTN_TOUCHPAD);
+        let pad_only = shared_frame(f, GRANT_GAMEPAD).buttons;
+        let want = if cfg!(target_os = "linux") {
+            BTN_A
+        } else {
+            BTN_A | BTN_TOUCHPAD
+        };
+        assert_eq!(pad_only, want);
+    }
 
     /// A mirror the stream scales to the picture maps a pointer as the encoder-scaled one did:
     /// neither crops, so the event keeps its fraction of the picture for the injector.
