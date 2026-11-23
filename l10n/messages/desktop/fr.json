@@ -168,7 +168,7 @@
 	"desktop_stream_console_library": "Bibliothèque",
 	"desktop_stream_console_library_host": "Bibliothèque · {host}",
 	"desktop_stream_streaming": "Streaming",
-	"desktop_stream_streaming_to": "Streaming vers {host}",
+	"desktop_stream_streaming_to": "Streaming depuis {host}",
 	"desktop_stream_own_window": "Le stream a sa propre fenêtre — celle-ci revient à la fin de la session.",
 	"desktop_stream_stats_waiting": "En attente des premières statistiques…",
 	"desktop_stream_stats_off": "L’incrustation des statistiques est désactivée — {keys} dans la fenêtre du stream l’active.",

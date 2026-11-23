@@ -175,7 +175,7 @@
 	"desktop_stream_console_library": "Library",
 	"desktop_stream_console_library_host": "Library · {host}",
 	"desktop_stream_streaming": "Streaming",
-	"desktop_stream_streaming_to": "Streaming to {host}",
+	"desktop_stream_streaming_to": "Streaming from {host}",
 	"desktop_stream_own_window": "The stream has its own window — this one returns when the session ends.",
 	"desktop_stream_stats_waiting": "Waiting for the first statistics…",
 	"desktop_stream_stats_off": "The statistics overlay is off — {keys} in the stream window turns it on.",

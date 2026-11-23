@@ -65,7 +65,7 @@ fn initiate_opts(
     wake_on_fail: bool,
 ) {
     // Every route reads the target back for its screen copy ("Connecting to X",
-    // "Streaming to X") — stash it up front, not just on the pairing route.
+    // "Streaming from X") — stash it up front, not just on the pairing route.
     *ctx.shared.target.lock().unwrap() = target.clone();
     let known = KnownHosts::load();
     let fp = target.host.fp_hex.as_deref();

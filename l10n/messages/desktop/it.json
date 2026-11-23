@@ -168,7 +168,7 @@
 	"desktop_stream_console_library": "Libreria",
 	"desktop_stream_console_library_host": "Libreria · {host}",
 	"desktop_stream_streaming": "Streaming",
-	"desktop_stream_streaming_to": "Streaming verso {host}",
+	"desktop_stream_streaming_to": "Streaming da {host}",
 	"desktop_stream_own_window": "Lo streaming ha una finestra propria — questa torna al termine della sessione.",
 	"desktop_stream_stats_waiting": "In attesa delle prime statistiche…",
 	"desktop_stream_stats_off": "L’overlay delle statistiche è disattivato — premi {keys} nella finestra dello streaming per attivarlo.",

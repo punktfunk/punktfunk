@@ -142,6 +142,6 @@ internal class StreamUi(
     }
 }
 
-/** The Access chip's time left in the app's language: "1 h 58 m", "12 m", "45 s". */
+/** The Access chip's time left in the app's language: "1 h 58 min", "12 min", "45 s". */
 internal fun Context.accessRemaining(secs: Int): String =
     SessionAccess.remaining(secs).let { getString(it.message, *it.args.toTypedArray()) }

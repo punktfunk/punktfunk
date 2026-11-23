@@ -59,7 +59,7 @@ struct SessionNotices {
     var micMute = Flash<Bool>()
     /// The touch model is passthrough but this host drops contacts, so the trackpad model runs.
     var touchFallback = Flash<Bool>()
-    /// "Access ends in 5 m", around the T−5 m / T−1 m marks the host also warns at.
+    /// "Access ends in 5 min", around the T−5 m / T−1 m marks the host also warns at.
     var accessWarning = Flash<String>()
     /// The host's line for a launch that did not give the player their game, or the start
     /// notice about the screen: a shared one, or a preset's the host did not give.
