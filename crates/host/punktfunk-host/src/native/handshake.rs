@@ -1462,7 +1462,7 @@ fn welcome_host_caps(n: &Negotiation<'_>, t: &SessionTerms) -> u8 {
             0
         }
         // Text injection only where the backend can type (SendInput UNICODE; wlroots keymap;
-        // KWin keysyms). Clients without the bit keep VK-synthesis for IME.
+        // KWin keysyms; gamescope's input method). Clients without the bit keep VK synthesis.
         | if crate::inject::text_input_supported() {
             punktfunk_core::quic::HOST_CAP_TEXT_INPUT
         } else {
