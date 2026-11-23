@@ -286,9 +286,9 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 /// The WSI layer stays out of gamescope's own Vulkan process. Only a direct flatpak launch sees
 /// gamescope's Wayland socket ([`shape_flatpak_command`]); a nested Steam sees no Wayland at all
 /// ([`steam_runtime_dir_script`]), and everything else gets [`GDK_X11`]. An installed mangoapp
-/// runs hidden ([`mangoapp_config`]). Gamescope and the game write to [`spawn_log_path`] of
-/// `inst`, kept under [`LOG_CAP`]. Gamescope starts unraised ([`pf_frame::thread_qos::unraised`]):
-/// the nested game is its child and takes its nice.
+/// runs hidden ([`mangoapp_config`], [`mangoapp_file_wanted`]). Gamescope and the game write to
+/// [`spawn_log_path`] of `inst`, kept under [`LOG_CAP`]. Gamescope starts unraised
+/// ([`pf_frame::thread_qos::unraised`]): the nested game is its child and takes its nice.
 pub(super) fn spawn(
     mode: Mode,
     app: Option<String>,
@@ -374,7 +374,7 @@ pub(super) fn spawn(
         &nested_env,
         steam_dir.as_deref(),
     );
-    // Only mangoapp starts hidden. A game's own MangoHud keeps the box's config.
+    // Off Steam only mangoapp starts hidden: a game's own MangoHud keeps the box's config.
     if mangoapp_env.is_some() {
         script.insert_str(0, "unset MANGOHUD_CONFIG; ");
     }
