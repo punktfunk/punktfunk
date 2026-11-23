@@ -213,7 +213,8 @@ fn connect(dpy: &str, xauthority: Option<&str>) -> Result<Connected, String> {
 
     // Intern with `only_if_exists=false` so we have an id if gamescope sets
     // the property later. PROPERTY_CHANGE failure is not fatal: resync still
-    // tracks it at [`FEEDBACK_RESYNC`].
+    // tracks it at [`FEEDBACK_RESYNC`]. STRUCTURE_NOTIFY brings the root's
+    // ConfigureNotify when gamescope changes mode mid-session.
     let atoms = [GS_CURSOR_FEEDBACK, GS_MOUSE_FOCUS].map(|name| {
         conn.intern_atom(false, name.as_bytes())
             .map_err(ReplyError::from)
@@ -223,7 +224,8 @@ fn connect(dpy: &str, xauthority: Option<&str>) -> Result<Connected, String> {
     });
     if let Ok(c) = conn.change_window_attributes(
         root,
-        &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        &ChangeWindowAttributesAux::new()
+            .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
     ) {
         let _ = c.check();
     }
@@ -399,7 +401,8 @@ struct XDisplay {
     conn: RustConnection,
     root: Window,
     /// Nested root size — `QueryPointer` space, not necessarily the captured
-    /// frame (see [`scale_to_frame`]).
+    /// frame (see [`scale_to_frame`]). Follows the root's ConfigureNotify, so a
+    /// mode change mid-session rescales the pointer.
     root_size: (u16, u16),
     /// Last polled position; a change since the previous tick marks focus.
     last_pos: Option<(i32, i32)>,
@@ -443,9 +446,9 @@ impl XDisplay {
         d
     }
 
-    /// Drain this display's events, re-read the gamescope atoms when one changed (or on
-    /// `resync`), then poll the pointer. `true` when it moved since the last poll; an I/O
-    /// error marks the display dead.
+    /// Drain this display's events, take a resized root, re-read the gamescope atoms when
+    /// one changed (or on `resync`), then poll the pointer. `true` when it moved since the
+    /// last poll; an I/O error marks the display dead.
     fn pump(&mut self, resync: bool) -> bool {
         // CursorNotify = shape changed. PropertyNotify on either gamescope atom
         // = a new verdict or focus (the root has many properties).
@@ -453,6 +456,9 @@ impl XDisplay {
         loop {
             match self.conn.poll_for_event() {
                 Ok(Some(Event::XfixesCursorNotify(_))) => self.need_shape = true,
+                Ok(Some(Event::ConfigureNotify(ev))) if ev.window == self.root => {
+                    self.root_size = (ev.width, ev.height);
+                }
                 Ok(Some(Event::PropertyNotify(ev))) => {
                     need_feedback |= ev.atom != 0
                         && (ev.atom == self.feedback_atom || ev.atom == self.focus_atom);
