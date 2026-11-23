@@ -244,13 +244,16 @@ jobs:
       # already has all but rsync — this is belt-and-braces against a future slim-image swap, and
       # costs one cached apt call.)
       - name: Installer prerequisites
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils git rsync openssh-client
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils git rsync openssh-client
 
       # Exact action revision and Determinate Nix release; container mode has no daemon.
+      # cache.nixos.org comes through ci-core's LAN mirror; nix still checks its signatures.
       - uses: DeterminateSystems/determinate-nix-action@d0c908e6cbe9f89f36ed8205a3ab6f092636916a # v3.23.1
         with:
           init: none
-          extra-conf: experimental-features = nix-command flakes
+          extra-conf: |
+            experimental-features = nix-command flakes
+            substituters = http://192.168.1.58:8090/cache.nixos.org
       - name: Verify Nix
         run: '"$NIX" --version'
 

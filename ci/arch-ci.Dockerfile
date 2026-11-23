@@ -19,6 +19,10 @@
 # This file staying current is still the CHEAP path — that gate is the backstop, not the plan.
 FROM docker.io/library/archlinux:base-devel
 
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
+
 # One transaction: the main build/runtime deps (first list) + the gamescope companion's
 # deps (second list) — both copied verbatim from what arch.yml installed in-job, where
 # they now no-op as `--needed` guards.

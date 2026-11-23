@@ -566,7 +566,7 @@ jobs:
       # rights?)" — no CA bundle to validate git.unom.io's (public) Let's Encrypt cert.
       - name: Install git + node + CA certs
         working-directory: /
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git nodejs
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates git nodejs
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # RETRIED, like every other single-shot network call in CI (scripts/ci/retry.sh's header
       # has the why: this box runs many jobs in parallel and drops packets under that load).
@@ -611,7 +611,7 @@ jobs:
       # HTTPS fetch otherwise fails with "Problem with the SSL CA cert" (see web job).
       - name: Install git + CA certs
         working-directory: /
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Retried — see the web job above.
       - name: Install dependencies
@@ -631,7 +631,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Install git + CA certs
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Both suites run here, not only on a `sdk-v*` / `plugin-kit-v*` publish tag: they gate the
       # client, the runner CLI and the plugin runtime, for a few seconds. On the tag alone a
@@ -713,7 +713,7 @@ jobs:
       # oven/bun ships neither git nor a real node, and the slim base has no CA bundle —
       # actions/checkout needs all three (see the web job).
       - name: Install git + node + CA certs
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git nodejs
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates git nodejs
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Regenerates each bun.nix from its committed bun.lock and diffs, and checks that the
       # bun2nix version pin agrees across flake.nix and both package.json files (bun.nix has no
@@ -734,7 +734,7 @@ jobs:
       # oven/bun ships neither git nor a real node, and the slim base has no CA bundle —
       # actions/checkout needs all three (see the web job).
       - name: Install git + node + CA certs
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git nodejs python3
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git nodejs python3
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

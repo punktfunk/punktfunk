@@ -153,7 +153,7 @@ jobs:
       # (same preamble as web-screenshots.yml / ci.yml's web job).
       - name: Install git + CA certs
         working-directory: /
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # `bun audit` queries the registry advisory DB for the versions pinned in the tree's
       # bun.lock. No install/build needed — it reads the manifest + lockfile. Fails the job on any
@@ -178,7 +178,7 @@ jobs:
     steps:
       - name: Install git + CA certs
         working-directory: /
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: bun audit (non-blocking)
         run: |

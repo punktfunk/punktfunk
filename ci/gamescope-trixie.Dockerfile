@@ -11,6 +11,10 @@
 # hand (docker build -f ci/gamescope-trixie.Dockerfile -t <registry>/punktfunk-gamescope-trixie:latest ci
 # && docker push …) before that job can run.
 FROM debian:trixie
+
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
 ENV DEBIAN_FRONTEND=noninteractive
 
 # nodejs is not optional: the Gitea runner executes the JS actions (checkout/cache) INSIDE this

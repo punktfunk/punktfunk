@@ -9,6 +9,10 @@
 # zerocopy path only needs the symbols at link time, so a driver userspace package plus a
 # libcuda.so -> libcuda.so.1 symlink stands in for it (CI never executes the CUDA path).
 FROM ubuntu:26.04
+
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # toolchain + bindgen; nodejs runs the JS actions (checkout/cache); unzip extracts the pinned bun zip
@@ -49,8 +53,12 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 COPY rustup.env install-rustup.sh /tmp/
+# docker.yml passes rust-toolchain.toml's channel, so jobs find the pinned toolchain baked in.
+# The extra targets are the ones ci.yml, setup-binary.yml and installer-smoke.yml add.
+ARG RUST_TOOLCHAIN=stable
 RUN sh /tmp/install-rustup.sh -y --no-modify-path --profile minimal \
-        --component rustfmt,clippy \
+        --default-toolchain "$RUST_TOOLCHAIN" --component rustfmt,clippy \
+        --target wasm32-unknown-emscripten,x86_64-unknown-linux-musl,aarch64-unknown-linux-musl \
     && rm /tmp/rustup.env /tmp/install-rustup.sh \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME" \
     && rustc --version && cargo clippy --version && cargo fmt --version
