@@ -160,6 +160,16 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(g.cutter.x < g.front.x && g.cutter.y > g.front.y)
     }
 
+    /// The open approval is keyed by the device, not by its row: a refresh ages the row.
+    @Test @MainActor func approvalSurvivesARefresh() {
+        let store = Preview.store("approve")
+        var aged = Preview.lanDevice
+        aged.ageSecs += 2
+        store.pending = [aged, Preview.wanDevice]
+        #expect(store.isApproving(aged))
+        #expect(!store.isApproving(Preview.wanDevice))
+    }
+
     @Test func grantButton() {
         #expect(GrantAction.of(granted: false, asked: false) == .ask)
         #expect(GrantAction.of(granted: false, asked: true) == .openSettings)

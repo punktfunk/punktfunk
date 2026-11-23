@@ -53,7 +53,7 @@ public enum Preview {
         case "pending", "approve":
             s.state = .running(summary(pending: 2))
             s.pending = [lanDevice, wanDevice]
-            if name == "approve" { s.confirm = .approve(lanDevice) }
+            if name == "approve" { s.confirm = .approve(id: lanDevice.id) }
         case "attention", "release":
             s.state = .running(summary(kept: 2))
             s.grants = Grants(screen: false, input: true, audio: .unknown)
