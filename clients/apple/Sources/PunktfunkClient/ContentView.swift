@@ -607,23 +607,26 @@ struct ContentView: View {
     #if os(iOS) || os(visionOS) || os(tvOS)
     /// In the touch and TV UIs a shelf is a tab, not a presentation: a written `libraryTarget`
     /// becomes the Library tab's shelf and clears, so the gamepad shell never inherits it as an
-    /// open layer.
+    /// open layer. A stream shelf connects over it, so cancelling leaves the shelf underneath.
     private func showShelfInTab() {
         guard !gamepadUIActive, let shelf = libraryTarget else { return }
         libraryShelfID = shelf.id
         touchTab = .library
         libraryTarget = nil
+        if shelf.stream { flow.connect(shelf.host) }
     }
     #endif
 
     #if os(macOS)
     /// On the Mac a shelf is the Library row's pick, not a presentation: a written `libraryTarget`
-    /// becomes that pick, selects the row and clears. In gamepad mode the console takes it.
+    /// becomes that pick, selects the row and clears. In gamepad mode the console takes it. A
+    /// stream shelf connects over it.
     private func showShelfInSidebar() {
         guard !gamepadUIActive, let shelf = libraryTarget else { return }
         libraryShelfID = shelf.id
         macDestination = .library
         libraryTarget = nil
+        if shelf.stream { flow.connect(shelf.host) }
     }
 
     /// Run a host window's pending request here, unless another main window took it first. A
@@ -1166,9 +1169,10 @@ struct ContentView: View {
         let start = StartScreen.resolve(
             startIn: startInRaw, defaultHost: defaultHostID, hosts: store.hosts)
         guard let host = start.host else { return }
-        libraryTarget = LibraryTarget(host: host)
-        // The connect overlay rides over home, so cancelling leaves the shelf underneath.
-        if case .stream = start { flow.connect(host) }
+        // The UI that takes the shelf connects: the console asks with its own profile picker.
+        var shelf = LibraryTarget(host: host)
+        if case .stream = start { shelf.stream = true }
+        libraryTarget = shelf
     }
 
     /// PUNKTFUNK_AUTOCONNECT=host[:port] connects immediately (trust-on-first-use,

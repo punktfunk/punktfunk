@@ -104,7 +104,8 @@ struct ConsoleHomeView: View {
         entry = nil
         guard
             let built = ConsoleModel(
-                entry: opening?.host, pin: opening.flatMap(preset(of:)), store: store,
+                entry: opening?.host, stream: opening?.stream ?? false,
+                pin: opening.flatMap(preset(of:)), store: store,
                 discovery: discovery, presets: presets, power: .shared, nowPlaying: .shared,
                 waker: waker,
                 actions: ConsoleModel.Actions(
