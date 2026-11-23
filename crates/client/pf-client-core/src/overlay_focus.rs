@@ -1,25 +1,22 @@
-//! Gamescope overlay input mask. Tells [`crate::gamepad::GamepadService::set_masked`]
-//! to stop forwarding the real pad while any Steam UI owns it. SDL's
-//! unfocused-window drop cannot fire here: gamescope focuses per Xwayland ctx,
-//! Steam lives in the root ctx, and the client sits alone in its own.
+//! Gamescope overlay focus. Masks the real pad while Steam's UI owns input
+//! ([`crate::gamepad::GamepadService::set_masked`]) and tells when Steam's on-screen
+//! keyboard types into this client. SDL's focus events can't: gamescope focuses per
+//! Xwayland ctx, Steam lives in the root ctx, and the client sits alone in its own.
 //!
-//! Signal: `GAMESCOPE_FOCUSED_APP` (input) on the root ctx's root window
-//! (`gamescope -e` only). Pads forward while it is this client's app id. Without
-//! that id, they forward while it equals `GAMESCOPE_FOCUSED_APP_GFX` (base
-//! layer), which misses Steam's own pages: Settings or Downloads make Steam both.
+//! Signals on the root ctx's root window (`gamescope -e` only). Pads forward while
+//! `GAMESCOPE_FOCUSED_APP` (input) is this client's app id, or, until that id is known,
+//! equals `GAMESCOPE_FOCUSED_APP_GFX` (base layer), which misses Steam's own pages.
+//! Steam's keyboard is the one overlay that keeps the keys on this client's display
+//! (`GAMESCOPE_KEYBOARD_FOCUS_DISPLAY`); its menus move them to Steam's.
 //!
-//! Gaming Mode uses two Xwaylands; atoms live on the first, `$DISPLAY` is
-//! the second. Candidates are `$DISPLAY`, the sockets in `/tmp/.X11-unix` and
-//! the abstract `@/tmp/.X11-unix/X<n>` sockets in `/proc/net/unix`; keep the
-//! first root that carries both atoms. No cookie: gamescope Xwayland accepts
-//! local connections.
+//! Gaming Mode runs two Xwaylands: the atoms live on the first, `$DISPLAY` is the
+//! second. Candidates are `$DISPLAY`, the sockets in `/tmp/.X11-unix` and the abstract
+//! `@/tmp/.X11-unix/X<n>` ones in `/proc/net/unix`, the only way out of a flatpak's
+//! private `/tmp/.X11-unix` (through `--share=network`). The first root carrying both
+//! atoms wins. No cookie: gamescope Xwayland accepts local connections.
 //!
-//! A flatpak's `/tmp/.X11-unix` is a private tmpfs that no `--filesystem` grant
-//! fills (flatpak 1.18), so there the abstract socket, open through
-//! `--share=network`, is the only way to the root ctx.
-//!
-//! Best-effort: no gamescope or no X means "no signal" and fails open (forward
-//! as before). A session that has gamescope but no reachable root says so once.
+//! Best-effort: no gamescope or no X fails open (forward as before). A session that has
+//! gamescope but no reachable root says so once.
 
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::os::fd::OwnedFd;
@@ -41,10 +38,11 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 /// A local X server accepts in microseconds. 250 ms bounds one dead listener.
 const DIAL_TIMEOUT: Duration = Duration::from_millis(250);
 
-/// Overlay-owns-input flag from the watcher thread. Relaxed load: the
-/// presenter polls each frame and talks to the gamepad service on an edge.
+/// Overlay-owns-input and Steam-keyboard flags from the watcher thread. Relaxed
+/// loads: the presenter polls each frame and acts on an edge.
 pub struct OverlayFocus {
     open: Arc<AtomicBool>,
+    keyboard: Arc<AtomicBool>,
 }
 
 impl OverlayFocus {
@@ -59,18 +57,26 @@ impl OverlayFocus {
         if !crate::gamescope::under_gamescope() {
             return None;
         }
-        let open = Arc::new(AtomicBool::new(false));
-        let flag = open.clone();
+        let focus = OverlayFocus {
+            open: Arc::new(AtomicBool::new(false)),
+            keyboard: Arc::new(AtomicBool::new(false)),
+        };
+        let flags = (focus.open.clone(), focus.keyboard.clone());
         std::thread::Builder::new()
             .name("punktfunk-overlay-focus".into())
-            .spawn(move || watch(&flag))
+            .spawn(move || watch(&flags.0, &flags.1))
             .map_err(|e| tracing::warn!(error = %e, "overlay focus watcher start failed"))
             .ok()?;
-        Some(OverlayFocus { open })
+        Some(focus)
     }
 
     pub fn is_open(&self) -> bool {
         self.open.load(Ordering::Relaxed)
+    }
+
+    /// Steam's on-screen keyboard is up and types into this client.
+    pub fn steam_keyboard(&self) -> bool {
+        self.keyboard.load(Ordering::Relaxed)
     }
 }
 
@@ -217,23 +223,88 @@ impl OwnApp {
     }
 }
 
-fn overlay_open(
-    conn: &RustConnection,
-    root: Window,
+/// The root ctx's root window and the atoms read off it.
+struct Root {
+    conn: RustConnection,
+    window: Window,
     app: Atom,
     gfx: Atom,
-    own: &mut OwnApp,
-) -> bool {
-    own.masked(read_appid(conn, root, app), read_appid(conn, root, gfx))
+    /// `GAMESCOPE_KEYBOARD_FOCUS_DISPLAY`; `0` where gamescope does not publish it.
+    keys: Atom,
+    /// The root ctx's display, which is Steam's.
+    dpy: String,
 }
 
-/// Block on PropertyNotify for the two atoms. Any X error returns so the
+/// What the root says now: the overlay holds input, and Steam's keyboard is up.
+fn read_focus(r: &Root, own: &mut OwnApp, ours: Option<&str>) -> (bool, bool) {
+    let open = own.masked(
+        read_appid(&r.conn, r.window, r.app),
+        read_appid(&r.conn, r.window, r.gfx),
+    );
+    let keys = (r.keys != 0)
+        .then(|| read_display(&r.conn, r.window, r.keys))
+        .flatten();
+    (open, keyboard_up(open, keys.as_deref(), ours, &r.dpy))
+}
+
+/// gamescope stores a display name's bytes as CARDINALs; the first holds the first four,
+/// little-endian (`:1` reads 12602), which covers every `:N` it names.
+fn read_display(conn: &RustConnection, root: Window, atom: Atom) -> Option<String> {
+    let reply = conn
+        .get_property(false, root, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    let word = reply.value32()?.next()?;
+    Some(display_name(word))
+}
+
+fn display_name(word: u32) -> String {
+    word.to_le_bytes()
+        .into_iter()
+        .take_while(|&b| b != 0)
+        .map(char::from)
+        .collect()
+}
+
+/// Steam's keyboard types into this client: Steam holds input (`open`) while the keys stay
+/// on our display, which is not Steam's. One shared display can't tell the keyboard from
+/// Steam's menus, so there it never counts.
+fn keyboard_up(open: bool, keys_on: Option<&str>, ours: Option<&str>, steam: &str) -> bool {
+    let screenless = |d: &str| {
+        d.split_once('.')
+            .map_or(d, |(display, _)| display)
+            .to_owned()
+    };
+    let Some(ours) = ours.map(screenless) else {
+        return false;
+    };
+    open && ours != screenless(steam) && keys_on.map(screenless) == Some(ours)
+}
+
+/// Store what [`read_focus`] saw and log each edge.
+fn publish(open: &AtomicBool, keyboard: &AtomicBool, (o, k): (bool, bool), own: &OwnApp) {
+    if open.swap(o, Ordering::Relaxed) != o {
+        tracing::info!(
+            open = o,
+            launch = ?own.launch,
+            own = ?own.focused,
+            "gamescope overlay focus changed"
+        );
+    }
+    if keyboard.swap(k, Ordering::Relaxed) != k {
+        tracing::info!(up = k, "Steam's keyboard over this client");
+    }
+}
+
+/// Block on PropertyNotify for the focus atoms. Any X error returns so the
 /// outer loop can rebuild after a session restart.
-fn watch(flag: &Arc<AtomicBool>) {
+fn watch(open: &AtomicBool, keyboard: &AtomicBool) {
     let mut own = OwnApp::from_env();
+    let ours = std::env::var("DISPLAY").ok().filter(|d| !d.is_empty());
     let mut warned = false;
     loop {
-        let Some((conn, root, app, gfx)) = connect() else {
+        let Some(r) = connect() else {
             if !std::mem::replace(&mut warned, true) {
                 tracing::warn!(masking = false, "gamescope root display unreachable");
             }
@@ -242,22 +313,15 @@ fn watch(flag: &Arc<AtomicBool>) {
         };
         warned = false;
         // Seed before the first event: the overlay may already be up.
-        flag.store(
-            overlay_open(&conn, root, app, gfx, &mut own),
-            Ordering::Relaxed,
-        );
+        let now = read_focus(&r, &mut own, ours.as_deref());
+        publish(open, keyboard, now, &own);
         loop {
-            match conn.wait_for_event() {
-                Ok(Event::PropertyNotify(e)) if e.atom == app || e.atom == gfx => {
-                    let open = overlay_open(&conn, root, app, gfx, &mut own);
-                    if flag.swap(open, Ordering::Relaxed) != open {
-                        tracing::info!(
-                            open,
-                            launch = ?own.launch,
-                            own = ?own.focused,
-                            "gamescope overlay focus changed"
-                        );
-                    }
+            match r.conn.wait_for_event() {
+                Ok(Event::PropertyNotify(e))
+                    if e.atom == r.app || e.atom == r.gfx || (r.keys != 0 && e.atom == r.keys) =>
+                {
+                    let now = read_focus(&r, &mut own, ours.as_deref());
+                    publish(open, keyboard, now, &own);
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -267,12 +331,13 @@ fn watch(flag: &Arc<AtomicBool>) {
             }
         }
         // Unmask: a restart mid-overlay would otherwise leave the pad dead.
-        flag.store(false, Ordering::Relaxed);
+        open.store(false, Ordering::Relaxed);
+        keyboard.store(false, Ordering::Relaxed);
         std::thread::sleep(RECONNECT_DELAY);
     }
 }
 
-fn connect() -> Option<(RustConnection, Window, Atom, Atom)> {
+fn connect() -> Option<Root> {
     for dpy in candidate_displays() {
         // `dpy`, not `display`: tracing's value helper would steal a field named
         // `display` inside the macro.
@@ -300,8 +365,20 @@ fn connect() -> Option<(RustConnection, Window, Atom, Atom)> {
         if !selected {
             continue;
         }
+        let keys = conn
+            .intern_atom(true, b"GAMESCOPE_KEYBOARD_FOCUS_DISPLAY")
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map_or(0, |r| r.atom);
         tracing::info!(dpy, "watching gamescope focus for overlay input masking");
-        return Some((conn, root, app, gfx));
+        return Some(Root {
+            conn,
+            window: root,
+            app,
+            gfx,
+            keys,
+            dpy,
+        });
     }
     None
 }
@@ -385,5 +462,44 @@ mod tests {
             0000: 00000002 00000000 00010000 0001 01 71208 @/tmp/dbus-abc\n";
         assert_eq!(abstract_display_numbers(table), vec![3, 0]);
         assert!(abstract_display_numbers(b"").is_empty());
+    }
+
+    /// Values read off a Steam Deck's root (SteamOS 3.9.6, gamescope 3.16.30.2).
+    #[test]
+    fn the_keyboard_focus_display_decodes_to_its_name() {
+        assert_eq!(display_name(12346), ":0");
+        assert_eq!(display_name(12602), ":1");
+        assert_eq!(display_name(u32::from_le_bytes(*b":10\0")), ":10");
+        assert_eq!(display_name(0), "");
+    }
+
+    /// Steam+X kept the keys on the game's `:1`; the quick access and Steam menus moved
+    /// them to Steam's `:0` (measured on the Deck).
+    #[test]
+    fn only_steams_keyboard_leaves_the_keys_with_us() {
+        let rows = [
+            ("the keyboard over us", (true, Some(":1"), Some(":1")), true),
+            (
+                "a screen suffix on our display",
+                (true, Some(":1"), Some(":1.0")),
+                true,
+            ),
+            ("a Steam menu", (true, Some(":0"), Some(":1")), false),
+            ("nothing open", (false, Some(":1"), Some(":1")), false),
+            (
+                "one display for Steam and us",
+                (true, Some(":0"), Some(":0")),
+                false,
+            ),
+            ("no DISPLAY", (true, Some(":1"), None), false),
+            (
+                "no keyboard focus published",
+                (true, None, Some(":1")),
+                false,
+            ),
+        ];
+        for (name, (open, keys_on, ours), want) in rows {
+            assert_eq!(keyboard_up(open, keys_on, ours, ":0"), want, "{name}");
+        }
     }
 }

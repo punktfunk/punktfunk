@@ -26,7 +26,7 @@ use pf_client_core::trust::{MouseMode, TouchMode};
 use punktfunk_core::client::{NativeClient, SurfaceTouch};
 use punktfunk_core::input::scroll::{ScrollAccumulator, ScrollEvent, ScrollPhase, ScrollSource};
 use punktfunk_core::input::{InputEvent, InputKind, MOUSE_MOVE_COUNTS};
-use punktfunk_core::quic::{GRANT_KEYBOARD, GRANT_POINTER};
+use punktfunk_core::quic::{GRANT_KEYBOARD, GRANT_POINTER, HOST_CAP_TEXT_INPUT};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -467,6 +467,22 @@ impl Capture {
     pub fn on_key_repeat(&mut self, sc: sdl3::keyboard::Scancode) {
         if keymap_sdl::scancode_to_vk(sc).is_some_and(|vk| self.held_keys.contains(&vk)) {
             self.on_key_down(sc);
+        }
+    }
+
+    /// The stream holds the keys and the host types committed text (`HOST_CAP_TEXT_INPUT`).
+    pub fn takes_text(&self) -> bool {
+        self.captured && self.connector.host_caps() & HOST_CAP_TEXT_INPUT != 0
+    }
+
+    /// Committed text, one `TextInput` per scalar. Enter, Backspace and Tab ride as keys.
+    pub fn on_text(&mut self, text: &str) {
+        if !self.takes_text() {
+            return;
+        }
+        self.flush_motion();
+        for c in text.chars().filter(|c| !c.is_control()) {
+            send(&self.connector, InputKind::TextInput, c as u32, 0, 0, 0);
         }
     }
 

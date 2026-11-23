@@ -7,13 +7,17 @@ use pf_client_core::shortcuts::Out;
 use sdl3::keyboard::{Scancode, TextInputOptions, TextInputType};
 
 impl Shell {
-    /// One SDL event: a drag past its window's edge onto the window under it, the console's
-    /// verdict, then [`route`] picks who takes it, and this performs. `Break` ends the session.
+    /// One SDL event: a held typed key goes out unless this is its text, a drag past its
+    /// window's edge lands on the window under it, the console gives its verdict, then
+    /// [`route`] picks who takes it, and this performs. `Break` ends the session.
     pub(super) fn on_event(
         &mut self,
         stream: &mut Option<StreamState>,
         event: Event,
     ) -> Result<ControlFlow<Outcome>> {
+        if !matches!(event, Event::TextInput { .. }) {
+            self.send_typed_key(stream);
+        }
         let event = self.across_windows(stream, event);
         let screen = event
             .get_window_id()
@@ -112,10 +116,12 @@ impl Shell {
         }
     }
 
-    /// The stream's keys, buttons, motion and SDL wheel. Windows never auto-repeats injected
-    /// input, so a held key needs its repeats. A left click on a released stream engages
-    /// capture and is not forwarded; other buttons stay with the desktop (a side button
-    /// starts a desktop gesture). `engage` refuses without pointer or keyboard access.
+    /// The stream's keys, text, buttons, motion and SDL wheel. Windows never auto-repeats
+    /// injected input, so a held key needs its repeats. While SDL text input is on toward a
+    /// text host, a key press waits for the text SDL queues behind it: a soft keyboard's keys
+    /// are the client's layout, which the host's need not match. A left click on a released
+    /// stream engages capture and is not forwarded; other buttons stay with the desktop.
+    /// `engage` refuses without pointer or keyboard access.
     fn on_capture_event(&mut self, stream: &mut Option<StreamState>, event: Event) {
         if let Event::MouseMotion {
             which,
@@ -133,6 +139,17 @@ impl Shell {
             return;
         };
         match event {
+            Event::KeyDown {
+                scancode: Some(sc),
+                repeat,
+                ..
+            } if self.text_input_on.is_some() && cap.takes_text() => {
+                self.typed_key = Some((sc, repeat));
+            }
+            Event::TextInput { text, .. } => {
+                self.typed_key = None;
+                cap.on_text(&text);
+            }
             Event::KeyDown {
                 scancode: Some(sc),
                 repeat: true,
@@ -158,6 +175,20 @@ impl Shell {
             Event::MouseButtonUp { mouse_btn, .. } => cap.on_button_up(mouse_btn),
             Event::MouseWheel { x, y, .. } => cap.on_wheel(x, y),
             _ => {}
+        }
+    }
+
+    /// The held typed key no text followed: it goes as the key after all.
+    pub(super) fn send_typed_key(&mut self, stream: &mut Option<StreamState>) {
+        let Some((sc, repeat)) = self.typed_key.take() else {
+            return;
+        };
+        if let Some(cap) = capture_mut(stream) {
+            if repeat {
+                cap.on_key_repeat(sc);
+            } else {
+                cap.on_key_down(sc);
+            }
         }
     }
 
@@ -623,10 +654,10 @@ impl Shell {
         self.mouse.warp_mouse_in_window(&self.window, wx, wy);
     }
 
-    /// SDL text input tracks overlay editing and the ring's Keyboard slot (IME / Steam
-    /// OSK), edge-wise. A password field starts it as a hidden password, so an IME neither
-    /// shows nor learns it ([`text_input_want`]). The IME's candidate window follows the
-    /// overlay's field, set only when it moved.
+    /// SDL text input tracks overlay editing, the ring's Keyboard slot (IME / Steam OSK) and
+    /// Steam's keyboard opened from Steam, edge-wise. A password field starts it as a hidden
+    /// password, so an IME neither shows nor learns it ([`text_input_want`]). The IME's
+    /// candidate window follows the overlay's field, set only when it moved.
     pub(super) fn text_input_tick(&mut self) {
         let overlay = self.overlay.as_ref();
         let ti = self.sdl_video.text_input();
@@ -644,6 +675,9 @@ impl Shell {
         let want = text_input_want(
             self.ring_keyboard,
             overlay.is_some_and(|o| o.text_input_active()),
+            self.overlay_focus
+                .as_ref()
+                .is_some_and(|of| of.steam_keyboard()),
             overlay.is_some_and(|o| o.text_input_secure()),
             steam_keyboard,
         );
@@ -655,8 +689,8 @@ impl Shell {
         }
         self.text_input_on = want;
         match want {
-            Some(false) => ti.start(&self.window),
-            Some(true) => {
+            Some(TextWant::Asked(false)) => ti.start(&self.window),
+            Some(TextWant::Asked(true)) => {
                 let hidden = TextInputOptions {
                     input_type: Some(TextInputType::PasswordHidden),
                     autocorrect: Some(false),
@@ -667,6 +701,13 @@ impl Shell {
                     // Nothing types into the field but the console's tray.
                     tracing::warn!(error = %e, "password text input did not start");
                 }
+            }
+            // SDL would ask Steam for another keyboard: start with its screen keyboard off.
+            Some(TextWant::Following) => {
+                sdl3::hint::set(SCREEN_KEYBOARD, "0");
+                ti.start(&self.window);
+                // SAFETY: a NUL-terminated name SDL reads during the call and does not keep.
+                unsafe { sdl3::sys::hints::SDL_ResetHint(SCREEN_KEYBOARD_C.as_ptr()) };
             }
             None => {}
         }
@@ -737,17 +778,35 @@ impl Shell {
     }
 }
 
-/// SDL text input as it should stand: `Some(secure)` on, `None` off. The ring's Keyboard slot
-/// types to the host and is never a password. SDL hands a field to Steam's keyboard with no
-/// password mode, so a password starts none there and the console's tray types it.
+/// Why SDL text input is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextWant {
+    /// The console's field or the ring's Keyboard slot asked; `true` for a password.
+    Asked(bool),
+    /// Steam's keyboard is up, opened from Steam: SDL follows it and opens none.
+    Following,
+}
+
+/// SDL's screen keyboard hint, which [`Shell::text_input_tick`] turns off for one start.
+const SCREEN_KEYBOARD: &str = "SDL_ENABLE_SCREEN_KEYBOARD";
+const SCREEN_KEYBOARD_C: &std::ffi::CStr = c"SDL_ENABLE_SCREEN_KEYBOARD";
+
+/// SDL text input as it should stand, `None` off. The ring's Keyboard slot types to the host
+/// and is never a password. SDL hands a field to Steam's keyboard with no password mode, so a
+/// password asks for none there and the console's tray types it.
 fn text_input_want(
     ring: bool,
     editing: bool,
+    following: bool,
     secure: bool,
     steam: impl FnOnce() -> bool,
-) -> Option<bool> {
+) -> Option<TextWant> {
     let secure = secure && !ring;
-    ((ring || editing) && !(secure && steam())).then_some(secure)
+    if (ring || editing) && !(secure && steam()) {
+        Some(TextWant::Asked(secure))
+    } else {
+        following.then_some(TextWant::Following)
+    }
 }
 
 /// The overlay's text area, swapchain pixels, in window coordinates: what SDL places the
@@ -808,6 +867,7 @@ fn kind_of(event: &Event, chord: bool) -> Kind {
         Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } => Kind::Button,
         Event::MouseMotion { .. } => Kind::Motion,
         Event::MouseWheel { .. } => Kind::Wheel,
+        Event::TextInput { .. } => Kind::Text,
         Event::FingerDown { .. }
         | Event::FingerMotion { .. }
         | Event::FingerUp { .. }
@@ -1232,16 +1292,39 @@ mod tests {
     }
 
     /// A password field starts hidden text input, and none where Steam's keyboard would show
-    /// it. The ring's slot stays plain text.
+    /// it. The ring's slot stays plain text. A keyboard Steam opened itself is followed.
     #[test]
     fn a_password_starts_hidden_text_input_or_none_under_steam() {
+        use TextWant::{Asked, Following};
         let steam = || true;
         let elsewhere = || false;
-        assert_eq!(text_input_want(false, false, false, steam), None);
-        assert_eq!(text_input_want(false, true, false, steam), Some(false));
-        assert_eq!(text_input_want(false, true, true, elsewhere), Some(true));
-        assert_eq!(text_input_want(false, true, true, steam), None);
-        assert_eq!(text_input_want(true, false, true, steam), Some(false));
+        assert_eq!(text_input_want(false, false, false, false, steam), None);
+        assert_eq!(
+            text_input_want(false, true, false, false, steam),
+            Some(Asked(false))
+        );
+        assert_eq!(
+            text_input_want(false, true, false, true, elsewhere),
+            Some(Asked(true))
+        );
+        assert_eq!(text_input_want(false, true, false, true, steam), None);
+        assert_eq!(
+            text_input_want(true, false, false, true, steam),
+            Some(Asked(false))
+        );
+        // Steam's keyboard opened from Steam: followed, unless something asked first.
+        assert_eq!(
+            text_input_want(false, false, true, false, steam),
+            Some(Following)
+        );
+        assert_eq!(
+            text_input_want(true, false, true, false, steam),
+            Some(Asked(false))
+        );
+        assert_eq!(
+            text_input_want(false, true, true, true, steam),
+            Some(Following)
+        );
     }
 
     /// At 200 % a field drawn in swapchain pixels lands at half those numbers in window units.
