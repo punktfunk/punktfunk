@@ -84,6 +84,26 @@ pub(crate) fn take(agent: bool) {
     }
 }
 
+/// Whether another process holds the lock within `wait`: the login agent's instance, moments
+/// after a launch was handed to it.
+pub(crate) fn held_within(wait: Duration) -> bool {
+    held_at_within(&lock_path(), wait)
+}
+
+fn held_at_within(path: &Path, wait: Duration) -> bool {
+    let deadline = Instant::now() + wait;
+    loop {
+        // A free lock is taken and dropped at once, so the agent can still take it.
+        if let Ok(Lock::Held(_)) = acquire(path, Duration::ZERO) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Ask a running host to show its window, if one holds the lock.
 pub(crate) fn wake_holder() {
     if let Ok(Lock::Held(pid)) = acquire(&lock_path(), Duration::ZERO) {
@@ -143,6 +163,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(matches!(acquire(&path, Duration::ZERO), Ok(Lock::Held(Some(p))) if p == pid));
+        assert!(held_at_within(&path, Duration::ZERO));
+        // A lock nobody takes reads as not held once the wait is over, and stays free.
+        let free = dir.path().join("free.lock");
+        assert!(!held_at_within(&free, Duration::from_millis(150)));
+        assert!(matches!(acquire(&free, Duration::ZERO), Ok(Lock::Taken(_))));
         let waited = Instant::now();
         assert!(matches!(acquire(&path, AGENT_WAIT), Ok(Lock::Taken(_))));
         assert!(waited.elapsed() < AGENT_WAIT);

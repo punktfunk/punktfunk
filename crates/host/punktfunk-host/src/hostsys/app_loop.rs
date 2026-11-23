@@ -18,6 +18,9 @@ use std::path::{Path, PathBuf};
 /// The login agent's launchd label, which launchd hands its instance as `XPC_SERVICE_NAME`.
 const AGENT_LABEL: &str = "io.unom.punktfunk.host";
 
+/// How long a launch handed to the login agent waits to see the agent's instance take over.
+const AGENT_START: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The command line a launch runs: `argv`, except that a bare launch of the app serves.
 pub(crate) fn launch_args(argv: Vec<String>, exe: &Path) -> Vec<String> {
     if argv.is_empty() && bundle_of(exe).is_some() {
@@ -135,9 +138,14 @@ pub(crate) fn start(args: &[String], work: fn()) {
             // SAFETY: on the main thread, before anything serves, with a context that lives
             // for the process (`Ui::find`); the library returns 0 or 1.
             if unsafe { (ui.prelaunch)(ui.ctx) } == 1 {
-                tracing::info!("launch handed to the login agent");
-                super::instance::wake_holder();
-                std::process::exit(0);
+                // The agent's instance takes the lock moments after it starts. An agent that
+                // can't start must not leave this launch with no host.
+                if super::instance::held_within(AGENT_START) {
+                    tracing::info!("launch handed to the login agent");
+                    super::instance::wake_holder();
+                    std::process::exit(0);
+                }
+                tracing::warn!("the login agent did not start — serving from this launch");
             }
         }
         super::instance::take(agent);
