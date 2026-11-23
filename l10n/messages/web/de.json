@@ -1015,6 +1015,7 @@
 	"games_detached_note": "Der Stream ist beendet, das Spiel läuft weiter",
 	"games_untracked_note": "Dieser Titel bietet nichts, woran der Host seinen Prozess erkennen kann – das Beenden des Spiels beendet die Sitzung deshalb nicht",
 	"games_closing_in": "Client ist weg – wird in {time} geschlossen, falls er nicht zurückkommt",
+	"games_plane_local": "Auf dem Bildschirm dieses PCs",
 	"games_end_all_waiting_confirm": [{
 		"declarations": ["input count", "local n = count: plural"],
 		"selectors": ["n"],
@@ -1246,6 +1247,7 @@
 	"sessions_player": "Spieler",
 	"sessions_player_auto": "Beliebiger Spieler",
 	"sessions_player_n": "Spieler {n}",
+	"sessions_player_share_n": "Teilt den Controller von Spieler {n}",
 	"action_player_failed": "Der Spielerplatz der Sitzung konnte nicht festgelegt werden",
 	"nav_controllers": "Controller",
 	"controllers_intro": "Was der Host empfängt, nicht was der Client zu senden glaubt.",
