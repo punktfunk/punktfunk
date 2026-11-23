@@ -2103,6 +2103,9 @@ impl LatencySplit {
         self.net_us
             .push(hostnet_us.saturating_sub(t.host_us as u64));
         if let Some(s) = t.stages {
+            // `RUST_LOG=punktfunk_probe::au=debug`: one line per AU, in the order they arrive.
+            tracing::debug!(target: "punktfunk_probe::au", pts_ns = t.pts_ns, host_us = t.host_us,
+                queue_us = s.queue_us, encode_us = s.encode_us, "au");
             self.queue_us.push(s.queue_us as u64);
             self.enc_us.push(s.encode_us as u64);
             self.pace_us.push(s.pace_us as u64);
