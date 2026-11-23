@@ -244,22 +244,38 @@ fn warp_onto_stream_head(
     out
 }
 
-/// Sum same-axis, same-precision scroll, and each run of adjacent relative motion into at most
-/// `motion_reports` moves of equal share. A sum is its last move with the travel of all: it
-/// keeps that move's capture time, so the speed over the run reads true. A mouse's own counts
-/// never sum with finished distances. Buttons, keys, moves, and type changes pass through in
-/// order: a key between two moves flushes the motion before it first.
+/// Sum same-axis, same-precision scroll, and the batch's runs of adjacent relative motion into
+/// moves of equal share. The motion of the whole batch takes `motion_reports` less one per other
+/// event, and never fewer than one per run: an overflowing ring drops a key's release. A sum is
+/// its last move with the travel of all: it keeps that move's capture time, so the speed over
+/// the run reads true. A mouse's own counts never sum with finished distances. Buttons, keys,
+/// moves, and type changes pass through in order: a key between two moves flushes the motion
+/// before it first.
 fn coalesce(events: Vec<InputEvent>, motion_reports: usize) -> Vec<InputEvent> {
+    let alike = |a: &InputEvent, b: &InputEvent| {
+        a.kind == InputKind::MouseMove
+            && b.kind == InputKind::MouseMove
+            && a.mouse_counts_time().is_some() == b.mouse_counts_time().is_some()
+    };
+    let moves = events
+        .iter()
+        .filter(|e| e.kind == InputKind::MouseMove)
+        .count();
+    let runs = (events.iter().enumerate())
+        .filter(|&(i, e)| e.kind == InputKind::MouseMove && (i == 0 || !alike(&events[i - 1], e)))
+        .count();
+    let budget = motion_reports.saturating_sub(events.len() - moves);
+    let share = if budget > runs {
+        moves.div_ceil(budget - runs)
+    } else {
+        moves
+    };
     let mut out: Vec<InputEvent> = Vec::with_capacity(events.len());
     let mut rest = events.as_slice();
     while let Some(&ev) = rest.first() {
         if ev.kind == InputKind::MouseMove {
-            let counts = ev.mouse_counts_time().is_some();
-            let alike = |e: &&InputEvent| {
-                e.kind == InputKind::MouseMove && e.mouse_counts_time().is_some() == counts
-            };
-            let run = rest.iter().take_while(alike).count();
-            for group in rest[..run].chunks(run.div_ceil(motion_reports.max(1))) {
+            let run = rest.iter().take_while(|e| alike(&ev, e)).count();
+            for group in rest[..run].chunks(share.max(1)) {
                 let (last, before) = group.split_last().expect("chunks are never empty");
                 let mut sum = *last;
                 for e in before {
@@ -360,11 +376,38 @@ mod tests {
         let xs = |out: &[InputEvent]| out.iter().map(|e| e.x).collect::<Vec<_>>();
         assert_eq!(xs(&coalesce(run(5), 32)), [1, 2, 3, 4, 5]);
         let out = coalesce(run(70), 32);
-        assert_eq!(out.len(), 24); // groups of ceil(70 / 32) = 3
+        assert_eq!(out.len(), 24); // groups of ceil(70 / (32 - 1 run)) = 3
         assert_eq!(xs(&out)[..2], [1 + 2 + 3, 4 + 5 + 6]);
         assert_eq!(out.iter().map(|e| e.x).sum::<i32>(), (1..=70).sum::<i32>());
         assert_eq!(out.iter().map(|e| e.y).sum::<i32>(), -(1..=70).sum::<i32>());
         assert_eq!(xs(&coalesce(run(70), 1)), [(1..=70).sum::<i32>()]);
+    }
+
+    /// The cap holds for the whole batch: runs split by keys share it, and the keys keep room.
+    #[test]
+    fn coalesce_budgets_motion_across_the_batch() {
+        let moves = |n| (0..n).map(|_| mk(InputKind::MouseMove, 0, 1, 0));
+        let mut events: Vec<InputEvent> = moves(40).collect();
+        events.push(mk(InputKind::KeyDown, 30, 0, 0));
+        events.extend(moves(40));
+        events.push(mk(InputKind::KeyUp, 30, 0, 0));
+        let out = coalesce(events, 32);
+        assert!(out.len() <= 32, "{} reports", out.len());
+        let keys: Vec<_> = (out.iter().enumerate())
+            .filter(|(_, e)| e.kind != InputKind::MouseMove)
+            .map(|(i, e)| (i, e.kind))
+            .collect();
+        assert_eq!(keys[1], (out.len() - 1, InputKind::KeyUp));
+        assert_eq!(out.iter().map(|e| e.x).sum::<i32>(), 80);
+        let tight: Vec<_> = (0..40)
+            .flat_map(|_| {
+                [
+                    mk(InputKind::MouseMove, 0, 1, 0),
+                    mk(InputKind::KeyDown, 30, 0, 0),
+                ]
+            })
+            .collect();
+        assert_eq!(coalesce(tight, 32).len(), 80); // one report per run, never fewer
     }
 
     fn warp(events: Vec<InputEvent>, aim: u64, warped: &mut u64) -> Vec<InputEvent> {
