@@ -182,8 +182,11 @@ public enum ConsoleJSON {
         ]
     }
 
-    /// One row as a console entry (`{"library": <HostRow>}`) — the shelf to open.
-    public static func entry(_ host: StoredHost, pin: StreamPreset?, presets: [StreamPreset]) -> String {
+    /// One row as a console entry (`{"library": <HostRow>}`) — the shelf to open. `stream` makes
+    /// it `{"stream": …}`: the shelf plus a connect to the host's desktop, asked in the console.
+    public static func entry(
+        _ host: StoredHost, pin: StreamPreset?, presets: [StreamPreset], stream: Bool = false
+    ) -> String {
         var row = row(
             host, advert: nil, online: true, presets: presets, hostActions: [:], running: [:])
         if let pin {
@@ -191,7 +194,7 @@ public enum ConsoleJSON {
             row["pin"] = chip(pin)
             row["bound_preset"] = NSNull()
         }
-        return string(["library": row])
+        return string([stream ? "stream" : "library": row])
     }
 
     /// `{"pair": HostRow}`: the console's Pair screen for this host, over Home.
