@@ -106,11 +106,11 @@ fn local_ipv4s() -> Vec<Ipv4Addr> {
         .unwrap_or_default()
 }
 
-/// UDP `connect` does a route lookup without sending; `local_addr` is the
-/// source the OS chose. Same as the host's `primary_local_ip`.
+/// UDP `connect` toward 192.0.2.1 (RFC 5737, on no LAN) is a route lookup that sends nothing;
+/// `local_addr` is the source the OS chose. Same as the host's `primary_local_ip`.
 fn routed_local_ipv4() -> Option<Ipv4Addr> {
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("8.8.8.8:80").ok()?;
+    sock.connect("192.0.2.1:80").ok()?;
     match sock.local_addr().ok()?.ip() {
         IpAddr::V4(v) if !v.is_loopback() => Some(v),
         _ => None,

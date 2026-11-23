@@ -564,7 +564,8 @@ fn local_ip(run: &dyn CommandRunner) -> Option<String> {
     {
         return Some(first.to_string());
     }
-    let out = run.first_line("ip", &["-4", "route", "get", "1.1.1.1"])?;
+    // 192.0.2.1 (RFC 5737) is on no LAN, so the lookup names the default route's source.
+    let out = run.first_line("ip", &["-4", "route", "get", "192.0.2.1"])?;
     let mut it = out.split_whitespace();
     while let Some(word) = it.next() {
         if word == "src" {
