@@ -10,8 +10,8 @@
 #                              to the Gitea release on tag pushes
 #                    macOS (App Store)    -> archive + upload to TestFlight (App Store Connect)
 #                    iOS    -> archive + upload to TestFlight, plus an unsigned .ipa for sideloading
-#                    tvOS   -> archive + upload to TestFlight (Rust core built with the pinned
-#                              nightly + -Zbuild-std, in build-xcframework.sh)
+#                    tvOS   -> archive + upload to TestFlight, plus an unsigned .ipa (Rust core
+#                              built with the pinned nightly + -Zbuild-std, in build-xcframework.sh)
 #                    visionOS -> archive + upload to TestFlight (the iOS scheme; built like tvOS)
 #   screenshots  — needs: swift. App Store Connect screenshots of the REAL UI, attached to the run
 #                  as a zip artifact. Best-effort, so a capture gap never reds the core signal.
@@ -676,83 +676,15 @@ jobs:
             -authenticationKeyID "${{ secrets.ASC_API_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_API_ISSUER_ID }}"
 
-      - name: iOS — unsigned .ipa for sideloading (Gitea release + run artifact)
-        # Re-exports the TestFlight archive, then strips our signature: iOS refuses an App Store
-        # profile outside the store, and a re-signer that keeps our entitlements fails. AltStore,
-        # SideStore and Sideloadly sign the result with the player's Apple ID. Warns and skips
-        # when the archive is absent (a workflow_dispatch with testflight=false).
+      - name: iOS — unsigned .ipa for sideloading
+        # AltStore, SideStore and Sideloadly sign it with the player's Apple ID. Skips when the
+        # archive is absent (a workflow_dispatch with testflight=false).
         if: gitea.event_name != 'workflow_dispatch' || inputs.testflight == 'true'
-        id: ios_ipa
         run: |
-          ARCHIVE="$RUNNER_TEMP/Punktfunk-ios.xcarchive"
-          if [ ! -d "$ARCHIVE" ]; then
-            echo "::warning::iOS archive not found — skipping .ipa export"
-            exit 0
-          fi
-          PROFILE="Punktfunk iOS App Store Distribution"
-          WIDGET_PROFILE="Punktfunk iOS Widgets App Store Distribution"
-          # destination=export writes the .ipa to -exportPath; otherwise identical manual signing to
-          # the upload plist (both profiles, Apple Distribution). No ASC key needed — no network.
-          cat > "$RUNNER_TEMP/export-appstore-ipa.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>app-store-connect</string>
-            <key>destination</key><string>export</string>
-            <key>teamID</key><string>$TEAM_ID</string>
-            <key>signingStyle</key><string>manual</string>
-            <key>signingCertificate</key><string>Apple Distribution</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>io.unom.punktfunk</key><string>$PROFILE</string>
-              <key>io.unom.punktfunk.widgets</key><string>$WIDGET_PROFILE</string>
-            </dict>
-          </dict>
-          </plist>
-          EOF
-          DEVELOPER_DIR="$XCODE_DEV_DIR" xcodebuild -exportArchive \
-            -archivePath "$ARCHIVE" \
-            -exportOptionsPlist "$RUNNER_TEMP/export-appstore-ipa.plist" \
-            -exportPath "$RUNNER_TEMP/export-ipa"
-          SRC=$(ls "$RUNNER_TEMP/export-ipa/"*.ipa 2>/dev/null | head -1)
-          [ -n "$SRC" ] || { echo "::warning::no .ipa was produced by export"; exit 0; }
-          # Payload only: Symbols/ and Signatures/ belong to the store upload.
-          SIDE="$RUNNER_TEMP/sideload"
-          rm -rf "$SIDE" && mkdir -p "$SIDE"
-          (cd "$SIDE" && unzip -q "$SRC" 'Payload/*')
-          APP=$(ls -d "$SIDE/Payload/"*.app)
-          for b in "$APP"/PlugIns/*.appex "$APP"; do
-            codesign --remove-signature "$b"
-            rm -rf "$b/_CodeSignature" "$b/embedded.mobileprovision"
-          done
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          IPA="$GITHUB_WORKSPACE/dist/Punktfunk-$VERSION.ipa"
-          rm -f "$IPA"
-          (cd "$SIDE" && zip -qry "$IPA" Payload)
-          echo "IPA=$IPA" >> "$GITHUB_ENV"
-          echo "ipa=dist/Punktfunk-$VERSION.ipa" >> "$GITHUB_OUTPUT"
-          echo "exported $IPA"
-
-      - name: Attach .ipa to the workflow run
-        if: steps.ios_ipa.outputs.ipa != ''
-        # v3, not v4: Gitea's artifact backend identifies as GHES, which upload-artifact@v4 refuses
-        # (same reason as android.yml / the screenshots job below). Download is a zip of the .ipa.
-        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3
-        with:
-          name: punktfunk-ios-ipa
-          path: ${{ steps.ios_ipa.outputs.ipa }}
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Attach .ipa to the Gitea release (stable tags only)
-        if: startsWith(gitea.ref, 'refs/tags/v') && steps.ios_ipa.outputs.ipa != ''
-        env:
-          GITEA_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-        run: |
-          . scripts/ci/gitea-release.sh
-          RID=$(ensure_release "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" auto)
-          upsert_asset "$RID" "$IPA" "Punktfunk-$VERSION.ipa"
+          bash clients/apple/tools/sideload-ipa.sh "$RUNNER_TEMP/Punktfunk-ios.xcarchive" \
+            "dist/Punktfunk-$VERSION.ipa" \
+            "io.unom.punktfunk=Punktfunk iOS App Store Distribution" \
+            "io.unom.punktfunk.widgets=Punktfunk iOS Widgets App Store Distribution"
 
       - name: tvOS — archive + upload to TestFlight
         # Canary + stable, the same track as iOS/macOS — the tvOS xcframework slice is built
@@ -810,6 +742,40 @@ jobs:
             -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
             -authenticationKeyID "${{ secrets.ASC_API_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_API_ISSUER_ID }}"
+
+      - name: tvOS — unsigned .ipa for sideloading
+        # Sideloadly installs it on Apple TV. Best-effort like the archive, so a tvOS miss never
+        # holds back the iOS .ipa.
+        if: gitea.event_name != 'workflow_dispatch' || inputs.testflight == 'true'
+        continue-on-error: true
+        run: |
+          bash clients/apple/tools/sideload-ipa.sh "$RUNNER_TEMP/Punktfunk-tvos.xcarchive" \
+            "dist/Punktfunk-tvOS-$VERSION.ipa" \
+            "io.unom.punktfunk=Punktfunk tvOS App Store Distribution"
+
+      - name: Attach the .ipa files to the workflow run
+        if: gitea.event_name != 'workflow_dispatch' || inputs.testflight == 'true'
+        # v3, not v4: Gitea's artifact backend identifies as GHES, which upload-artifact@v4 refuses
+        # (same reason as android.yml / the screenshots job below). Download is a zip of both.
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3
+        with:
+          name: punktfunk-ipa
+          path: |
+            dist/Punktfunk-${{ env.VERSION }}.ipa
+            dist/Punktfunk-tvOS-${{ env.VERSION }}.ipa
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Attach the .ipa files to the Gitea release (stable tags only)
+        if: startsWith(gitea.ref, 'refs/tags/v')
+        env:
+          GITEA_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          . scripts/ci/gitea-release.sh
+          RID=$(ensure_release "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" auto)
+          for f in "Punktfunk-$VERSION.ipa" "Punktfunk-tvOS-$VERSION.ipa"; do
+            if [ -f "dist/$f" ]; then upsert_asset "$RID" "dist/$f" "$f"; fi
+          done
 
       - name: visionOS — archive + upload to TestFlight
         # visionOS is a destination of the iOS scheme: same bundle id, same xcframework (the
