@@ -145,14 +145,28 @@ fn cursor_args() -> Vec<String> {
 const MANGOAPP_HIDDEN: &str = "read_cfg,no_display";
 
 /// `MANGOHUD_CONFIG` for a spawn's mangoapp, or `None` to leave the env alone. A Steam spawn
-/// needs none: gamescope writes Steam a `no_display` file its performance overlay slider drives.
-/// A `MANGOHUD_CONFIG` the box already sets stands.
+/// reads a file instead ([`mangoapp_file_wanted`]). A `MANGOHUD_CONFIG` the box already sets stands.
 fn mangoapp_config(
     mangoapp: bool,
     steam_mode: bool,
     box_config: Option<&str>,
 ) -> Option<&'static str> {
     (mangoapp && !steam_mode && box_config.is_none_or(str::is_empty)).then_some(MANGOAPP_HIDDEN)
+}
+
+/// What a Steam spawn's mangoapp reads first. Steam's performance overlay slider rewrites it.
+const MANGOAPP_FILE_HIDDEN: &str = "no_display\n";
+
+/// Whether a Steam spawn gets [`MANGOAPP_FILE_HIDDEN`] as its `MANGOHUD_CONFIGFILE`. Gamescope's
+/// own file ends in a NUL that MangoHud cannot parse, so mangoapp would start shown. A file the
+/// box names stands.
+fn mangoapp_file_wanted(mangoapp: bool, steam_mode: bool, box_file: Option<&str>) -> bool {
+    mangoapp && steam_mode && box_file.is_none_or(str::is_empty)
+}
+
+/// That file for the spawn that writes `log`, so teardown finds it beside the log.
+pub(super) fn mangoapp_file(log: &std::path::Path) -> std::path::PathBuf {
+    log.with_extension("mangohud.conf")
 }
 
 /// Paint-on-commit + `--framerate-limit` at [`game_hz`], the whole-hertz form of `-r`. The two
@@ -324,6 +338,16 @@ pub(super) fn spawn(
     let mangoapp_env = mangoapp_config(mangoapp, steam_mode, box_config.as_deref());
     if let Some(config) = mangoapp_env {
         cmd.env("MANGOHUD_CONFIG", config);
+    }
+    let box_file = crate::with_env_lock(|| std::env::var("MANGOHUD_CONFIGFILE").ok());
+    if mangoapp_file_wanted(mangoapp, steam_mode, box_file.as_deref()) {
+        let file = mangoapp_file(&log);
+        match std::fs::write(&file, MANGOAPP_FILE_HIDDEN) {
+            Ok(()) => {
+                cmd.env("MANGOHUD_CONFIGFILE", &file);
+            }
+            Err(e) => tracing::warn!(error = %e, "gamescope: mangoapp config not written"),
+        }
     }
     add_bare_gamescope_args(&mut cmd, mode, steam_mode, grab_cursor, hdr);
     let wsi = WsiPlan::resolve();
@@ -570,8 +594,10 @@ impl Drop for GamescopeProc {
         // Clear the relayed EIS socket name so an injector can't reconnect to this now-dead
         // session's socket between sessions (the stale path is the "Connection refused").
         let _ = std::fs::remove_file(&self.relay);
-        // Drop this spawn's per-instance log so `$XDG_RUNTIME_DIR` doesn't accumulate them.
+        // Drop this spawn's per-instance log and mangoapp file so `$XDG_RUNTIME_DIR` doesn't
+        // accumulate them.
         let _ = std::fs::remove_file(&self.log);
+        let _ = std::fs::remove_file(mangoapp_file(&self.log));
         if let Some(dir) = &self.steam_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -730,6 +756,25 @@ mod tests {
         assert_eq!(mangoapp_config(true, true, None), None);
         assert_eq!(mangoapp_config(true, false, Some("fps_only")), None);
         assert_eq!(mangoapp_config(false, false, None), None);
+    }
+
+    /// A Steam spawn's mangoapp starts hidden from its own file, unless the box names one.
+    #[test]
+    fn steam_mangoapp_reads_a_hidden_file_unless_the_box_names_one() {
+        assert!(mangoapp_file_wanted(true, true, None));
+        assert!(mangoapp_file_wanted(true, true, Some("")));
+        assert!(!mangoapp_file_wanted(
+            true,
+            true,
+            Some("/etc/mangohud.conf")
+        ));
+        assert!(!mangoapp_file_wanted(true, false, None));
+        assert!(!mangoapp_file_wanted(false, true, None));
+        let log = std::path::Path::new("/run/user/1000/punktfunk-gamescope-7.log");
+        assert_eq!(
+            mangoapp_file(log),
+            std::path::Path::new("/run/user/1000/punktfunk-gamescope-7.mangohud.conf")
+        );
     }
 
     #[test]
