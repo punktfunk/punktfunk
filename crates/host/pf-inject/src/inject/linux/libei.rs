@@ -15,6 +15,7 @@
 //! normal key events.
 
 use super::InputInjector;
+use crate::gamescope_text::TextPipe;
 use crate::head_pick::{self, HeadFacts, StreamTarget};
 use crate::plan::{Abs, Op, Plan};
 use crate::scroll::{mutter_axis_calls, ScrollBackend, ScrollMapper, ScrollOp};
@@ -101,7 +102,7 @@ async fn session_main(mut rx: UnboundedReceiver<InputEvent>, source: EiSource) {
     // Closing the portal session (end of fn) closes EIS. Bound setup so an unanswered
     // approval dialog cannot hang the worker.
     let gamescope = matches!(source, EiSource::SocketPathFile(_));
-    let (keepalive, context, mut events, output_hint, mutter) = match tokio::time::timeout(
+    let (keepalive, context, mut events, output_hint, mutter, eis) = match tokio::time::timeout(
         Duration::from_secs(30),
         connect(source),
     )
@@ -124,6 +125,7 @@ async fn session_main(mut rx: UnboundedReceiver<InputEvent>, source: EiSource) {
     let mut state = EiState::new();
     state.output_hint = output_hint;
     state.gamescope = gamescope;
+    state.text_socket = eis;
     state.scroll = ScrollMapper::new(if gamescope {
         ScrollBackend::Gamescope
     } else if mutter.is_some() {
@@ -222,9 +224,12 @@ type Connected = (
     Option<(u32, u32)>,
     // Mutter's RemoteDesktop session, which scroll goes through ([`mutter_axis_sender`]).
     Option<zbus::Proxy<'static>>,
+    // gamescope's EIS socket, which names the display its input method is on.
+    Option<std::path::PathBuf>,
 );
 
 async fn connect(source: EiSource) -> Result<Connected> {
+    let mut eis_socket = None;
     let (keepalive, stream, output_hint, mutter) = match source {
         EiSource::Portal => {
             let (_rd, session, fd) = connect_portal().await?;
@@ -250,7 +255,8 @@ async fn connect(source: EiSource) -> Result<Connected> {
             Err(e) => return Err(anyhow!("KWin EIS.RemoteDesktop.connectToEIS: {e}")),
         },
         EiSource::SocketPathFile(file) => {
-            let (stream, hint) = connect_socket_file(&file).await?;
+            let (stream, hint, socket) = connect_socket_file(&file).await?;
+            eis_socket = Some(socket);
             (Keepalive::Socket, stream, hint, None)
         }
     };
@@ -266,7 +272,7 @@ async fn connect(source: EiSource) -> Result<Connected> {
         anyhow!("EI handshake timed out (EIS server not responding — stale/half-ready socket?)")
     })?
     .map_err(|e| anyhow!("EI handshake: {e}"))?;
-    Ok((keepalive, context, events, output_hint, mutter))
+    Ok((keepalive, context, events, output_hint, mutter, eis_socket))
 }
 
 /// One task sends every `NotifyPointerAxis` in order: a stop must not pass the
@@ -432,11 +438,14 @@ async fn connect_mutter() -> Result<(Box<dyn Send>, zbus::Proxy<'static>, std::o
 }
 
 /// Poll `file` for the EIS socket path (gamescope relays `LIBEI_SOCKET` there), then
-/// connect. A bare name is resolved against `XDG_RUNTIME_DIR`, matching libei.
+/// connect, and return the stream, the hint and that path. A bare name is resolved against
+/// `XDG_RUNTIME_DIR`, matching libei.
 /// Line 2, when present, is compositor output `WxH` — gamescope's EIS region is
 /// degenerate, so geometry cannot come from the protocol. A file still empty at the
 /// deadline is a gamescope built without libei: it has no EIS to connect to.
-async fn connect_socket_file(file: &std::path::Path) -> Result<(UnixStream, Option<(u32, u32)>)> {
+async fn connect_socket_file(
+    file: &std::path::Path,
+) -> Result<(UnixStream, Option<(u32, u32)>, std::path::PathBuf)> {
     // Re-read and retry: the file may still name a dead session's socket, or the
     // live one is not listening yet. Bound so a wedged compositor still errors.
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -476,7 +485,7 @@ async fn connect_socket_file(file: &std::path::Path) -> Result<(UnixStream, Opti
                     logged = name.to_string();
                 }
                 match UnixStream::connect(&full) {
-                    Ok(stream) => return Ok((stream, hint)),
+                    Ok(stream) => return Ok((stream, hint, full)),
                     // Refused: file exists, no listener yet (or a dead session).
                     // NotFound: path not created yet. Retry. Anything else is fatal.
                     Err(e)
@@ -570,6 +579,10 @@ struct EiState {
     scroll: ScrollMapper,
     /// Mutter only: scroll goes to the session's `NotifyPointerAxis`, never to EIS.
     mutter_axis: Option<UnboundedSender<(f64, f64, u32)>>,
+    /// gamescope only: its EIS socket, beside which its input method types committed text.
+    text_socket: Option<std::path::PathBuf>,
+    /// That input method, opened on the first character.
+    text: Option<TextPipe>,
 }
 
 /// Last-warned unmatched anchor, so a sticky miss logs once per change rather
@@ -673,6 +686,28 @@ impl EiState {
             gamescope: false,
             scroll: ScrollMapper::new(ScrollBackend::Libei),
             mutter_axis: None,
+            text_socket: None,
+            text: None,
+        }
+    }
+
+    /// Type `code` through gamescope's input method. A pipe that fails is dropped, and the
+    /// next character opens a new one.
+    fn type_text(&mut self, code: u32) {
+        let (Some(socket), Some(c)) = (&self.text_socket, char::from_u32(code)) else {
+            return;
+        };
+        let typed = match &mut self.text {
+            Some(pipe) => pipe.type_char(c),
+            None => TextPipe::open(socket).and_then(|mut pipe| {
+                pipe.type_char(c)?;
+                self.text = Some(pipe);
+                Ok(())
+            }),
+        };
+        if let Err(e) = typed {
+            self.text = None;
+            tracing::warn!(error = %format!("{e:#}"), "libei: gamescope did not type the text");
         }
     }
 
@@ -907,8 +942,13 @@ impl EiState {
         }
     }
 
-    /// Emit `op` on the first resumed device with its capability, sampled by `loud`.
+    /// Emit `op` on the first resumed device with its capability, sampled by `loud`. Text
+    /// goes to gamescope's input method.
     fn send(&mut self, op: Op, ctx: &ei::Context, n: u64, loud: bool) {
+        if let Op::Text(code) = op {
+            self.type_text(code);
+            return;
+        }
         let Some(cap) = capability_for(&op) else {
             return;
         };
@@ -1037,8 +1077,8 @@ impl EiState {
     }
 }
 
-/// The EI capability `op` needs. `None` for committed text: keycodes go against the server's
-/// keymap, and `HOST_CAP_TEXT_INPUT` is not advertised on this backend.
+/// The EI capability `op` needs. `None` for committed text, which no EIS device types:
+/// gamescope's goes to its input method ([`EiState::type_text`]).
 fn capability_for(op: &Op) -> Option<DeviceCapability> {
     Some(match op {
         Op::Motion { .. } => DeviceCapability::Pointer,

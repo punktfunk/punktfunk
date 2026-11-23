@@ -469,21 +469,22 @@ pub fn default_backend() -> Backend {
 }
 
 /// Whether this backend can type committed text ([`InputKind::TextInput`], `HOST_CAP_TEXT_INPUT`).
-/// Windows always (`KEYEVENTF_UNICODE`). Linux on wlroots (Unicode virtual keyboard) and on KWin
-/// with `keyboard_keysym`; libei and gamescope can only press host-layout keycodes. Welcome-time
-/// cap; a mid-session switch away from a capable backend drops text events (input is lossy).
+/// Windows always (`KEYEVENTF_UNICODE`). Linux on wlroots (Unicode virtual keyboard), on KWin
+/// with `keyboard_keysym`, and in gamescope through its input method; GNOME's libei can only
+/// press host-layout keycodes. Welcome-time cap; a mid-session switch to libei drops text.
 #[cfg(target_os = "windows")]
 pub fn text_input_supported() -> bool {
     true
 }
 
-/// Linux types text through the wlroots virtual keyboard and KWin 6.5+ keysyms.
+/// Linux types text through the wlroots virtual keyboard, KWin 6.5+ keysyms and gamescope's
+/// input method.
 #[cfg(target_os = "linux")]
 pub fn text_input_supported() -> bool {
     match default_backend() {
-        Backend::WlrVirtual | Backend::WlrLayout => true,
+        Backend::WlrVirtual | Backend::WlrLayout | Backend::GamescopeEi => true,
         Backend::KwinFakeInput => kwin_fake_input::keysym_supported(),
-        Backend::Libei | Backend::GamescopeEi => false,
+        Backend::Libei => false,
     }
 }
 
@@ -1352,6 +1353,9 @@ pub mod touchpad {
         pub fn apply(&mut self, _pad: &PadState) {}
     }
 }
+#[cfg(target_os = "linux")]
+#[path = "inject/linux/gamescope_text.rs"]
+mod gamescope_text;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/kwin_fake_input.rs"]
 mod kwin_fake_input;
