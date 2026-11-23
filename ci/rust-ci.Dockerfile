@@ -9,6 +9,10 @@
 # zerocopy path only needs the symbols at link time, so a driver userspace package plus a
 # libcuda.so -> libcuda.so.1 symlink stands in for it (CI never executes the CUDA path).
 FROM ubuntu:26.04
+
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # toolchain + bindgen; nodejs runs the JS actions (checkout/cache); unzip extracts the pinned bun zip

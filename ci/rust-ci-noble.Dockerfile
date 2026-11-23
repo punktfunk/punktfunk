@@ -18,6 +18,10 @@
 # run after this image is added uses the image from a PRIOR docker.yml push — seed it once manually
 # (docker build -f ci/rust-ci-noble.Dockerfile -t … ci && docker push) before the host job can run.
 FROM ubuntu:24.04
+
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

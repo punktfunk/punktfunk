@@ -12,6 +12,10 @@
 ARG FEDORA_VERSION=43
 FROM fedora:${FEDORA_VERSION}
 
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
+
 # Stock Fedora only: the host links nothing from RPM Fusion any more.
 RUN dnf -y install \
       # rpmbuild + source-tarball tooling; nodejs runs the Gitea Actions JS (checkout/cache) only

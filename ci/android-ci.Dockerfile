@@ -12,6 +12,10 @@
 # absent (AGP auto-downloads it if a build ever needs it — same note as the old workflow).
 FROM ubuntu:26.04
 
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
+
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git unzip zip python3 openjdk-21-jdk-headless \
