@@ -1057,7 +1057,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
     /// Seconds until this session's access expires, LIVE (the core counts it down from the
     /// Welcome / the latest `AccessUpdate`, anchored to this device's clock — skew never moves
     /// it). `0` = permanent — show no countdown then; while a deadline exists it clamps to
-    /// ≥ 1, so `0` stays unambiguous. Poll ~1 Hz for the "ends in 1 h 58 m" chip.
+    /// ≥ 1, so `0` stays unambiguous. Poll ~1 Hz for the "ends in 1 h 58 min" chip.
     public var accessExpiresInSeconds: UInt32 {
         return withLiveHandle(or: 0) { h in
             var secs: UInt32 = 0

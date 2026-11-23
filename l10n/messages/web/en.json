@@ -1189,7 +1189,7 @@
 				"n"
 			],
 			"match": {
-				"n=one": "This game has no id the host can single out, so ending it now ends all {count} game nobody is streaming.",
+				"n=one": "This game has no id the host can single out, so ending it now ends {count} game nobody is streaming.",
 				"n=*": "This game has no id the host can single out, so ending it now ends all {count} games nobody is streaming."
 			}
 		}
@@ -1204,7 +1204,7 @@
 				"n"
 			],
 			"match": {
-				"n=one": "End all {count} game nobody is streaming?",
+				"n=one": "End {count} game nobody is streaming?",
 				"n=*": "End all {count} games nobody is streaming?"
 			}
 		}

@@ -872,7 +872,7 @@ final class SessionModel: ObservableObject {
         flash(\.launch, text, for: SessionNotices.launchSeconds)
     }
 
-    /// "1 h 58 m" / "12 m" — the countdown wording the chip and the warnings share, for a
+    /// "1 h 58 min" / "12 min" — the countdown wording the chip and the warnings share, for a
     /// minute or more.
     static func accessCountdown(_ secs: UInt32) -> String {
         let s = Int(secs)
@@ -883,7 +883,7 @@ final class SessionModel: ObservableObject {
         return L10n.grantRemainingMinutes(minutes: String(s / 60))
     }
 
-    /// The chip's tail: "ends in 12 m", or "ends in under 1 m" in the last minute.
+    /// The chip's tail: "ends in 12 min", or "ends in under 1 min" in the last minute.
     static func accessChipEnd(_ secs: UInt32) -> String {
         secs < 60
             ? String(localized: L10n.grantChipEndsSoon)

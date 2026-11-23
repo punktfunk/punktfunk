@@ -132,7 +132,7 @@ struct StreamHUDView: View {
     }
 
     #if os(tvOS)
-    /// "access full control", then " · ends in 1 h 58 m" while the access is timed.
+    /// "access full control", then " · ends in 1 h 58 min" while the access is timed.
     private var accessLine: String {
         let level: LocalizedStringResource
         switch model.notices.accessLevel {
@@ -440,7 +440,7 @@ struct Sc2CapturedBadge: View {
 }
 
 #if !os(tvOS)
-/// The session's access chip (per-client access §7) — "Controller only · ends in 1 h 58 m".
+/// The session's access chip (per-client access §7) — "Controller only · ends in 1 h 58 min".
 /// Rides over the stream for the life of a LIMITED session, at every stats tier but Off (see
 /// `StreamBadgeStack`), in the badges' glass language: what this session may do (and for how
 /// long) is not a statistic, and a guest whose keyboard does nothing deserves the why on
