@@ -1,11 +1,11 @@
 //! macOS desktop-audio capture through a Core Audio process tap (macOS 14.2+).
 //!
-//! A private global stereo tap takes every process's output except this one. A private
-//! aggregate device carries the tap, and an IOProc on it hands interleaved `f32` to the
-//! capturer over a bounded channel (drop, never block the IO thread). The tap mixes at its own
-//! rate, which need not be the output device's; [`convert`] resamples to the delivered rate and
-//! lays stereo into the session's layout. Client-only audio mutes the Mac's speakers while the
-//! tap is read.
+//! A private global stereo tap takes every process's output except this one and the
+//! [`REPLAYERS`]. A private aggregate device carries the tap, and an IOProc on it hands
+//! interleaved `f32` to the capturer over a bounded channel (drop, never block the IO thread).
+//! The tap mixes at its own rate, which need not be the output device's; [`convert`] resamples
+//! to the delivered rate and lays stereo into the session's layout. Client-only audio mutes the
+//! Mac's speakers while the tap is read, the replayers through a second tap on the aggregate.
 //!
 //! Tap and aggregate are private to this process and do not outlive it. The mute holds only
 //! while this process reads the tap, so a crash cannot leave the Mac silent, and nothing needs
@@ -18,6 +18,7 @@ mod convert;
 use crate::capture_policy::CaptureStats;
 use crate::{wiring_plan, AudioCapturer, CaptureRate, VirtualMic};
 use anyhow::{anyhow, Context, Result};
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::AnyThread;
 use objc2_core_audio::{
@@ -53,7 +54,7 @@ const SYSTEM: AudioObjectID = kAudioObjectSystemObject as AudioObjectID;
 /// device's (a 192 kHz device can carry a 48 kHz tap), and [`convert::settle_rate`] never
 /// delivers above it, so only `rate <= this` is honest.
 pub(super) fn probe_capture_rate() -> CaptureRate {
-    match Tap::create(CATapMuteBehavior::Unmuted).and_then(|tap| tap_format(tap.id)) {
+    match Tap::global(CATapMuteBehavior::Unmuted, &[]).and_then(|tap| tap_format(tap.id)) {
         Ok(format) => CaptureRate::Engine(format.mSampleRate.round() as u32),
         Err(e) => {
             tracing::debug!(error = %format!("{e:#}"), "hi-res capture-rate probe: tap format unreadable");
@@ -134,8 +135,13 @@ pub struct TapCapturer {
     io: IoProc,
     _aggregate: Aggregate,
     tap: Tap,
+    /// Mutes the replayers the tap leaves out; read on the aggregate, its samples never used.
+    _silencer: Option<Tap>,
     tap_hz: f64,
     last_format_check: Instant,
+    /// The process list at the last check, and the replayers in it the taps were built for.
+    processes: Vec<AudioObjectID>,
+    replayers: Vec<AudioObjectID>,
 }
 
 impl TapCapturer {
@@ -146,11 +152,21 @@ impl TapCapturer {
         );
         anyhow::ensure!(rate_hz > 0, "audio capture rate must be positive");
         let mute = mute_behavior();
-        let tap = Tap::create(mute)?;
+        let processes = process_list();
+        let replayers = replayers_in(&processes);
+        let tap = Tap::global(mute, &replayers)?;
+        let silencer = (mute != CATapMuteBehavior::Unmuted && !replayers.is_empty())
+            .then(|| Tap::only(&replayers, mute))
+            .transpose()?;
         let format = tap_format(tap.id)?;
         let tap_hz = format.mSampleRate.round() as u32;
         let open_hz = convert::settle_rate(tap_hz, rate_hz);
-        let aggregate = Aggregate::create(&tap.uid)?;
+        // The capture tap goes first: the IOProc reads the first two channels.
+        let uids: Vec<&str> = std::iter::once(&tap)
+            .chain(&silencer)
+            .map(|t| t.uid.as_str())
+            .collect();
+        let aggregate = Aggregate::create(&uids)?;
         let (tx, rx) = sync_channel::<Vec<f32>>(64);
         let (spare, spare_rx) = sync_channel::<Vec<f32>>(64);
         let active = Arc::new(AtomicBool::new(true));
@@ -178,6 +194,7 @@ impl TapCapturer {
             tap_hz,
             tap_ch = format.mChannelsPerFrame,
             muted = mute != CATapMuteBehavior::Unmuted,
+            replayers_left_out = replayers.len(),
             "macOS process tap capturing"
         );
         if channels > 2 {
@@ -199,9 +216,26 @@ impl TapCapturer {
             io,
             _aggregate: aggregate,
             tap,
+            _silencer: silencer,
             tap_hz: format.mSampleRate,
             last_format_check: Instant::now(),
+            processes,
+            replayers,
         })
+    }
+
+    /// A replayer that started, restarted or quit since open: the taps leave out the wrong
+    /// process, so the lease reopens. Bundle ids are read only when the process list changed.
+    fn check_replayers(&mut self) -> Result<()> {
+        let now = process_list();
+        if now != self.processes {
+            anyhow::ensure!(
+                replayers_in(&now) == self.replayers,
+                "audio replay process started or stopped"
+            );
+            self.processes = now;
+        }
+        Ok(())
     }
 
     /// Once: a tap that never carried a sample past [`SILENCE_NOTE_AFTER`]. A refused grant and a
@@ -244,6 +278,7 @@ impl AudioCapturer for TapCapturer {
                 ),
                 Err(e) => return Err(e.context("process tap gone")),
             }
+            self.check_replayers()?;
         }
         match self.chunks.recv_timeout(budget) {
             // The copy is made here, off the IO thread, so its buffer can go back.
@@ -300,41 +335,76 @@ fn mute_behavior() -> CATapMuteBehavior {
     }
 }
 
-/// A private global stereo tap of every process but this one.
+/// Processes that play other apps' audio again from their own process. ARK (SoundSource, Audio
+/// Hijack) mutes each app with a tap of its own and replays it, so a tap holding both the app
+/// and the replayer carries every sound twice, the replay tens of milliseconds late.
+const REPLAYERS: &[&str] = &["com.rogueamoeba.arkaudiod"];
+
+/// Every audio client's process object. Unreadable reads as empty: nothing is left out.
+fn process_list() -> Vec<AudioObjectID> {
+    prop_list(SYSTEM, kAudioHardwarePropertyProcessObjectList).unwrap_or_default()
+}
+
+fn replayers_in(processes: &[AudioObjectID]) -> Vec<AudioObjectID> {
+    let replays = |&p: &AudioObjectID| bundle_id(p).is_some_and(|id| REPLAYERS.contains(&&*id));
+    processes.iter().copied().filter(replays).collect()
+}
+
+/// A private stereo process tap.
 struct Tap {
     id: AudioObjectID,
     uid: String,
 }
 
 impl Tap {
-    fn create(mute: CATapMuteBehavior) -> Result<Tap> {
+    /// Every process but this one and `skip`.
+    fn global(mute: CATapMuteBehavior, skip: &[AudioObjectID]) -> Result<Tap> {
         objc2::rc::autoreleasepool(|_| {
-            let me = own_process_object();
-            let exclude: Vec<_> = me.into_iter().map(NSNumber::new_u32).collect();
-            let exclude = NSArray::from_retained_slice(&exclude);
+            let ids = numbers(own_process_object().iter().chain(skip));
             // SAFETY: a fresh allocation; the initializer takes an NSArray of NSNumbers holding
-            // process object ids, which `exclude` is.
+            // process object ids, which `ids` is.
             let desc = unsafe {
                 CATapDescription::initStereoGlobalTapButExcludeProcesses(
                     CATapDescription::alloc(),
-                    &exclude,
+                    &ids,
                 )
             };
-            // SAFETY: plain property setters on a live description.
-            unsafe {
-                desc.setPrivate(true);
-                desc.setMuteBehavior(mute);
-                desc.setName(&NSString::from_str("Punktfunk desktop audio"));
-            }
-            // SAFETY: `UUID` returns the description's own non-null NSUUID.
-            let uid = unsafe { desc.UUID() }.UUIDString().to_string();
-            let mut id: AudioObjectID = 0;
-            // SAFETY: `desc` is a valid description and `id` a live out-pointer.
-            let status = unsafe { AudioHardwareCreateProcessTap(Some(&desc), &mut id) };
-            check(status, "create process tap")?;
-            Ok(Tap { id, uid })
+            Tap::create(&desc, mute)
         })
     }
+
+    /// Only `processes`.
+    fn only(processes: &[AudioObjectID], mute: CATapMuteBehavior) -> Result<Tap> {
+        objc2::rc::autoreleasepool(|_| {
+            let ids = numbers(processes);
+            // SAFETY: as in `global`.
+            let desc = unsafe {
+                CATapDescription::initStereoMixdownOfProcesses(CATapDescription::alloc(), &ids)
+            };
+            Tap::create(&desc, mute)
+        })
+    }
+
+    fn create(desc: &CATapDescription, mute: CATapMuteBehavior) -> Result<Tap> {
+        // SAFETY: plain property setters on a live description.
+        unsafe {
+            desc.setPrivate(true);
+            desc.setMuteBehavior(mute);
+            desc.setName(&NSString::from_str("Punktfunk desktop audio"));
+        }
+        // SAFETY: `UUID` returns the description's own non-null NSUUID.
+        let uid = unsafe { desc.UUID() }.UUIDString().to_string();
+        let mut id: AudioObjectID = 0;
+        // SAFETY: `desc` is a valid description and `id` a live out-pointer.
+        let status = unsafe { AudioHardwareCreateProcessTap(Some(desc), &mut id) };
+        check(status, "create process tap")?;
+        Ok(Tap { id, uid })
+    }
+}
+
+fn numbers<'a>(ids: impl IntoIterator<Item = &'a AudioObjectID>) -> Retained<NSArray<NSNumber>> {
+    let ids: Vec<_> = ids.into_iter().map(|&id| NSNumber::new_u32(id)).collect();
+    NSArray::from_retained_slice(&ids)
 }
 
 impl Drop for Tap {
@@ -347,13 +417,13 @@ impl Drop for Tap {
     }
 }
 
-/// A private aggregate device whose only input is the tap.
+/// A private aggregate device whose inputs are the taps, in order.
 struct Aggregate {
     id: AudioObjectID,
 }
 
 impl Aggregate {
-    fn create(tap_uid: &str) -> Result<Aggregate> {
+    fn create(tap_uids: &[&str]) -> Result<Aggregate> {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let uid = format!(
             "io.unom.punktfunk.audio-tap-{}-{}",
@@ -362,12 +432,16 @@ impl Aggregate {
         );
         objc2::rc::autoreleasepool(|_| {
             let yes = NSNumber::new_bool(true);
-            let tap_uid = NSString::from_str(tap_uid);
-            let sub_tap = NSDictionary::<NSString, AnyObject>::from_slices(
-                &[&*key(kAudioSubTapUIDKey)],
-                &[tap_uid.as_ref()],
-            );
-            let taps = NSArray::from_slice(&[&*sub_tap]);
+            let sub_taps: Vec<_> = tap_uids
+                .iter()
+                .map(|uid| {
+                    NSDictionary::<NSString, AnyObject>::from_slices(
+                        &[&*key(kAudioSubTapUIDKey)],
+                        &[NSString::from_str(uid).as_ref()],
+                    )
+                })
+                .collect();
+            let taps = NSArray::from_retained_slice(&sub_taps);
             let uid = NSString::from_str(&uid);
             let name = NSString::from_str("Punktfunk desktop audio");
             let keys = [
