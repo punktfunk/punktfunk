@@ -83,6 +83,8 @@ jobs:
     runs-on: ${{ matrix.runner || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
+      # Each image stands alone: one runner's fault must not cancel the other images' builds.
+      fail-fast: false
       matrix:
         include:
           - image: punktfunk-rust-ci
@@ -175,9 +177,12 @@ jobs:
 
       - name: Push
         if: steps.exists.outputs.hit == 'false'
+        # The registry can take longer than docker's 30 s header wait to commit a large layer
+        # while ci-core's disk flushes. Pushing again skips the layers already there.
         run: |
-          docker push "$CI_REGISTRY_PUSH/${{ matrix.image }}:$KEY"
-          docker push "$CI_REGISTRY_PUSH/${{ matrix.image }}:latest"
+          push() { for i in 1 2 3; do docker push "$1" && return; sleep 20; done; return 1; }
+          push "$CI_REGISTRY_PUSH/${{ matrix.image }}:$KEY"
+          push "$CI_REGISTRY_PUSH/${{ matrix.image }}:latest"
 
       # :latest must be whatever ci/ says it is, on every run — not only on the runs that
       # happened to build. Two things break that: an out-of-band overwrite (reachable only
@@ -265,9 +270,11 @@ jobs:
 
       - name: Push
         if: steps.exists.outputs.hit == 'false'
+        # Retried for the same reason as the builders' Push above.
         run: |
-          docker push "$CI_REGISTRY_PUSH/$IMAGE:$KEY"
-          docker push "$CI_REGISTRY_PUSH/$IMAGE:latest"
+          push() { for i in 1 2 3; do docker push "$1" && return; sleep 20; done; return 1; }
+          push "$CI_REGISTRY_PUSH/$IMAGE:$KEY"
+          push "$CI_REGISTRY_PUSH/$IMAGE:latest"
 
       - name: Reconcile :latest with the content key
         run: .gitea/scripts/reconcile-latest.sh "$IMAGE" "$KEY"
