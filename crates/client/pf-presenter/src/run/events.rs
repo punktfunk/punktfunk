@@ -672,12 +672,17 @@ impl Shell {
                 ti.set_rect(&self.window, area.0, area.1);
             }
         }
+        #[cfg(target_os = "linux")]
+        let following = self
+            .overlay_focus
+            .as_ref()
+            .is_some_and(|of| of.steam_keyboard());
+        #[cfg(not(target_os = "linux"))]
+        let following = false;
         let want = text_input_want(
             self.ring_keyboard,
             overlay.is_some_and(|o| o.text_input_active()),
-            self.overlay_focus
-                .as_ref()
-                .is_some_and(|of| of.steam_keyboard()),
+            following,
             overlay.is_some_and(|o| o.text_input_secure()),
             steam_keyboard,
         );
