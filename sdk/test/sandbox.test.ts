@@ -277,7 +277,8 @@ describe("refusedRoot", () => {
 	});
 
 	test("sees the home behind a link, as on Fedora Atomic", () => {
-		const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pf-linkhome-")));
+		// Not os.tmpdir(): on macOS that is under /var/folders, which no root may lie in.
+		const root = fs.realpathSync(fs.mkdtempSync(path.join("/tmp", "pf-linkhome-")));
 		const real = path.join(root, "var/home/u");
 		fs.mkdirSync(path.join(real, ".ssh"), { recursive: true });
 		fs.mkdirSync(path.join(real, "Games"), { recursive: true });

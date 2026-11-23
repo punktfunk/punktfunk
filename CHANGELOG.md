@@ -14,6 +14,81 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.48.0
+
+595 commits since v0.47.0. ALPN `pkf2` stays; driver protocol 11 with floor 9; **C ABI 75**. The
+host runs on macOS. A mode carries its exact rate in millihertz, a client's fingers reach a host
+touchpad, and a relative move can carry a mouse's own counts. A client on the host's own machine
+starts games there with no stream. The native plane serves IPv6 behind a setting. gamescope moves
+to `+pfhdr41`.
+Deep dive: `git log v0.47.0..v0.48.0`
+
+### Versions
+
+| | v0.47.0 | v0.48.0 | Notes |
+|---|---|---|---|
+| Wire protocol | punktfunk/2 | **punktfunk/2** | ALPN unchanged. A mode's exact rate rides its own tag: ClientHello 33, ServerHello 31, Reconfigure and Reconfigured 4, StreamConfig 13; left out for a whole rate. Touchpad frames on the `0xCC/0x06` rich-input datagram; feature bits 45 (host presents a touchpad) and 46 (its tap clicks). Lossless frames in `0xD5` parts under one seq, feature bit 44. `MouseMove.flags` bit 31 marks a mouse's counts, bit 30 a capture time in the low 16 bits. Feedback carries a no-wave level; a host before it answers with a wave. The client asks for ACK_FREQUENCY 2 ms. A host serves IPv6 from a second, v6-only endpoint on the same port. Old peers skip all of it |
+| C ABI | 72 | **75** | 73 `PunktfunkTouchpadFrame`, `PunktfunkTouchpadContact`, `PunktfunkSurfaceTouch`, `punktfunk_connection_send_touchpad{,_pinch}`, `punktfunk_connection_touchpad_surface`, `punktfunk_connection_host_touchpad{,_taps}`, `PUNKTFUNK_TOUCHPAD_*`, `PUNKTFUNK_PINCH_*`; 74 `PunktfunkConnectOpts.refresh_mhz`, `punktfunk_connection_request_mode_exact`, `punktfunk_connection_refresh_mhz`; 75 `PUNKTFUNK_MOUSE_MOVE_COUNTS`, `PUNKTFUNK_MOUSE_MOVE_TIMED` |
+| Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged |
+| Workspace crate dirs | 47 | **47** | unchanged; macOS backends live in the existing crates |
+| Virtual-display driver protocol | 10 | **11** | floor stays 9. `AddRequest` and `UpdateModesRequest` gain `refresh_mhz`; a driver below 11 runs whole hertz, which the host reads back. Encode control op 11 `SET_WAVE_HEALS`; an older driver keeps its waves. New UMDF2 driver `pf-touchpad`, a Precision Touchpad |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged |
+| Plugin index schema | 1 | **1** | unchanged; a catalog entry may name macOS probes |
+| Host event schema | 1 | **1** | unchanged; a desk launch's events carry plane `local` and no device |
+| `api/openapi.json` | 0.47.0 | **0.48.0** | New: `POST /game/launch` (desk launch: launch grant and a loopback peer), `POST /game/handoff{,/{token}}` (admin lane, one-use token), `GET`/`PUT /steam/entries`, `GET /profiles/pads`, `PUT /profiles/pads/{key}{,/label}`. `SessionPlayerRequest` gains `share`. Nothing removed |
+| gamescope patch level (`+pfhdrN`) | 35 | **41** | 36 WSI surface extent; 37 decimal `-r` and a limiter on the display's cycle; 38 Intel LINEAR capture declared exported; 39 Intel planar height on 16 rows; 40 Intel tiled planar modifiers; 41 HDR P010 at full range |
+| `@punktfunk/host` (SDK) | 0.6.0 | **0.6.0** | unchanged; main's client gains the routes above |
+| `@punktfunk/plugin-kit` | 0.15.0 | **0.15.0** | unchanged; `reachServer(url)` is on main, not yet published. The 0.4 line gained 0.4.13 (Steam.app on macOS) |
+
+### Breaking
+
+- **C ABI 75.** Re-pin and rebuild against the new header.
+- **`punktfunk_core::Mode`** gains `refresh_mhz`. A struct literal names it, `0` for a whole rate,
+  or builds with `Mode::exact`.
+- **Dedicated game sessions** is the default where no `display-settings.json` names a value: a
+  library launch on KDE or GNOME opens in its own gamescope. Seats, Game Mode and a box without
+  gamescope keep their route. Pick **Auto** to keep launches on the desktop.
+- **Linux network plugins** run under `unshare --net` with `pasta`, and reach this computer's
+  loopback only on ports the operator granted (`ports` on the access request, or
+  `plugins grant <plugin> 127.0.0.1:<port>`). The runner refuses a network plugin without
+  `unshare` or `pasta`; packages depend on `passt` and `util-linux`. Ports 47980 to 48010 are
+  never granted. macOS plugins run under `sandbox-exec` with the same policy.
+- **A Windows plugin outside a container** reaches the host over loopback TLS pinned to the host's
+  certificate; only a container keeps the named pipe.
+- **A client on its host's own machine** plays that host's games there and refuses to stream to it.
+  `PUNKTFUNK_ALLOW_SELF_STREAM=1` keeps loopback rigs streaming.
+- **NixOS:** the encode-worker wrapper runs for group `punktfunk`, or `punktfunk-games` with seats.
+  An account gains it at its next login.
+- **ufw:** the `punktfunk-gamestream` profile opens UDP 47998 to 48000. Run
+  `ufw app update punktfunk-gamestream` to narrow an allowed one.
+
+### Packaging
+
+- **macOS host:** `Punktfunk-Host-<ver>.dmg`, `Punktfunk Host.app`, bundle id and LaunchAgent label
+  `io.unom.punktfunk.host`, macOS 15 on Apple silicon. The signed update manifest gains an
+  optional macOS leg (URL and SHA-256); older manifests still parse.
+- **winget:** `unom.PunktfunkClient` beside `unom.PunktfunkHost`.
+- **tvOS:** each release attaches an unsigned `.ipa` for sideloading.
+
+### Knobs
+
+- New: `PUNKTFUNK_MOUSE=0` keeps a Linux host moving the pointer one pixel a count; `=1` uses the
+  uinput mouse where the desktop's check answered no. `PUNKTFUNK_TOUCHPAD=0` turns the touchpad
+  plane off on either end. `PUNKTFUNK_IPV6` (row `ipv6`, off) binds the IPv6 endpoint;
+  `PUNKTFUNK_IPV6_PUBLIC=1` admits public IPv6 peers. macOS: `PUNKTFUNK_HID_INPUT=1` opens the
+  virtual HID mouse and keyboard; `PUNKTFUNK_HOST_UI` names the menu bar library, `off` for none.
+- CLI: `punktfunk-host launch <ID>` starts a title at the desk; `punktfunk launch <host> --game
+  <id> [--exec]`. `punktfunk-host play` is a synced Steam entry's target. `punktfunk-host plugins
+  grant <plugin> 127.0.0.1:<port>` and `revoke`. `ctl console-url` works on macOS, and `--open`
+  opens it there and on Windows. The probe's `--remode` takes a mode step per ask, `--mode` a
+  fraction, `--cursor-watch` reads pointer datagrams without sending input.
+- JNI: `nativeSendMouseCounts`, `nativeHostPresentsTouchpad`, `nativeHostTapsClick`,
+  `nativeTouchpadSurface`, `nativeLogCaps`. Android `debug.punktfunk.au_tail=fill|aud` (a
+  Realtek decoder gets the delimiter by default) and `debug.punktfunk.low_latency_key=rtk-lowdelay`;
+  a Xiaomi TV Box S opens HEVC with no low-latency key unless that property names one.
+- Host files: `desk-pad-labels.json` keeps controller names; `library-seat-shortcuts.json` lists
+  the owner's shortcuts each seat's Steam carries.
+
 ## v0.47.0
 
 1530 commits since v0.46.0. ALPN `pkf2` stays; driver protocol 10 with floor 9; **C ABI 72**. A

@@ -749,10 +749,12 @@ const SECRET_PATHS: &[&str] = &[
 ];
 
 /// Names directly under `/tmp` that hold a desktop's display, session, agent or terminal sockets,
-/// or an X cookie; a trailing `*` matches any rest. A read-only bind still lets `connect` through,
-/// so no root holds one, nor `/tmp` itself. The SDK's `TMP_SOCKETS` is the same list.
+/// an X cookie, or the macOS runner's plugin views (`punktfunk`); a trailing `*` matches any rest.
+/// A read-only bind still lets `connect` through, so no root holds one, nor `/tmp` itself. The
+/// SDK's `TMP_SOCKETS` is the same list.
 #[cfg(unix)]
 const TMP_SOCKETS: &[&str] = &[
+    "punktfunk",
     ".X11-unix",
     ".ICE-unix",
     ".XIM-unix",
@@ -773,6 +775,11 @@ const TMP_SOCKETS: &[&str] = &[
     ".Xauth*",
     "com.apple.launchd.*",
 ];
+
+/// macOS's per-user temp roots, where the runner keeps each plugin's token and host socket. No
+/// root lies in one or holds one. The SDK's `PRIVATE_TEMP` is the same list.
+#[cfg(unix)]
+const PRIVATE_TEMP: &[&str] = &["/var/folders", "/private/var/folders"];
 
 /// `p` is `tmp` itself or lies in one of its [`TMP_SOCKETS`].
 #[cfg(unix)]
@@ -873,6 +880,11 @@ fn refusal_rule(
                 && ["/proc", "/sys", "/dev", "/run"]
                     .iter()
                     .any(|r| within(canonical, Path::new(r))))
+            || PRIVATE_TEMP.iter().map(Path::new).any(|t| {
+                [raw, canonical]
+                    .iter()
+                    .any(|p| within(p, t) || within(t, p))
+            })
             || near(SECRET_PATHS)
             || (write && near(STARTUP_PATHS))
             || [raw, canonical].iter().any(|p| tmp_socket(p, &policy.tmp));
@@ -2564,6 +2576,12 @@ mod tests {
                     "/home/u/.local/share/flatpak/app/org.libretro.RetroArch",
                     "/var/lib/flatpak/app/org.libretro.RetroArch",
                     "/home/u/.local/share/punktfunk/emulators/ryujinx/app",
+                    "/var",
+                    "/private",
+                    "/private/var",
+                    "/var/folders",
+                    "/private/var/folders/xy/abc/T/punktfunk/p-1",
+                    "/var/foldersx",
                 ],
                 &[
                     "/home/u/.ssh",

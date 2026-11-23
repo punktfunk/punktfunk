@@ -204,6 +204,12 @@
   </branding>
 
   <releases>
+    <release version="0.48.0" date="2026-11-23">
+      <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.48.0</url>
+      <description>
+        <p>Streams at your screen's exact refresh rate, fingers and a mouse that feel like the host's own, games played on the host's own PC with no stream, two controllers on one player, and IPv6.</p>
+      </description>
+    </release>
     <release version="0.47.0" date="2026-11-14">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.47.0</url>
       <description>

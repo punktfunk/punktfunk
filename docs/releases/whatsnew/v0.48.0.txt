@@ -1,0 +1,5 @@
+• Native streams at your screen's exact refresh rate, such as 59.94 Hz.
+• In Trackpad mode your fingers drive the host's own touchpad on Windows and Linux.
+• Realtek boxes show each picture a refresh sooner; a Chromecast with Google TV and a Xiaomi TV Box S play HEVC without stalls.
+• PyroWave runs on a Shield TV and a Chromecast with Google TV 4K.
+• IPv6 hosts, Keep this address, and a 60-minute background timeout.

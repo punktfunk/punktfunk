@@ -367,10 +367,12 @@ const SECRETS = [
 
 /**
  * Names directly under `/tmp` that hold a desktop's display, session, agent or terminal sockets,
- * or an X cookie; a trailing `*` matches any rest. A read-only bind still lets `connect` through,
- * so no bind holds one, nor `/tmp` itself. The host's `TMP_SOCKETS` is the same list.
+ * an X cookie, or the macOS runner's plugin views (`punktfunk`); a trailing `*` matches any rest.
+ * A read-only bind still lets `connect` through, so no bind holds one, nor `/tmp` itself. The
+ * host's `TMP_SOCKETS` is the same list.
  */
 const TMP_SOCKETS = [
+	"punktfunk",
 	".X11-unix",
 	".ICE-unix",
 	".XIM-unix",
@@ -392,9 +394,13 @@ const TMP_SOCKETS = [
 	"com.apple.launchd.*",
 ];
 
+/** macOS's per-user temp roots, where the runner keeps each plugin's token and host socket. */
+const PRIVATE_TEMP = ["/var/folders", "/private/var/folders"];
+
 /**
  * A root no manifest or grant may bind: the host's processes, devices, the session bus and
- * runtime sockets, `/tmp` itself and a desktop's sockets there (`TMP_SOCKETS`), the home or
+ * runtime sockets, macOS's temp roots or a parent of one (`PRIVATE_TEMP`), `/tmp` itself and a
+ * desktop's sockets there (`TMP_SOCKETS`), the home or
  * anything above it, keys, credential stores (`SECRETS`) or a parent of one, and the host's config
  * dir (`configDir`, and `~/.config/punktfunk*` wherever the config lives) or anything above it,
  * which holds every plugin's token. A read-write bind (`write`) also may not hold what the session
@@ -440,6 +446,7 @@ export const refusedRoot = (
 			above(path.join(h, ".config", "punktfunk")) ||
 			under(c) ||
 			["/proc", "/sys", "/dev"].some(under) ||
+			PRIVATE_TEMP.some((t) => under(t) || above(t)) ||
 			(under("/run") && !p.startsWith("/run/media/")) ||
 			[".ssh", ".gnupg"].some((d) => under(path.join(h, d))) ||
 			SECRETS.some(near) ||
