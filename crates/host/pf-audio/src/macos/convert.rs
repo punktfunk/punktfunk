@@ -14,16 +14,24 @@ pub(super) fn settle_rate(tap_hz: u32, requested: u32) -> u32 {
 /// its channel count, so one interleaved buffer and one buffer per channel both work. A mono
 /// source feeds both sides.
 pub(super) fn gather_stereo(bufs: &[(&[f32], usize)], out: &mut Vec<f32>) {
+    gather_pair(bufs, 0, out);
+}
+
+/// Interleaved stereo from the `pair`th two channels across the buffers: an aggregate lays its
+/// taps side by side, two channels each, in the order it was given them. Nothing when the
+/// buffers hold no such channel.
+pub(super) fn gather_pair(bufs: &[(&[f32], usize)], pair: usize, out: &mut Vec<f32>) {
     let frames = bufs
         .iter()
         .map(|(s, ch)| s.len() / (*ch).max(1))
         .min()
         .unwrap_or(0);
-    // The first two channels across the buffers, as (buffer, channel) pairs.
+    // The channels across the buffers, as (buffer, channel) pairs.
     let mut picks = bufs
         .iter()
         .enumerate()
-        .flat_map(|(b, (_, ch))| (0..*ch).map(move |c| (b, c)));
+        .flat_map(|(b, (_, ch))| (0..*ch).map(move |c| (b, c)))
+        .skip(pair * 2);
     let Some(left) = picks.next() else { return };
     let right = picks.next().unwrap_or(left);
     let at = |(b, c): (usize, usize), f: usize| bufs[b].0[f * bufs[b].1 + c];
@@ -205,6 +213,20 @@ mod tests {
         out.clear();
         gather_stereo(&[], &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_later_pair_reads_the_tap_beside_the_first() {
+        let mut out = Vec::new();
+        // Two taps in one interleaved buffer, then one buffer per tap.
+        gather_pair(&[(&[1.0, 2.0, 7.0, 8.0], 4)], 1, &mut out);
+        assert_eq!(out, [7.0, 8.0]);
+        out.clear();
+        gather_pair(&[(&[1.0, 2.0], 2), (&[7.0, 8.0], 2)], 1, &mut out);
+        assert_eq!(out, [7.0, 8.0]);
+        out.clear();
+        gather_pair(&[(&[1.0, 2.0], 2)], 1, &mut out);
+        assert!(out.is_empty(), "no second tap, nothing read");
     }
 
     #[test]
