@@ -28,8 +28,8 @@ export type Artwork = typeof Artwork.Type;
  * | `steam_ui` | `bigpicture` \| `desktop` — opens the Steam client itself | both |
  * | `launcher_ui` | which launcher UI to open: `heroic` \| `heroic-console` \| `lutris` \| `hydra-big-picture` \| `itch` \| `bottles` on linux; `playnite` \| `epic` \| `gog` \| `xbox` \| `hydra-big-picture` \| `amazon` \| `battlenet` \| `ea` \| `ubisoft` \| `rockstar` \| `itch` on windows | both |
  * | `lutris_id` | digits — a pga.db game id | linux |
- * | `heroic` | `<runner>:<appName>`, runner ∈ legendary/gog/nile | linux |
- * | `epic` | `<namespace>:<catalogItemId>:<appName>` or a bare appName | windows |
+ * | `heroic` | `<runner>:<appName>`, runner ∈ legendary/gog/nile | linux, macos |
+ * | `epic` | `<namespace>:<catalogItemId>:<appName>` or a bare appName | windows, macos |
  * | `gog` | `exe \t args \t workdir` | windows |
  * | `aumid` | `<PFN>!<AppId>` | windows |
  * | `xbox` | `<Identity>!<AppId>` from `MicrosoftGame.config`; the host completes the AUMID | windows |

@@ -737,24 +737,6 @@ fn push_unique(out: &mut Vec<std::path::PathBuf>, path: std::path::PathBuf) {
     }
 }
 
-/// Epic URI from a `<namespace>:<catalogItemId>:<appName>` triple or a bare
-/// `appName`. Charset-checked so the URI stays one argv token.
-pub(crate) fn epic_launch_uri(value: &str) -> Option<String> {
-    let ok = |s: &str| {
-        !s.is_empty()
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-    };
-    let inner = match value.split(':').collect::<Vec<_>>().as_slice() {
-        [ns, cat, app] if ok(ns) && ok(cat) && ok(app) => format!("{ns}%3A{cat}%3A{app}"),
-        [app] if ok(app) => (*app).to_string(),
-        _ => return None,
-    };
-    Some(format!(
-        "com.epicgames.launcher://apps/{inner}?action=launch&silent=true"
-    ))
-}
-
 /// GOG `exe \t args \t workdir` triple → `(cmdline, workdir)`. Direct spawn
 /// (no Galaxy). Re-confine exe and workdir to [`gog_install_dirs`]: the plugin
 /// already confined at parse, but the triple arrives over the provider API.
@@ -1059,19 +1041,6 @@ mod tests {
         );
         assert!(ui("nonsense").is_none());
         assert!(ui("").is_none());
-    }
-    #[test]
-    fn epic_launch_uri_triple_bare_and_guard() {
-        assert_eq!(
-            epic_launch_uri("fn:abc:Fortnite").as_deref(),
-            Some("com.epicgames.launcher://apps/fn%3Aabc%3AFortnite?action=launch&silent=true")
-        );
-        assert_eq!(
-            epic_launch_uri("Fortnite").as_deref(),
-            Some("com.epicgames.launcher://apps/Fortnite?action=launch&silent=true")
-        );
-        assert!(epic_launch_uri("bad part:x:y").is_none());
-        assert!(epic_launch_uri("").is_none());
     }
     #[test]
     fn gog_spawn_parses_and_guards() {

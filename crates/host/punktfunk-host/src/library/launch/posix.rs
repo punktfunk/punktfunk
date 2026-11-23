@@ -95,6 +95,14 @@ fn command_for(spec: &LaunchSpec) -> Option<String> {
             .then(|| format!("lutris lutris:rungameid/{}", spec.value)),
         #[cfg(target_os = "linux")]
         "heroic" => heroic_command(&spec.value),
+        // LaunchServices hands the link to the launcher, running or not, as it does Steam's.
+        // `gui=false` shuts Heroic's window as `--no-gui` does on Linux; an older Heroic ignores it.
+        #[cfg(target_os = "macos")]
+        "heroic" => {
+            heroic_launch_uri(&spec.value).map(|uri| open_link(&format!("{uri}&gui=false")))
+        }
+        #[cfg(target_os = "macos")]
+        "epic" => epic_launch_uri(&spec.value).map(|uri| open_link(&uri)),
         // Steam client UI (design D4). `-gamepadui` boots a fresh Steam into Big Picture (SteamOS
         // game-mode when nested); an already-running Steam ignores it and obeys only the URI.
         #[cfg(not(target_os = "macos"))]
@@ -148,11 +156,19 @@ fn command_for(spec: &LaunchSpec) -> Option<String> {
 /// session. Quote the URI: every launch route runs this value as a shell command.
 #[cfg(target_os = "linux")]
 pub(crate) fn heroic_command(value: &str) -> Option<String> {
+    let uri = heroic_launch_uri(value)?;
+    let prefix = heroic_launch_prefix()?;
+    Some(format!("{prefix} --no-gui '{uri}'"))
+}
+
+/// `<runner>:<appName>` → `heroic://launch?…`. `None` for another runner, or an appName that
+/// would not stay one URI token (Epic/Amazon alnum, GOG digits).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn heroic_launch_uri(value: &str) -> Option<String> {
     let (runner, app) = value.split_once(':')?;
     if !matches!(runner, "legendary" | "gog" | "nile") {
         return None;
     }
-    // appName charset: keep the URI a single token (Epic/Amazon alnum, GOG digits).
     if app.is_empty()
         || !app
             .bytes()
@@ -160,10 +176,13 @@ pub(crate) fn heroic_command(value: &str) -> Option<String> {
     {
         return None;
     }
-    let prefix = heroic_launch_prefix()?;
-    Some(format!(
-        "{prefix} --no-gui 'heroic://launch?appName={app}&runner={runner}'"
-    ))
+    Some(format!("heroic://launch?appName={app}&runner={runner}"))
+}
+
+/// `open` with one quoted link: LaunchServices starts the app that claims its scheme.
+#[cfg(target_os = "macos")]
+fn open_link(uri: &str) -> String {
+    format!("/usr/bin/open {}", super::exec::sh_quote(uri))
 }
 
 /// Hydra opens Big Picture from argv only, a running instance included. Every Linux build's entry
@@ -607,6 +626,33 @@ mod tests {
             command_for(&game).as_deref(),
             Some("/usr/bin/open steam://rungameid/570")
         );
+    }
+
+    /// Epic and Heroic titles open their launcher's link, quoted whole; a bad value runs nothing.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn epic_and_heroic_links_go_through_open_on_macos() {
+        let cmd = |kind: &str, value: &str| {
+            command_for(&LaunchSpec {
+                kind: kind.into(),
+                value: value.into(),
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            cmd("epic", "fn:abc:Fortnite").as_deref(),
+            Some(
+                "/usr/bin/open \
+                 'com.epicgames.launcher://apps/fn%3Aabc%3AFortnite?action=launch&silent=true'"
+            )
+        );
+        assert_eq!(
+            cmd("heroic", "gog:1207658924").as_deref(),
+            Some("/usr/bin/open 'heroic://launch?appName=1207658924&runner=gog&gui=false'")
+        );
+        assert_eq!(cmd("epic", "a'b"), None);
+        assert_eq!(cmd("heroic", "sideload:x"), None);
+        assert_eq!(cmd("heroic", "legendary:bad name"), None);
     }
 
     /// A plain command runs in a process group of its own and reports its exit.
