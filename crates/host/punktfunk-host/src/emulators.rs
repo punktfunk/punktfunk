@@ -335,23 +335,33 @@ struct Hid {
     release: u16,
 }
 
-/// SDL's GUID for a pad its HIDAPI driver drives: USB bus, a CRC, the USB ids, hidapi's
-/// release, then `h`. A Sony pad's CRC is of the name SDL renames it to; a Switch Pro is
-/// renamed, then its GUID re-derived from hidapi's strings.
-fn hidapi_guid(vendor: u16, product: u16, hid: &Hid) -> Option<String> {
-    let name = sdl_name(vendor, product)?;
-    let crc = match (vendor, hid.manufacturer.as_str()) {
-        (0x054c, _) => crc16(name.as_bytes()),
+/// SDL's bus numbers.
+const USB: u16 = 0x03;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const BLUETOOTH: u16 = 0x05;
+
+/// SDL's GUID for a pad its HIDAPI driver drives: the bus, a CRC, the USB ids, hidapi's release,
+/// then `h`. A Sony pad's CRC is of the name SDL renames it to; any other's, a Switch Pro renamed
+/// and re-derived included, is of hidapi's strings.
+fn hidapi_guid(bus: u16, vendor: u16, product: u16, hid: &Hid) -> String {
+    let crc = match (sdl_name(vendor, product), hid.manufacturer.as_str()) {
+        (Some(name), _) if vendor == 0x054c => crc16(name.as_bytes()),
         (_, "") => crc16(hid.product.as_bytes()),
         (_, m) => crc16(format!("{m} {}", hid.product).as_bytes()),
     };
-    let words = [3, crc, vendor, 0, product, 0, hid.release];
+    let words = [bus, crc, vendor, 0, product, 0, hid.release];
     let mut guid: String = words
         .iter()
         .map(|w| format!("{:02x}{:02x}", w & 0xff, w >> 8))
         .collect();
     guid.push_str("6800");
-    Some(guid)
+    guid
+}
+
+/// [`hidapi_guid`] of a USB pad SDL names itself: the pads Linux builds over uhid and usbip.
+/// `None` for any other, which SDL reads through evdev.
+fn named_hidapi_guid(vendor: u16, product: u16, hid: &Hid) -> Option<String> {
+    sdl_name(vendor, product).map(|_| hidapi_guid(USB, vendor, product, hid))
 }
 
 /// CRC-16/ARC, what `SDL_crc16` computes.
@@ -398,8 +408,44 @@ fn hid_of(sys: &Path, sysfs: &str) -> Option<Hid> {
     })
 }
 
+/// The pad a macOS session of `kind` makes first: an `IOHIDUserDevice` of its pad-kind row,
+/// which SDL drives through HIDAPI. An Xbox pad is Bluetooth there, the rest USB to SDL; a kind
+/// with no macOS pad of its own, Xbox 360 among them, is the Xbox Wireless pad.
+#[cfg(target_os = "macos")]
+fn first_pad(kind: GamepadPref) -> hermir::PadRef {
+    use pf_driver_proto::gamepad as g;
+    let devtype = match kind {
+        GamepadPref::XboxOne => g::DEVTYPE_XBOX_ONE_S,
+        GamepadPref::XboxElite => g::DEVTYPE_XBOX_ELITE,
+        GamepadPref::DualSense => g::DEVTYPE_DUALSENSE,
+        GamepadPref::DualSenseEdge => g::DEVTYPE_DUALSENSE_EDGE,
+        GamepadPref::DualShock4 => g::DEVTYPE_DUALSHOCK4,
+        GamepadPref::SwitchPro => g::DEVTYPE_SWITCH_PRO,
+        _ => g::DEVTYPE_XBOX,
+    };
+    let row = pf_driver_proto::pad_kind::served_kind(devtype);
+    let bus = if row.vid == 0x045e { BLUETOOTH } else { USB };
+    let hid = Hid {
+        manufacturer: row.manufacturer.into(),
+        product: row.product.into(),
+        release: row.version,
+    };
+    hermir::PadRef {
+        name: row.product.into(),
+        bus,
+        vendor: row.vid,
+        product: row.pid,
+        version: row.version,
+        index: 0,
+        evdev: None,
+        guid: Some(hidapi_guid(bus, row.vid, row.pid, &hid)),
+        gamepad_name: sdl_name(row.vid, row.pid).map(Into::into),
+    }
+}
+
 /// The pad a session of `kind` makes first, as the kernel, hidapi and SDL name it. The kinds
 /// without a row seat as an Xbox 360 pad.
+#[cfg(not(target_os = "macos"))]
 fn first_pad(kind: GamepadPref) -> hermir::PadRef {
     #[cfg(target_os = "linux")]
     let usbip = pf_inject::dualsense_usbip::usbip_preferred();
@@ -460,7 +506,7 @@ fn first_pad(kind: GamepadPref) -> hermir::PadRef {
         version,
         index: 0,
         evdev: None,
-        guid: hid.and_then(|h| hidapi_guid(vendor, product, &h)),
+        guid: hid.and_then(|h| named_hidapi_guid(vendor, product, &h)),
         gamepad_name: sdl_name(vendor, product).map(Into::into),
     }
 }
@@ -542,7 +588,7 @@ fn pads(text: &str, sys: &Path, which: Which<'_>) -> Vec<hermir::PadRef> {
             .unwrap_or("")
             .trim_matches('"')
             .to_string();
-        let hidapi = || hid_of(sys, sysfs).and_then(|h| hidapi_guid(vendor, product, &h));
+        let hidapi = || hid_of(sys, sysfs).and_then(|h| named_hidapi_guid(vendor, product, &h));
         let guid = match which {
             Which::Ours => hidapi(),
             Which::Desk(_, open) => (sdl_name(vendor, product).is_some()
@@ -1909,8 +1955,9 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         assert_eq!(got.as_ref(), Some(&want));
         // A Switch Pro's CRC is of hidapi's product string, not of SDL's name for it.
         let crc = crc16(b"Punktfunk Switch Pro Controller 0");
-        let guid = hidapi_guid(0x057e, 0x2009, &want).unwrap();
+        let guid = named_hidapi_guid(0x057e, 0x2009, &want).unwrap();
         assert_eq!(&guid[4..8], format!("{:02x}{:02x}", crc & 0xff, crc >> 8));
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(first_pad(GamepadPref::SwitchPro).guid, Some(guid));
         assert_eq!(hid_of(sys.path(), "/devices/virtual/input/input3"), None);
     }
@@ -2062,6 +2109,7 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
 
     /// The seven pads the host names are the kinds it makes; off USB, or a HIDAPI pad without
     /// its GUID, they are not named, and nothing else is.
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn only_the_seven_modelled_pads_are_named() {
         use GamepadPref::*;
@@ -2172,8 +2220,33 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
             seat(GamepadPref::SwitchPro),
             "Nintendo Switch Pro Controller"
         );
-        assert_eq!(seat(GamepadPref::Xbox360), "Xbox 360 Controller");
-        assert_eq!(seat(GamepadPref::SteamDeck), "Xbox 360 Controller");
+        let xbox = match cfg!(target_os = "macos") {
+            true => "Xbox Series X Controller",
+            false => "Xbox 360 Controller",
+        };
+        assert_eq!(seat(GamepadPref::Xbox360), xbox);
+        assert_eq!(seat(GamepadPref::SteamDeck), xbox);
+    }
+
+    /// SDL reads a Mac's pads through HIDAPI: an Xbox pad on Bluetooth with its GUID's CRC of
+    /// hidapi's strings, a DualSense on USB with the CRC of the name SDL renames it to.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_session_seats_its_iohid_pads_as_sdl_reads_them() {
+        let crc = |s: &str| {
+            let c = crc16(s.as_bytes());
+            format!("{:02x}{:02x}", c & 0xff, c >> 8)
+        };
+        let xbox = first_pad(GamepadPref::Xbox360);
+        let guid = xbox.guid.clone().unwrap();
+        assert_eq!((xbox.bus, xbox.vendor, xbox.product), (5, 0x045e, 0x0b13));
+        assert_eq!(&guid[..4], "0500");
+        assert_eq!(&guid[4..8], crc("Microsoft Xbox Wireless Controller"));
+        assert_eq!(&guid[8..24], "5e040000130b0000");
+        assert!(guid.ends_with("6800"));
+        // What SDL 3.4 reported for a USB DualSense of the same strings and release.
+        let ds = first_pad(GamepadPref::DualSense).guid;
+        assert_eq!(ds.as_deref(), Some("030057564c050000e60c000000016800"));
     }
 
     #[test]

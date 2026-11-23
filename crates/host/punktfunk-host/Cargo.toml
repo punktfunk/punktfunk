@@ -223,6 +223,8 @@ objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
 objc2-core-graphics = { workspace = true }
 objc2-foundation = { workspace = true }
+# The pad-kind rows the virtual pads are made from, which an emulator's bindings name.
+pf-driver-proto = { path = "../pf-driver-proto" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # `screencast` gates the ScreenCast portal module; `remote_desktop` adds the RemoteDesktop one
