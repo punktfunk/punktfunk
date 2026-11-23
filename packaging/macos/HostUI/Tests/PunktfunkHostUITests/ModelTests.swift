@@ -150,6 +150,16 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(moving[Step.start(in: moving, firstLaunch: false, grants: .all)] == .move)
     }
 
+    /// The mark's three circles: the cutter sits on the front disc's edge, toward the back one.
+    @Test func markGeometry() {
+        let g = MarkGeometry(side: 30)
+        #expect(g.radius == 10)
+        #expect(g.back == CGPoint(x: 10, y: 20) && g.front == CGPoint(x: 20, y: 10))
+        let d = hypot(g.cutter.x - g.front.x, g.cutter.y - g.front.y)
+        #expect(abs(d - g.radius) < 1e-9)
+        #expect(g.cutter.x < g.front.x && g.cutter.y > g.front.y)
+    }
+
     @Test func grantButton() {
         #expect(GrantAction.of(granted: false, asked: false) == .ask)
         #expect(GrantAction.of(granted: false, asked: true) == .openSettings)
