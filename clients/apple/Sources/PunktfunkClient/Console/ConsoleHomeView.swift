@@ -117,6 +117,7 @@ struct ConsoleHomeView: View {
                     holding: { self.model.consoleHold = $0 },
                     paired: onPaired, quit: onQuit))
         else {
+            entry = opening // the app's own UI takes the shelf, and its stream, instead
             onFailed()
             return
         }
