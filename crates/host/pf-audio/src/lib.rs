@@ -419,6 +419,8 @@ pub mod wiring_plan;
 // platform's CI, not only Windows.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub mod capture_policy;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod replay_detect;
 
 mod capture_lease;
 mod mic_jitter;

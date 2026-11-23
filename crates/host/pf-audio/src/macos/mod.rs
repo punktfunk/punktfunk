@@ -1,8 +1,11 @@
 //! macOS desktop-audio capture through a Core Audio process tap (macOS 14.2+).
 //!
 //! A private global stereo tap takes every process's output except this one and the
-//! [`REPLAYERS`]. A private aggregate device carries the tap, and an IOProc on it hands
-//! interleaved `f32` to the capturer over a bounded channel (drop, never block the IO thread).
+//! replayers: tools that play other apps' audio again from a process of their own, which a
+//! tap holding both would carry twice. [`REPLAYERS`] are known ahead, and a [`Probe`] finds
+//! any other by what it plays. A private aggregate device carries the tap, and an IOProc on it
+//! hands interleaved `f32` to the capturer over a bounded channel (drop, never block the IO
+//! thread).
 //! The tap mixes at its own rate, which need not be the output device's; [`convert`] resamples
 //! to the delivered rate and lays stereo into the session's layout. Client-only audio mutes the
 //! Mac's speakers while the tap is read, the replayers through a second tap on the aggregate.
@@ -16,6 +19,7 @@
 mod convert;
 
 use crate::capture_policy::CaptureStats;
+use crate::replay_detect::{Decimator, Judge, Verdict};
 use crate::{wiring_plan, AudioCapturer, CaptureRate, VirtualMic};
 use anyhow::{anyhow, Context, Result};
 use objc2::rc::Retained;
@@ -27,13 +31,13 @@ use objc2_core_audio::{
     kAudioAggregateDeviceUIDKey, kAudioHardwarePropertyProcessObjectList,
     kAudioHardwarePropertyTranslatePIDToProcessObject, kAudioObjectPropertyElementMain,
     kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, kAudioProcessPropertyBundleID,
-    kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyPID, kAudioSubTapUIDKey,
-    kAudioTapPropertyFormat, AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID,
-    AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop, AudioHardwareCreateAggregateDevice,
-    AudioHardwareCreateProcessTap, AudioHardwareDestroyAggregateDevice,
-    AudioHardwareDestroyProcessTap, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
-    AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertySelector, CATapDescription,
-    CATapMuteBehavior,
+    kAudioProcessPropertyIsRunningInput, kAudioProcessPropertyIsRunningOutput,
+    kAudioProcessPropertyPID, kAudioSubTapUIDKey, kAudioTapPropertyFormat,
+    AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart,
+    AudioDeviceStop, AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
+    AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
+    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+    AudioObjectPropertyAddress, AudioObjectPropertySelector, CATapDescription, CATapMuteBehavior,
 };
 use objc2_core_audio_types::{
     kAudioFormatFlagIsBigEndian, kAudioFormatFlagIsFloat, kAudioFormatLinearPCM, AudioBufferList,
@@ -45,7 +49,7 @@ use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 const SYSTEM: AudioObjectID = kAudioObjectSystemObject as AudioObjectID;
@@ -142,6 +146,8 @@ pub struct TapCapturer {
     /// The process list at the last check, and the replayers in it the taps were built for.
     processes: Vec<AudioObjectID>,
     replayers: Vec<AudioObjectID>,
+    /// One for each process that could be a replayer and is not known yet.
+    probes: Vec<Probe>,
 }
 
 impl TapCapturer {
@@ -204,7 +210,7 @@ impl TapCapturer {
                  multichannel virtual output device exists"
             );
         }
-        Ok(TapCapturer {
+        let mut capturer = TapCapturer {
             chunks: rx,
             spare,
             channels,
@@ -221,21 +227,70 @@ impl TapCapturer {
             last_format_check: Instant::now(),
             processes,
             replayers,
-        })
+            probes: Vec::new(),
+        };
+        capturer.start_probes();
+        Ok(capturer)
     }
 
-    /// A replayer that started, restarted or quit since open: the taps leave out the wrong
-    /// process, so the lease reopens. Bundle ids are read only when the process list changed.
+    /// A replayer that started, restarted, quit or was just found: the taps leave out the
+    /// wrong processes, so the lease reopens. Verdicts are read only when something changed.
     fn check_replayers(&mut self) -> Result<()> {
         let now = process_list();
-        if now != self.processes {
+        let judged = self.settle_probes();
+        if judged || now != self.processes {
             anyhow::ensure!(
                 replayers_in(&now) == self.replayers,
                 "audio replay process started or stopped"
             );
             self.processes = now;
         }
+        self.start_probes();
         Ok(())
+    }
+
+    /// Keeps each finished probe's verdict, and lets go of the finished probes and of those
+    /// whose process stopped reading or playing. True when a verdict landed.
+    fn settle_probes(&mut self) -> bool {
+        let mut judged = false;
+        self.probes.retain(|probe| {
+            let verdict = probe.verdict();
+            // A process that quit before its verdict has no name left to keep it under.
+            if let (Some(verdict), Some(app)) = (verdict, identity(probe.process)) {
+                match verdict {
+                    Verdict::Replays => {
+                        tracing::info!(%app, "audio replayer found — leaving it out of the capture")
+                    }
+                    Verdict::Own => tracing::debug!(%app, "process plays audio of its own"),
+                }
+                remember(&app, verdict);
+            }
+            judged |= verdict.is_some();
+            verdict.is_none() && duplex(probe.process)
+        });
+        judged
+    }
+
+    /// Starts judging each process that reads and plays audio and has no verdict or probe yet.
+    fn start_probes(&mut self) {
+        let me = own_process_object();
+        for &process in &self.processes {
+            let probed = self.probes.iter().any(|p| p.process == process);
+            if Some(process) == me || probed || !duplex(process) {
+                continue;
+            }
+            let Some(app) = identity(process).filter(|id| verdict_of(id).is_none()) else {
+                continue;
+            };
+            match Probe::start(process) {
+                Ok(probe) => self.probes.push(probe),
+                // Unjudged it stays in the capture. Asking again every second would not help.
+                Err(e) => {
+                    tracing::debug!(%app, error = %format!("{e:#}"), "audio replay probe did not start");
+                    remember(&app, Verdict::Own);
+                }
+            }
+        }
     }
 
     /// Once: a tap that never carried a sample past [`SILENCE_NOTE_AFTER`]. A refused grant and a
@@ -266,7 +321,9 @@ impl AudioCapturer for TapCapturer {
 
     fn next_chunk_within(&mut self, budget: Duration) -> Result<Vec<f32>> {
         self.note_silence();
-        if self.last_format_check.elapsed() >= FORMAT_CHECK_EVERY {
+        // A verdict is acted on at once: until then a replayer's copy is in every chunk.
+        let judged = self.probes.iter().any(|p| p.verdict().is_some());
+        if judged || self.last_format_check.elapsed() >= FORMAT_CHECK_EVERY {
             self.last_format_check = Instant::now();
             // Either way the lease reopens, with a resampler for the tap as it now is.
             match tap_format(self.tap.id) {
@@ -335,10 +392,13 @@ fn mute_behavior() -> CATapMuteBehavior {
     }
 }
 
-/// Processes that play other apps' audio again from their own process. ARK (SoundSource, Audio
-/// Hijack) mutes each app with a tap of its own and replays it, so a tap holding both the app
-/// and the replayer carries every sound twice, the replay tens of milliseconds late.
-const REPLAYERS: &[&str] = &["com.rogueamoeba.arkaudiod"];
+/// Replayers known ahead, so not even their first second is doubled: ARK (SoundSource, Audio
+/// Hijack) and FineTune. Each mutes an app with a tap of its own and plays it again, so a tap
+/// holding both carries every sound twice, the replay milliseconds late.
+const REPLAYERS: &[&str] = &["com.rogueamoeba.arkaudiod", "com.finetuneapp.finetune"];
+
+/// What each probed app plays, by [`identity`], for the life of the host.
+static JUDGED: Mutex<Vec<(String, Verdict)>> = Mutex::new(Vec::new());
 
 /// Every audio client's process object. Unreadable reads as empty: nothing is left out.
 fn process_list() -> Vec<AudioObjectID> {
@@ -346,8 +406,129 @@ fn process_list() -> Vec<AudioObjectID> {
 }
 
 fn replayers_in(processes: &[AudioObjectID]) -> Vec<AudioObjectID> {
-    let replays = |&p: &AudioObjectID| bundle_id(p).is_some_and(|id| REPLAYERS.contains(&&*id));
-    processes.iter().copied().filter(replays).collect()
+    let replays = |id: String| verdict_of(&id) == Some(Verdict::Replays);
+    let replayer = |&p: &AudioObjectID| identity(p).is_some_and(replays);
+    processes.iter().copied().filter(replayer).collect()
+}
+
+/// The name a verdict is kept under: the bundle id, or the pid of a process that has none.
+fn identity(process: AudioObjectID) -> Option<String> {
+    bundle_id(process).filter(|id| !id.is_empty()).or_else(|| {
+        let pid = prop::<i32>(process, kAudioProcessPropertyPID).ok()?;
+        Some(format!("pid {pid}"))
+    })
+}
+
+fn verdict_of(identity: &str) -> Option<Verdict> {
+    if REPLAYERS.contains(&identity) {
+        return Some(Verdict::Replays);
+    }
+    let judged = JUDGED.lock().unwrap_or_else(PoisonError::into_inner);
+    judged
+        .iter()
+        .find(|(id, _)| id == identity)
+        .map(|&(_, v)| v)
+}
+
+/// The first verdict on an app stands.
+fn remember(identity: &str, verdict: Verdict) {
+    let mut judged = JUDGED.lock().unwrap_or_else(PoisonError::into_inner);
+    if !judged.iter().any(|(id, _)| id == identity) {
+        judged.push((identity.to_owned(), verdict));
+    }
+}
+
+/// Whether a process reads audio and plays audio now. A replayer does while it replays; so
+/// does a call, which the probe then clears. A tool that reads in one process and plays from
+/// another is never judged: finding it takes a probe of every playing process.
+fn duplex(process: AudioObjectID) -> bool {
+    let runs = |selector| prop::<u32>(process, selector).unwrap_or(0) != 0;
+    runs(kAudioProcessPropertyIsRunningInput) && runs(kAudioProcessPropertyIsRunningOutput)
+}
+
+/// Listens to one process beside everyone else until its audio tells what it is. Both taps
+/// are unmuted, so a listener hears nothing change. Fields drop in order: IO stops first.
+struct Probe {
+    process: AudioObjectID,
+    verdict: Arc<OnceLock<Verdict>>,
+    _io: IoProc,
+    _aggregate: Aggregate,
+    _rest: Tap,
+    _own: Tap,
+}
+
+impl Probe {
+    fn start(process: AudioObjectID) -> Result<Probe> {
+        let rest = Tap::global(CATapMuteBehavior::Unmuted, &[process])?;
+        let own = Tap::only(&[process], CATapMuteBehavior::Unmuted)?;
+        let hz = tap_format(rest.id)?.mSampleRate.round() as u32;
+        // The rest goes first: the IOProc reads the taps as pairs of channels in this order.
+        let aggregate = Aggregate::create(&[&rest.uid, &own.uid])?;
+        let verdict = Arc::new(OnceLock::new());
+        let io = IoProc::start(aggregate.id, ProbeState::new(hz, verdict.clone()))?;
+        Ok(Probe {
+            process,
+            verdict,
+            _io: io,
+            _aggregate: aggregate,
+            _rest: rest,
+            _own: own,
+        })
+    }
+
+    fn verdict(&self) -> Option<Verdict> {
+        self.verdict.get().copied()
+    }
+}
+
+/// What the probe's IOProc owns.
+struct ProbeState {
+    rest: Decimator,
+    own: Decimator,
+    judge: Judge,
+    verdict: Arc<OnceLock<Verdict>>,
+    stereo: Vec<f32>,
+    rest_low: Vec<f32>,
+    own_low: Vec<f32>,
+}
+
+impl ProbeState {
+    fn new(tap_hz: u32, verdict: Arc<OnceLock<Verdict>>) -> ProbeState {
+        ProbeState {
+            rest: Decimator::new(tap_hz),
+            own: Decimator::new(tap_hz),
+            judge: Judge::default(),
+            verdict,
+            stereo: Vec::new(),
+            rest_low: Vec::new(),
+            own_low: Vec::new(),
+        }
+    }
+}
+
+impl Cycle for ProbeState {
+    /// The judge compares here, on an IO thread that plays nothing: about a millisecond, four
+    /// times a second, until the verdict.
+    fn cycle(&mut self, input: &AudioBufferList) {
+        if self.verdict.get().is_some() {
+            return;
+        }
+        let (bufs, n) = buffers(input);
+        self.rest_low.clear();
+        self.own_low.clear();
+        let taps = [
+            (&mut self.rest, &mut self.rest_low),
+            (&mut self.own, &mut self.own_low),
+        ];
+        for (pair, (decimator, low)) in taps.into_iter().enumerate() {
+            self.stereo.clear();
+            convert::gather_pair(&bufs[..n], pair, &mut self.stereo);
+            decimator.push(&self.stereo, low);
+        }
+        if let Some(verdict) = self.judge.feed(&self.rest_low, &self.own_low) {
+            let _ = self.verdict.set(verdict);
+        }
+    }
 }
 
 /// A private stereo process tap.
@@ -484,7 +665,12 @@ impl Drop for Aggregate {
     }
 }
 
-/// What the IOProc owns. Only the HAL's IO thread touches it while IO runs.
+/// What an IOProc does each cycle. Only the HAL's IO thread calls it while IO runs.
+trait Cycle: Send {
+    fn cycle(&mut self, input: &AudioBufferList);
+}
+
+/// What the capture's IOProc owns.
 struct IoState {
     tx: SyncSender<Vec<f32>>,
     /// Chunk buffers the reader hands back, so a cycle fills one instead of allocating.
@@ -502,7 +688,7 @@ struct IoState {
     last_callback: Option<Instant>,
 }
 
-impl IoState {
+impl Cycle for IoState {
     /// Allocates nothing once the spare buffers have grown to the tap's cycle.
     fn cycle(&mut self, input: &AudioBufferList) {
         let (bufs, n) = buffers(input);
@@ -569,10 +755,10 @@ unsafe extern "C-unwind" fn io_proc(
     _output_time: NonNull<AudioTimeStamp>,
     client: *mut c_void,
 ) -> i32 {
-    // SAFETY: `client` is the `IoState` that `IoProc::start` registered; the HAL calls this
+    // SAFETY: `client` is the boxed state that `IoProc::start` registered; the HAL calls this
     // proc on one IO thread at a time and never after `AudioDeviceDestroyIOProcID`, which
     // runs before the state is freed. `input` is valid for this cycle.
-    let (state, input) = unsafe { (&mut *client.cast::<IoState>(), input.as_ref()) };
+    let (state, input) = unsafe { (&mut *client.cast::<Box<dyn Cycle>>(), input.as_ref()) };
     // A panic must not unwind into the HAL.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.cycle(input)));
     0
@@ -582,15 +768,17 @@ unsafe extern "C-unwind" fn io_proc(
 struct IoProc {
     device: AudioObjectID,
     id: AudioDeviceIOProcID,
-    state: Option<NonNull<IoState>>,
+    /// Boxed twice: the HAL carries one thin pointer.
+    state: Option<NonNull<Box<dyn Cycle>>>,
 }
 
 // SAFETY: `state` is reached only by the HAL's IO thread while IO runs, and freed by `stop`
-// after the IOProc is destroyed; every field of `IoState` is `Send`.
+// after the IOProc is destroyed; `Cycle` is `Send`.
 unsafe impl Send for IoProc {}
 
 impl IoProc {
-    fn start(device: AudioObjectID, state: IoState) -> Result<IoProc> {
+    fn start(device: AudioObjectID, state: impl Cycle + 'static) -> Result<IoProc> {
+        let state: Box<dyn Cycle> = Box::new(state);
         let state = NonNull::from(Box::leak(Box::new(state)));
         let mut io = IoProc {
             device,
@@ -829,6 +1017,47 @@ mod tests {
         let second = chunks.try_recv().expect("a chunk");
         assert_eq!(second.as_ptr(), at, "the returned buffer, refilled");
         assert!(!second.is_empty());
+    }
+
+    /// Two taps side by side in one buffer, the second the first 21 ms late.
+    #[test]
+    fn a_probe_calls_a_late_copy_a_replayer() {
+        let verdict = Arc::new(OnceLock::new());
+        let mut state = ProbeState::new(48_000, verdict.clone());
+        let (frames, late) = (512, 1_008);
+        let mut seed = 1u32;
+        let app: Vec<f32> = (0..48_000 * 2)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+            })
+            .collect();
+        for start in (late..app.len() - frames).step_by(frames) {
+            let mut samples: Vec<f32> = (start..start + frames)
+                .flat_map(|t| [app[t], app[t], app[t - late], app[t - late]])
+                .collect();
+            let list = AudioBufferList {
+                mNumberBuffers: 1,
+                mBuffers: [objc2_core_audio_types::AudioBuffer {
+                    mNumberChannels: 4,
+                    mDataByteSize: (samples.len() * size_of::<f32>()) as u32,
+                    mData: samples.as_mut_ptr().cast(),
+                }],
+            };
+            state.cycle(&list);
+        }
+        assert_eq!(verdict.get(), Some(&Verdict::Replays));
+    }
+
+    #[test]
+    fn a_seeded_replayer_needs_no_probe() {
+        assert_eq!(
+            verdict_of("com.rogueamoeba.arkaudiod"),
+            Some(Verdict::Replays)
+        );
+        assert_eq!(verdict_of("io.unom.test.unheard"), None);
+        remember("io.unom.test.unheard", Verdict::Own);
+        assert_eq!(verdict_of("io.unom.test.unheard"), Some(Verdict::Own));
     }
 
     #[test]
