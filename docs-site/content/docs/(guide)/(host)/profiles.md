@@ -96,8 +96,9 @@ What turning it on does:
 - **Seats get your non-Steam games.** Each seat's Steam lists the non-Steam games you added to
   yours, with their art, launch options and the Proton you picked. A seat plays them from your
   folder, and what a game writes there goes to a copy of the seat's own; your folder stays as it
-  is. A game inside a Steam library, or whose launch options name your home, plays on your desktop
-  only, and a seat on someone's own account keeps its own. A seat picks up a change when it next
+  is. A game inside a Steam library, one that starts in a folder directly in your home such as
+  Downloads, or one whose launch options name your home, plays on your desktop only, and a seat on
+  someone's own account keeps its own. A seat picks up a change when it next
   starts.
 - **Your library is the box's.** Every profile's apps list the games your own host found. A
   profile with a desktop of its own plays your Steam games with its own Steam, and ROM Manager

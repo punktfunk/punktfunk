@@ -1,10 +1,10 @@
 //! The box owner's Steam shortcuts in a made seat's own Steam ([`shortcuts`]).
 //!
 //! A shortcut reaches a seat when the box's catalog lists it from a source left on, its program
-//! lies in its start folder, and that folder is the owner's and passes a granted root's fence
-//! ([`libraries::fenced`]). The seat sees the folder at `/run/media/punktfunk/shortcuts/<key>` as
-//! an [`Overlay`]: a game that saves beside itself keeps each person's saves apart, and the
-//! owner's folder never changes. A custom Proton tool such a shortcut maps comes the same way and
+//! lies in its start folder, and that folder is the owner's, lies deeper than directly in their
+//! home, and passes a granted root's fence ([`libraries::fenced`]). The seat sees the folder at
+//! `/run/media/punktfunk/shortcuts/<key>` as an [`Overlay`]: a game that saves beside itself
+//! keeps each person's saves apart, and the owner's folder never changes. A custom Proton tool such a shortcut maps comes the same way and
 //! is linked into the seat's `compatibilitytools.d`. Launch options that still name the owner's
 //! home after the move keep a shortcut on the owner's desktop: the seat can't see there.
 //!
@@ -120,6 +120,7 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
         let name = shortcuts::text(entry, "AppName").unwrap_or_default();
         tracing::info!(shortcut = %name, reason, "owner's shortcut not shared with seats");
     };
+    let home = std::fs::canonicalize(&owner.home).unwrap_or_else(|_| owner.home.clone());
     // Each listed entry with its art, its folder as stored, and that folder past the fence.
     let mut found = Vec::new();
     let mut seen = BTreeSet::new();
@@ -142,6 +143,10 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
                 continue;
             };
             let folder = match libraries::fenced(Path::new(&stored), state, owner, libraries) {
+                Ok(folder) if in_home_itself(&folder, &home) => {
+                    skip(&entry, "it starts in a folder directly in the owner's home");
+                    continue;
+                }
                 Ok(folder) if owns(&folder, owner.uid) => folder,
                 Ok(_) => {
                     skip(&entry, "its folder isn't the owner's");
@@ -165,7 +170,6 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
     }
     let roots = outermost(found.iter().map(|(.., folder)| folder.clone()).collect());
     let idmap = libraries::idmap((owner.uid, owner.gid), seat);
-    let home = std::fs::canonicalize(&owner.home).unwrap_or_else(|_| owner.home.clone());
     for (entry, art, stored, folder) in found {
         let Some(root) = roots.iter().find(|root| folder.starts_with(root)) else {
             continue;
@@ -259,6 +263,12 @@ fn names_home<'a>(entry: &Fields, homes: impl IntoIterator<Item = &'a Path>) -> 
         let home = home.to_string_lossy();
         !home.is_empty() && home != "/" && options.contains(&format!("{home}/"))
     })
+}
+
+/// `folder` sits directly in the owner's `home`: Downloads, Desktop, a Games folder of every game.
+/// A seat reads all of a shared folder as its own, so only a game's own folder deeper down goes.
+fn in_home_itself(folder: &Path, home: &Path) -> bool {
+    folder.parent() == Some(home)
 }
 
 /// `folders`, each once, none inside another.
@@ -488,6 +498,16 @@ fn owns(path: &Path, uid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_directly_in_the_home_stays_home() {
+        let home = Path::new("/home/u");
+        assert!(in_home_itself(Path::new("/home/u/Downloads"), home));
+        assert!(in_home_itself(Path::new("/home/u/Games"), home));
+        assert!(!in_home_itself(Path::new("/home/u/Games/Celeste"), home));
+        assert!(!in_home_itself(Path::new("/home/u"), home));
+        assert!(!in_home_itself(Path::new("/mnt/games/Celeste"), home));
+    }
 
     #[test]
     fn a_folder_inside_another_shares_its_overlay() {
