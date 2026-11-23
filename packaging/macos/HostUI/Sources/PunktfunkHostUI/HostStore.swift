@@ -39,7 +39,8 @@ public final class HostStore {
     enum Confirm: Equatable {
         case endSession(id: Int, name: String)
         case release
-        case approve(PendingDevice)
+        /// By id: a refresh replaces the device's row, its age with it.
+        case approve(id: Int)
     }
 
     let context: HostContext
@@ -80,6 +81,9 @@ public final class HostStore {
             inApplications = Relocation.isInApplications(context.bundle)
         }
     }
+
+    /// Whether `device`'s approval is open, whichever refresh its row came from.
+    func isApproving(_ device: PendingDevice) -> Bool { confirm == .approve(id: device.id) }
 
     var needsAttention: Bool { state.pairingAttention || grants.missingRequired }
     var glyph: GlyphState { .of(state, needsAttention: needsAttention) }

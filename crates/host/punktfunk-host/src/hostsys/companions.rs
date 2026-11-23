@@ -25,6 +25,8 @@ const RUNNER_OFF: &str = "plugin-runner-off";
 const RUNNER_RESTART: &str = "plugin-runner-restart";
 /// How often the supervisor looks at its children and the runner's two files.
 const TICK: Duration = Duration::from_millis(500);
+/// How long a switch of the runner waits to see it: a start takes one tick, a stop about a second.
+const SETTLE: Duration = Duration::from_secs(5);
 /// One older generation of each log, rotated at a start. A single long run grows it until the next.
 const LOG_CAP: u64 = 10 * 1024 * 1024;
 
@@ -239,21 +241,29 @@ pub(crate) fn runner_running() -> bool {
 }
 
 /// Switch the runner on or off, now and for every later start of the serving host. On also
-/// starts a runner that isn't running, one that refused its sandbox included.
+/// starts a runner that isn't running, one that refused its sandbox included. In the serving
+/// host it returns once the runner is up or gone, as `systemctl` does, or after [`SETTLE`]:
+/// the console shows the state this answers with.
 pub(crate) fn set_runner_enabled(on: bool) -> anyhow::Result<()> {
     use anyhow::Context;
     let off = pf_paths::config_dir().join(RUNNER_OFF);
     if !on {
-        return pf_paths::replace_file(&off, b"")
-            .with_context(|| format!("replace {}", off.display()));
-    }
-    match std::fs::remove_file(&off) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(e).with_context(|| format!("remove {}", off.display()))
+        pf_paths::replace_file(&off, b"").with_context(|| format!("replace {}", off.display()))?;
+    } else {
+        match std::fs::remove_file(&off) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("remove {}", off.display()));
+            }
+            _ if runner_running() => {}
+            _ => restart_runner()?,
         }
-        _ if runner_running() => Ok(()),
-        _ => restart_runner(),
     }
+    let supervised = lock().is_some();
+    let until = Instant::now() + SETTLE;
+    while supervised && runner_running() != on && Instant::now() < until {
+        std::thread::sleep(TICK / 5);
+    }
+    Ok(())
 }
 
 /// Ask the serving host for a fresh start of its runner, which follows within a tick.

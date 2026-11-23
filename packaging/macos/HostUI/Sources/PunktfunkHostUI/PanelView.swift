@@ -251,7 +251,7 @@ private struct PendingRow: View {
                     Button(L10n.trayMacPendingArm) { store.pair(for: device) }
                         .help(Text(L10n.trayMacPendingRemoteHint))
                 } else {
-                    Button(L10n.trayMacPendingApprove) { store.confirm = .approve(device) }
+                    Button(L10n.trayMacPendingApprove) { store.confirm = .approve(id: device.id) }
                 }
                 Button { store.deny(device) } label: { Image(systemName: "xmark") }
                     .buttonStyle(.borderless)
@@ -275,7 +275,7 @@ private struct PendingRow: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .padding(.leading, 34)
-            if store.confirm == .approve(device) {
+            if store.isApproving(device) {
                 approveBox.padding(.top, 4)
             }
         }

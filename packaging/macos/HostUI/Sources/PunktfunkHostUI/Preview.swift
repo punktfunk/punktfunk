@@ -10,8 +10,8 @@ public enum Preview {
         "attention", "release", "unavailable", "elsewhere", "error",
     ]
     public static let setupPages = [
-        "setup-welcome", "setup-move", "setup-screen", "setup-screen-asked", "setup-input",
-        "setup-audio", "setup-login", "setup-done", "setup-done-unsigned",
+        "setup-welcome", "setup-move", "setup-permissions", "setup-permissions-asked",
+        "setup-permissions-allowed", "setup-login", "setup-done", "setup-done-unsigned",
     ]
 
     /// The host's controller row, its English left to the host messages the bundle carries.
@@ -53,7 +53,7 @@ public enum Preview {
         case "pending", "approve":
             s.state = .running(summary(pending: 2))
             s.pending = [lanDevice, wanDevice]
-            if name == "approve" { s.confirm = .approve(lanDevice) }
+            if name == "approve" { s.confirm = .approve(id: lanDevice.id) }
         case "attention", "release":
             s.state = .running(summary(kept: 2))
             s.grants = Grants(screen: false, input: true, audio: .unknown)
@@ -79,19 +79,22 @@ public enum Preview {
         s.grants = Grants(screen: false, input: true, audio: .unknown)
         s.login = .off
         s.inApplications = name != "setup-welcome" && name != "setup-move"
-        let model = Onboarding(store: s, firstLaunch: true)
+        if name == "setup-permissions-allowed" || name == "setup-done" { s.grants = .all }
+        let model = Onboarding(store: s, finished: false, reached: nil)
         let page: Step = switch name {
         case "setup-move": .move
-        case "setup-screen", "setup-screen-asked": .screen
-        case "setup-input": .input
-        case "setup-audio": .audio
+        case "setup-permissions", "setup-permissions-asked", "setup-permissions-allowed": .permissions
         case "setup-login": .login
         case "setup-done", "setup-done-unsigned": .done
         default: .welcome
         }
         model.index = model.steps.firstIndex(of: page) ?? 0
-        model.screenAsked = name == "setup-screen-asked"
-        if page == .done { model.controllers = ControllerVerdict.of(controllerRow(ok: name == "setup-done")) }
+        model.screenAsked = name == "setup-permissions-asked"
+        if page == .done {
+            model.controllers = ControllerVerdict.of(controllerRow(ok: name == "setup-done"))
+            // The unsigned page also stands for a console that has hashed its password.
+            if name == "setup-done" { model.consolePassword = "preview-preview-0000" }
+        }
         return model
     }
 

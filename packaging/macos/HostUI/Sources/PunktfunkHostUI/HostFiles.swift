@@ -1,6 +1,6 @@
 // The files the host leaves in its config directory for local tools: the management endpoint,
-// the two bearer tokens and its TLS identity. Read per request, never cached: the host mints new
-// tokens at every start and can switch certificates while the UI runs.
+// the two bearer tokens, the console password and its TLS identity. Read per request, never
+// cached: the host mints new tokens at every start and can switch certificates while the UI runs.
 import CryptoKit
 import Foundation
 
@@ -57,6 +57,9 @@ struct HostFiles: Sendable {
     var port: UInt16 { read("mgmt-endpoint").flatMap(Self.port(endpoint:)) ?? Self.defaultPort }
     var trayToken: String? { read("tray-token").flatMap { Self.value($0, key: "PUNKTFUNK_TRAY_TOKEN") } }
     var mgmtToken: String? { read("mgmt-token").flatMap { Self.value($0, key: "PUNKTFUNK_MGMT_TOKEN") } }
+    /// The console's login password. The console swaps the line for a hash at the first sign-in
+    /// with it, and this reads nil from then on.
+    var consolePassword: String? { read("web-password").flatMap { Self.value($0, key: "PUNKTFUNK_UI_PASSWORD") } }
 
     /// SHA-256 of the identity certificate: `native-cert.pem`, else the GameStream `cert.pem`.
     var pin: Data? {

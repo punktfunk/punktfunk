@@ -140,14 +140,65 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
 
 @Suite struct OnboardingTests {
     @Test func stepsAndStart() {
-        #expect(Step.all(inApplications: true) == [.welcome, .screen, .input, .audio, .login, .done])
+        #expect(Step.all(inApplications: true) == [.welcome, .permissions, .login, .done])
         #expect(Step.all(inApplications: false).contains(.move))
         let steps = Step.all(inApplications: true)
-        #expect(Step.start(in: steps, firstLaunch: true, grants: Grants(screen: false, input: false, audio: .unknown)) == 0)
-        #expect(steps[Step.start(in: steps, firstLaunch: false, grants: Grants(screen: true, input: false, audio: .unknown))] == .input)
-        #expect(steps[Step.start(in: steps, firstLaunch: false, grants: Grants(screen: false, input: false, audio: .unknown))] == .screen)
+        let none = Grants(screen: false, input: false, audio: .unknown)
+        #expect(Step.start(in: steps, reached: nil, finished: false, grants: none) == 0)
+        #expect(steps[Step.start(in: steps, reached: nil, finished: true, grants: none)] == .permissions)
+        #expect(Step.start(in: steps, reached: nil, finished: true, grants: .all) == 0)
         let moving = Step.all(inApplications: false)
-        #expect(moving[Step.start(in: moving, firstLaunch: false, grants: .all)] == .move)
+        #expect(moving[Step.start(in: moving, reached: nil, finished: true, grants: .all)] == .move)
+    }
+
+    /// A grant restarts the app with every grant in: the setup still comes back where it was.
+    @Test func unfinishedSetupResumes() {
+        let steps = Step.all(inApplications: true)
+        #expect(steps[Step.start(in: steps, reached: .permissions, finished: false, grants: .all)] == .permissions)
+        #expect(steps[Step.start(in: steps, reached: .login, finished: false, grants: .all)] == .login)
+        // The move reopens the app from Applications, where its page no longer exists.
+        #expect(steps[Step.start(in: steps, reached: .move, finished: false, grants: .all)] == .permissions)
+    }
+
+    /// The open approval is keyed by the device, not by its row: a refresh ages the row.
+    @Test @MainActor func approvalSurvivesARefresh() {
+        let store = Preview.store("approve")
+        var aged = Preview.lanDevice
+        aged.ageSecs += 2
+        store.pending = [aged, Preview.wanDevice]
+        #expect(store.isApproving(aged))
+        #expect(!store.isApproving(Preview.wanDevice))
+    }
+
+    @Test @MainActor func reopenIsOfferedAfterAGrantWasAsked() {
+        let model = Preview.onboarding("setup-permissions")
+        #expect(!model.needsReopen)
+        model.screenAsked = true
+        #expect(model.needsReopen)
+        model.grants.screen = true
+        #expect(!model.needsReopen, "an allowed grant needs no restart")
+    }
+
+    @Test func consolePasswordReadsUntilHashed() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pf-hostui-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let files = HostFiles(dir: dir)
+        #expect(files.consolePassword == nil)
+        try "PUNKTFUNK_UI_PASSWORD=preview-preview-0000\n".write(to: dir.appendingPathComponent("web-password"), atomically: true, encoding: .utf8)
+        #expect(files.consolePassword == "preview-preview-0000")
+        try "PUNKTFUNK_UI_PASSWORD_HASH=$argon2id$x\n".write(to: dir.appendingPathComponent("web-password"), atomically: true, encoding: .utf8)
+        #expect(files.consolePassword == nil)
+    }
+
+    /// The mark's three circles: the cutter sits on the front disc's edge, toward the back one.
+    @Test func markGeometry() {
+        let g = MarkGeometry(side: 30)
+        #expect(g.radius == 10)
+        #expect(g.back == CGPoint(x: 10, y: 20) && g.front == CGPoint(x: 20, y: 10))
+        let d = hypot(g.cutter.x - g.front.x, g.cutter.y - g.front.y)
+        #expect(abs(d - g.radius) < 1e-9)
+        #expect(g.cutter.x < g.front.x && g.cutter.y > g.front.y)
     }
 
     @Test func grantButton() {

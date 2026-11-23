@@ -424,5 +424,9 @@
 	"setup_mac_login_body": "macOS host setup window: what starting at login does.",
 	"setup_mac_done_title": "macOS host setup window: heading of the last page.",
 	"setup_mac_done_body": "macOS host setup window: last page.",
-	"setup_mac_step_a11y": "macOS host setup window: read aloud for the page dots. {step}, {total}: numbers."
+	"setup_mac_step_a11y": "macOS host setup window: read aloud for the page dots. {step}, {total}: numbers.",
+	"setup_mac_permissions_title": "macOS host setup window: heading of the page that lists the permissions.",
+	"setup_mac_permissions_body": "macOS host setup window: under the heading of the permissions page.",
+	"setup_mac_allow": "macOS host setup window: button beside one permission that asks macOS for it.",
+	"setup_mac_password_hint": "macOS host setup window: under the web console password on the last page."
 }

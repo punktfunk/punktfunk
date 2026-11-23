@@ -564,5 +564,9 @@
 	"setup_mac_login_body": "Devices can connect whenever you're logged in, without opening Punktfunk Host first.",
 	"setup_mac_done_title": "Punktfunk Host is ready",
 	"setup_mac_done_body": "Pair a device from the menu bar, or change anything else in the web console.",
-	"setup_mac_step_a11y": "Step {step} of {total}"
+	"setup_mac_step_a11y": "Step {step} of {total}",
+	"setup_mac_permissions_title": "Permissions",
+	"setup_mac_permissions_body": "macOS lets you decide what Punktfunk Host may do on this device.",
+	"setup_mac_allow": "Allow",
+	"setup_mac_password_hint": "The web console asks for it when you sign in from another device."
 }

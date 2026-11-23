@@ -631,8 +631,8 @@ fn run_uninstall(
         crate::plugins::manifest::mark_person(&pf_paths::config_dir(), pkg, false)
             .context("unmark the person's plugin")?;
     }
-    if let Some(provider) = provider {
-        match delete_titles(&provider) {
+    if let Some(provider) = &provider {
+        match delete_titles(provider) {
             Ok(n) if n > 0 => log_line(id, format!("removed {n} library titles of {provider}")),
             Ok(_) => {}
             Err(e) => log_line(
@@ -642,6 +642,12 @@ fn run_uninstall(
         }
     }
     refresh_plugin_tokens(id, plugin_tokens)?;
+    // Its token is revoked now, so its own deregistration on the way out is refused.
+    if let Some(provider) = provider
+        && crate::plugin_host::registry::registry().remove(&provider)
+    {
+        crate::events::emit(crate::events::EventKind::PluginsChanged { id: provider });
+    }
     restart_runner(id);
     Ok(())
 }

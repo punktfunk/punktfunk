@@ -16,7 +16,6 @@ macOS 15 or later.
 | `host.entitlements` | The host's entitlements; the team id is filled at build |
 | `bun.entitlements` | bun's: the two a JIT runtime needs |
 | `io.unom.punktfunk.host.plist` | The LaunchAgent: starts `punktfunk-host serve` at login, restarts it after a crash |
-| `AppIcon.icon` | The app icon (Icon Composer); `actool` compiles it at build |
 | `HostUI/` | The menu bar item and permission setup: a SwiftPM library the host loads; `bundle.sh` builds it |
 
 ## Menu bar UI
@@ -50,7 +49,8 @@ sh packaging/macos/dmg.sh -a "dist/Punktfunk Host.app" -v 0.48.0 -o dist
 `bundle.sh` prints the app's path, `dmg.sh` the image's: `dist/Punktfunk-Host-0.48.0.dmg`. Each
 `bundle.sh` option also reads an environment variable; the script's header lists them. Without
 `-u`/`-w` the bundle has no web console and no plugin runner. Without `HostUI/` it has no menu
-bar UI, and without Xcode no icon; the script says which. `dmg.sh` needs Python 3.10 or later
+bar UI, and without Xcode no icon; the script says which. The icon is the Apple client's
+(`clients/apple/App/punktfunk_Logo.icon`), compiled by `actool`. `dmg.sh` needs Python 3.10 or later
 (`PF_PYTHON`) and keeps dmgbuild in `~/Library/Caches/punktfunk-packaging` (`PF_CACHE`).
 
 The binary reports the version it was built with (`PUNKTFUNK_BUILD_VERSION`), so pass the same

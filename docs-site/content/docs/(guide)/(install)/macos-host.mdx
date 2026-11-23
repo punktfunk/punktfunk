@@ -24,8 +24,9 @@ login session, so it streams while you are logged in. Keep it on a trusted netwo
 2. Drag **Punktfunk Host** onto **Applications**.
 3. Open it from Applications. Its icon appears in the menu bar and a setup window opens.
 
-The setup window asks for one permission per step. Each button shows macOS's own prompt the
-first time; after that it opens the matching page of System Settings.
+The setup window lists the permissions on one page, then asks about starting at login. Each
+**Allow** button shows macOS's own prompt the first time; after that it opens the matching page
+of System Settings.
 
 | Step | What it allows | In System Settings → Privacy & Security |
 | --- | --- | --- |
@@ -37,8 +38,12 @@ first time; after that it opens the matching page of System Settings.
 macOS also asks once to let Punktfunk Host find devices on your local network. Allow it, or
 clients can't find or reach the host.
 
-After you allow screen recording the setup window offers **Reopen Punktfunk Host**: macOS
-applies that permission only to a freshly started app.
+After you allow screen recording or keyboard and mouse, the page offers **Reopen Punktfunk
+Host**: macOS applies those two only to a freshly started app. The setup window comes back
+where you left it.
+
+The last page shows the web console's password. Copy it: the console asks for it when you sign
+in from another device.
 
 Controllers need no permission: the app is signed to present them itself.
 
@@ -57,8 +62,8 @@ console.
   Login**, **Open Logs Folder**, **Restart Punktfunk Host** and **Quit Punktfunk Host**. Quit
   stops the host; with **Start at Login** on it comes back at your next login.
 - **Web console.** **Open Web Console** signs you in. From another device it is
-  `https://<this Mac's address>:47992`; the first password is in
-  `~/.config/punktfunk/web-password` until you sign in once.
+  `https://<this Mac's address>:47992`; the setup window's last page shows the first password,
+  and `~/.config/punktfunk/web-password` holds it until you sign in with it once.
 - **Settings.** Change them in the console under **Host**. A line in
   `~/.config/punktfunk/host.env` pins a setting; **Restart Punktfunk Host** applies the file.
   See [Configuration](/docs/configuration).
