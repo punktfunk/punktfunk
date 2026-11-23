@@ -62,6 +62,8 @@ export interface SavedHost {
   profile?: Preset | null;
   pinned_profiles?: Preset[];
   online: boolean | null;
+  /** This device's own host. Absent from a client older than the field. */
+  local?: boolean;
 }
 
 /**
@@ -287,6 +289,54 @@ export const pickScreen = callable<[ref: string, rowId: string], ScreensResult>(
 
 export const runnerInfo = callable<[], RunnerInfo>("runner_info");
 export const shortcutArt = callable<[], ShortcutArt>("shortcut_art");
+
+// ---- This device's own host, through `punktfunk-host ctl steam` -------------------------
+
+/** One source of the host's library (`ROM Manager`) and how many titles it can sync. */
+export interface LocalSource {
+  id: string;
+  name: string;
+  games: number;
+}
+
+/** One title the host's library can launch: no launcher, no `steam:*`. `art` names the kinds the
+ *  host has: `portrait`, `hero`, `logo`, `header`. */
+export interface LocalEntry {
+  id: string;
+  title: string;
+  source: string;
+  platform?: string | null;
+  art: string[];
+}
+
+/** `GET /api/v1/steam/entries` as `ctl steam entries --json` prints it. */
+export interface LocalEntriesResult {
+  ok: boolean;
+  error?: string; // "host-unavailable" | "host-error"
+  steam_owns_desk?: boolean;
+  sources?: LocalSource[];
+  entries?: LocalEntry[];
+}
+
+/** The map the host keeps of what was synced: library id → 32-bit app id, and every other entry
+ *  the plugin made, so the host's library hides them. */
+export interface SteamMap {
+  version: 1;
+  entries: Record<string, number>;
+  own: number[];
+}
+
+/** This device's `punktfunk-host`; "" when there is none. */
+export const hostBin = callable<[], { path: string }>("host_bin");
+export const localEntries = callable<[], LocalEntriesResult>("local_entries");
+/** One image of a title, base64, `type` `png` | `jpg` | `gif` | `webp`. */
+export const localArt = callable<
+  [gameId: string, kind: string],
+  { ok: boolean; data?: string; type?: string; error?: string }
+>("local_art");
+export const localMap = callable<[steamMap: SteamMap], { ok: boolean; error?: string }>(
+  "local_map",
+);
 
 /**
  * A Steam game's own artwork, for the hidden shortcut that streams it: base64 images keyed like

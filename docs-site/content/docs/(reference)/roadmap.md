@@ -15,6 +15,6 @@ For what works today, see the [Support matrix](/docs/support-matrix); for what c
 - **HDR on Mutter, KWin and Sway virtual displays.** Those compositors' virtual outputs are
   SDR-only upstream. gamescope, Hyprland and the GNOME 50+ monitor mirror carry HDR — see
   [HDR](/docs/hdr).
-- **Hosting on macOS, iOS, tvOS or Android.** They are client-only platforms.
+- **Hosting on iOS, tvOS or Android.** They are client-only platforms.
 - **HEVC 4:4:4 on AMD.** AMD's encoder can't produce it. Intel's VAAPI path has no 4:4:4 yet
   either. [PyroWave](/docs/pyrowave) carries full chroma on both.

@@ -94,8 +94,15 @@ pub enum Backend {
     SendInput,
 }
 
+/// Preferred injection backend. macOS has only CoreGraphics events.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    CgEvent,
+}
+
 /// Preferred injection backend. [`open`] rejects it.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     /// Placeholder so the host still builds.
@@ -140,7 +147,14 @@ pub fn open(backend: Backend) -> Result<Box<dyn InputInjector>> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+pub fn open(backend: Backend) -> Result<Box<dyn InputInjector>> {
+    match backend {
+        Backend::CgEvent => Ok(Box::new(cgevent::CgEventInjector::open()?)),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn open(_backend: Backend) -> Result<Box<dyn InputInjector>> {
     anyhow::bail!("no input-injection backend on this platform")
 }
@@ -407,10 +421,14 @@ pub fn default_backend() -> Backend {
         }
         if c.eq_ignore_ascii_case("wlroots")
             || c.eq_ignore_ascii_case("sway")
-            // Hyprland and niri serve the wlr virtual-input protocols; same backend as sway/river.
+            // Hyprland, niri and mango serve the wlr virtual-input protocols; same backend as
+            // sway/river.
             || c.eq_ignore_ascii_case("hyprland")
             || c.eq_ignore_ascii_case("niri")
             || c.eq_ignore_ascii_case("biri")
+            || ["mango", "mangowm", "mangowc"]
+                .iter()
+                .any(|m| c.eq_ignore_ascii_case(m))
         {
             return Backend::WlrVirtual;
         }
@@ -440,31 +458,43 @@ pub fn default_backend() -> Backend {
     Backend::SendInput
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+pub fn default_backend() -> Backend {
+    Backend::CgEvent
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn default_backend() -> Backend {
     Backend::Unsupported
 }
 
 /// Whether this backend can type committed text ([`InputKind::TextInput`], `HOST_CAP_TEXT_INPUT`).
-/// Windows always (`KEYEVENTF_UNICODE`). Linux on wlroots (Unicode virtual keyboard) and on KWin
-/// with `keyboard_keysym`; libei and gamescope can only press host-layout keycodes. Welcome-time
-/// cap; a mid-session switch away from a capable backend drops text events (input is lossy).
+/// Windows always (`KEYEVENTF_UNICODE`). Linux on wlroots (Unicode virtual keyboard), on KWin
+/// with `keyboard_keysym`, and in gamescope through its input method; GNOME's libei can only
+/// press host-layout keycodes. Welcome-time cap; a mid-session switch to libei drops text.
 #[cfg(target_os = "windows")]
 pub fn text_input_supported() -> bool {
     true
 }
 
-/// Linux types text through the wlroots virtual keyboard and KWin 6.5+ keysyms.
+/// Linux types text through the wlroots virtual keyboard, KWin 6.5+ keysyms and gamescope's
+/// input method.
 #[cfg(target_os = "linux")]
 pub fn text_input_supported() -> bool {
     match default_backend() {
-        Backend::WlrVirtual | Backend::WlrLayout => true,
+        Backend::WlrVirtual | Backend::WlrLayout | Backend::GamescopeEi => true,
         Backend::KwinFakeInput => kwin_fake_input::keysym_supported(),
-        Backend::Libei | Backend::GamescopeEi => false,
+        Backend::Libei => false,
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS types any scalar as the Unicode string of a key event.
+#[cfg(target_os = "macos")]
+pub fn text_input_supported() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn text_input_supported() -> bool {
     false
 }
@@ -484,7 +514,14 @@ pub fn touch_supported() -> bool {
     pen::synthetic_pen_available()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// Contacts land as the pointer, scroll and gestures macOS emulates touch with
+/// (`touch_plan`).
+#[cfg(target_os = "macos")]
+pub fn touch_supported() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn touch_supported() -> bool {
     false
 }
@@ -493,12 +530,12 @@ pub fn touch_supported() -> bool {
 /// `HOST_CAP2_SCROLL`). Every shipped backend does — the mapper lowers it onto
 /// each one's own primitives. Welcome-time; a host without the bit only sees
 /// the legacy `MouseScroll` wire.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub fn scroll_supported() -> bool {
     true
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn scroll_supported() -> bool {
     false
 }
@@ -527,7 +564,14 @@ pub fn pen_supported() -> bool {
     pen::synthetic_pen_available()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// CoreGraphics tablet events, posted with the Accessibility grant the mouse needs. Same
+/// `PUNKTFUNK_PEN` kill-switch.
+#[cfg(target_os = "macos")]
+pub fn pen_supported() -> bool {
+    pf_host_config::row_bool("PUNKTFUNK_PEN")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn pen_supported() -> bool {
     false
 }
@@ -797,6 +841,26 @@ mod pad_driver_verdict_tests {
     }
 }
 
+/// Whether this process may create virtual pads on macOS — [`hid_device_probe`].
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HidDeviceVerdict {
+    /// The host's signature carries the HID virtual device entitlement.
+    Ready,
+    /// It does not, as in an unsigned or ad hoc build: the system refuses every pad.
+    Refused,
+}
+
+/// Reads this process's signature; creates no device, so a running game never sees a pad.
+#[cfg(target_os = "macos")]
+pub fn hid_device_probe() -> HidDeviceVerdict {
+    if hid_user_device::entitled() {
+        HidDeviceVerdict::Ready
+    } else {
+        HidDeviceVerdict::Refused
+    }
+}
+
 static THREAD_BOOST: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
 /// Install the call this crate's input threads make first to raise their own priority: input
@@ -952,10 +1016,23 @@ pub mod gamepad;
 mod gamepad_raii;
 #[cfg(target_os = "windows")]
 pub use gamepad_raii::set_pad_session;
+/// Virtual DualSense and DualSense Edge on macOS.
+#[cfg(target_os = "macos")]
+#[path = "inject/macos/dualsense_macos.rs"]
+pub mod dualsense_macos;
+/// Virtual DualShock 4 on macOS.
+#[cfg(target_os = "macos")]
+#[path = "inject/macos/dualshock4_macos.rs"]
+pub mod dualshock4_macos;
 /// `vmouse-spike --selftest`: checks the device's input reads as hardware.
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/hid_selftest.rs"]
 pub mod hid_selftest;
+/// `IOHIDUserDevice` and [`hid_user_device::HidUserDevice`], the one device every macOS pad
+/// drives.
+#[cfg(target_os = "macos")]
+#[path = "inject/macos/hid_user_device.rs"]
+pub mod hid_user_device;
 /// HORIPAD for Steam codec. Not cfg-gated, like [`eightbitdo_proto`].
 #[path = "inject/proto/hori_proto.rs"]
 pub mod hori_proto;
@@ -978,6 +1055,10 @@ pub mod mouse_windows;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/pad_broker.rs"]
 pub mod pad_broker;
+/// Buddy pads ([`pad_buddy::BuddyHub`]): sessions sharing one OS slot. Pure state, built on
+/// every target like [`pad_pool`].
+#[path = "inject/pad_buddy.rs"]
+pub mod pad_buddy;
 /// Virtual-pad creation-retry ([`pad_gate::PadGate`]), driven by [`pad_slots`]. Replaces a
 /// per-backend permanent `broken` latch with capped-backoff retry.
 ///
@@ -1070,6 +1151,10 @@ pub mod switch2_usbip;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/switch_pro.rs"]
 pub mod switch_pro;
+/// Virtual Switch Pro Controller on macOS.
+#[cfg(target_os = "macos")]
+#[path = "inject/macos/switch_pro_macos.rs"]
+pub mod switch_pro_macos;
 /// Virtual Switch Pro Controller (`057E:2009`) via UMDF + shm (device-type 8). The driver
 /// answers the handshake; the host publishes `0x30` state and reads rumble and player lights.
 #[cfg(target_os = "windows")]
@@ -1136,6 +1221,10 @@ pub mod usbip_relay;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/usbip_trace.rs"]
 pub mod usbip_trace;
+/// Virtual Xbox Wireless, One S and Elite Series 2 pads on macOS.
+#[cfg(target_os = "macos")]
+#[path = "inject/macos/xbox_macos.rs"]
+pub mod xbox_macos;
 /// Xbox HID codec — report `pf-gamepad` serves as device-types 4/5/6 (Wireless / One S /
 /// Elite Series 2). Wireless has Share; One S and Elite serve the descriptor cut without it.
 /// Gives HID footing `pf-xusb` never had: Steam / WGI / GameInput / DirectInput cannot see an
@@ -1152,8 +1241,14 @@ pub mod xbox_proto;
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/xbox_windows.rs"]
 pub mod xbox_windows;
-/// Stub — virtual gamepads need Linux uinput or Windows UMDF; events are dropped elsewhere.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// The macOS default pad is the Xbox Wireless `0B13`: macOS has no XInput, and `045E:028E` is
+/// not allowed virtual.
+#[cfg(target_os = "macos")]
+pub mod gamepad {
+    pub use crate::xbox_macos::XboxMacManager as GamepadManager;
+}
+/// Stub — no virtual gamepad backend on this platform; events are dropped.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub mod gamepad {
     #[derive(Default)]
     pub struct GamepadManager;
@@ -1192,9 +1287,34 @@ pub use stream_target::{set_screen_target, set_stream_target};
 pub mod stream_output;
 #[cfg(target_os = "linux")]
 pub use stream_output::{set_stream_output, stream_output};
-/// Stub — pen injection needs the Linux uinput tablet or Windows synthetic pointers.
-/// `pen_supported()` is false here, so no host advertises the cap and no batches arrive.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+#[path = "inject/macos/cgevent.rs"]
+mod cgevent;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/cgevent_plan.rs"]
+mod cgevent_plan;
+/// The virtual HID mouse and keyboard in front of CGEvent, behind `PUNKTFUNK_HID_INPUT=1`.
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/hid_input.rs"]
+mod hid_input;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/pen_plan.rs"]
+mod pen_plan;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/touch_plan.rs"]
+mod touch_plan;
+#[cfg(target_os = "macos")]
+pub use cgevent::{
+    post_event_access, request_post_event_access, set_screen_display, set_stream_display,
+};
+/// The session's stylus as CoreGraphics tablet events.
+#[cfg(target_os = "macos")]
+pub mod pen {
+    pub use crate::cgevent::VirtualPen;
+}
+/// Stub — no pen injection backend on this platform. `pen_supported()` is false here, so no
+/// host advertises the cap and no batches arrive.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub mod pen {
     use anyhow::{bail, Result};
     pub struct VirtualPen;
@@ -1233,6 +1353,9 @@ pub mod touchpad {
         pub fn apply(&mut self, _pad: &PadState) {}
     }
 }
+#[cfg(target_os = "linux")]
+#[path = "inject/linux/gamescope_text.rs"]
+mod gamescope_text;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/kwin_fake_input.rs"]
 mod kwin_fake_input;

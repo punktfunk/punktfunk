@@ -262,6 +262,7 @@ fn a_group_runs_every_undo_its_members_journaled() {
             heads: vec![Head {
                 name: name.into(),
                 mode: None,
+                at: None,
             }],
         };
         let fake = FakeDisplay::new("kwin");

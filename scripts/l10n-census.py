@@ -40,6 +40,7 @@ SURFACES = {
     "windows": ["clients/windows/src"],
     "decky": ["clients/decky/src"],
     "tray": ["crates/install/punktfunk-tray/src"],
+    "hostui": ["packaging/macos/HostUI/Sources"],
     "setup": ["crates/install/punktfunk-setup/src"],
     "setup-win": ["crates/install/punktfunk-setup-win/src"],
 }

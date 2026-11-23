@@ -826,7 +826,7 @@ pub(crate) fn apply_topology(
         tracing::warn!(
             source_uuid = ?ours.replication_source,
             our_prefix,
-            "KWin had our streamed output MIRRORING another screen (a stored kwinoutputconfig.json \
+            "KWin had our streamed output mirroring another screen (a stored kwinoutputconfig.json \
              replicationSource for this monitor set) — clearing it so the output is its own desktop"
         );
     }
@@ -861,7 +861,7 @@ pub(crate) fn apply_topology(
     } else {
         tracing::warn!(
             also_disabled = ?disabled,
-            "KWin output management: apply acked but the streamed output did NOT become the \
+            "KWin output management: apply acked but the streamed output did not become the \
              primary (priority read-back) — the desktop stays on another output"
         );
     }
@@ -901,7 +901,7 @@ pub(crate) fn clear_replication_source(
     tracing::warn!(
         source_uuid = ?ours.replication_source,
         our_prefix,
-        "KWin had our streamed output MIRRORING another screen (a stored kwinoutputconfig.json \
+        "KWin had our streamed output mirroring another screen (a stored kwinoutputconfig.json \
          replicationSource for this monitor set) — clearing it so the output is its own desktop"
     );
     let config = sess.new_config();
@@ -1271,7 +1271,7 @@ pub(crate) fn enable_disabled_output(ours: &str) -> Option<String> {
     }
     tracing::info!(
         %name,
-        "KWin output management: KWin created our virtual output DISABLED and refused to stream \
+        "KWin output management: KWin created our virtual output disabled and refused to stream \
          it; enabled it — KWin persists that, so the retry's request comes back enabled"
     );
     Some(name)

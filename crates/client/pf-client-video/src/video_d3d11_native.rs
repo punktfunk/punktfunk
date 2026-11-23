@@ -291,7 +291,7 @@ impl NativeD3d11Decoder {
             chroma = stream.chroma_format_idc,
             bits = stream.bit_depth,
             presenter_device = matches!(out, Output::Slices(_)),
-            "native D3D11VA decoder built (pf-dxvadec, pinned)"
+            "native D3D11VA decoder built (pf-dxvadec)"
         );
         Ok(NativeD3d11Decoder {
             device,

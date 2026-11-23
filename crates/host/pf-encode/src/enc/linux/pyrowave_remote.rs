@@ -471,10 +471,8 @@ pub(crate) fn open_preferring_worker(
             device = %hs.device,
             worker = %path.display(),
             "pyrowave: every global queue priority class was refused — encoding at default \
-             priority. The GPU-preemption lever is INERT without CAP_SYS_NICE on the encode \
-             WORKER binary (never on punktfunk-host — a capability there makes the host \
-             unidentifiable to KWin and kills desktop streaming); PYROWAVE_QUEUE_PRIORITY=off \
-             silences this"
+             priority; the encode worker needs CAP_SYS_NICE, and punktfunk-host must not carry \
+             it (KWin stops identifying the host); PYROWAVE_QUEUE_PRIORITY=off silences this"
         ),
         PriorityOutcome::NotRequested => tracing::info!(
             device = %hs.device,
@@ -665,6 +663,10 @@ impl Encoder for RemotePyroWave {
 
     fn note_confirmed(&mut self, _acked: Option<crate::Acked>) {
         // Intra-only: no reference to keep.
+    }
+
+    fn set_wave_heals(&mut self, _heals: bool) {
+        // Intra-only: every frame is a whole picture, so no wave ever starts.
     }
 
     fn set_pipelined(&mut self, _on: bool) -> bool {

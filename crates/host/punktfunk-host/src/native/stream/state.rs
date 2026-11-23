@@ -1028,6 +1028,7 @@ fn shared_handles(ctx: &SessionContext) -> (Shared, FecState) {
     let shared = Shared {
         acked: s.acked.clone(),
         lossy_window: s.lossy_window.clone(),
+        no_wave: s.no_wave.clone(),
         arrival_poke: s.arrival_poke.clone(),
         driver_dropped: Default::default(),
         screen_wire: s.screens.clone(),
@@ -1376,7 +1377,10 @@ fn spawn_launch_and_lease(
             compositor,
             nested_spawn,
             seat: seat.as_deref(),
+            place: crate::library::Place::Stream,
         },
+        #[cfg(windows)]
+        &crate::library::View::here(),
     );
     let spawned_now = spawned.now;
     if let Some(t) = launch_target {
@@ -1602,6 +1606,7 @@ fn window_source(
             | Compositor::Wlroots
             | Compositor::Niri
             | Compositor::Umbriel
+            | Compositor::Mango
             | Compositor::Kwin
             | Compositor::Mutter => Some(WindowSource::Toplevels {
                 compositor,
@@ -1694,10 +1699,16 @@ mod tests {
                 1,
             )
         };
+        // VideoToolbox converts packed RGB at studio range, so a macOS session signals that.
+        let bt709 = if cfg!(target_os = "macos") {
+            ColorInfo::SDR_BT709_STUDIO
+        } else {
+            ColorInfo::SDR_BT709
+        };
         let f = format_of(&plan(true), &sdr, 10);
-        assert_eq!((f.bit_depth, f.color), (8, ColorInfo::SDR_BT709));
+        assert_eq!((f.bit_depth, f.color), (8, bt709));
         let f = format_of(&plan(false), &sdr, 10);
-        assert_eq!((f.bit_depth, f.color), (10, ColorInfo::SDR_BT709));
+        assert_eq!((f.bit_depth, f.color), (10, bt709));
     }
 
     /// Native passes the connection's fingerprint and address; GameStream the paired
@@ -1786,6 +1797,7 @@ mod tests {
             resend: Arc::default(),
             acked: Arc::default(),
             lossy_window: Arc::default(),
+            no_wave: Arc::default(),
             ramp_open: Arc::default(),
             cursor_client_draws: Arc::default(),
             arrival_poke: Arc::default(),
@@ -1863,8 +1875,10 @@ mod tests {
                 plane: crate::events::Plane::Native,
                 preset: None,
                 profile: None,
-                pad: punktfunk_core::config::GamepadPref::Auto,
-                pad_slots: None,
+                pads: crate::session_launch::Pads::Session {
+                    kind: punktfunk_core::config::GamepadPref::Auto,
+                    slots: None,
+                },
             },
             launch_outcome: unbounded_channel().0,
             frame_map: Default::default(),

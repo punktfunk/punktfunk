@@ -1178,6 +1178,7 @@
 	"games_detached_note": "Its stream ended, and the game is still running",
 	"games_untracked_note": "This title exposes nothing the host can recognize its process by, so quitting it won't end the session",
 	"games_closing_in": "Its client is gone — closing in {time} unless it comes back",
+	"games_plane_local": "On this PC's screen",
 	"games_end_all_waiting_confirm": [
 		{
 			"declarations": [
@@ -1423,6 +1424,7 @@
 	"sessions_player": "Player",
 	"sessions_player_auto": "Any player",
 	"sessions_player_n": "Player {n}",
+	"sessions_player_share_n": "Shares Player {n}",
 	"action_player_failed": "Couldn't place the session's player",
 	"nav_controllers": "Controllers",
 	"controllers_intro": "What the host receives, not what the client thinks it sent.",
@@ -1602,6 +1604,8 @@
 	"setting_session_watch_hint": "Keeps streaming when the host switches between Game Mode and the desktop.",
 	"setting_mdns": "Local discovery",
 	"setting_mdns_hint": "Announces the host on the local network. Off means adding it by address.",
+	"setting_ipv6": "IPv6",
+	"setting_ipv6_hint": "Lets devices on your network or a VPN connect over IPv6.",
 	"setting_idle_timeout_ms": "Disconnect timeout",
 	"setting_idle_timeout_ms_hint": "How long a silent device keeps its session before the host lets go.",
 	"setting_update_check": "Check for updates",

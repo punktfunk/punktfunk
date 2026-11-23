@@ -31,6 +31,11 @@ pub struct SeatDefaults {
     pub browser_origins: Vec<String>,
     /// Every app a Windows seat starts reads GameInput in the background.
     pub background_input: bool,
+    /// The box listens on IPv6, so each seat does: the door redirects a client to the address
+    /// it dialed.
+    pub ipv6: bool,
+    /// The box answers public IPv6 addresses (`PUNKTFUNK_IPV6_PUBLIC`), so each seat does.
+    pub ipv6_public: bool,
 }
 
 /// The rows [`SeatDefaults::of`] reads. On a door they are the door's own: its file is the one
@@ -43,6 +48,7 @@ pub const ROWS: &[&str] = &[
     "webtransport",
     "webtransport_origins",
     "seat_background_input",
+    "ipv6",
 ];
 
 impl SeatDefaults {
@@ -55,6 +61,8 @@ impl SeatDefaults {
             browser: config.webtransport,
             browser_origins: config.webtransport_origins.clone(),
             background_input: config.seat_background_input,
+            ipv6: config.ipv6,
+            ipv6_public: config.ipv6_public,
         }
     }
 
@@ -67,6 +75,8 @@ impl SeatDefaults {
             "browser": self.browser,
             "browser_origins": self.browser_origins,
             "background_input": self.background_input,
+            "ipv6": self.ipv6,
+            "ipv6_public": self.ipv6_public,
         })
     }
 
@@ -89,6 +99,8 @@ impl SeatDefaults {
                 .filter_map(|o| o.as_str().map(str::to_string))
                 .collect(),
             background_input: v["background_input"].as_bool().unwrap_or(true),
+            ipv6: v["ipv6"].as_bool().unwrap_or(false),
+            ipv6_public: v["ipv6_public"].as_bool().unwrap_or(false),
         }
     }
 }
@@ -154,6 +166,8 @@ mod tests {
             browser: true,
             browser_origins: vec!["https://box:47992".into()],
             background_input: false,
+            ipv6: true,
+            ipv6_public: true,
         };
         assert_eq!(SeatDefaults::from_json(&d.to_json()), d);
         assert_eq!(
@@ -166,6 +180,8 @@ mod tests {
                 browser: false,
                 browser_origins: Vec::new(),
                 background_input: true,
+                ipv6: false,
+                ipv6_public: false,
             }
         );
     }

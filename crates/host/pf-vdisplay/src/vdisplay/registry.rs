@@ -175,7 +175,13 @@ pub fn snapshot() -> Snapshot {
             displays: linux::snapshot(),
         }
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        Snapshot {
+            displays: crate::macos::snapshot(),
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Snapshot::default()
     }
@@ -2768,7 +2774,7 @@ mod linux {
         run_undo(torn.backend, &undo);
         tracing::warn!(
             backend = torn.backend,
-            "virtual display: reused kept display was dead on first frame — torn down (A2 mark_failed)"
+            "virtual display: reused kept display was dead on first frame — torn down"
         );
         drop(torn); // keepalive Drop outside the lock (may block)
         emit_released(1);
@@ -2783,7 +2789,7 @@ mod linux {
             let mut es = r.entries.lock().unwrap();
             drain_where(&mut es, |e| e.backend == backend)
         };
-        removed.finish("invalidated — compositor instance gone (A4 session switch)");
+        removed.finish("invalidated — compositor instance gone");
     }
 
     /// Session keepalive. Drop releases the registry hold; a stale lease

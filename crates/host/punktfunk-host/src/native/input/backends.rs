@@ -14,9 +14,12 @@ mod os;
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
 mod os;
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+#[path = "macos.rs"]
+mod os;
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod os {
-    /// Off Linux and Windows a pad is Xbox360 or nothing.
+    /// Elsewhere a pad is Xbox360 or nothing.
     pub(super) const MANAGERS: &[super::ManagerRow] = &[];
 }
 
@@ -90,7 +93,10 @@ const POINTER_KINDS: [GamepadPref; 3] = [
 type ManagerRow = (GamepadPref, Build);
 
 /// A table constructor's manager.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 fn boxed<M: PadManager + 'static>(m: M) -> Option<Box<dyn PadManager>> {
     Some(Box::new(m))
 }

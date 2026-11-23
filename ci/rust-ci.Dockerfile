@@ -48,9 +48,10 @@ RUN apt-get update \
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --profile minimal \
+COPY rustup.env install-rustup.sh /tmp/
+RUN sh /tmp/install-rustup.sh -y --no-modify-path --profile minimal \
         --component rustfmt,clippy \
+    && rm /tmp/rustup.env /tmp/install-rustup.sh \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME" \
     && rustc --version && cargo clippy --version && cargo fmt --version
 

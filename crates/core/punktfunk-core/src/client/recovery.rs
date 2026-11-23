@@ -514,12 +514,15 @@ impl RecoveryDriver {
 /// The frames the decoder took clean, in its order: an IDR, an anchor, a wave's close after an
 /// unbroken sweep, or the frame right after a clean one. The newest and the sixteen before it
 /// ride [`Feedback::acked`]; the host keeps one of these resident as the next loss's anchor.
+/// On a decoder no wave heals, a wave's close is no clean frame.
 #[derive(Default)]
 pub(crate) struct AckChain {
     prev: Option<u32>,
     clean: bool,
     /// Every frame since a wave's start followed the one before it.
     sweep: bool,
+    /// No wave heals this decoder ([`FeedbackOut::no_wave`]).
+    no_wave: bool,
     last: Option<u32>,
     mask: u16,
 }
@@ -533,7 +536,7 @@ impl AckChain {
         let follows = self.prev.is_some_and(|p| p.wrapping_add(1) == index);
         self.prev = Some(index);
         use crate::packet::{USER_FLAG_RECOVERY_CLOSE as CLOSE, USER_FLAG_RECOVERY_POINT as POINT};
-        let healed = flags & CLOSE != 0 && follows && self.sweep;
+        let healed = flags & CLOSE != 0 && follows && self.sweep && !self.no_wave;
         self.sweep = if flags & POINT != 0 {
             flags & CLOSE == 0
         } else {
@@ -702,6 +705,12 @@ impl FeedbackOut {
         self.shape = shape;
     }
 
+    /// Whether no wave heals the decoder in use ([`Feedback::no_wave`]): a level every
+    /// datagram carries, and a wave's close then confirms nothing.
+    pub(crate) fn no_wave(&mut self, no_wave: bool) {
+        self.acks.no_wave = no_wave;
+    }
+
     /// A new ask under a new number. It replaces the open one.
     pub(crate) fn ask(
         &mut self,
@@ -791,11 +800,12 @@ impl FeedbackOut {
         self.stamp()
     }
 
-    /// The last closed window, the link rate and the shape.
+    /// The last closed window, the link rate, the shape and whether a wave heals.
     fn levels(&self) -> Feedback {
         Feedback {
             link_kbps: self.link_kbps,
             shape: self.shape,
+            no_wave: self.acks.no_wave,
             ..self.report
         }
     }
@@ -1213,6 +1223,20 @@ mod feedback_out_tests {
         assert_eq!(acked(21, POINT), None);
         assert_eq!(acked(23, 0), None, "22 never came");
         assert_eq!(acked(24, POINT | CLOSE), None, "the sweep had a gap");
+        // A decoder no wave heals confirms nothing until an anchor or an IDR, and says so.
+        out.no_wave(true);
+        let mut acked = |i, f| out.decoded(i, f).and_then(|fb| fb.acked);
+        assert_eq!(acked(30, POINT), None);
+        assert_eq!(
+            acked(31, POINT | CLOSE),
+            None,
+            "its decoder dropped the wave"
+        );
+        assert_eq!(acked(32, 0), None);
+        let fb = out
+            .decoded(33, USER_FLAG_RECOVERY_ANCHOR)
+            .expect("an anchor");
+        assert_eq!((fb.acked, fb.no_wave), (Some((33, 0)), true));
     }
 
     /// A NACK repeats like any ask until its own frame arrives; frames after it answer

@@ -89,6 +89,7 @@ use wiring::SessionWiring;
 /// Every `PUNKTFUNK_*` read of the plane.
 mod knobs;
 pub(crate) use knobs::HostKnobs;
+pub use knobs::Ipv6;
 use knobs::SessionKnobs;
 mod scope;
 use scope::SessionScope;
@@ -143,6 +144,8 @@ pub struct Punktfunk1Options {
     pub idle_timeout: Option<std::time::Duration>,
     /// `_punktfunk._udp` advert. `--no-mdns` / `PUNKTFUNK_MDNS=0` skips it.
     pub mdns: bool,
+    /// The IPv6 listener beside the IPv4 one, off unless the operator turned it on.
+    pub ipv6: Ipv6,
 }
 
 use crate::native_pairing::{NativePairing, PairingDecision};
@@ -262,6 +265,7 @@ pub(crate) fn native_serve_opts(cfg: &NativeServe) -> Punktfunk1Options {
         paired_store: None,
         idle_timeout: knobs.idle_timeout,
         mdns: cfg.mdns,
+        ipv6: knobs.ipv6,
     }
 }
 
@@ -280,8 +284,8 @@ pub(crate) async fn serve(
     let fingerprint = endpoint::fingerprint_of_pem(&identity.cert_pem)
         .map_err(|e| anyhow!("cert fingerprint: {e}"))?;
     hold_guests_kept_at_start(&np);
-    // Media leaves from this socket. `pkf1` stays listed for [`serve_pkf1`]: an older client
-    // still pairs there, and is told to update for anything else.
+    // Media leaves from the socket a connection arrived on. `pkf1` stays listed for
+    // [`serve_pkf1`]: an older client still pairs there, and is told to update for anything else.
     let alpns: &[&[u8]] = &[
         punktfunk_core::quic::v2::registry::ALPN,
         endpoint::QUIC_ALPN,
@@ -295,11 +299,30 @@ pub(crate) async fn serve(
     )
     .map_err(|e| anyhow!("QUIC server endpoint: {e}"))?;
     let media_socket = Arc::new(media_socket);
+    // IPv6 only when the operator turned it on, on a socket of its own: a box without IPv6
+    // still serves IPv4.
+    let ep6 = (opts.ipv6 != Ipv6::Off)
+        .then(|| {
+            endpoint::server_shared(
+                (std::net::Ipv6Addr::UNSPECIFIED, opts.port).into(),
+                &identity.cert_pem,
+                &identity.key_pem,
+                opts.idle_timeout.unwrap_or(endpoint::DEFAULT_IDLE_TIMEOUT),
+                alpns,
+            )
+            .map(|(ep, media)| (ep, Arc::new(media)))
+            .map_err(|e| {
+                tracing::warn!(error = %e, "IPv6 QUIC endpoint did not bind — serving IPv4 only")
+            })
+            .ok()
+        })
+        .flatten();
     // Bound: a test dials on this, not on a guessed delay.
     #[cfg(test)]
     let _listening = tests::Listening::on(opts.port);
     tracing::info!(
         port = opts.port,
+        ipv6 = ?ep6.as_ref().map(|_| opts.ipv6),
         source = ?opts.source,
         fingerprint = %hex::encode(fingerprint),
         "punktfunk host listening (QUIC) — clients pin this fingerprint"
@@ -360,6 +383,9 @@ pub(crate) async fn serve(
         // Console registry after the probed subsystems are up, so a probe never names a node
         // that was about to appear.
         crate::diagnostics::preflight();
+        // After the reading, so its stale "still setting up" never lands over a pushed verdict.
+        #[cfg(target_os = "windows")]
+        crate::audio::pad_endpoint::on_health_change(crate::diagnostics::catalog::push_pad_audio);
         install_shutdown_restore();
     }
     // Headless CLI: surface the PIN if armed at startup. The console arms on demand.
@@ -368,7 +394,7 @@ pub(crate) async fn serve(
         tracing::info!(
             paired = st.paired_clients,
             require = opts.require_pairing,
-            "pairing armed — enter the PIN shown on the console to pair a client"
+            "pairing armed — enter the PIN printed on stderr to pair a client"
         );
         // Shared secret: print to the operator's terminal, not tracing — GET /api/v1/logs
         // ships the DEBUG ring.
@@ -404,7 +430,6 @@ pub(crate) async fn serve(
     let mut sessions = tokio::task::JoinSet::new();
     let at = Arc::new(Accepting {
         fingerprint,
-        media_socket,
         pairing_clocks: PairingClocks::default(),
         sem,
         accepted: std::sync::atomic::AtomicU32::new(0),
@@ -419,13 +444,25 @@ pub(crate) async fn serve(
         // A finished task stays in the set until joined; a serving host never reaches the drain
         // below, and every client probe is a task.
         while sessions.try_join_next().is_some() {}
-        let incoming = tokio::select! {
+        // Each connection keeps its endpoint's socket for media. A closed IPv6 endpoint leaves
+        // IPv4 serving.
+        let (incoming, media) = tokio::select! {
             i = ep.accept() => match i {
-                Some(i) => i,
+                Some(i) => (i, media_socket.clone()),
                 None => break,
             },
+            Some(i) = async {
+                let (ep6, media6) = ep6.as_ref()?;
+                Some((ep6.accept().await?, media6.clone()))
+            } => i,
             () = at.done.notified(), if at.max_sessions != 0 => break,
         };
+        // The IPv6 listener answers nobody over the public internet unless the operator opened
+        // it. No reply at all: a scan cannot tell it from a closed port.
+        if opts.ipv6 == Ipv6::Private && crossed_public_internet(&incoming) {
+            incoming.ignore();
+            continue;
+        }
         // A source that has not proved it can receive at the address it claims gets a Retry
         // rather than a task and a TLS handshake, so a spoofed-source flood cannot make this
         // host amplify. Costs the real client one RTT on first contact. A failed retry drops
@@ -434,12 +471,31 @@ pub(crate) async fn serve(
             let _ = incoming.retry();
             continue;
         }
-        sessions.spawn(serve_connection(incoming, host(), at.clone()));
+        sessions.spawn(serve_connection(incoming, media, host(), at.clone()));
     }
     // Drain in-flight sessions (max_sessions reached or endpoint closed).
     while sessions.join_next().await.is_some() {}
     ep.wait_idle().await;
+    if let Some((ep6, _)) = &ep6 {
+        ep6.wait_idle().await;
+    }
     Ok(())
+}
+
+/// Whether an IPv6 `incoming` may have crossed the public internet: either end is a public
+/// address, or the address it was sent to is unread. An IPv4 one is never asked: that listener
+/// answers every source. The first is logged for the operator, the rest at debug.
+fn crossed_public_internet(incoming: &quinn::Incoming) -> bool {
+    let (peer, local) = (incoming.remote_address(), incoming.local_ip());
+    if peer.is_ipv4() || punktfunk_core::provenance::off_internet_v6(peer.ip(), local) {
+        return false;
+    }
+    static TOLD: std::sync::Once = std::sync::Once::new();
+    TOLD.call_once(
+        || tracing::info!(%peer, "public IPv6 peer ignored — PUNKTFUNK_IPV6_PUBLIC=1 answers them"),
+    );
+    tracing::debug!(%peer, ?local, "public IPv6 peer ignored");
+    true
 }
 
 /// The `_punktfunk._udp` advert. None on a seat host, with `--no-mdns`, or when discovery fails:
@@ -481,7 +537,6 @@ fn advertise(
 /// What the accept loop shares with every connection's task.
 struct Accepting {
     fingerprint: [u8; 32],
-    media_socket: Arc<std::net::UdpSocket>,
     pairing_clocks: PairingClocks,
     /// The session slots, shared with the browser plane.
     sem: Arc<tokio::sync::Semaphore>,
@@ -494,8 +549,14 @@ struct Accepting {
 
 /// One connection, off the accept loop: a peer that stalls its handshake holds only its own task,
 /// up to the idle timeout. A pin mismatch ends here, before a session slot is taken; a `pkf1`
-/// client is answered on the pairing path; a session's error closes typed.
-async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<Accepting>) {
+/// client is answered on the pairing path; a session's error closes typed. `media` is the socket
+/// of the endpoint the connection arrived on.
+async fn serve_connection(
+    incoming: quinn::Incoming,
+    media: Arc<std::net::UdpSocket>,
+    host: SessionHost,
+    at: Arc<Accepting>,
+) {
     let conn = match incoming.await {
         Ok(c) => c,
         Err(e) => {
@@ -513,22 +574,12 @@ async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<
     let peer = conn.remote_address();
     if endpoint::negotiated_alpn(&conn).as_deref() != Some(punktfunk_core::quic::v2::registry::ALPN)
     {
-        serve_pkf1(
-            conn,
-            at.media_socket.clone(),
-            &at.fingerprint,
-            &host.np,
-            &at.pairing_clocks,
-        )
-        .await;
+        serve_pkf1(conn, media, &at.fingerprint, &host.np, &at.pairing_clocks).await;
         return;
     }
     tracing::info!(%peer, "client connected");
     let conn_err = conn.clone();
-    let link = link::SessionLink::QuicV2(
-        conn.clone(),
-        Arc::new(link::V2Link::new(conn, at.media_socket.clone())),
-    );
+    let link = link::SessionLink::QuicV2(conn.clone(), Arc::new(link::V2Link::new(conn, media)));
     let SessionHost {
         opts,
         audio_cap,
@@ -585,21 +636,31 @@ async fn serve_connection(incoming: quinn::Incoming, host: SessionHost, at: Arc<
 #[cfg_attr(windows, allow(dead_code, reason = "the signal handler is Unix only"))]
 const SHUTDOWN_RESTORE_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// A stop asked from inside: `host.restart` on a host its unit or runner starts over.
+/// A stop asked from inside: `host.restart` on a host its unit, runner or login agent starts over.
 static STOP: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// The status a [`STOP`] exits with.
+static STOP_CODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// Stops this host as its stop signal would: the box is given back first.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 pub(crate) fn stop_self() -> Result<(), String> {
+    stop_exiting(0)
+}
+
+/// [`stop_self`], exiting with `code`.
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+pub(crate) fn stop_exiting(code: i32) -> Result<(), String> {
+    STOP_CODE.store(code, Ordering::SeqCst);
     STOP.notify_one();
     Ok(())
 }
 
-/// Catch `SIGTERM`/`SIGINT` or [`stop_self`], end the live sessions, give the box back, then
-/// exit. `exit(0)` runs no destructor, so this is where the audio defaults, every display's
-/// topology restore and output, and a Game Mode takeover are undone. Crash-restore lives in
-/// `$XDG_RUNTIME_DIR`, which logind removes with the user manager. Blocking, under
-/// [`SHUTDOWN_RESTORE_GRACE`].
+/// Catch `SIGTERM`/`SIGINT` or [`stop_exiting`], end the live sessions, give the box back, then
+/// exit: 0 on a signal, the stop's code otherwise. `exit` runs no destructor, so this is where
+/// the audio defaults, every display's topology restore and output, and a Game Mode takeover are
+/// undone, and where a macOS host's children end. Crash-restore lives in `$XDG_RUNTIME_DIR`,
+/// which logind removes with the user manager. Blocking, under [`SHUTDOWN_RESTORE_GRACE`] and
+/// the children's own graces.
 fn install_shutdown_restore() {
     #[cfg(unix)]
     tokio::spawn(async {
@@ -614,15 +675,18 @@ fn install_shutdown_restore() {
             );
             return;
         };
-        let sig = tokio::select! {
-            _ = term.recv() => "SIGTERM",
-            _ = int.recv() => "SIGINT",
-            _ = STOP.notified() => "host.restart",
+        let (sig, code) = tokio::select! {
+            _ = term.recv() => ("SIGTERM", 0),
+            _ = int.recv() => ("SIGINT", 0),
+            _ = STOP.notified() => ("host.restart", STOP_CODE.load(Ordering::SeqCst)),
         };
         tracing::info!(
             signal = sig,
             "host stopping — handing the box's session back"
         );
+        // Beside the restore, so the runner's plugin finalizers don't wait behind it.
+        #[cfg(target_os = "macos")]
+        let companions = tokio::task::spawn_blocking(crate::hostsys::companions::stop);
         // Sessions end first, as a power action ends them: each client hears a typed close
         // instead of freezing on a display torn down under it.
         crate::power::set_closing(true);
@@ -643,7 +707,9 @@ fn install_shutdown_restore() {
                 "the session restore did not finish in time — exiting anyway"
             );
         }
-        std::process::exit(0);
+        #[cfg(target_os = "macos")]
+        let _ = companions.await;
+        std::process::exit(code);
     });
 }
 
@@ -935,9 +1001,16 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<Said> {
     if let Some(m) = e.downcast_ref::<pf_vdisplay::UmbrielIpcMismatch>() {
         return Some(Said::new("close_umbriel_mismatch", m.user_message()));
     }
-    // Umbriel is the one Linux backend whose outputs have no PipeWire node.
+    // Umbriel and mango are the Linux backends whose outputs have no PipeWire node. The backend
+    // in use says which one refused.
     #[cfg(target_os = "linux")]
     if e.downcast_ref::<pf_capture::NoPipeWireNode>().is_some() {
+        if crate::vdisplay::in_use() == Some(crate::vdisplay::Compositor::Mango) {
+            return Some(Said::new(
+                "close_mango_no_capture",
+                "This mango session can't be captured directly; the stream needs a GPU encoder.",
+            ));
+        }
         return Some(Said::new(
             "close_umbriel_no_capture",
             "This Umbriel session can't be captured directly; the stream needs a GPU encoder.",
@@ -950,6 +1023,10 @@ pub(crate) fn setup_failed_sentence(e: &anyhow::Error) -> Option<Said> {
             "Couldn't join the shared screen — this device streams with a video codec that \
              can't share it. Set the same video codec on both devices, then join again.",
         ));
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(n) = e.downcast_ref::<pf_capture::NoScreenRecording>() {
+        return Some(Said::new("close_no_screen_recording", n.user_message()));
     }
     e.downcast_ref::<pf_vdisplay::DisplayAsleep>()
         .map(|d| Said::new("close_display_asleep", &d.user_message()))
@@ -1131,9 +1208,7 @@ where
         crate::native_pairing::PinAttempt::Pin(pin) => pin,
         crate::native_pairing::PinAttempt::Disarmed => {
             close_rejected(conn, punktfunk_core::reject::RejectReason::PairingNotArmed).await;
-            anyhow::bail!(
-                "pairing not armed (arm it in the console, or start with --allow-pairing)"
-            )
+            anyhow::bail!("pairing not armed (arm it in the console or with `ctl pair arm`)")
         }
         // Armed for a different device: reject without the ceremony so this does not burn the window.
         crate::native_pairing::PinAttempt::BoundToOther => {
@@ -1238,6 +1313,7 @@ impl SessionHost {
                 paired_store: None,
                 idle_timeout: None,
                 mdns: false,
+                ipv6: Ipv6::Off,
             }),
             audio_cap: Arc::new(std::sync::Mutex::new(None)),
             inj_tx: std::sync::mpsc::channel().0,
@@ -1714,6 +1790,9 @@ fn session_lanes(host: &SessionHost, who: &Admitted, n: &handshake::Negotiated) 
         preferred_pad_slot: Arc::new(std::sync::atomic::AtomicU8::new(
             preferred_pad_slot.unwrap_or(crate::session_status::NO_PAD_SLOT),
         )),
+        shared_pad_slot: Arc::new(std::sync::atomic::AtomicU8::new(
+            crate::session_status::NO_PAD_SLOT,
+        )),
         // Written by the input thread, read by `GET /session/{id}/pads`.
         pads: Arc::new(crate::pad_feed::PadFeed::new()),
     };
@@ -2031,9 +2110,8 @@ async fn stream_session(
         () = stop_overdue(scope.life().stop_flag()) => {
             tracing::error!(
                 grace_s = STREAM_STOP_GRACE.as_secs(),
-                "stream thread has not returned since the session was stopped — abandoning it so \
-                 the session slot is freed. Its capture/encoder stay held until the stuck call \
-                 returns; this is a HOST WEDGE — please report it with the log above"
+                "stream thread wedged after stop: abandoned to free the session slot, its capture \
+                 and encoder held until the stuck call returns — report this with the log above"
             );
             anyhow::bail!("stream thread wedged after stop");
         }
@@ -2107,6 +2185,7 @@ fn display_half(
         &knobs,
         terms.joined.as_ref(),
         handshake::follows_source(&features, &terms.tenure),
+        terms.mirrored(),
     );
     // The content the Welcome was resolved for, not a second look at it.
     format_facts.content_hdr = format_facts

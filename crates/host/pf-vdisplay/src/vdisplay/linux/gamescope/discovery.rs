@@ -165,6 +165,30 @@ fn baselayer_has(display: &str, appid: u32) -> bool {
     root_cardinals(display, b"GAMESCOPECTRL_BASELAYER_APPID").is_some_and(|v| v.contains(&appid))
 }
 
+/// Steam owns the box's own session: it is gamescope, a root of it carries Steam's baselayer
+/// atom, and this home's Steam runs. A gamescope a person started around an app has no such atom.
+pub(crate) fn steam_owns_desk() -> bool {
+    let home = std::env::var_os("HOME");
+    owns_desk(
+        crate::detect_active_session().kind,
+        || {
+            xwayland_cursor_targets(None).iter().any(|(display, _)| {
+                root_cardinals(display, b"GAMESCOPECTRL_BASELAYER_APPID").is_some()
+            })
+        },
+        || home.is_some_and(|h| home_steam_pid(std::path::Path::new(&h)).is_some()),
+    )
+}
+
+/// [`steam_owns_desk`] on its inputs, each read only once the ones before it hold.
+fn owns_desk(
+    kind: crate::ActiveKind,
+    baselayer: impl FnOnce() -> bool,
+    steam: impl FnOnce() -> bool,
+) -> bool {
+    kind == crate::ActiveKind::Gaming && baselayer() && steam()
+}
+
 /// Whether the focused app presents an HDR surface on `display`, from gamescope's
 /// `GAMESCOPE_COLOR_APP_WANTS_HDR_FEEDBACK`. Unset reads `false`: gamescope writes the atom
 /// at the first HDR surface. `None` once the display is gone.
@@ -758,6 +782,12 @@ pub(crate) fn gamescope_planar_capture_in_vram() -> bool {
     gamescope_patch_level() >= 25 && !flags_lost()
 }
 
+/// A planar capture lists tiled modifiers too. Below this it lists LINEAR alone, which
+/// fixates our default as [`gamescope_offers_tiled_capture`] says.
+pub(crate) fn gamescope_offers_tiled_planar_capture() -> bool {
+    gamescope_patch_level() >= 40 && !flags_lost()
+}
+
 /// The 10-bit capture formats are offered under BT.709 as well as PQ. Below this every 10-bit
 /// negotiation is HDR, so a 10-bit SDR session captures 8-bit and the encoder widens it.
 pub(crate) fn gamescope_captures_sdr10() -> bool {
@@ -1152,6 +1182,21 @@ mod live_probe {
 #[cfg(test)]
 mod tests {
     use super::{node_from_log, wayland_name_from_log};
+
+    /// Steam owns the desk only in a gamescope session whose root carries its atom and with this
+    /// home's Steam running; a desktop never reads the X root.
+    #[test]
+    fn steam_owns_the_desk_only_in_its_own_gamescope() {
+        use crate::ActiveKind::{DesktopKde, Gaming, None as Nothing};
+        let owns = |kind, atom: bool, steam: bool| super::owns_desk(kind, || atom, || steam);
+        assert!(owns(Gaming, true, true));
+        assert!(!owns(Gaming, false, true), "a gamescope a person started");
+        assert!(!owns(Gaming, true, false), "Steam is not running");
+        assert!(!owns(DesktopKde, true, true));
+        assert!(!owns(Nothing, true, true));
+        let read = |_: bool| -> bool { panic!("a desktop reads no gamescope atom") };
+        assert!(!super::owns_desk(DesktopKde, || read(true), || read(true)));
+    }
 
     /// `environ` is read once per `(pid, start ticks)`: a steady sweep reads nothing, a restarted
     /// pid reads again, a gone pid leaves the cache.

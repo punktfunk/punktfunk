@@ -39,8 +39,10 @@ pub(crate) fn toplevels() -> Option<Vec<Toplevel>> {
     let Ok(rt) = pf_portal::portal_runtime() else {
         return Some(Vec::new());
     };
+    // The timeout is built inside the runtime: a timer made on the caller's thread, which has
+    // no runtime of its own, panics.
     let read = rt
-        .block_on(tokio::time::timeout(READ_BUDGET, read()))
+        .block_on(async { tokio::time::timeout(READ_BUDGET, read()).await })
         .unwrap_or_else(|elapsed| Err(elapsed.into()));
     if read.is_err() {
         *BUS.lock().unwrap_or_else(|e| e.into_inner()) = None;

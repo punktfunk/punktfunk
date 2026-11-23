@@ -346,6 +346,7 @@ impl Drive<'_> {
                             mask,
                         }));
                 }
+                Ctl::SetWaveHeals(heals) => self.enc.set_wave_heals(heals),
                 Ctl::NoteConfirmed(acked) => {
                     self.enc
                         .note_confirmed(acked.map(|(last, mask)| pf_encode_win::Acked {
@@ -373,7 +374,7 @@ impl Drive<'_> {
                 Ctl::SetHdrMeta(bytes) => self.enc.set_hdr_meta(hdr_meta(&bytes)),
                 Ctl::Flush => {
                     if let Err(e) = self.enc.flush() {
-                        tracing::info!("encode: flush failed: {e:#}");
+                        tracing::warn!("encode: flush failed: {e:#}");
                     }
                     self.drain_all();
                 }
@@ -450,18 +451,18 @@ impl Drive<'_> {
         let index = self.wire_seq.wrapping_add(self.inflight.len() as u32);
         let submitted = qpc_now();
         if let Err(e) = self.enc.submit_indexed(&frame, index) {
-            tracing::info!("encode: submit failed: {e:#}");
+            tracing::warn!("encode: submit failed: {e:#}");
             self.release_if_live(slot);
             self.set_state(au::ENCODER_WEDGED);
             if e.downcast_ref::<TerminalEncoderError>().is_some() {
-                tracing::info!("encode: submit error is terminal — leaving");
+                tracing::warn!("encode: submit error is terminal — leaving");
                 return false;
             }
             // A lazy backend re-runs its whole bring-up per submit; stop retrying at the compose
             // rate and leave the session threadless for the host's reset rung.
             self.submit_failures += 1;
             if self.submit_failures >= MAX_SUBMIT_FAILURES {
-                tracing::info!("encode: {MAX_SUBMIT_FAILURES} submits failed in a row — leaving");
+                tracing::warn!("encode: {MAX_SUBMIT_FAILURES} submits failed in a row — leaving");
                 return false;
             }
             return true;
@@ -518,7 +519,7 @@ impl Drive<'_> {
             }
             Ok(None) => false,
             Err(e) => {
-                tracing::info!("encode: poll failed: {e:#}");
+                tracing::warn!("encode: poll failed: {e:#}");
                 self.set_state(au::ENCODER_WEDGED);
                 // A detached thread's slots were reclaimed by its successor; releasing one
                 // here would free a slot that successor is encoding.

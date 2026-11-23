@@ -167,6 +167,20 @@ fn vendor_keys(codec_name: &str, aggressive: bool) -> Vec<(&'static str, i32)> {
     keys
 }
 
+/// Boxes that show HEVC about once a second under a low-latency key while the decoder reports
+/// the stream rate, as (`ro.product.manufacturer`, `ro.product.device` or `ro.product.model`):
+/// the Xiaomi TV Box S (3rd Gen).
+const KEYLESS_HEVC_BOXES: &[(&str, &[&str])] = &[("Xiaomi", &["twilight", "MiTV-AFMU0"])];
+
+/// Whether this box decodes `codec` with no low-latency key at all ([`KEYLESS_HEVC_BOXES`]).
+/// Its other codecs keep their keys.
+pub(crate) fn keyless(codec: u8, maker: &str, device: &str, model: &str) -> bool {
+    codec_mime(codec) == "video/hevc"
+        && KEYLESS_HEVC_BOXES.iter().any(|(m, names)| {
+            maker.eq_ignore_ascii_case(m) && names.iter().any(|&n| n == device || n == model)
+        })
+}
+
 /// A Realtek decoder, by its OMX or Codec2 name.
 pub(crate) fn is_realtek(codec_name: &str) -> bool {
     let name = codec_name.to_ascii_lowercase();
@@ -211,12 +225,24 @@ pub(crate) fn marked_strings(bytes: &[u8], marks: &[&str], cap: usize) -> Vec<St
     out
 }
 
+/// An Amlogic decoder, by its OMX or Codec2 name.
+fn is_amlogic(codec_name: &str) -> bool {
+    let name = codec_name.to_ascii_lowercase();
+    name.starts_with("omx.amlogic") || name.starts_with("c2.amlogic")
+}
+
 /// Whether the fed stream is recoded with a 16-bit POC: HEVC on an Amlogic decoder, whose
 /// long-term references fail behind a POC lsb wrap. `forced` is the debug override.
 pub(crate) fn widens_poc(codec: u8, codec_name: &str, forced: Option<bool>) -> bool {
-    let name = codec_name.to_ascii_lowercase();
-    let amlogic = name.starts_with("omx.amlogic") || name.starts_with("c2.amlogic");
-    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(amlogic)
+    codec == punktfunk_core::quic::CODEC_HEVC && forced.unwrap_or(is_amlogic(codec_name))
+}
+
+/// Whether a picture in several slices stays off the decoder: HEVC on an Amlogic one, which
+/// takes the whole device down decoding it. The host sends such a client one slice a picture,
+/// but an intra-refresh wave from NVENC has two or three, and so has a keyframe forced
+/// during one. No wave heals this decoder.
+pub(crate) fn one_slice_only(codec: u8, codec_name: &str) -> bool {
+    codec == punktfunk_core::quic::CODEC_HEVC && is_amlogic(codec_name)
 }
 
 /// Whether each fed AU goes through the concealer first. HEVC on a Realtek decoder, which keeps
@@ -348,6 +374,26 @@ mod tests {
     }
 
     #[test]
+    fn only_hevc_on_a_listed_box_goes_keyless() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+        // (name, codec, maker, device, model, keyless)
+        let rows = [
+            ("by device", CODEC_HEVC, "Xiaomi", "twilight", "", true),
+            ("by model", CODEC_HEVC, "Xiaomi", "", "MiTV-AFMU0", true),
+            ("maker case", CODEC_HEVC, "XIAOMI", "twilight", "", true),
+            ("H.264", CODEC_H264, "Xiaomi", "twilight", "", false),
+            ("AV1", CODEC_AV1, "Xiaomi", "twilight", "", false),
+            ("another Xiaomi", CODEC_HEVC, "Xiaomi", "jaws", "", false),
+            ("another maker", CODEC_HEVC, "Google", "twilight", "", false),
+            ("a Chromecast", CODEC_HEVC, "Google", "sabrina", "", false),
+            ("no identity", CODEC_HEVC, "", "", "", false),
+        ];
+        for (name, codec, maker, device, model, want) in rows {
+            assert_eq!(super::keyless(codec, maker, device, model), want, "{name}");
+        }
+    }
+
+    #[test]
     fn only_amlogic_hevc_takes_the_wide_poc() {
         use punktfunk_core::quic::{CODEC_AV1, CODEC_HEVC};
         assert!(super::widens_poc(
@@ -382,6 +428,21 @@ mod tests {
             "c2.amlogic.av1.decoder",
             Some(true)
         ));
+    }
+
+    #[test]
+    fn only_amlogic_hevc_is_kept_to_one_slice() {
+        use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC};
+        for (codec, name, want) in [
+            (CODEC_HEVC, "c2.amlogic.hevc.decoder", true),
+            (CODEC_HEVC, "OMX.amlogic.hevc.decoder.awesome2", true),
+            (CODEC_HEVC, "c2.qti.hevc.decoder", false),
+            (CODEC_HEVC, "c2.mtk.hevc.decoder", false),
+            (CODEC_H264, "c2.amlogic.avc.decoder", false),
+            (CODEC_AV1, "c2.amlogic.av1.decoder", false),
+        ] {
+            assert_eq!(super::one_slice_only(codec, name), want, "{name}");
+        }
     }
 
     #[test]

@@ -301,6 +301,7 @@ pub(crate) fn open(
         reference_floor: None,
         floor_refused: false,
         confirmed: None,
+        wave_heals: Some(true),
         confirmed_refused: false,
         wire_chunk: params.wire_chunk_bytes as usize,
         wire_chunk_warned: false,
@@ -344,6 +345,9 @@ pub struct EncoderProxy {
     floor_refused: bool,
     /// The confirmations the driver holds; sent only when they change.
     confirmed: Option<pf_encode_core::Acked>,
+    /// Whether the driver's backend still starts waves; sent only when it changes. `None`
+    /// once the driver refused the op: it predates it, and the wave stays.
+    wave_heals: Option<bool>,
     /// The driver refused the confirmations op once: it predates it and keeps no anchor.
     confirmed_refused: bool,
     /// Decided at `SET_ENCODE`; a later `set_wire_chunking` that differs is logged once.
@@ -488,6 +492,26 @@ impl Encoder for EncoderProxy {
         }
     }
 
+    fn set_wave_heals(&mut self, heals: bool) {
+        if self.wave_heals.is_none_or(|held| held == heals) {
+            return;
+        }
+        let sent = self.ctl(
+            encode::ENCODE_CTL_SET_WAVE_HEALS,
+            u32::from(heals),
+            0,
+            [0; 28],
+        );
+        self.wave_heals = sent.is_ok().then_some(heals);
+        if let Err(e) = sent {
+            tracing::info!(
+                target_id = self.target_id,
+                error = %format!("{e:#}"),
+                "driver encode: this driver keeps its waves — the client asks for its keyframe"
+            );
+        }
+    }
+
     fn note_confirmed(&mut self, acked: Option<pf_encode_core::Acked>) {
         // Each send is a round trip into the driver host: one per four frames of progress.
         // The snapshot still holds the kept candidate inside its sixteen-frame window.
@@ -599,6 +623,8 @@ impl Encoder for EncoderProxy {
             return false;
         }
         self.au.reader.rebase(base);
+        // The fresh encoder starts waves again until told.
+        self.wave_heals = self.wave_heals.map(|_| true);
         true
     }
 

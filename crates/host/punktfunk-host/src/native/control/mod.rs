@@ -613,6 +613,12 @@ impl ControlTask {
                 .acked
                 .store(u64::from(last) << 16 | u64::from(mask), Ordering::Relaxed);
         }
+        if shared.no_wave.swap(fb.no_wave, Ordering::Relaxed) != fb.no_wave {
+            tracing::info!(
+                no_wave = fb.no_wave,
+                "client's decoder and intra-refresh waves"
+            );
+        }
         let wake = apply_shape(&shared.shape, fb.shape);
         self.link.note_link(fb.link_kbps, wake);
         // The ask before the window: an RFI raised in a window counts in its report.

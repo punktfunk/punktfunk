@@ -1,7 +1,7 @@
 // Launching a plugin out of process. The Linux shape is a bwrap sandbox (`bwrapArgv` in
-// sandbox.ts). What every out-of-process shape shares lives here too, and runner-windows.ts
-// builds on it: the state and token prep, the `--run-unit` argv, the spawn, the stderr tail and
-// the exit outcome.
+// sandbox.ts). What every out-of-process shape shares lives here too, and runner-windows.ts and
+// runner-macos.ts build on it: the state and token prep, the host proxy, the `--run-unit` argv,
+// the spawn, the stderr tail and the exit outcome.
 import { Effect } from "effect";
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -10,12 +10,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { configDir, hostFetch, publishedMgmtUrl } from "./config.js";
-import { serveHostProxy } from "./host-proxy.js";
+import { type HostProxy, serveHostProxy } from "./host-proxy.js";
 import type { RunnerOptions, Unit } from "./runner.js";
 import type { LogSink } from "./runner-log.js";
 import {
 	bwrapArgv,
 	expandHome,
+	type GrantedRoot,
 	grantedPorts,
 	grantedRoots,
 	homeLink,
@@ -77,19 +78,21 @@ export const pluginToken = (config: string, id: string): string | undefined => {
  * token and an unwritable state dir are different faults and say so.
  *
  * The plugin writes that dir, so the old file is unlinked and a new one created exclusively: a
- * link it left there is removed, never followed to another plugin's files.
+ * link it left there is removed, never followed to another plugin's files. macOS reads it where
+ * the plugin finds it, under `name`.
  */
 export const writePluginToken = (
 	config: string,
 	stateDir: string,
 	id: string,
+	name = ".plugin-token",
 ): string | Error => {
 	const token = pluginToken(config, id);
 	if (token === undefined)
 		return new Error(
 			`No API credential exists for ${id} yet. Restart the host if this persists.`,
 		);
-	const file = path.join(stateDir, ".plugin-token");
+	const file = path.join(stateDir, name);
 	try {
 		fs.mkdirSync(stateDir, { recursive: true });
 		fs.rmSync(file, { force: true });
@@ -98,6 +101,44 @@ export const writePluginToken = (
 	} catch (e) {
 		return new Error(`Couldn't write the credential for ${id} into ${stateDir} — ${e}`);
 	}
+};
+
+/** Say which of a plugin's declared paths and grants its sandbox leaves out, and why. */
+export const warnRefused = (
+	manifest: PluginManifest,
+	grants: readonly GrantedRoot[],
+	home: string,
+	config: string,
+	id: string,
+	log: LogSink,
+): void => {
+	const refused = [
+		...[...(manifest.reads ?? []), ...(manifest.files ?? [])].map((p) => [p, false, false] as const),
+		// A declared write the owner may still allow is waiting, not refused.
+		...(manifest.writes ?? []).map((p) => [p, true, true] as const),
+		...grants.map((g) => [g.path, g.write, true] as const),
+	]
+		.map(([p, write, operator]) => [expandHome(p, home), write, operator] as const)
+		.filter(
+			([p, write, operator]) => path.isAbsolute(p) && refusedRoot(p, home, config, write, operator),
+		)
+		.map(([p]) => p);
+	if (refused.length > 0)
+		log(`[runner] ${id}: not sharing ${refused.join(", ")} — no plugin gets those`, "warn");
+};
+
+/** The supervisor's end of a sandbox's way to the host: `socket`, forwarded over the pinned TLS. */
+export const proxyToHost = (socket: string, options: RunnerOptions): HostProxy => {
+	const url = options.connect?.url ?? publishedMgmtUrl() ?? "https://127.0.0.1:47990";
+	// The host's cert is self-signed: a bare `fetch` fails TLS and every plugin 502s at connect.
+	const pinned = options.sandboxFetch
+		? Promise.resolve(options.sandboxFetch)
+		: hostFetch(url, options.connect);
+	return serveHostProxy({
+		socket,
+		url,
+		fetch: ((input, init) => pinned.then((f) => f(input, init))) as typeof fetch,
+	});
 };
 
 /**
@@ -144,20 +185,7 @@ export const runSandboxed = (
 		}
 		const home = os.homedir();
 		const grants = grantedRoots(config, id);
-		const refused = [
-			...[...(manifest.reads ?? []), ...(manifest.files ?? [])].map((p) => [p, false, false] as const),
-			// A declared write the owner may still allow is waiting, not refused.
-			...(manifest.writes ?? []).map((p) => [p, true, true] as const),
-			...grants.map((g) => [g.path, g.write, true] as const),
-		]
-			.map(([p, write, operator]) => [expandHome(p, home), write, operator] as const)
-			.filter(
-				([p, write, operator]) =>
-					path.isAbsolute(p) && refusedRoot(p, home, config, write, operator),
-			)
-			.map(([p]) => p);
-		if (refused.length > 0)
-			log(`[runner] ${id}: not sharing ${refused.join(", ")} — no plugin gets those`, "warn");
+		warnRefused(manifest, grants, home, config, id, log);
 		const runtime = process.env.XDG_RUNTIME_DIR ?? "/tmp";
 		// One per attempt: a restart's new proxy binds while the old one is still closing, and a
 		// shared name would let the old close delete the new socket.
@@ -166,16 +194,7 @@ export const runSandboxed = (
 			"punktfunk",
 			`plugin-${id}-${randomBytes(4).toString("hex")}.sock`,
 		);
-		const url = options.connect?.url ?? publishedMgmtUrl() ?? "https://127.0.0.1:47990";
-		// The host's cert is self-signed: a bare `fetch` fails TLS and every plugin 502s at connect.
-		const pinned = options.sandboxFetch
-			? Promise.resolve(options.sandboxFetch)
-			: hostFetch(url, options.connect);
-		const proxy = serveHostProxy({
-			socket,
-			url,
-			fetch: ((input, init) => pinned.then((f) => f(input, init))) as typeof fetch,
-		});
+		const proxy = proxyToHost(socket, options);
 		// Its UI socket goes in a dir of its own, forwarded to the host's loopback.
 		let ui: { dir: string; port: number } | undefined;
 		let forward: UiForward | undefined;

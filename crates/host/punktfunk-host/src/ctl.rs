@@ -90,6 +90,20 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             out(json, &v, |_| println!("game ended"));
             Ok(())
         }
+        "launch" => {
+            let Some(id) = rest.first().filter(|a| !a.starts_with("--")) else {
+                return Err(Failure::usage(
+                    "launch: give the title's library id (steam:570)",
+                ));
+            };
+            let v = Client::one_shot()?.post("/api/v1/game/launch", &json!({ "app_id": id }))?;
+            out(json, &v, |v| match v["running"].as_bool() {
+                Some(true) => println!("already running"),
+                _ => println!("starting, via {}", v["via"].as_str().unwrap_or("host")),
+            });
+            Ok(())
+        }
+        "steam" => steam(rest, json),
         "pair" => pair(rest, json),
         "pending" => {
             let v = Client::one_shot()?.get("/api/v1/native/pending")?;
@@ -125,6 +139,17 @@ fn run(args: &[&str], json: bool) -> Result<()> {
         #[cfg(unix)]
         "console-url" => {
             let url = console_stub()?;
+            #[cfg(target_os = "macos")]
+            if rest.contains(&"--open") {
+                match std::process::Command::new("/usr/bin/open")
+                    .arg(&url)
+                    .status()
+                {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => return Err(Failure::api(format!("open the browser: {s}"))),
+                    Err(e) => return Err(Failure::api(format!("open the browser: {e}"))),
+                }
+            }
             out(json, &json!({ "url": url }), move |_| println!("{url}"));
             Ok(())
         }
@@ -215,6 +240,61 @@ fn pair(args: &[&str], json: bool) -> Result<()> {
         Some(other) => Err(Failure::usage(format!(
             "pair: expected arm | disarm | status, got '{other}'"
         ))),
+    }
+}
+
+/// What the Decky plugin syncs into this box's Steam. `entries --json` prints the host's answer
+/// as it is, with no envelope: the plugin reads it whole. `map` sends the map JSON on stdin.
+/// `art` writes one image's bytes to stdout.
+fn steam(args: &[&str], json: bool) -> Result<()> {
+    let c = Client::one_shot()?;
+    match args {
+        ["entries"] => {
+            let v = c.get("/api/v1/steam/entries")?;
+            if json {
+                println!("{v}");
+                return Ok(());
+            }
+            for s in v["sources"].as_array().into_iter().flatten() {
+                println!(
+                    "{:<20} {:>6}  {}",
+                    trunc(s["id"].as_str().unwrap_or(""), 20),
+                    s["games"].as_u64().unwrap_or(0),
+                    s["name"].as_str().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        ["map"] => {
+            let raw = client::read_capped(std::io::stdin(), client::RAW_BODY_LIMIT)
+                .map_err(|e| Failure::usage(format!("steam map: read stdin: {e}")))?;
+            let map: Value = serde_json::from_slice(&raw)
+                .map_err(|e| Failure::usage(format!("steam map: stdin is not JSON: {e}")))?;
+            let v = c.put("/api/v1/steam/entries", &map)?;
+            out(json, &v, |_| println!("Steam map stored"));
+            Ok(())
+        }
+        ["art", id, kind] => {
+            let target = format!(
+                "library/art/{}/{}",
+                crate::mgmt::path_segment(id),
+                crate::mgmt::path_segment(kind)
+            );
+            let path = format!("/api/v1/{target}");
+            let (status, _, body) = c.send(crate::mgmt::owner::Forwarded::get(target))?;
+            if status != 200 {
+                return Err(Failure::api(format!("{path}: no such art ({status})")));
+            }
+            let bytes = client::read_capped(body, client::RAW_BODY_LIMIT)
+                .map_err(|e| Failure::api(format!("{path}: {e}")))?;
+            use std::io::Write as _;
+            std::io::stdout()
+                .write_all(&bytes)
+                .map_err(|e| Failure::api(format!("write the art to stdout: {e}")))
+        }
+        _ => Err(Failure::usage(
+            "steam: expected entries | map | art <ID> <KIND>",
+        )),
     }
 }
 
@@ -687,8 +767,9 @@ fn render_stats(v: &Value) {
 ///
 /// **Why a file and not the URL.** `/proc/<pid>/cmdline` is world-readable, so a ticket passed to
 /// the browser as an argument is legible to every other local user for its whole lifetime. The
-/// ticket lives in a 0600 file under `$XDG_RUNTIME_DIR`, and only its PATH reaches argv. No
-/// runtime dir means no private place to put it, so this fails.
+/// ticket lives in a 0600 file under `$XDG_RUNTIME_DIR/punktfunk`, on macOS under
+/// `<config_dir>/run`, and only its PATH reaches argv. No runtime dir means no private place to
+/// put it, so this fails.
 ///
 /// TTL and single-use are the redeemer's to enforce: a stub left from an earlier launch is spent.
 #[cfg(unix)]
@@ -698,13 +779,19 @@ fn console_stub() -> Result<String> {
     let mut raw = [0u8; 16];
     rand::Rng::fill_bytes(&mut rand::rng(), &mut raw);
     let nonce = hex::encode(raw);
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
-        Failure::unreachable(
-            "no XDG_RUNTIME_DIR — there is nowhere to put a ticket that another local user cannot \
-             read. Open the console and log in instead."
-                .to_string(),
-        )
-    })?;
+    // macOS sets no XDG_RUNTIME_DIR; the config dir is the user's own private folder.
+    #[cfg(target_os = "macos")]
+    let runtime = dir.join("run");
+    #[cfg(not(target_os = "macos"))]
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|r| std::path::Path::new(&r).join("punktfunk"))
+        .ok_or_else(|| {
+            Failure::unreachable(
+                "no XDG_RUNTIME_DIR — there is nowhere to put a ticket that another local user \
+                 cannot read. Open the console and log in instead."
+                    .to_string(),
+            )
+        })?;
     // The console's own port, not the mgmt one. It is not published anywhere the way
     // `mgmt-endpoint` is, so the documented default stands until somebody moves it.
     // `127.0.0.1`, not `localhost`: the console binds IPv4 only, and any local user can
@@ -723,7 +810,7 @@ fn console_stub() -> Result<String> {
         let ticket = handoff_ticket(&token, ts, &nonce)?;
         format!("https://127.0.0.1:47992/_auth/handoff?t={ticket}")
     };
-    write_stub(&std::path::Path::new(&runtime).join("punktfunk"), &target)
+    write_stub(&runtime, &target)
 }
 
 /// Where the browser lands when no ticket came: the console's sentence for a refused one.
@@ -1055,6 +1142,10 @@ USAGE:
 STATE
     status                       host state, session count, paired counts
     sessions                     the active session(s) and any launched game
+    launch <ID>                  start a library title on this host's own screen, with no stream
+    steam entries                the titles a Steam entry of their own may start, by source
+    steam map                    store the map of synced Steam entries, as JSON on stdin
+    steam art <ID> <KIND>        one image of a title (portrait, hero, logo, header) to stdout
     summary                      one call for a status surface: host version, what is streaming,
                                  the streaming client's name, paired counts, and any conflicting
                                  host on this box. The only verb that names a connected device.
@@ -1072,7 +1163,7 @@ PAIRING
     approve <ID> [--name N] [--preset P] [--expires-in S]
     deny <ID>
     pin <PIN> <UNIQUEID> <FP> <PEER_IP>
-                                 submit to the exact ceremony shown by `status`
+                                 submit to the exact ceremony shown by `pair status`
 
 DEVICES
     clients                      paired devices on both planes
@@ -1081,11 +1172,13 @@ DEVICES
     unpair <FP> | unpair --all [--yes]
 
 CONSOLE
-    console-url                  write a one-shot login page under $XDG_RUNTIME_DIR and print its
-                                 file:// URL, so a browser opened at it lands already logged in.
-                                 The ticket stays out of argv, where every local user can read it.
+    console-url                  write a one-shot login page under $XDG_RUNTIME_DIR (macOS: the
+                                 config dir's run/) and print its file:// URL, so a browser opened
+                                 at it lands already logged in. The ticket stays out of argv,
+                                 where every local user can read it.
                                  Inside a seat it opens that person's own Punktfunk instead.
-                                 Windows: inside a seat only; prints the URL. --open opens it.
+                                 Windows: inside a seat only; prints the URL.
+                                 --open also opens it (Windows, macOS).
 
 DISPLAYS
     display                      the virtual-display policy, every preset, and the live displays.

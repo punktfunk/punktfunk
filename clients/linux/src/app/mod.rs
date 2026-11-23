@@ -81,7 +81,7 @@ pub enum AppMsg {
     /// The SPAKE2 PIN ceremony dialog.
     Pair(ConnectRequest),
     SpeedTest(ConnectRequest),
-    /// The Library on this host's shelf.
+    /// The Library on this host's shelf. On this device's own host the request's title plays.
     OpenLibrary(ConnectRequest),
     /// "Switch profile…": the picker without a connect.
     SwitchProfile(ConnectRequest),
@@ -475,8 +475,19 @@ impl SimpleComponent for AppModel {
                 sender.input(AppMsg::OpenLibrary(req.clone()));
                 // Stream is the library PLUS a connect, never a screen of its own: the session
                 // window is the overlay, so ending it leaves the shelf on screen underneath.
+                // This device's own host stays on its shelf; asking that blocks, so off here.
                 if matches!(screen, start::Start::Stream(_)) {
-                    sender.input(AppMsg::WakeConnect(req));
+                    let sender = sender.input_sender().clone();
+                    let (port, fp) = (req.host.port, req.host.fp_hex.clone().unwrap_or_default());
+                    std::thread::Builder::new()
+                        .name("punktfunk-start".into())
+                        .spawn(move || {
+                            pf_client_core::trust::local::look_once(port, &fp);
+                            if !pf_client_core::trust::local::is_this_device(&fp) {
+                                sender.emit(AppMsg::WakeConnect(req));
+                            }
+                        })
+                        .ok();
                 }
             }
         }

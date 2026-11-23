@@ -5,7 +5,7 @@
 //! Windows: the virtual touchpad. The Windows-only arms live in `windows/devtest.rs`. Each fn is
 //! the full `punktfunk-host` subcommand; `main.rs` only forwards. Flags live on the fn.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use anyhow::Context;
 use anyhow::Result;
 
@@ -327,7 +327,7 @@ pub fn hdr_probe() -> Result<()> {
 }
 
 /// Connector names `PUNKTFUNK_CAPTURE_MONITOR` takes — available before the mgmt API is up.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn list_monitors() -> Result<()> {
     let compositor = crate::vdisplay::detect()?;
     let monitors = crate::vdisplay::monitors::list(compositor)

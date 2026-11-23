@@ -288,11 +288,13 @@ const OFFERED_NEVER_SHOWN: &[&str] = &["follow_os_theme"];
 
 /// Catalogue entries naming a platform whose console has no row: the platform's own screen has
 /// one. The desktop shells (GTK, WinUI) draw the console toggle, and the console is the desktop
-/// session itself; the Apple app picks its own controller, in its own id grammar.
+/// session itself; the Apple app picks its own controller, in its own id grammar; the
+/// browser's page locks the pointer, so its settings sheet holds the raw mouse switch.
 const NATIVE_ONLY: &[(&str, &str)] = &[
     ("gamepad_ui_enabled", "desktop"),
     ("gamepad_ui_mode", "desktop"),
     ("forward_pad", "apple"),
+    ("raw_mouse", "web"),
 ];
 
 /// Rows with no one stored default to name: none exists, it depends on the device, or an unset
@@ -2440,9 +2442,11 @@ fn the_background_rows_follow_the_device() {
         assert_eq!(background_timeout(ctx.settings), 10);
         assert!(adjust(RowId::BackgroundTimeout, 1, false, ctx));
         assert_eq!(background_timeout(ctx.settings), 30);
+        assert!(adjust(RowId::BackgroundTimeout, 1, false, ctx));
+        assert_eq!(background_timeout(ctx.settings), 60);
         assert!(
             !adjust(RowId::BackgroundTimeout, 1, false, ctx),
-            "30 is the top"
+            "60 is the top"
         );
     }
     let android = crate::screens::Device {

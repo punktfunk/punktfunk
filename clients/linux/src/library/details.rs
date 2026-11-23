@@ -84,8 +84,9 @@ pub fn show(
         body.append(&dim(&line));
     }
 
+    // A title up on this device's own host is played, not resumed.
     let play = gtk::Button::builder()
-        .label(if running.is_some() {
+        .label(if running.is_some() && !view.here.get() {
             client::lib_resume()
         } else {
             common::common_play()

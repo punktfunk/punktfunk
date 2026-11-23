@@ -280,7 +280,7 @@ pub(super) fn fullscreen_mode(s: &pf_client_core::trust::Settings) -> usize {
 const BACKGROUND_KEEP_ALIVE_KEY: &str = "background_keep_alive";
 const BACKGROUND_TIMEOUT_KEY: &str = "background_timeout_minutes";
 /// Minutes, as the two touch UIs offer them. Stored as a number.
-const BACKGROUND_TIMEOUTS: [u64; 4] = [1, 5, 10, 30];
+const BACKGROUND_TIMEOUTS: [u64; 5] = [1, 5, 10, 30, 60];
 const BACKGROUND_TIMEOUT_DEFAULT: u64 = 10;
 
 /// The corner each platform's stats overlay sits in until the player picks one.

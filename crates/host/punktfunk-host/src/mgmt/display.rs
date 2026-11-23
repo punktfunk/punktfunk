@@ -166,9 +166,13 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if edid_lock_available() {
         enforced.push("edid_lock".into());
     }
-    // A monitor `screen` needs the mirror backend (`vdisplay::open_for`): Linux and Windows.
+    // A monitor `screen` needs the mirror backend (`vdisplay::open_for`): Linux, Windows, macOS.
     // Do not advertise it elsewhere — a stored monitor would never take effect.
-    let mirrors = cfg!(any(target_os = "linux", target_os = "windows"));
+    let mirrors = cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    ));
     if mirrors {
         enforced.push("screen".into());
         enforced.push("capture_monitor".into());
@@ -187,6 +191,12 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if session.keep_monitors {
         enforced.push("keep_monitors".into());
     }
+    // A macOS display ends with its session and sits where macOS puts it; its `exclusive`
+    // reads the keep-list.
+    if cfg!(target_os = "macos") {
+        enforced.retain(|f| f != "keep_alive" && f != "layout");
+        enforced.push("keep_monitors".into());
+    }
     // What acts per device. The rest are stored and served but read inside a backend
     // `create`, which takes no client — advertising one would put a control on the
     // device sheet that this host would store and ignore.
@@ -195,6 +205,8 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
         "mode_conflict".into(),
         "identity".into(),
     ];
+    // A device field the host ignores everywhere would be a dead control.
+    client_enforced.retain(|f| enforced.contains(f));
     // The cap is applied in the native handshake, before Welcome, so the client is told the
     // mode it actually gets rather than the one it asked for.
     client_enforced.push("max_mode".into());
@@ -329,12 +341,12 @@ fn write(body: serde_json::Map<String, serde_json::Value>) -> Option<Response> {
     let stored = crate::vdisplay::policy::prefs().update(|p| match merged(p, body) {
         Ok(next) => {
             *p = next.sanitized();
-            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
             if let Some(dropped) = p.screen.take().and_then(DisplayTarget::into_monitor) {
                 p.capture_monitor = None;
                 tracing::warn!(
-                    "management API: ignoring screen={dropped:?} — this host cannot \
-                     stream a chosen physical monitor; the pin was NOT stored"
+                    "management API: ignoring screen={dropped:?} — this host can't \
+                     stream a chosen physical monitor; the pin was not stored"
                 );
             }
             true
@@ -737,7 +749,11 @@ pub(crate) struct MonitorsResponse {
     )
 )]
 pub(crate) async fn get_display_monitors() -> Result<Json<MonitorsResponse>, Response> {
-    let pin_supported = cfg!(any(target_os = "linux", target_os = "windows"));
+    let pin_supported = cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    ));
     // Effective pin (env override, else stored policy): highlight what sessions will mirror.
     // With no mirror backend report `None` even if a pin is stored — highlighting a head
     // nothing will capture is the false signal this field exists to avoid.
@@ -944,7 +960,11 @@ pub(crate) async fn get_display_targets(
         enabled: None,
         in_use_by: None,
     };
-    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+    if !cfg!(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos"
+    )) {
         return Ok(Json(DisplayTargets {
             locked: false,
             host_default: DisplayTarget::Own,

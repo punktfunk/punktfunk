@@ -91,6 +91,21 @@ jobs:
         with:
           path: target/x86_64-unknown-linux-musl/release/punktfunk-setup
           key: punktfunk-setup-musl-${{ github.run_id }}
+      # A save the cache server refuses only warns: its 5 s lock wait loses to a stalled fsync.
+      # Look the entry up, and save once more after the stall if it is missing.
+      - id: saved
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/x86_64-unknown-linux-musl/release/punktfunk-setup
+          key: punktfunk-setup-musl-${{ github.run_id }}
+          lookup-only: true
+      - if: steps.saved.outputs.cache-hit != 'true'
+        run: sleep 30
+      - if: steps.saved.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/x86_64-unknown-linux-musl/release/punktfunk-setup
+          key: punktfunk-setup-musl-${{ github.run_id }}
 
   omarchy:
     name: omarchy integration self-check

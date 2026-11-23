@@ -47,7 +47,7 @@ pub fn probe_one(addr: &str, port: u16, fp_hex: &str, timeout: std::time::Durati
 /// Whether a probe's answer is the host that was asked for. `answered` is the fingerprint
 /// that replied, or `None` when nothing did; `want` is the record's pin, compared by
 /// [`same_pin`]. A record saved by address alone has none, so any answer is the host it names.
-fn answered_as_self(want: &str, answered: Option<[u8; 32]>) -> bool {
+pub(super) fn answered_as_self(want: &str, answered: Option<[u8; 32]>) -> bool {
     answered.is_some_and(|fp| same_pin(want, &hex(&fp)).unwrap_or(true))
 }
 

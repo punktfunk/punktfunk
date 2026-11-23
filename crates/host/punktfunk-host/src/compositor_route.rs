@@ -22,7 +22,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// `None` when nothing was detected *and* no backend the client named is available — the
 /// caller turns that into a handshake error.
-#[cfg_attr(windows, allow(dead_code, reason = "Windows has one compositor"))]
+#[cfg_attr(
+    any(windows, target_os = "macos"),
+    allow(dead_code, reason = "Windows and macOS have one compositor")
+)]
 fn pick_compositor(
     pref: CompositorPref,
     available: &[crate::vdisplay::Compositor],
@@ -48,6 +51,10 @@ fn pick_compositor(
 /// `XDG_CURRENT_DESKTOP` scrub, so [`pick_compositor`]'s `None` arm cannot
 /// fire. [`Compositor::Gamescope`] is exempt: it stands a session up.
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(
+    target_os = "macos",
+    allow(dead_code, reason = "macOS has one compositor")
+)]
 fn pinned_at_a_dead_session(
     overridden: bool,
     chosen: crate::vdisplay::Compositor,
@@ -60,7 +67,7 @@ fn pinned_at_a_dead_session(
 /// so a retry a few seconds later can land in a recovered desktop. `pinned` is
 /// the `PUNKTFUNK_COMPOSITOR` value when the pin is what got us here, so the
 /// message names the knob to change.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn no_live_session(pinned: Option<&str>, recover: bool) -> anyhow::Error {
     if recover && crate::vdisplay::try_recover_session() {
         return anyhow::anyhow!(
@@ -88,7 +95,7 @@ fn no_live_session(pinned: Option<&str>, recover: bool) -> anyhow::Error {
 /// shared-desktop backends want shared planes. `PUNKTFUNK_GAMESCOPE_ISOLATE`
 /// turns it off. The resolve paths and `serve_session`'s plane setup must
 /// never disagree about this predicate.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) fn session_is_isolated(
     compositor: crate::vdisplay::Compositor,
     route: Option<&crate::vdisplay::GamescopeRoute>,
@@ -114,14 +121,19 @@ pub(crate) fn resolve_compositor(
     Option<crate::vdisplay::GamescopeRoute>,
 )> {
     use crate::vdisplay::Compositor;
-    // Windows has one virtual-display backend, so skip the Linux
+    // Windows and macOS have one display backend each, so skip the Linux
     // session-detection state machine.
     #[cfg(target_os = "windows")]
     {
         let _ = (pref, dedicated_launch, isolation_capable, revive);
         Ok((Compositor::Windows, None))
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (pref, dedicated_launch, isolation_capable, revive);
+        Ok((Compositor::MacOs, None))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         // (Re)connect: drop a pending TV-session restore so the box stays in
         // the streamed session. Keep-alive REUSE skips `create_managed_session`'s
@@ -172,10 +184,9 @@ pub(crate) fn resolve_compositor(
                         .compositor
                         .as_deref()
                         .unwrap_or("-"),
-                    "game_session=dedicated asked for this launch's OWN headless gamescope, but \
-                     PUNKTFUNK_COMPOSITOR pins this host to a backend — the operator pin wins and \
-                     the game launches into the pinned session instead. Unset PUNKTFUNK_COMPOSITOR \
-                     to get dedicated game sessions."
+                    "dedicated game session skipped: PUNKTFUNK_COMPOSITOR pins this host to a \
+                     backend, so the game launches into the pinned session. Unset it for \
+                     dedicated sessions"
                 );
             } else {
                 let route = crate::vdisplay::resolve_gamescope_route(Compositor::Gamescope, true);

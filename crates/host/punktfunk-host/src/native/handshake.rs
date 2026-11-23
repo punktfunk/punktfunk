@@ -43,7 +43,7 @@ pub(super) fn audio_budget(
             WARNED.call_once(|| {
                 tracing::warn!(
                     value = %s,
-                    "audio.quality (PUNKTFUNK_AUDIO_QUALITY) is not one of low/standard/high — \
+                    "audio_quality (PUNKTFUNK_AUDIO_QUALITY) is not one of low/standard/high — \
                      using the default"
                 );
             });
@@ -271,11 +271,9 @@ pub(super) fn resolve_audio_plane(
     }
     if !operator_allows {
         tracing::info!(
-            // Reaching here means PUNKTFUNK_AUDIO_HIRES=0. Name the variable so the operator finds it.
-            "hi-res audio requested by the client but it is disabled on this host by \
-             PUNKTFUNK_AUDIO_HIRES=0 — the session uses Opus 48 kHz (remove that line, or set it \
-             to 1, to allow the lossless plane; it costs 1.4–8.5 Mbps in stereo and up to 33.9 in \
-             7.1, off the top of the link and outside the ABR loop)"
+            // The `audio_hires` row is off, from the console or PUNKTFUNK_AUDIO_HIRES=0.
+            "hi-res audio requested but Lossless audio is off on this host \
+             (PUNKTFUNK_AUDIO_HIRES) — the session uses Opus 48 kHz"
         );
         return AudioPlane::opus();
     }
@@ -295,13 +293,10 @@ pub(super) fn resolve_audio_plane(
             requested_rate_hz,
             requested_bits,
             ?capture_rate,
-            "hi-res audio was requested but this host's capture path cannot honestly deliver \
-             that rate — the session uses Opus 48 kHz. On Windows the endpoint's own engine rate \
-             is authoritative (autoconvert would silently hand us an upsampled copy), so set the \
-             rate in that device's Windows properties; on Linux the default stream-sink mode \
-             delivers any supported rate, while PUNKTFUNK_STREAM_SINK=0 can only offer the rate \
-             the monitored sink itself runs at — and declines outright when that sink is idle or \
-             cannot be read"
+            "hi-res audio was requested but this host's capture path can't deliver that rate — \
+             the session uses Opus 48 kHz. On Windows, set the rate in the device's sound \
+             properties; on Linux, capture of the host's own output (Where audio plays, or \
+             PUNKTFUNK_STREAM_SINK=0) offers only that sink's running rate"
         );
         return AudioPlane::opus();
     }
@@ -399,7 +394,7 @@ pub(super) fn cursor_forward(
         compositor.is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
             && encoder.cursor_blend_capable(codec, cuda_planned, bit_depth == 10, hdr)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
         // Windows: the v5 IddCx hardware-cursor channel. Without it DWM paints the pointer
         // into the IDD frame and a second copy doubles it. The encoder is not consulted: the
@@ -407,6 +402,19 @@ pub(super) fn cursor_forward(
         // A capture worker's picture carries the pointer already.
         let _ = (compositor, codec, bit_depth, hdr, encoder);
         !worker && crate::windows::idd::hw_cursor_capable()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Every session's stream is its own, a mirror's and a joiner's too, and paints the
+        // pointer on the capture-mouse flip; no encoder blends. Its image must be readable now,
+        // or the frames carry the pointer under the client's.
+        let _ = (compositor, codec, bit_depth, hdr, worker, encoder);
+        pf_capture::pointer_image_readable()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (compositor, codec, bit_depth, hdr, worker, encoder);
+        false
     }
 }
 
@@ -599,6 +607,11 @@ pub(in crate::native) struct SessionTerms {
 }
 
 impl SessionTerms {
+    /// The connector of the monitor this session mirrors, if it mirrors one.
+    pub(in crate::native) fn mirrored(&self) -> Option<&str> {
+        mirrored(self.screen.as_ref())
+    }
+
     /// `Hello::bitrate_kbps == 0`. A mode switch re-resolves PyroWave's pin either way, and an
     /// Automatic rate is held inside the new bounds. Another codec's explicit rate stays.
     pub(in crate::native) fn bitrate_auto(&self) -> bool {
@@ -687,8 +700,11 @@ pub(super) async fn negotiate(
         &n.knobs,
         joined.as_ref(),
         follows_source(&n.first.features, &tenure),
+        mirrored(screen.as_ref()),
     );
-    let (studio_asked, owner_hdr) = (facts.studio_asked, facts.owner_hdr);
+    let studio_asked = facts.studio_asked;
+    // The range a joiner must stream: a shared capture's own, on a display lit either way.
+    let owner_stream = joined.as_ref().map(|d| d.stream_hdr());
     let verdict = negotiate_video_format(facts.clone(), codec, encoder.clone(), hello.mode).await?;
     let Verdict {
         bit_depth,
@@ -696,7 +712,9 @@ pub(super) async fn negotiate(
         chroma,
         ..
     } = verdict;
-    if owner_hdr.is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none()) {
+    if owner_stream
+        .is_some_and(|o| crate::vdisplay::admission::joined_hdr(o, session_hdr).is_none())
+    {
         // Out of the table first, as `admit_mode`'s refusal.
         drop(reservation);
         let said = super::Said::new(
@@ -1444,7 +1462,7 @@ fn welcome_host_caps(n: &Negotiation<'_>, t: &SessionTerms) -> u8 {
             0
         }
         // Text injection only where the backend can type (SendInput UNICODE; wlroots keymap;
-        // KWin keysyms). Clients without the bit keep VK-synthesis for IME.
+        // KWin keysyms; gamescope's input method). Clients without the bit keep VK synthesis.
         | if crate::inject::text_input_supported() {
             punktfunk_core::quic::HOST_CAP_TEXT_INPUT
         } else {
@@ -1612,6 +1630,14 @@ fn game_mode_pref(launch: Option<&str>) -> Option<CompositorPref> {
     (launch == Some(crate::library::GAME_MODE_ID)).then_some(CompositorPref::Gamescope)
 }
 
+/// The connector a `screen` echo names: the monitor the session mirrors.
+fn mirrored(screen: Option<&ScreenEcho>) -> Option<&str> {
+    match screen {
+        Some(ScreenEcho::Monitor(connector)) => Some(connector.as_str()),
+        _ => None,
+    }
+}
+
 /// What the depth, HDR and chroma rule reads about the client, the source and the operator,
 /// kept for the session so a codec change re-runs the handshake's rule for the new codec.
 #[derive(Clone)]
@@ -1627,6 +1653,9 @@ pub(super) struct FormatFacts {
     pub(super) owner_hdr: Option<bool>,
     /// A joiner's: the format of the capture it shares, the ceiling of its own.
     pub(super) owner_format: Option<crate::vdisplay::admission::SampleFormat>,
+    /// The monitor the session mirrors, by connector. Its own HDR state bounds the stream's
+    /// where the capture composes HDR from any display (macOS).
+    pub(super) mirrored: Option<String>,
     /// The rule runs again when the source moves: the session reaches another compositor, or
     /// its content turns HDR or SDR. Only for a client that rebuilds its decoder at an epoch,
     /// on a capture the session does not share.
@@ -1648,6 +1677,8 @@ pub(super) struct Verdict {
 
 impl FormatFacts {
     /// `owner` is the display a joiner was admitted onto. `follows` is [`follows_source`].
+    /// `mirrored` is the connector of the monitor the session mirrors.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn of(
         hello: &Hello,
         studio_asked: crate::session_plan::StudioAsk,
@@ -1656,6 +1687,7 @@ impl FormatFacts {
         knobs: &SessionKnobs,
         owner: Option<&crate::vdisplay::admission::LiveDisplay>,
         follows: bool,
+        mirrored: Option<&str>,
     ) -> FormatFacts {
         let owner_format = owner.and_then(|d| d.format);
         FormatFacts {
@@ -1666,18 +1698,33 @@ impl FormatFacts {
             studio_asked: asked_under(owner_format, studio_asked),
             owner_hdr: owner.map(|d| d.hdr),
             owner_format,
+            mirrored: mirrored.map(str::to_owned),
             follows,
             content_hdr: None,
         }
     }
 
+    /// Whether the monitor this session mirrors can show HDR now. macOS composes PQ from any
+    /// display, so an SDR panel would stream SDR content as HDR. Elsewhere, and for a session's
+    /// own screen, the capture's answer already covers it.
+    fn mirror_has_hdr(&self) -> bool {
+        let Some(connector) = &self.mirrored else {
+            return true;
+        };
+        #[cfg(target_os = "macos")]
+        return crate::vdisplay::display_hdr(connector);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = connector;
+            true
+        }
+    }
+
     /// gamescope names the HDR state of what it shows; every other source streams what its
-    /// display is lit in. So does a host that shares screens: a shared capture has one format
-    /// for every session on it.
+    /// display is lit in. A capture another session shares stays in its range: the stream asks
+    /// before each move ([`crate::vdisplay::admission::move_format`]).
     pub(super) fn follows_content(&self) -> bool {
-        self.follows
-            && self.compositor == Some(crate::vdisplay::Compositor::Gamescope)
-            && !crate::vdisplay::policy::prefs().get().any_join()
+        self.follows && self.compositor == Some(crate::vdisplay::Compositor::Gamescope)
     }
 
     /// The facts of a session that moved to `compositor` on `route`. `content_hdr` is what the
@@ -1714,6 +1761,7 @@ impl FormatFacts {
                 hdr,
                 bit_depth,
             ),
+            hdr,
         };
         let joined = crate::vdisplay::admission::joined_format(self.owner_format?, can);
         Some(joined.map(|_| ()))
@@ -1721,9 +1769,10 @@ impl FormatFacts {
 
     /// Bit depth, HDR verdict, and chroma for `codec` at `mode`, each gated by host, client,
     /// codec, source, and `encoder`, the session's resolution. A joiner asks HDR only of an HDR
-    /// display. A source showing SDR content streams SDR and keeps its display lit in HDR.
-    /// `mode` is the one the pipeline opens at: the Hello's at the handshake, the live one
-    /// later. Blocks on its probes.
+    /// display, streams the range of a capture it shares, and lights nothing: its display is
+    /// lit as its owner lit it. A source showing SDR content streams SDR and keeps its display
+    /// lit in HDR. `mode` is the one the pipeline opens at: the Hello's at the handshake, the
+    /// live one later. Blocks on its probes.
     pub(super) fn resolve(
         &self,
         codec: crate::encode::Codec,
@@ -1745,7 +1794,8 @@ impl FormatFacts {
         // capture fold in `hdr_capture_failed(VirtualOutput)`; GameStream's rtsp.rs check has no
         // twin here: that latch is per-source and this gate already used this session's source.
         let capture_supports_hdr =
-            crate::capture::capturer_supports_hdr_for(compositor, gamescope_route, encoder);
+            crate::capture::capturer_supports_hdr_for(compositor, gamescope_route, encoder)
+                && self.mirror_has_hdr();
         // An 8-bit desktop's SDR-10 only widens: a colour pass per frame for no source detail, and
         // the operator opts in (`sdr10_widen`). Our gamescope composites 10-bit SDR, and Windows 11
         // 24H2 composes the virtual display in SDR wide colour unless this host saw it refused
@@ -1759,7 +1809,7 @@ impl FormatFacts {
             && encoder.carries_sdr10(codec);
         // The display can be lit in HDR; the stream is HDR while its content is.
         let lit_hdr = client_wants_hdr && capture_supports_hdr;
-        let source_hdr = lit_hdr && self.content_hdr != Some(false);
+        let source_hdr = stream_hdr(lit_hdr, self.content_hdr, shared);
         let depth_reachable = source_hdr || sdr10_chain_ok;
         // Probe may open a tiny encoder: short-circuited behind the cheap gates.
         let ten_bit_asked = host_wants_10bit && client_supports_10bit && codec.supports_10bit();
@@ -1767,6 +1817,8 @@ impl FormatFacts {
             ten_bit_gates(ten_bit_asked, depth_reachable, lit_hdr, || {
                 encoder.can_encode_10bit(codec)
             });
+        // A request lit otherwise finds no display to join.
+        let display_hdr = self.owner_hdr.unwrap_or(display_hdr);
         let bit_depth: u8 = if gpu_can_10bit { 10 } else { 8 };
         // The colour label and the capturer mandate read this, never `bit_depth >= 10` (10-bit
         // without it is SDR: BT.709 VUI).
@@ -1806,6 +1858,9 @@ impl FormatFacts {
         // `can_encode_444`. HDR does not cost chroma (HEVC Main 4:4:4 10).
         let ingest_chain_supports_444 = codec == crate::encode::Codec::PyroWave
             || crate::capture::capturer_supports_444(encoder.ingests_rgb_444());
+        // macOS capture has no 10-bit full-chroma format, so a 10-bit session there stays 4:2:0.
+        let mac_ten_bit = cfg!(target_os = "macos") && bit_depth == 10;
+        let ingest_chain_supports_444 = ingest_chain_supports_444 && !mac_ten_bit;
         // Probe opens a tiny encoder, short-circuited. A negative latches until
         // restart — a GPU either supports HEVC 4:4:4 or it does not.
         let gpu_supports_444 = if matches!(
@@ -1826,6 +1881,8 @@ impl FormatFacts {
                 crate::encode::Codec::H265 | crate::encode::Codec::PyroWave
             ) {
                 "the negotiated codec only carries 4:2:0 — 4:4:4 needs HEVC or PyroWave"
+            } else if mac_ten_bit {
+                "a 10-bit session on macOS stays 4:2:0 — capture has no 10-bit full-chroma format"
             } else if !ingest_chain_supports_444 {
                 "this host's encoder backend can't ingest full chroma — 4:4:4 needs direct \
                  NVENC (NVIDIA) or the PyroWave codec"
@@ -1904,6 +1961,16 @@ pub(super) fn follows_source(
 /// HDR the client asks for: `VIDEO_CAP_HDR`, except a joiner of an SDR display (`owner_hdr`).
 fn hdr_asked(video_caps: u8, owner_hdr: Option<bool>) -> bool {
     video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0 && owner_hdr != Some(false)
+}
+
+/// Whether the stream off a display that can be lit in HDR (`lit_hdr`) is HDR: not while its
+/// content is SDR, nor for a joiner of a `shared` capture that hands out SDR.
+fn stream_hdr(
+    lit_hdr: bool,
+    content_hdr: Option<bool>,
+    shared: Option<crate::vdisplay::admission::SampleFormat>,
+) -> bool {
+    lit_hdr && content_hdr != Some(false) && shared.is_none_or(|f| f.hdr)
 }
 
 /// The GPU's 10-bit verdict for the stream (`depth_reachable`) and for the lit display
@@ -2181,6 +2248,30 @@ pub(crate) mod tests {
             assert!(!runs_exact_rate(Some(c), true), "{c:?} shared");
         }
         assert!(runs_exact_rate(None, false));
+    }
+
+    /// A Mac forwards the pointer to a client that asked, a mirror or a joiner too, and only
+    /// while the system hands out the pointer's image.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_offers_the_pointer_only_when_it_can_leave_it_out() {
+        let encoder = crate::encode::resolve();
+        let asks = punktfunk_core::quic::CLIENT_CAP_CURSOR;
+        let offer = |caps, worker| {
+            cursor_forward(
+                caps,
+                None,
+                crate::encode::Codec::H265,
+                8,
+                false,
+                worker,
+                &encoder,
+            )
+        };
+        assert!(!offer(0, false), "a client that did not ask");
+        let readable = pf_capture::pointer_image_readable();
+        assert_eq!(offer(asks, false), readable);
+        assert_eq!(offer(asks, true), readable, "a mirror's stream is its own");
     }
 
     /// A rate stored for PyroWave reads as Automatic once the host lands on HEVC: the session
@@ -2517,6 +2608,27 @@ pub(crate) mod tests {
         assert!(hdr_asked(hdr_client, None), "not a joiner: its own ask");
     }
 
+    /// A display lit in HDR streams SDR while its content is SDR, to its owner and to a joiner
+    /// of its capture alike. A display that is not lit streams SDR whatever it shows.
+    #[test]
+    fn a_lit_display_streams_the_range_of_its_content() {
+        use crate::vdisplay::admission::SampleFormat;
+        let shared = |hdr| {
+            Some(SampleFormat {
+                bit_depth: 10,
+                chroma_444: false,
+                full_range: true,
+                hdr,
+            })
+        };
+        assert!(stream_hdr(true, None, None), "no content named: as lit");
+        assert!(stream_hdr(true, Some(true), None));
+        assert!(!stream_hdr(true, Some(false), None), "SDR content");
+        assert!(stream_hdr(true, None, shared(true)), "a joiner of PQ");
+        assert!(!stream_hdr(true, None, shared(false)), "a joiner of SDR");
+        assert!(!stream_hdr(false, Some(true), shared(true)), "not lit");
+    }
+
     /// A joiner of a limited-range capture streams limited range; a full-range one leaves its
     /// ask alone, and a session with no shared capture keeps its own.
     #[test]
@@ -2528,6 +2640,7 @@ pub(crate) mod tests {
                 bit_depth: 8,
                 chroma_444: false,
                 full_range,
+                hdr: false,
             })
         };
         let (none, both) = (

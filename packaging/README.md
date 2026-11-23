@@ -19,6 +19,7 @@ traps in each ecosystem.
 | [`nix/`](nix/) | the flake's packages and the `services.punktfunk` module | `nix.yml` |
 | [`windows/`](windows/) | the host installer, `pf-vdisplay` and the gamepad drivers | `windows-host.yml`, `windows-drivers.yml` |
 | [`winget/`](winget/) | winget manifests and the REST source | `windows-host.yml` |
+| [`macos/`](macos/) | the host as a signed development app bundle | — |
 | [`gamescope/`](gamescope/) | `punktfunk-gamescope`, patched for 10-bit HDR PipeWire capture | `deb.yml` |
 | [`linux/`](linux/), [`kde/`](kde/) | desktop entries, udev rules, firewall profiles, `host.env` presets | the distro packages |
 

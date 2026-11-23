@@ -76,6 +76,17 @@ x11rb = { version = "0.14", default-features = false }
 # `connect`, which std cannot make. Already in the host's closure through tokio and the host.
 socket2 = "0.6"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The online displays, their arrangement (`vdisplay/macos.rs`) and the private virtual-display
+# classes reached through the runtime (`vdisplay/macos_virtual.rs`).
+objc2 = { workspace = true }
+dispatch2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true }
+objc2-core-graphics = { workspace = true }
+# A screen's HDR headroom (`vdisplay/macos.rs`).
+objc2-app-kit = { workspace = true }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 pf-paths-win = { path = "../pf-paths-win" }
 # The render-adapter LUID (manager.rs).

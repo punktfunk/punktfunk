@@ -279,8 +279,9 @@ fn hosts_list_prints_one_line_per_saved_host() {
 }
 
 /// `hosts list --json`: the keys a panel reads, the preset and its pins resolved against the
-/// catalog (a dangling pin drops out), the pre-rename `profile` keys mirroring them, and
-/// `online` null when nothing was probed.
+/// catalog (a dangling pin drops out), the pre-rename `profile` keys mirroring them,
+/// `online` null when nothing was probed, and `local` false for a host loopback never
+/// answers as.
 #[test]
 fn hosts_list_json_resolves_presets_and_keeps_the_old_keys() {
     let store = scratch_store(
@@ -316,6 +317,7 @@ fn hosts_list_json_resolves_presets_and_keeps_the_old_keys() {
             "profile": preset,
             "pinned_profiles": [preset],
             "online": null,
+            "local": false,
         }]})
     );
     std::fs::remove_dir_all(&store).ok();

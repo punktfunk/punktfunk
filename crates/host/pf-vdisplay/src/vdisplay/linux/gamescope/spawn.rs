@@ -68,7 +68,8 @@ fn add_bare_gamescope_args(
         .args(["--backend", "headless"])
         .args(["-W", &mode.width.to_string()])
         .args(["-H", &mode.height.to_string()])
-        .args(["-r", &rate]);
+        .args(["-r", &rate])
+        .args(device_args(pf_gpu::linux_named_gpu().as_ref()));
     if steam_mode {
         command.arg("--steam");
     }
@@ -79,6 +80,21 @@ fn add_bare_gamescope_args(
     // `-r` is already the reported refresh. This adds the rest of the advertised set.
     command.args(refresh_rate_args(hz));
     command.args(["--xwayland-count", "1", "--"]);
+}
+
+/// `--prefer-vk-device` for a GPU the operator named, so the capture is composited where the
+/// encoder reads it and the game inside renders there too. On auto gamescope keeps Mesa's first
+/// device, the boot-VGA GPU [`pf_gpu::linux_render_node`] falls back to. Twin cards share
+/// vendor:device, so gamescope takes the first of them.
+fn device_args(named: Option<&pf_gpu::GpuInfo>) -> Vec<String> {
+    named
+        .map(|g| {
+            vec![
+                "--prefer-vk-device".to_string(),
+                format!("{:04x}:{:04x}", g.vendor_id, g.device_id),
+            ]
+        })
+        .unwrap_or_default()
 }
 
 /// Our compositor flags, the set [`verify_managed_spawn_flags`] checks. Every spawn path passes
@@ -129,14 +145,28 @@ fn cursor_args() -> Vec<String> {
 const MANGOAPP_HIDDEN: &str = "read_cfg,no_display";
 
 /// `MANGOHUD_CONFIG` for a spawn's mangoapp, or `None` to leave the env alone. A Steam spawn
-/// needs none: gamescope writes Steam a `no_display` file its performance overlay slider drives.
-/// A `MANGOHUD_CONFIG` the box already sets stands.
+/// reads a file instead ([`mangoapp_file_wanted`]). A `MANGOHUD_CONFIG` the box already sets stands.
 fn mangoapp_config(
     mangoapp: bool,
     steam_mode: bool,
     box_config: Option<&str>,
 ) -> Option<&'static str> {
     (mangoapp && !steam_mode && box_config.is_none_or(str::is_empty)).then_some(MANGOAPP_HIDDEN)
+}
+
+/// What a Steam spawn's mangoapp reads first. Steam's performance overlay slider rewrites it.
+const MANGOAPP_FILE_HIDDEN: &str = "no_display\n";
+
+/// Whether a Steam spawn gets [`MANGOAPP_FILE_HIDDEN`] as its `MANGOHUD_CONFIGFILE`. Gamescope's
+/// own file ends in a NUL that MangoHud cannot parse, so mangoapp would start shown. A file the
+/// box names stands.
+fn mangoapp_file_wanted(mangoapp: bool, steam_mode: bool, box_file: Option<&str>) -> bool {
+    mangoapp && steam_mode && box_file.is_none_or(str::is_empty)
+}
+
+/// That file for the spawn that writes `log`, so teardown finds it beside the log.
+pub(super) fn mangoapp_file(log: &std::path::Path) -> std::path::PathBuf {
+    log.with_extension("mangohud.conf")
 }
 
 /// Paint-on-commit + `--framerate-limit` at [`game_hz`], the whole-hertz form of `-r`. The two
@@ -256,9 +286,9 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 /// The WSI layer stays out of gamescope's own Vulkan process. Only a direct flatpak launch sees
 /// gamescope's Wayland socket ([`shape_flatpak_command`]); a nested Steam sees no Wayland at all
 /// ([`steam_runtime_dir_script`]), and everything else gets [`GDK_X11`]. An installed mangoapp
-/// runs hidden ([`mangoapp_config`]). Gamescope and the game write to [`spawn_log_path`] of
-/// `inst`, kept under [`LOG_CAP`]. Gamescope starts unraised ([`pf_frame::thread_qos::unraised`]):
-/// the nested game is its child and takes its nice.
+/// runs hidden ([`mangoapp_config`], [`mangoapp_file_wanted`]). Gamescope and the game write to
+/// [`spawn_log_path`] of `inst`, kept under [`LOG_CAP`]. Gamescope starts unraised
+/// ([`pf_frame::thread_qos::unraised`]): the nested game is its child and takes its nice.
 pub(super) fn spawn(
     mode: Mode,
     app: Option<String>,
@@ -309,6 +339,16 @@ pub(super) fn spawn(
     if let Some(config) = mangoapp_env {
         cmd.env("MANGOHUD_CONFIG", config);
     }
+    let box_file = crate::with_env_lock(|| std::env::var("MANGOHUD_CONFIGFILE").ok());
+    if mangoapp_file_wanted(mangoapp, steam_mode, box_file.as_deref()) {
+        let file = mangoapp_file(&log);
+        match std::fs::write(&file, MANGOAPP_FILE_HIDDEN) {
+            Ok(()) => {
+                cmd.env("MANGOHUD_CONFIGFILE", &file);
+            }
+            Err(e) => tracing::warn!(error = %e, "gamescope: mangoapp config not written"),
+        }
+    }
     add_bare_gamescope_args(&mut cmd, mode, steam_mode, grab_cursor, hdr);
     let wsi = WsiPlan::resolve();
     if wsi == WsiPlan::DistroDisabled {
@@ -334,7 +374,7 @@ pub(super) fn spawn(
         &nested_env,
         steam_dir.as_deref(),
     );
-    // Only mangoapp starts hidden. A game's own MangoHud keeps the box's config.
+    // Off Steam only mangoapp starts hidden: a game's own MangoHud keeps the box's config.
     if mangoapp_env.is_some() {
         script.insert_str(0, "unset MANGOHUD_CONFIG; ");
     }
@@ -554,8 +594,10 @@ impl Drop for GamescopeProc {
         // Clear the relayed EIS socket name so an injector can't reconnect to this now-dead
         // session's socket between sessions (the stale path is the "Connection refused").
         let _ = std::fs::remove_file(&self.relay);
-        // Drop this spawn's per-instance log so `$XDG_RUNTIME_DIR` doesn't accumulate them.
+        // Drop this spawn's per-instance log and mangoapp file so `$XDG_RUNTIME_DIR` doesn't
+        // accumulate them.
         let _ = std::fs::remove_file(&self.log);
+        let _ = std::fs::remove_file(mangoapp_file(&self.log));
         if let Some(dir) = &self.steam_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -576,6 +618,21 @@ fn exe_for_children(exe: std::path::PathBuf) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_gpu_pins_the_compositor_and_auto_leaves_it() {
+        let arc = pf_gpu::GpuInfo {
+            id: String::new(),
+            name: String::new(),
+            vendor_id: pf_gpu::VENDOR_INTEL,
+            device_id: 0xe20b,
+            occurrence: 0,
+            vram_bytes: 0,
+            handle: Default::default(),
+        };
+        assert_eq!(device_args(Some(&arc)), ["--prefer-vk-device", "8086:e20b"]);
+        assert!(device_args(None).is_empty());
+    }
 
     /// After an in-place upgrade the running host's exe link reads `… (deleted)`; the
     /// wrapper must still find a splash binary to exec.
@@ -699,6 +756,25 @@ mod tests {
         assert_eq!(mangoapp_config(true, true, None), None);
         assert_eq!(mangoapp_config(true, false, Some("fps_only")), None);
         assert_eq!(mangoapp_config(false, false, None), None);
+    }
+
+    /// A Steam spawn's mangoapp starts hidden from its own file, unless the box names one.
+    #[test]
+    fn steam_mangoapp_reads_a_hidden_file_unless_the_box_names_one() {
+        assert!(mangoapp_file_wanted(true, true, None));
+        assert!(mangoapp_file_wanted(true, true, Some("")));
+        assert!(!mangoapp_file_wanted(
+            true,
+            true,
+            Some("/etc/mangohud.conf")
+        ));
+        assert!(!mangoapp_file_wanted(true, false, None));
+        assert!(!mangoapp_file_wanted(false, true, None));
+        let log = std::path::Path::new("/run/user/1000/punktfunk-gamescope-7.log");
+        assert_eq!(
+            mangoapp_file(log),
+            std::path::Path::new("/run/user/1000/punktfunk-gamescope-7.mangohud.conf")
+        );
     }
 
     #[test]

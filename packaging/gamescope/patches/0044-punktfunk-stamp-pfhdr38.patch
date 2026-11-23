@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sat, 21 Nov 2026 10:44:20 +0100
+Subject: [PATCH 44/44] punktfunk: stamp pfhdr38
+
+A banner shows whether a box declares its LINEAR capture image external.
+On an Intel Xe2 card an older gamescope hands out compressed bytes under
+a LINEAR label. No new capability.
+---
+ src/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 3c80c4c..ffcfa51 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -230,7 +230,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr35 — …on upstream 3.17.0 (31 is upstream there)
+ #   +pfhdr36 — …and the WSI layer reports an X11 window's size as its extent range
+ #   +pfhdr37 — …and a refresh with a fraction (-r 59.94) runs to the millihertz
+-version_tag = vcs_tag + '+pfhdr37' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr38 — …and Intel is told a LINEAR capture image is exported (Xe2 compressed it)
++version_tag = vcs_tag + '+pfhdr38' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)

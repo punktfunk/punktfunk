@@ -2,7 +2,7 @@
 //! systemd unit dirs plus flatpak app dirs plus `PATH` for install markers.
 //! Best-effort and spawn-free — a missing `/proc` or unreadable dir yields no evidence.
 
-use super::{Evidence, Known};
+use super::{find_on_path, Evidence, Known};
 use std::path::Path;
 
 /// Lowercased `/proc/<pid>/comm` of every readable pid. `comm` is the kernel's
@@ -70,7 +70,7 @@ pub fn static_evidence(known: &Known) -> Vec<Evidence> {
     // PATH covers manual/package installs that have no unit or flatpak.
     let path = std::env::var_os("PATH");
     for bin in known.processes {
-        if let Some(found) = find_on_path(bin, path.as_deref()) {
+        if let Some(found) = find_on_path(bin, path.as_deref(), BIN_DIRS) {
             ev.push(Evidence::Installed { at: found });
         }
     }
@@ -114,17 +114,5 @@ fn unit_enabled(unit: &str, home: Option<&std::ffi::OsStr>) -> bool {
     false
 }
 
-fn find_on_path(bin: &str, path: Option<&std::ffi::OsStr>) -> Option<String> {
-    let dirs = path.map(std::env::split_paths).into_iter().flatten();
-    // Common bindirs even when PATH is unset or narrow (service context).
-    let extra = ["/usr/bin", "/usr/local/bin", "/bin", "/usr/games"]
-        .into_iter()
-        .map(std::path::PathBuf::from);
-    for dir in dirs.chain(extra) {
-        let cand = dir.join(bin);
-        if cand.is_file() {
-            return Some(cand.to_string_lossy().into_owned());
-        }
-    }
-    None
-}
+/// Common bindirs, read even when PATH is unset or narrow (service context).
+const BIN_DIRS: &[&str] = &["/usr/bin", "/usr/local/bin", "/bin", "/usr/games"];

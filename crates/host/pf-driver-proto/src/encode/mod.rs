@@ -636,6 +636,10 @@ pub const ENCODE_CTL_SET_REFERENCE_FLOOR: u32 = 9;
 /// encoding, whatever the link: the backend keeps the newest confirmed picture resident as the
 /// next loss's anchor. A driver without it answers `STATUS_INVALID_PARAMETER`.
 pub const ENCODE_CTL_NOTE_CONFIRMED: u32 = 10;
+/// Whether an intra-refresh wave heals the client's decoder: `arg0` 0 and the backend starts
+/// none, so a loss it cannot anchor is a keyframe. A driver without it answers
+/// `STATUS_INVALID_PARAMETER`.
+pub const ENCODE_CTL_SET_WAVE_HEALS: u32 = 11;
 
 /// `SET_ENCODE` completed with fewer reply bytes than [`SetEncodeReply`]. The IOCTL itself
 /// succeeded, so the driver adopted the host's handles: the host must not close them too.
@@ -1022,9 +1026,10 @@ mod tests {
             ENCODE_CTL_CLOSE,
             ENCODE_CTL_SET_REFERENCE_FLOOR,
             ENCODE_CTL_NOTE_CONFIRMED,
+            ENCODE_CTL_SET_WAVE_HEALS,
         ];
         println!("ENCODE_CTL ops: {ops:?}");
-        assert_eq!(ops, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(ops, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         // `0` stays unassigned: a zeroed request is not a silent keyframe.
         assert!(!ops.contains(&0));
     }

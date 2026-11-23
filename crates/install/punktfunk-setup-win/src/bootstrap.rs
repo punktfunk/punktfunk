@@ -63,13 +63,12 @@ fn extract_and_run(exe: &Path, data: &[u8], payload: &[u8]) -> Result<ExitCode, 
             .stderr(std::process::Stdio::null())
             .status();
     }
-    // The stub is the bytes before the overlay — the same wizard, minus payload and
-    // signature. Written beside the runtime under the launch name, so `unins000.exe` keeps
-    // its D6 meaning in the child.
-    let stub_len = payload.as_ptr() as usize - data.as_ptr() as usize;
+    // The child is every byte we read, signature included: Smart App Control refuses an
+    // unsigned exe. `ROOT_ENV` stops it extracting again. The launch name keeps
+    // `unins000.exe` the uninstaller (D6).
     let name = exe.file_name().ok_or("the running exe has no file name")?;
     let child = root.join("runtime").join(name);
-    std::fs::write(&child, &data[..stub_len]).map_err(|e| format!("{}: {e}", child.display()))?;
+    std::fs::write(&child, data).map_err(|e| format!("{}: {e}", child.display()))?;
     let status = std::process::Command::new(&child)
         .args(std::env::args_os().skip(1))
         .env(ROOT_ENV, &root)

@@ -134,5 +134,26 @@
 	"decky_launch_failed_preset": "Não foi possível iniciar a transmissão (“{preset}”)",
 	"decky_end_game_unresolved": "Não foi possível identificar qual jogo encerrar.",
 	"decky_trust_request_failed": "Não foi possível solicitar acesso a {host}",
-	"decky_trust_bad_fingerprint": "Não foi possível ler a identidade de {host} — pareie com um PIN."
+	"decky_trust_bad_fingerprint": "Não foi possível ler a identidade de {host} — pareie com um PIN.",
+	"decky_local_title": "Jogos na Steam",
+	"decky_local_source_hint": "Adiciona os jogos desta fonte à sua biblioteca da Steam, para jogar neste dispositivo.",
+	"decky_local_progress": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "Atualizando sua biblioteca da Steam — falta {count} jogo",
+			"n=many": "Atualizando sua biblioteca da Steam — faltam {count} jogos",
+			"n=other": "Atualizando sua biblioteca da Steam — faltam {count} jogos"
+		}
+	}],
+	"decky_local_gone_hint": [{
+		"declarations": ["input count", "local n = count: plural"],
+		"selectors": ["n"],
+		"match": {
+			"n=one": "{count} jogo adicionado à Steam não está mais na biblioteca deste dispositivo.",
+			"n=many": "{count} jogos adicionados à Steam não estão mais na biblioteca deste dispositivo.",
+			"n=other": "{count} jogos adicionados à Steam não estão mais na biblioteca deste dispositivo."
+		}
+	}],
+	"decky_local_shared_layout_hint": "Tem o mesmo nome de um jogo que você transmite, então usa o layout do controle dessa transmissão."
 }

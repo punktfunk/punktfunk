@@ -277,5 +277,7 @@
 	"apple_usage_microphone": "Dein Mikrofon wird zum verbundenen Punktfunk-Host gestreamt und erscheint dort als virtuelles Mikrofon.",
 	"apple_usage_face_id": "Face ID öffnet dein eigenes Konto auf einem Host ohne dessen Passwort.",
 	"apple_usage_bluetooth": "Über Bluetooth liest Punktfunk deinen Steam Controller und reicht ihn an deinen Host durch.",
+	"apple_usage_host_audio_capture": "Punktfunk Host streamt den Ton dieses Geräts zusammen mit dem Bild.",
+	"apple_usage_host_local_network": "Über das lokale Netzwerk finden Geräte Punktfunk Host und verbinden sich, um von ihm zu streamen.",
 	"apple_pad_rumble_failed": "Der Vibrationstest ließ sich nicht ausführen – {error}"
 }

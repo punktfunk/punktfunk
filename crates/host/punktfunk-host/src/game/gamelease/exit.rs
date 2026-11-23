@@ -13,7 +13,6 @@
 //! Pin with the table tests below. Design: `design/session-game-lifetime.md`.
 
 // macOS has no watcher: only the tests read this module there.
-#![cfg_attr(target_os = "macos", allow(dead_code))]
 
 use super::{EXIT_CONFIRM, VETO_LIMIT};
 use std::time::{Duration, Instant};

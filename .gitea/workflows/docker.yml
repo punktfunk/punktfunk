@@ -83,6 +83,8 @@ jobs:
     runs-on: ${{ matrix.runner || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
+      # Each image stands alone: one runner's fault must not cancel the other images' builds.
+      fail-fast: false
       matrix:
         include:
           - image: punktfunk-rust-ci
@@ -175,9 +177,12 @@ jobs:
 
       - name: Push
         if: steps.exists.outputs.hit == 'false'
+        # The registry can take longer than docker's 30 s header wait to commit a large layer
+        # while ci-core's disk flushes. Pushing again skips the layers already there.
         run: |
-          docker push "$CI_REGISTRY_PUSH/${{ matrix.image }}:$KEY"
-          docker push "$CI_REGISTRY_PUSH/${{ matrix.image }}:latest"
+          push() { for i in 1 2 3; do docker push "$1" && return; sleep 20; done; return 1; }
+          push "$CI_REGISTRY_PUSH/${{ matrix.image }}:$KEY"
+          push "$CI_REGISTRY_PUSH/${{ matrix.image }}:latest"
 
       # :latest must be whatever ci/ says it is, on every run — not only on the runs that
       # happened to build. Two things break that: an out-of-band overwrite (reachable only
@@ -265,9 +270,11 @@ jobs:
 
       - name: Push
         if: steps.exists.outputs.hit == 'false'
+        # Retried for the same reason as the builders' Push above.
         run: |
-          docker push "$CI_REGISTRY_PUSH/$IMAGE:$KEY"
-          docker push "$CI_REGISTRY_PUSH/$IMAGE:latest"
+          push() { for i in 1 2 3; do docker push "$1" && return; sleep 20; done; return 1; }
+          push "$CI_REGISTRY_PUSH/$IMAGE:$KEY"
+          push "$CI_REGISTRY_PUSH/$IMAGE:latest"
 
       - name: Reconcile :latest with the content key
         run: .gitea/scripts/reconcile-latest.sh "$IMAGE" "$KEY"
@@ -333,9 +340,8 @@ jobs:
           case "$GITHUB_REF" in refs/tags/v*) docker push "$REGISTRY/$OWNER/${{ matrix.image }}:${GITHUB_REF_NAME}" ;; esac
 
   # Deploy the docs site to unom-1, the DMZ services VM website/cms also deploy to
-  # (docs.punktfunk.unom.io via Caddy on home-reverse-proxy-1 -> :3220). Same secret set
-  # as unom/website's deploy: DEPLOY_HOST/DEPLOY_USER/DEPLOY_PORT/DEPLOY_SSH_KEY (the
-  # unom-ci-deploy key).
+  # (docs.punktfunk.unom.io via Caddy on home-reverse-proxy-1 -> :3220). DEPLOY_HOST/USER/PORT/
+  # SSH_KEY are the unom-ci-deploy key; DEPLOY_KNOWN_HOSTS pins the host (scripts/ci/unom1-ssh.sh).
   deploy-docs:
     runs-on: ubuntu-24.04
     needs: apps
@@ -343,40 +349,23 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Sync compose file
-        # SHA-pinned (not tag-pinned): this action receives DEPLOY_SSH_KEY + host/user/port, so a
-        # moved tag would mean credential exfiltration. v0.1.7 = 917f8b8. Bump both the SHA and the
-        # trailing version together when upgrading.
-        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: "compose.production.yml"
-          target: "~/punktfunk-docs"
-          overwrite: true
-
-      - name: Pull and start docs
-        # SHA-pinned: receives DEPLOY_SSH_KEY + REGISTRY_TOKEN (see the scp step above). v1.2.5 = 0ff4204.
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+      - name: Sync compose file, pull and start docs
         env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          # Token enters via env, never the script text (keeps it out of run logs).
-          envs: REGISTRY_TOKEN
-          script: |
-            set -euo pipefail
-            # Log out on EVERY exit path: unlike the ephemeral LAN-registry runners, this is a
-            # long-lived internet-facing VM, so a `write:package` PAT left base64-encoded in
-            # ~/.docker/config.json is credential-at-rest on the most exposed host in the estate.
-            # The LAN jobs above `docker logout` too.
-            trap 'docker logout git.unom.io || true' EXIT
-            printf '%s' "$REGISTRY_TOKEN" | docker login git.unom.io -u enricobuehler --password-stdin
+        run: |
+          . scripts/ci/unom1-ssh.sh
+          $SSH "$DEST" 'mkdir -p ~/punktfunk-docs'
+          $SCP compose.production.yml "$DEST:punktfunk-docs/"
+          # The token rides stdin, never the command line. unom-1 faces the internet, so the
+          # `write:package` token is logged out on every exit path, not left at rest.
+          printf '%s' "$REGISTRY_TOKEN" | $SSH "$DEST" 'set -eu
+            trap "docker logout git.unom.io >/dev/null 2>&1 || true" EXIT
+            docker login git.unom.io -u enricobuehler --password-stdin
             cd ~/punktfunk-docs
             docker compose -f compose.production.yml pull docs
-            docker compose -f compose.production.yml up -d --no-build docs
+            docker compose -f compose.production.yml up -d --no-build docs'

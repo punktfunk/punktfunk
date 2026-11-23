@@ -352,8 +352,10 @@ fn run(
             plane: crate::events::Plane::Gamestream,
             preset: None,
             profile: None,
-            pad: punktfunk_core::config::GamepadPref::Xbox360,
-            pad_slots: None,
+            pads: crate::session_launch::Pads::Session {
+                kind: punktfunk_core::config::GamepadPref::Xbox360,
+                slots: None,
+            },
         };
         // The entry's own `apps.json` prep, then its library entry's when that entry is what
         // launches: a hidden title's steps don't run. `PF_APP_TITLE` and the `PF_STREAM_*`
@@ -451,7 +453,10 @@ fn run(
                     gamescope_route.as_ref(),
                 ) && nested_launch_started,
                 seat: seat.as_deref(),
+                place: crate::library::Place::Stream,
             },
+            #[cfg(windows)]
+            &crate::library::View::here(),
         );
 
         // Exit ends the session; session end can end the game only if asked, and a drop waits
@@ -873,8 +878,9 @@ fn open_gs_virtual_source(
         crate::vdisplay::open_for(compositor, device, None).context("open virtual display")?;
     vd.set_hw_cursor(host_composites_metadata_cursor(compositor, cfg));
     // gamescope takes its HDR flags and display-reuse key from this. An HDR plan captures PQ
-    // only, so without it an SDR gamescope streams SDR inside a PQ container.
-    vd.set_hdr(cfg.hdr);
+    // only, so without it an SDR gamescope streams SDR inside a PQ container. A joiner asks
+    // for the display as its owner lit it, which may stream SDR.
+    vd.set_hdr(joined.as_ref().map_or(cfg.hdr, |(_, d)| d.hdr));
     // Per-session, not a process-global env: concurrent sessions must not stomp launch targets.
     vd.set_launch_command(launch.and_then(|t| t.command.clone()));
     // Same reason: a process env let either plane retarget the other's `create`.
@@ -945,6 +951,8 @@ fn gs_capture_output(
             screen: 0,
             gamescope_cursor: crate::session_plan::gamescope_cursor_for(gamescope, route),
             mirrored: plan.mirrored,
+            #[cfg(target_os = "macos")]
+            framing: None,
         },
     )
     .context("capture virtual output")?;
@@ -968,6 +976,7 @@ pub(super) fn sample_format(cfg: &StreamConfig) -> crate::vdisplay::admission::S
             cfg.hdr,
             bit_depth,
         ),
+        hdr: cfg.hdr,
     }
 }
 
@@ -1919,8 +1928,8 @@ impl GsLoop<'_> {
                     to = %format!("{}x{} {:?}", to.1, to.2, to.0),
                     negotiated = ?(self.cfg.width, self.cfg.height),
                     "gamestream: the capture source changed mode mid-stream — reopened the \
-                     encoder at the delivered size (the client is not told; a strict decoder \
-                     may not follow — see the note at this guard)"
+                     encoder at the delivered size (the client is not told, and a strict \
+                     decoder may not follow)"
                 );
                 Ok(true)
             }

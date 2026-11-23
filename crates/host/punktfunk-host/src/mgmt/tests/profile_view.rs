@@ -9,7 +9,7 @@ pub(super) const SEAT_P: &str = "a1b2c3d4e5f6";
 /// A profile that shares the owner's desktop.
 pub(super) const SHARER: &str = "0a0b0c0d0e0f";
 /// [`SEAT_P`]'s row in the seats ledger.
-const SEAT: &str = "0123456789abcdef0123456789abcdef";
+pub(super) const SEAT: &str = "0123456789abcdef0123456789abcdef";
 
 /// The owner, [`SEAT_P`] and [`SHARER`].
 pub(super) fn profiles() -> serde_json::Value {
@@ -742,7 +742,7 @@ async fn a_seat_host_lists_what_the_box_lists_as_its_profile() {
     let own = pf_paths::seat::own_account();
     assert_eq!(
         crate::library::Reach::here(),
-        crate::library::Reach::seat(own)
+        crate::library::Reach::seat(own, SEAT)
     );
     let app = test_app_on(test_state(), None, true);
     for path in SEAT_ROUTES {
@@ -798,7 +798,7 @@ async fn a_seat_host_lists_what_the_box_lists_as_its_profile() {
 async fn the_box_refuses_a_title_it_does_not_list_by_its_library() {
     let tmp = ConfigDirOverride::new();
     write_fixture(tmp.path());
-    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false));
+    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false, SEAT));
     for id in ["steam:70", "steam:570", "lutris:4", "custom:r1"] {
         assert!(crate::library::held_back(&view, id), "{id}");
     }
@@ -809,6 +809,36 @@ async fn the_box_refuses_a_title_it_does_not_list_by_its_library() {
         let why = crate::library::launch_refusal(&view, id).0;
         assert_eq!(why, "launch_title_not_in_library", "{id}");
     }
+}
+
+/// A seat lists the owner's Steam shortcut only once the seat service put it into that seat's
+/// Steam, as its `library-seat-shortcuts.json` names it. The box's own view lists every one.
+#[tokio::test]
+async fn a_seat_lists_only_the_shortcuts_its_steam_has() {
+    let tmp = ConfigDirOverride::new();
+    let shortcut = |appid: u32| {
+        let id = (u64::from(appid) << 32) | 0x0200_0000;
+        serde_json::json!({"id": appid.to_string(), "title": "Shortcut", "provider": "steam",
+            "store": "steam", "external_id": appid.to_string(),
+            "launch": {"kind": "steam_appid", "value": id.to_string()}})
+    };
+    let library =
+        serde_json::json!({"entries": [shortcut(2_803_639_124), shortcut(2_975_785_097)]});
+    std::fs::write(tmp.path().join("library.json"), library.to_string()).unwrap();
+    let seat = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false, SEAT));
+    let listed = |view: &crate::library::View| {
+        let games = crate::library::all_games_for(view);
+        ["steam:2803639124", "steam:2975785097"].map(|id| games.iter().any(|g| g.id == id))
+    };
+    assert_eq!(listed(&seat), [false, false]);
+    let rows = serde_json::json!({SEAT: [2_803_639_124u32], "ffffffffffffffffffffffffffffffff": [2_975_785_097u32]});
+    std::fs::write(
+        tmp.path().join(pf_seats::steam::shortcuts::SEAT_FILE),
+        rows.to_string(),
+    )
+    .unwrap();
+    assert_eq!(listed(&seat), [true, false]);
+    assert_eq!(listed(&crate::library::View::default()), [true, true]);
 }
 
 /// The box's answers for [`SEAT_P`], then the seat's half of the test in a child.
@@ -1003,7 +1033,7 @@ async fn run_own_titles() {
     assert!(doom.get("launch").is_none(), "{doom}");
     let art = doom["art"]["hero"].as_str().unwrap_or_default();
     assert!(art.ends_with(&format!("&as={SEAT_P}")), "{art}");
-    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false));
+    let view = crate::library::View::of(SEAT_P, false, crate::library::Reach::seat(false, SEAT));
     assert!(crate::library::resolve_launch(&view, &id).is_none());
     let why = crate::library::launch_refusal(&view, &id).0;
     assert_eq!(why, "launch_title_not_on_desktop");

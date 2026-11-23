@@ -1,5 +1,5 @@
 //! Launched games as `/status` lists them: live sessions' leases, the compat plane's
-//! one slot, and launches still waiting for their session.
+//! one slot, the desk's own launches, and launches still waiting for their session.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -24,8 +24,10 @@ pub struct GameSnapshot {
     pub awaiting_window: bool,
     /// Seconds left before the game is ended. Set only on a `grace` row.
     pub grace_remaining_s: Option<u64>,
-    /// Hex fingerprint of the device that launched it; `None` if anonymous.
+    /// Hex fingerprint of the device that launched it, or the desk's key; `None` if anonymous.
     pub launched_by: Option<String>,
+    /// Why a desk launch was refused late or died at the start, on its `exited` row.
+    pub outcome: Option<punktfunk_core::quic::LaunchOutcome>,
 }
 
 /// Compat plane's launched game, while it has one.
@@ -58,10 +60,11 @@ impl Drop for GamestreamGameGuard {
 
 /// Every launched game the host currently knows: live sessions first, then
 /// the compat plane, then games waiting out a reconnect window, then launches
-/// still running with no session ([`crate::launchreg::detached`]), then
-/// launches still waiting for their session ([`waiting_launch`]).
+/// still running with no session ([`crate::launchreg::detached`]), then the
+/// desk's own ([`crate::desk::snapshot`]), then launches still waiting for their
+/// session ([`waiting_launch`]).
 ///
-/// Sources stay separate — a grace-pending or detached game has no session
+/// Sources stay separate — a grace-pending, detached or desk game has no session
 /// to hang off, and omitting it would hide a game the player can still end.
 pub fn games() -> Vec<GameSnapshot> {
     let mut out: Vec<GameSnapshot> = registry()
@@ -79,6 +82,7 @@ pub fn games() -> Vec<GameSnapshot> {
                 awaiting_window: g.awaits_window(),
                 grace_remaining_s: None,
                 launched_by: g.fingerprint.clone(),
+                outcome: None,
             })
         })
         .collect();
@@ -100,6 +104,7 @@ pub fn games() -> Vec<GameSnapshot> {
                 awaiting_window: g.awaits_window(),
                 grace_remaining_s: None,
                 launched_by: g.fingerprint.clone(),
+                outcome: None,
             }),
     );
     out.extend(
@@ -116,6 +121,7 @@ pub fn games() -> Vec<GameSnapshot> {
                 awaiting_window: false,
                 grace_remaining_s: Some(remaining),
                 launched_by: g.fingerprint.clone(),
+                outcome: None,
             }),
     );
     out.extend(
@@ -132,8 +138,10 @@ pub fn games() -> Vec<GameSnapshot> {
                 awaiting_window: false,
                 grace_remaining_s: None,
                 launched_by: Some(d.fingerprint),
+                outcome: None,
             }),
     );
+    out.extend(crate::desk::snapshot());
     // A waiting launch's row stands in until its session lists the game itself.
     for (_, w) in waiting()
         .lock()

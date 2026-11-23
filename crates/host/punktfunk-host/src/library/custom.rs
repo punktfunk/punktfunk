@@ -418,12 +418,12 @@ fn entry_in(view: &View, library_id: &str) -> Option<CustomEntry> {
     if is_own_id(library_id) {
         return own_entries(view).into_iter().find(|e| e.id == library_id);
     }
-    let off = disabled_scanners(view);
+    let gate = Gate::of(view);
     catalog()
         .entries
         .iter()
         .find(|e| library_id_for(e) == library_id)
-        .filter(|e| !source_off(e, &off, view.reach))
+        .filter(|e| !source_off(e, &gate))
         .cloned()
 }
 

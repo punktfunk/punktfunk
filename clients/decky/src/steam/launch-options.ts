@@ -89,3 +89,12 @@ export function launchOptions(
   // script rides behind it as an argument and reads PF_* from the environment.
   return `${env.join(" ")} %command% "${runner}"`;
 }
+
+/** The launch options of a title synced from this device's library. No library id rides them:
+ *  `play` asks the host by Steam's SteamGameId. */
+export function localLaunchOptions(runner: string, hostBin: string): string {
+  if (!isSafeClientBin(hostBin)) {
+    throw new Error(`host path can't ride the launch options: ${hostBin}`);
+  }
+  return `PF_LOCAL=1 PF_HOST_BIN=${hostBin} %command% "${runner}"`;
+}

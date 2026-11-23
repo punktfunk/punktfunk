@@ -93,14 +93,15 @@ punktfunk-host ctl approve 3
 | `access <FP> <PRESET>` | `full`, `controller` or `view` — see [Access levels](/docs/access-levels). |
 | `unpair <FP>` | Remove one device. `unpair --all` removes every device on both planes; it asks first, or takes `--yes`. |
 | `stop-session` | Stop the active session. |
-| `end-game` | End the launched game. |
+| `end-game` | End the launched game. A game [at the desk](/docs/play-on-this-device) stays: it ends only when named, from an app or the web console. |
+| `launch <ID>` | Start a library title on the host's own screen, with no stream: `launch steam:570`. |
 | `display` | The virtual-display policy, every preset, and the live and kept displays. |
 | `display preset <ID>` | Switch to a preset. The streamed screen and other settings a preset doesn't own stay. |
 | `display release [SLOT]` | Tear down kept displays now; omit `SLOT` for all. Never touches a streaming display. |
 | `stats` | Mode, codec and bitrate of the live stream; frame timings and drops while a capture records. |
 | `stats record start\|stop` | Arm or stop the performance capture. `stop` writes it to disk. The console shares the one slot. |
 | `watch` | Host events as line-JSON. `--kinds pairing.pending,stream.*` filters; `--since <seq>` resumes. |
-| `console-url` | Print a `file://` link that opens the console already logged in. Linux, and inside a Windows seat, where it prints the person's own link and `--open` opens it. |
+| `console-url` | Print a `file://` link that opens the console already logged in, on Linux and macOS. Inside a Windows seat it prints the person's own link. `--open` also opens it, on macOS and Windows. |
 
 In `stats`, **Target** is the encoder's bitrate; **Sent** is what left the box and exists only while
 a capture records. A still screen sends little, so read **new** fps beside **repeated** fps.

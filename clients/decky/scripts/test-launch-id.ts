@@ -7,6 +7,7 @@ import {
   isSafeClientBin,
   isSafeLaunchId,
   launchOptions,
+  localLaunchOptions,
   validateLaunch,
 } from "../src/steam/launch-options.ts";
 
@@ -150,3 +151,23 @@ for (const [ref, opts, what] of [
   assert.throws(() => validateLaunch(ref, opts), what, `${ref} ${JSON.stringify(opts)}`);
 }
 console.log("launch options tests passed");
+
+// A synced title of this device's library: the host binary rides as PF_HOST_BIN, every place
+// host_bin() finds one passes, and no library id ever rides the options.
+for (const bin of [
+  "/usr/bin/punktfunk-host",
+  "/home/deck/punktfunk/target-steamos/release/punktfunk-host",
+  "/var/lib/extensions/punktfunk/usr/bin/punktfunk-host",
+  "/home/deck/.local/bin/punktfunk-host",
+]) {
+  assert.equal(
+    localLaunchOptions(runner, bin),
+    `PF_LOCAL=1 PF_HOST_BIN=${bin} ${tail}`,
+    `host binary ${bin}`,
+  );
+}
+for (const bin of ["", "punktfunk-host", "/home/deck/my games/punktfunk-host", "/a;id", "/a$(id)"]) {
+  assert.throws(() => localLaunchOptions(runner, bin), /host path/, `unsafe host path ${JSON.stringify(bin)}`);
+}
+assert.ok(!localLaunchOptions(runner, "/usr/bin/punktfunk-host").includes("PF_GAME"), "no library id");
+console.log("local launch options tests passed");

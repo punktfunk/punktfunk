@@ -943,7 +943,7 @@ impl NvencCudaEncoder {
         });
         match fresh {
             Ok(nv::NVENCSTATUS::NV_ENC_SUCCESS) => tracing::error!(
-                "NVENC self-diagnosis: the session opens FINE on a fresh CUDA context — the \
+                "NVENC self-diagnosis: the session opens fine on a fresh CUDA context — the \
                  host's shared CUDA context is in a bad state (host bug; please report this log)"
             ),
             Ok(st) => tracing::error!(
@@ -2076,6 +2076,10 @@ impl Encoder for NvencCudaEncoder {
 
     fn note_confirmed(&mut self, acked: Option<crate::Acked>) {
         self.s.confirmed = acked;
+    }
+
+    fn set_wave_heals(&mut self, heals: bool) {
+        self.s.wave_heals = heals;
     }
 
     fn invalidate_ref_frames(&mut self, first: i64, last: i64) -> bool {

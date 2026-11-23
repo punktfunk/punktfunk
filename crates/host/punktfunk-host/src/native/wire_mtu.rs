@@ -118,6 +118,15 @@ struct JumboStart {
     clamped_udp_budget: Option<u16>,
 }
 
+/// The settle that proves `peer`'s path carries full-size video. An IPv6 search stops short
+/// of the IPv4 ceiling on a clean 1500 path, so there it is the default datagram itself.
+fn full_size_settle(peer: IpAddr) -> u16 {
+    match peer.to_canonical() {
+        IpAddr::V4(_) => video_datagram_udp_ceiling() as u16,
+        v6 => sealed_datagram_bytes(mtu1500_shard_payload_for(v6)) as u16,
+    }
+}
+
 /// Jumbo shard for `peer` that seals within `udp_budget`, or `None` when there is nothing to
 /// gain. The budget is a settle above the 1500 wire; `u16::MAX` asks for the target alone. Ends
 /// whose adapters differ settle below the larger one, so the settle, not the target, sizes it.
@@ -237,8 +246,8 @@ fn resolve(
             default,
             live_udp_mtu = jumbo.live_udp_mtu,
             proven_udp_budget = jumbo.proven_udp_budget,
-            "wire MTU: session starts at the JUMBO shard — this path proved it in a previous \
-             session AND re-proved it live on this connection (~6× fewer datagrams per frame)"
+            "wire MTU: session starts at the jumbo shard — this path proved it in a previous \
+             session and re-proved it live on this connection (~6× fewer datagrams per frame)"
         );
         return p;
     }
@@ -424,7 +433,7 @@ impl Watch {
                 },
             );
             tracing::info!(peer = %peer, discovered_udp_mtu = settled, goal,
-                "wire MTU: this path carries JUMBO video datagrams — the next session over \
+                "wire MTU: this path carries jumbo video datagrams — the next session over \
                  it starts at the big shard (it still has to re-prove the path live)");
         } else if jumbo_verdicts().lock().unwrap().remove(&key).is_some() {
             tracing::info!(peer = %peer, discovered_udp_mtu = settled, goal,
@@ -441,7 +450,7 @@ impl Watch {
     /// lower one counts only from a connection alive through the window, since a closed one
     /// stops discovering and a high-RTT path can still be mid-search.
     fn learn(&self, peer: IpAddr, settled: u16) {
-        if settled >= video_datagram_udp_ceiling() as u16 {
+        if settled >= full_size_settle(peer) {
             if learned().lock().unwrap().remove(&peer).is_some() {
                 tracing::info!(peer = %peer,
                     "wire MTU: path re-measured at full size — learned clamp cleared");
@@ -457,7 +466,7 @@ impl Watch {
     /// the session is ended.
     async fn fit(&mut self, addr: SocketAddr, settled: u16, moved: bool) -> bool {
         let peer = addr.ip();
-        let ceiling = video_datagram_udp_ceiling() as u16;
+        let ceiling = full_size_settle(peer);
         if sealed_datagram_bytes(self.current) <= settled as usize {
             if settled < ceiling {
                 tracing::info!(peer = %peer, discovered_udp_mtu = settled,
@@ -470,24 +479,21 @@ impl Watch {
                 peer = %peer,
                 discovered_udp_mtu = settled,
                 shard_payload = self.current,
-                "wire MTU: this session started at a JUMBO shard but the path does not \
-                 carry it — video datagrams are oversized for a hop, which streams as a \
-                 black screen with zero reported loss. The jumbo verdict for this path is \
-                 cleared: the next connect starts at the standard 1500-byte wire."
+                "wire MTU: this session started at a jumbo shard the path doesn't carry — the \
+                 path's jumbo verdict is cleared and the next connect starts at the standard \
+                 1500-byte wire"
             );
         } else {
             tracing::warn!(
                 peer = %peer,
                 discovered_udp_mtu = settled,
                 needed_udp_mtu = ceiling,
-                "wire MTU: this path CANNOT carry full-size video datagrams — the control \
-                 plane works but every video packet is oversized for a hop, which streams as \
-                 an endless black screen with zero reported loss. Typical cause: a VPN/overlay \
-                 adapter (Tailscale / Cloudflare WARP / ZeroTier) claiming the LAN route, or a \
-                 lowered NIC MTU — compare `ping <client> -f -l 1450` vs `-l 1200` and check \
-                 `netsh interface ipv4 show subinterfaces` (Windows) / `ip link` (Linux). The \
-                 measured budget is recorded: the NEXT session from this client sizes video to \
-                 fit automatically. To pin it for all sessions set PUNKTFUNK_WIRE_MTU."
+                "wire MTU: this path can't carry full-size video datagrams — usually a VPN or \
+                 overlay adapter (Tailscale, Cloudflare WARP, ZeroTier) holding the LAN route, \
+                 or a lowered NIC MTU (compare `ping <client> -f -l 1450` with `-l 1200`; \
+                 `netsh interface ipv4 show subinterfaces` on Windows, `ip link` on Linux). \
+                 Video is resized to the measured path; \
+                 PUNKTFUNK_WIRE_MTU pins a size for every session"
             );
         }
         if self.reneg.is_some() {
@@ -856,6 +862,19 @@ mod tests {
             None
         );
         assert_eq!(shrink_to(floor, 1200, V4), None);
+    }
+
+    /// On a clean 1500 path an IPv6 search stops at 1438, below the 1452 that fits: quinn
+    /// steps in 20 bytes from 1200 toward the 1472 ceiling. That settle keeps the v6 default
+    /// and reads as full size, so no clamp is learned from it.
+    #[test]
+    fn an_ipv6_settle_on_a_1500_path_keeps_the_default_shard() {
+        let full = mtu1500_shard_payload_for(V6);
+        assert_eq!(shrink_to(full, 1438, V6), None);
+        assert_eq!(shard_payload_for_udp_budget(1438, V6), full);
+        assert!(1438 >= full_size_settle(V6));
+        assert!(1438 < full_size_settle(V4));
+        assert_eq!(full_size_settle(V4) as usize, video_datagram_udp_ceiling());
     }
 
     /// After a move the next settle grows back toward the start shard, never past it, and

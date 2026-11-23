@@ -111,15 +111,15 @@ impl WindowsLaunch {
     }
 }
 
-/// Launches a store-qualified library id as the user of the host's WTS session.
+/// Launches a store-qualified library id from `view`'s library as the user of the host's WTS
+/// session.
 ///
 /// [`windows_launch_for`] maps the recipe and
-/// [`crate::interactive::spawn_as_current_session_user`] starts it after capture
-/// is live. The returned PID enters
+/// [`crate::interactive::spawn_as_current_session_user`] starts it. The returned PID enters
 /// [`crate::gamelease::LeaseRequest::spawned`] only when it owns the game rather
 /// than a protocol hand-off.
-pub fn launch_title(id: &str) -> Result<WindowsLaunch> {
-    let entry = find_game_for(&View::here(), id)
+pub fn launch_title(view: &View, id: &str) -> Result<WindowsLaunch> {
+    let entry = find_game_for(view, id)
         .filter(|g| g.launch.is_some())
         .ok_or_else(|| anyhow::anyhow!("no launchable library entry '{id}'"))?;
     let spec = entry.launch.clone().expect("filtered to Some above");
@@ -737,24 +737,6 @@ fn push_unique(out: &mut Vec<std::path::PathBuf>, path: std::path::PathBuf) {
     }
 }
 
-/// Epic URI from a `<namespace>:<catalogItemId>:<appName>` triple or a bare
-/// `appName`. Charset-checked so the URI stays one argv token.
-pub(crate) fn epic_launch_uri(value: &str) -> Option<String> {
-    let ok = |s: &str| {
-        !s.is_empty()
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-    };
-    let inner = match value.split(':').collect::<Vec<_>>().as_slice() {
-        [ns, cat, app] if ok(ns) && ok(cat) && ok(app) => format!("{ns}%3A{cat}%3A{app}"),
-        [app] if ok(app) => (*app).to_string(),
-        _ => return None,
-    };
-    Some(format!(
-        "com.epicgames.launcher://apps/{inner}?action=launch&silent=true"
-    ))
-}
-
 /// GOG `exe \t args \t workdir` triple → `(cmdline, workdir)`. Direct spawn
 /// (no Galaxy). Re-confine exe and workdir to [`gog_install_dirs`]: the plugin
 /// already confined at parse, but the triple arrives over the provider API.
@@ -1059,19 +1041,6 @@ mod tests {
         );
         assert!(ui("nonsense").is_none());
         assert!(ui("").is_none());
-    }
-    #[test]
-    fn epic_launch_uri_triple_bare_and_guard() {
-        assert_eq!(
-            epic_launch_uri("fn:abc:Fortnite").as_deref(),
-            Some("com.epicgames.launcher://apps/fn%3Aabc%3AFortnite?action=launch&silent=true")
-        );
-        assert_eq!(
-            epic_launch_uri("Fortnite").as_deref(),
-            Some("com.epicgames.launcher://apps/Fortnite?action=launch&silent=true")
-        );
-        assert!(epic_launch_uri("bad part:x:y").is_none());
-        assert!(epic_launch_uri("").is_none());
     }
     #[test]
     fn gog_spawn_parses_and_guards() {

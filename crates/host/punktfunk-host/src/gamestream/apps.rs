@@ -71,6 +71,7 @@ fn parse_compositor(s: &str) -> Option<crate::vdisplay::Compositor> {
         "hyprland" => Some(Hyprland),
         "niri" | "biri" => Some(Niri),
         "umbriel" => Some(Umbriel),
+        "mango" | "mangowm" | "mangowc" => Some(Mango),
         "wlroots" | "sway" | "river" => Some(Wlroots),
         _ => None,
     }

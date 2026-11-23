@@ -204,6 +204,9 @@ pub enum ActionOutcome {
     Handled,
     /// Launch. Boxed because SessionParams is large next to the unit variants.
     Start(Box<SessionParams>),
+    /// The launch was refused before any dial, and the handler said why on its own: the
+    /// console's connect ends.
+    Refused,
     Quit,
 }
 
@@ -291,9 +294,12 @@ struct Shell {
     overlay_damage: OverlayDamage,
     /// Ring Keyboard slot: hold text input on, which summons Steam's OSK under gamescope.
     ring_keyboard: bool,
-    /// SDL text input tracks overlay editing (IME / Steam OSK): `Some(secure)` while on.
-    /// Toggled edge-wise — start/stop are not free on Wayland.
-    text_input_on: Option<bool>,
+    /// A key press held while SDL text input is on toward a text host. The `TextInput` SDL
+    /// queues behind it replaces it; any other event sends it as the key.
+    typed_key: Option<(sdl3::keyboard::Scancode, bool)>,
+    /// Why SDL text input is on (IME, Steam's keyboard); `None` while off. Toggled edge-wise —
+    /// start/stop are not free on Wayland.
+    text_input_on: Option<events::TextWant>,
     overlay_frame: Option<OverlayFrame>,
     stats_verbosity: StatsVerbosity,
     fullscreen: bool,
@@ -335,6 +341,9 @@ struct Shell {
     ring_was_open: bool,
     /// SDL's screen saver hold as last set. SDL holds it from start, so this begins `true`.
     screen_held: bool,
+    /// A title this device's own host started is up: the console draws nothing, holds no
+    /// pad and no screen saver ([`Overlay::playing_here`]), edge-tracked.
+    let_go: bool,
     pump: GamepadPump,
     gamepad: GamepadService,
     overlay: Option<Box<dyn Overlay>>,
@@ -578,6 +587,7 @@ fn run_inner(opts: SessionOpts, mut mode: ModeCtl) -> Result<Outcome> {
                     break 'main outcome;
                 }
             }
+            sh.send_typed_key(&mut stream);
             // Native events forward only when capture owns the entire SDL batch.
             sh.scroll_routing
                 .finish(capture_mut(&mut stream), sh.overlay.as_deref());

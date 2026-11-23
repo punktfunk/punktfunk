@@ -21,6 +21,10 @@ use anyhow::Result;
 #[cfg(not(target_os = "linux"))]
 use anyhow::bail;
 
+/// The macOS main display's connector: a session's own screen there.
+#[cfg(target_os = "macos")]
+pub use crate::macos::main_display;
+
 /// One head as the compositor currently reports it.
 ///
 /// `x`/`y` are logical — compositor global layout, the same space libei
@@ -125,6 +129,8 @@ pub fn list(compositor: Compositor) -> Result<Vec<PhysicalMonitor>> {
         Compositor::Niri => crate::niri::list_monitors(),
         #[cfg(target_os = "linux")]
         Compositor::Umbriel => crate::umbriel::list_monitors(),
+        #[cfg(target_os = "linux")]
+        Compositor::Mango => crate::mango::list_monitors(),
         // Game Mode gamescope is DRM master and has a real connector; nested
         // ones this crate spawns are headless. Empty list, not an error, for those.
         #[cfg(target_os = "linux")]
@@ -133,6 +139,9 @@ pub fn list(compositor: Compositor) -> Result<Vec<PhysicalMonitor>> {
         Compositor::Windows => {
             anyhow::bail!("physical-monitor enumeration needs a Linux backend")
         }
+        // CoreGraphics' online displays, sorted as the Linux lists are.
+        #[cfg(target_os = "macos")]
+        Compositor::MacOs => crate::macos::list_monitors(),
         #[cfg(not(target_os = "linux"))]
         _ => bail!("physical-monitor enumeration is implemented for the Linux backends only"),
     }

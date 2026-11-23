@@ -15,6 +15,10 @@ clients/apple/PunktfunkCore.xcframework/
 clients/apple/.swiftpm/
 # String Catalog + L10n.swift from l10n/messages (scripts/gen-l10n-apple.sh)
 clients/apple/Sources/PunktfunkShared/Generated/
+# The macOS host UI package's build output and strings (scripts/gen-l10n-hostui.sh)
+packaging/macos/HostUI/.build/
+packaging/macos/HostUI/.swiftpm/
+packaging/macos/HostUI/Sources/PunktfunkHostUI/Generated/
 # Generated App Store screenshots (tools/screenshots.sh output; uploaded as a CI artifact)
 clients/apple/screenshots/
 clients/linux/screenshots/

@@ -26,6 +26,8 @@ struct LibraryTarget: Identifiable, Hashable {
     /// `.inherit` from the host's own card (its binding decides); `.preset` from
     /// a pinned card. `.defaults` never reaches here — nothing opens a library "with the globals".
     var preset: PresetSelection = .inherit
+    /// Start in Stream: the UI that takes this shelf also connects to the host's desktop.
+    var stream = false
 
     var id: String {
         switch preset {

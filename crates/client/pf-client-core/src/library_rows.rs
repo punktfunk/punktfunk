@@ -74,6 +74,8 @@ pub struct Layout<'a> {
     pub columns: usize,
     /// What each paired host's Desktops tile shows, in order.
     pub desktops: Vec<String>,
+    /// The shelf's host has a desktop to stream; this device's own host has none.
+    pub own_desktop: bool,
 }
 
 impl Layout<'_> {
@@ -95,7 +97,8 @@ impl Layout<'_> {
     }
 }
 
-/// The rows for one shelf. An empty section hides; Desktops ignores the search.
+/// The rows for one shelf. An empty section hides; Desktops ignores the search. The grid leads
+/// with the shelf host's desktop when Desktops does not show and the host has one to stream.
 pub fn rows(l: &Layout) -> Vec<Row> {
     let mut out = Vec::new();
     let groups = collate::collate(l.games, l.sort, None);
@@ -162,7 +165,7 @@ pub fn rows(l: &Layout) -> Vec<Row> {
                     &mut out,
                 );
             }
-            Section::Games => games(l, !desktops_on, &mut out),
+            Section::Games => games(l, !desktops_on && l.own_desktop, &mut out),
             // The console's; the desktop shell groups the grid instead.
             Section::Collections | Section::Desktops => {}
         }
@@ -188,6 +191,7 @@ pub fn hidden(
         search,
         columns,
         desktops: Vec::new(),
+        own_desktop: false,
     };
     let tiles: Vec<Tile> = collate::collate(games, sort, None)
         .into_iter()
@@ -308,6 +312,7 @@ mod tests {
             search,
             columns: 2,
             desktops: vec!["desk".into()],
+            own_desktop: true,
         }
     }
 
@@ -365,13 +370,24 @@ mod tests {
         );
     }
 
+    /// With Desktops off the grid leads with the host's desktop, unless the host has none to
+    /// stream (this device's own).
     #[test]
     fn with_desktops_off_the_grid_leads_with_the_desktop() {
         let games = [game("a", "A", 0)];
         let order = sections("-desktops");
-        let rows = rows(&layout(&games, &order, &[], ""));
-        assert!(rows.contains(&Row::Posters {
+        let rows_of = |own_desktop| {
+            rows(&Layout {
+                own_desktop,
+                ..layout(&games, &order, &[], "")
+            })
+        };
+        assert!(rows_of(true).contains(&Row::Posters {
             tiles: vec![Tile::Desktop, Tile::Game(0)],
+            caption: Caption::None,
+        }));
+        assert!(rows_of(false).contains(&Row::Posters {
+            tiles: vec![Tile::Game(0)],
             caption: Caption::None,
         }));
     }

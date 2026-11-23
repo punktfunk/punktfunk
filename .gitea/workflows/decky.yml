@@ -66,10 +66,8 @@ jobs:
 
       - name: pnpm
         run: |
+          # package.json's packageManager pins pnpm, version and hash, for every decky lane.
           corepack enable
-          # The repo's pnpm-lock.yaml + package.json devDeps target pnpm 9 (the version the
-          # @decky toolchain and the local build use). Pin it so --frozen-lockfile holds.
-          corepack prepare pnpm@9 --activate
 
       - name: Build frontend
         run: |
@@ -137,7 +135,8 @@ jobs:
             for f in main.py dist/index.js bin/punktfunkrun.sh assets/grid.png \
                      controller_config/punktfunk.vdf update.json \
                      py_modules/pf_decky/__init__.py py_modules/pf_decky/art.py \
-                     py_modules/pf_decky/client.py py_modules/pf_decky/session.py \
+                     py_modules/pf_decky/client.py py_modules/pf_decky/host.py \
+                     py_modules/pf_decky/session.py \
                      py_modules/pf_decky/steam_input.py py_modules/pf_decky/update.py; do
               unzip -l "$out/punktfunk.zip" "$PLUGIN/$f" >/dev/null || { echo "MISSING $f" >&2; exit 1; }
             done

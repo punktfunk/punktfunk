@@ -220,8 +220,8 @@
       "url": "https://git.unom.io/api/packages/unom/generic/punktfunk-client-windows/latest/punktfunk-client-setup_x64.exe",
       "urlArm64": "https://git.unom.io/api/packages/unom/generic/punktfunk-client-windows/latest/punktfunk-client-setup_arm64.exe",
       "install": [
-        "curl.exe -LO https://git.unom.io/api/packages/unom/generic/punktfunk-client-windows/latest/punktfunk-client-setup_x64.exe",
-        ".\\punktfunk-client-setup_x64.exe"
+        "winget source add -n punktfunk https://winget.punktfunk.unom.io -t Microsoft.Rest",
+        "winget install unom.PunktfunkClient"
       ]
     },
     {

@@ -138,11 +138,11 @@ pub(super) fn warn_if_mode_lost(mode: Mode, want_hz: u32, scope: Scope<'_>) {
     tracing::warn!(
         lost = %lost.join(", "),
         "gamescope: the session did not start at the mode we asked for — the session script \
-         dropped GAMESCOPE_BIN / SCREEN_WIDTH / SCREEN_HEIGHT. A headless gamescope reports \
-         `--nested-refresh` as its ONE refresh rate (60 Hz when the flag never arrives), so games \
-         and Steam will believe the display runs at that rate however fast the stream is. Install \
-         punktfunk-gamescope, or check /etc/gamescope-session-plus/sessions.d/ for a file that \
-         overrides GAMESCOPE_BIN or sets GAMESCOPECMD"
+         dropped GAMESCOPE_BIN / SCREEN_WIDTH / SCREEN_HEIGHT. A headless gamescope takes \
+         `--nested-refresh` as its only refresh rate (60 Hz without the flag), so games and Steam \
+         see that rate however fast the stream is. Install punktfunk-gamescope, or check \
+         /etc/gamescope-session-plus/sessions.d/ for a file that overrides GAMESCOPE_BIN or sets \
+         GAMESCOPECMD"
     );
 }
 

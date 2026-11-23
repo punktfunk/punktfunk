@@ -193,11 +193,12 @@ async def _exec(
     stdin_text: str | None = None,
     merge_stderr: bool = False,
     env_extra: dict[str, str] | None = None,
-) -> tuple[int, str, str]:
-    """Run ``argv`` in the user-session env: ``(returncode, stdout, stderr)``, decoded.
-    ``(-1, "", "")`` when ``argv`` is empty (nothing installed), or the call errors or times out.
-    ``merge_stderr`` folds stderr into stdout, ``env_extra`` adds to the environment. A timed-out
-    child is killed and reaped, so its pipes close with it."""
+    text: bool = True,
+) -> tuple[int, str | bytes, str]:
+    """Run ``argv`` in the user-session env: ``(returncode, stdout, stderr)``, decoded; stdout
+    stays bytes with ``text=False``. ``(-1, "", "")`` when ``argv`` is empty (nothing installed),
+    or the call errors or times out. ``merge_stderr`` folds stderr into stdout, ``env_extra`` adds
+    to the environment. A timed-out child is killed and reaped, so its pipes close with it."""
     if not argv:
         return -1, "", ""
     proc = None
@@ -214,7 +215,7 @@ async def _exec(
         rc = proc.returncode if proc.returncode is not None else -1
         return (
             rc,
-            (out or b"").decode("utf-8", "replace"),
+            (out or b"").decode("utf-8", "replace") if text else (out or b""),
             (err or b"").decode("utf-8", "replace"),
         )
     except asyncio.TimeoutError:
@@ -340,6 +341,15 @@ def _paired_fp(out: str) -> str:
     return ""
 
 
+def _host_ref(addr: str, port: int) -> str:
+    """``addr:port`` as the CLI reads it. An IPv6 literal goes in brackets: bare, its last group
+    would read as the port."""
+    addr = str(addr).strip()
+    if ":" in addr and not addr.startswith("["):
+        addr = f"[{addr}]"
+    return f"{addr}:{int(port)}"
+
+
 def _pair_failure(rc: int, out: str, err: str, fallback: str) -> dict:
     """A failed ``pair`` as the panel gets it: the exit-code error (``unreachable`` when the
     ``--json`` answer says the host never replied, which exit 3 alone cannot), the host's
@@ -381,7 +391,7 @@ async def pair(addr: str, port: int, pin: str, name: str) -> dict:
     """
     rc, out, err = await _run_cli(
         [
-            "pair", f"{addr}:{int(port)}",
+            "pair", _host_ref(addr, port),
             "--pin", "-",
             "--name", name,
             "--json",
@@ -408,7 +418,7 @@ async def request_access(addr: str, port: int, name: str, fp: str) -> dict:
     fp = str(fp).strip()
     if fp and not re.fullmatch(r"[0-9a-fA-F]{64}", fp):
         return {"ok": False, "error": "bad-fingerprint", "detail": "bad host fingerprint"}
-    args = ["pair", f"{addr}:{int(port)}", "--request-access", "--name", name, "--json"]
+    args = ["pair", _host_ref(addr, port), "--request-access", "--name", name, "--json"]
     if fp:
         args += ["--fp", fp]
     rc, out, err = await _run_cli(args, timeout=200.0)
@@ -436,7 +446,7 @@ async def trust_host(addr: str, port: int, fp: str, name: str) -> dict:
     answered by an impostor. Idempotent; a DIFFERENT fingerprint comes back ``refused`` and is
     never overwritten. The CLI makes the write; this backend never opens the client's store.
     """
-    args = ["hosts", "add", f"{addr}:{int(port)}", "--fp", fp.strip()]
+    args = ["hosts", "add", _host_ref(addr, port), "--fp", fp.strip()]
     if name.strip():
         args += ["--name", name.strip()]
     rc, _out, err = await _run_cli(args, timeout=20.0)

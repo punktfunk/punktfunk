@@ -62,10 +62,6 @@ mod windows {
         pub(crate) fn topology_reassert_gen() -> u64 {
             0
         }
-        #[cfg_attr(target_os = "linux", allow(dead_code, reason = "macOS reads it"))]
-        pub(crate) fn hw_cursor_capable() -> bool {
-            false
-        }
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn open_driver_encoder(
             _plan: &crate::session_plan::SessionPlan,
@@ -114,7 +110,7 @@ mod events;
 // Launch, lease and liveness of a session's game; the flat names keep `crate::gamelease::*`.
 mod game;
 use game::{
-    gamelease, holds, launchreg, procscan, runstate, session_launch, session_settings,
+    desk, gamelease, holds, launchreg, procscan, runstate, session_launch, session_settings,
     stream_marker,
 };
 mod gamestream;
@@ -157,6 +153,9 @@ mod ctl;
 mod native;
 #[forbid(unsafe_code)]
 mod native_pairing;
+// A title in Steam's tree: `ctl`'s client, and the child it starts for Steam.
+#[cfg(target_os = "linux")]
+mod play;
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "the handshake and the management routes read it")
@@ -231,13 +230,22 @@ unsafe extern "C" {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    let args = launch_args();
+    // SAFETY: the first thing this process does: no other thread exists yet.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        hostsys::app_loop::apply_host_env(&args)
+    };
     // Before any `ureq` agent (cover-art, webhooks, catalog, updates).
     punktfunk_core::tls::install_default_provider();
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into())
+    };
     // SCM `service run` has no console; log to a file, not stderr.
     if windows::entry::service_run_requested() {
-        windows::entry::init_file_logging(filter);
+        windows::entry::init_file_logging(filter());
     } else {
         // stderr so stdout stays machine-readable (`openapi > spec.json`). The ring tees DEBUG+
         // past this filter, so the Logs tab keeps every line stderr drops.
@@ -250,13 +258,24 @@ fn main() {
         } else {
             fmt.with_ansi(false)
         };
+        // A serving Mac host also logs to a file: launchd sends stderr nowhere.
+        #[cfg(target_os = "macos")]
+        let file = (args.first().map(String::as_str) == Some("serve")).then(|| {
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(|| telemetry::log_file::Writer)
+                .with_filter(filter())
+        });
+        #[cfg(not(target_os = "macos"))]
+        let file: Option<tracing_subscriber::layer::Identity> = None;
         log_capture::install_global(
             tracing_subscriber::registry()
                 .with(
                     log_capture::RingLayer
                         .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
                 )
-                .with(fmt.with_filter(filter)),
+                .with(fmt.with_filter(filter()))
+                .with(file),
         );
     }
 
@@ -283,16 +302,28 @@ fn main() {
             .to_string();
         let backtrace = std::backtrace::Backtrace::force_capture();
         let ts_ms = clock::unix_ms();
-        log_capture::ring().push_remote(
-            "ERROR",
-            "punktfunk_host::panic",
-            &format!("PANIC: {payload} (thread={thread}, at {location})\n{backtrace}"),
-            ts_ms,
-        );
+        let line = format!("PANIC: {payload} (thread={thread}, at {location})\n{backtrace}");
+        log_capture::ring().push_remote("ERROR", "punktfunk_host::panic", &line, ts_ms);
+        #[cfg(target_os = "macos")]
+        telemetry::log_file::write_panic(&line);
         default_panic(info);
     }));
     windows::entry::install_crash_handler();
 
+    #[cfg(target_os = "macos")]
+    hostsys::app_loop::start(&args, run);
+    run();
+}
+
+/// The command line this process runs: argv, except that a bare launch of the Mac app serves.
+fn launch_args() -> Vec<String> {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(target_os = "macos")]
+    let argv = hostsys::app_loop::launch_args(argv, &std::env::current_exe().unwrap_or_default());
+    argv
+}
+
+fn run() {
     if let Err(e) = real_main() {
         tracing::error!("{e:#}");
         std::process::exit(1);
@@ -397,6 +428,8 @@ fn is_management_cli(args: &[String]) -> bool {
         | Some("tray")
         // Loopback API client; `watch` is long-lived — do not take GPU clocks or the DXGI hook.
         | Some("ctl")
+        // A loopback client in Steam's tree: its child is the game, which owns the GPU.
+        | Some("play")
         | Some("settings")
         | Some("openapi")
         | Some("library")
@@ -475,14 +508,17 @@ fn startup(args: &[String]) {
 
 fn real_main() -> Result<()> {
     take_env_credentials();
+    let args = launch_args();
+    // `play`'s environment is the game's: no encoder opt-in of the host's in it.
     #[cfg(target_os = "linux")]
-    if let Some(value) = encode::anv_video_encode_flag() {
+    let play = args.first().is_some_and(|a| a == "play");
+    #[cfg(target_os = "linux")]
+    if let Some(value) = encode::anv_video_encode_flag().filter(|_| !play) {
         // SAFETY: right after `take_env_credentials`, so still single-threaded, and no Vulkan
         // instance exists yet (Mesa reads the variable when its ICD loads).
         unsafe { std::env::set_var("ANV_DEBUG", &value) };
         tracing::debug!(value, "ANV_DEBUG opted into Mesa Vulkan Video encode");
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
 
     if matches!(
         args.first().map(String::as_str),
@@ -527,6 +563,8 @@ fn real_main() -> Result<()> {
             Ok(())
         }
         Some("ctl") => ctl::main(&args[1..]),
+        #[cfg(target_os = "linux")]
+        Some("play") => play::main(),
         Some("settings") => settings_cli(&args[1..]),
         Some("plugins") => plugins::main(&args[1..], library::delete_provider),
         Some("openapi") => {
@@ -578,7 +616,7 @@ fn real_main() -> Result<()> {
         // console user, because a SYSTEM caller writes SYSTEM's app preferences, not the user's.
         #[cfg(target_os = "windows")]
         Some("voice-route") => audio::voice_route::cli(&args[1..]),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         Some("list-monitors") => devtest::list_monitors(),
         #[cfg(target_os = "linux")]
         Some("mirror-test") => devtest::mirror_test(&args),
@@ -598,7 +636,7 @@ fn real_main() -> Result<()> {
             print_usage();
             Ok(())
         }
-        // No implicit `serve`; bare invocation is `None` above and prints help.
+        // A bare launch prints help above, unless `launch_args` made it the Mac app's `serve`.
         Some(other) => match windows::entry::subcommand(other, &args) {
             Some(result) => result,
             None => bail!("unknown command '{other}' (try --help)"),
@@ -649,6 +687,7 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
         // QUIC idle timeout; flag overrides env; absent = core's `DEFAULT_IDLE_TIMEOUT`.
         idle_timeout: native::HostKnobs::get().idle_timeout,
         mdns: discovery::mdns_enabled(),
+        ipv6: native::HostKnobs::get().ipv6,
     };
     let mut source = "synthetic".to_string();
     // What `--source synthetic-abr` encodes; ignored by the other sources.
@@ -731,7 +770,7 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
 
 fn print_usage() {
     eprintln!(
-        "punktfunk-host — Linux streaming host
+        "punktfunk-host — Punktfunk streaming host
 
 USAGE:
     punktfunk-host serve [OPTIONS]            native punktfunk host + management REST API
@@ -750,7 +789,7 @@ USAGE:
                                               every cover the host fetched and cached on disk
     punktfunk-host punktfunk1-host [OPTIONS]  native punktfunk host alone (tests and benches)
     punktfunk-host probe-compositor           exit 0 iff the compositor is up + ready (bringup gate)
-    punktfunk-host list-monitors              list the host's physical monitors (Linux) — the
+    punktfunk-host list-monitors              list the host's physical monitors (Linux, macOS) — the
                                               connector names PUNKTFUNK_CAPTURE_MONITOR takes
     punktfunk-host spike [OPTIONS]            capture→encode→file pipeline spike (dev tool)
 
@@ -763,9 +802,8 @@ SERVE OPTIONS:
                                  machine with Sunshine/Apollo/Vibeshine, whose web UI owns 47990 —
                                  clients follow via mDNS and the console via mgmt-endpoint
     --gamestream  (--moonlight)  ALSO run the GameStream/Moonlight-compat planes (nvhttp pairing,
-                                 RTSP, ENet control, _nvstream mDNS). OFF by default — they carry
-                                 inherent on-path weaknesses (plain-HTTP pairing + legacy GCM nonce
-                                 reuse, security-review #5/#9); enable only on a TRUSTED LAN.
+                                 RTSP, ENet control, _nvstream mDNS). Off by default — Moonlight
+                                 pairs over plain HTTP; enable only on a trusted LAN.
                                  The flag locks the console's GameStream setting; an install sets
                                  that setting instead (`settings set gamestream true`)
     --native                     no-op (the native plane always runs in `serve`)
@@ -785,8 +823,8 @@ PUNKTFUNK1-HOST OPTIONS:
     --port <N>                   QUIC listen port (default: 9777)
     --source <synthetic|synthetic-abr|virtual>
                                  test frames, frames sized from the live Automatic rate, or a
-                                 virtual display + NVENC (default: synthetic). synthetic-abr
-                                 needs no display and no GPU
+                                 virtual display + this host's encoder (default: synthetic).
+                                 synthetic-abr needs no display and no GPU
     --content <SCRIPT>           what synthetic-abr encodes: steady, idle-then-motion,
                                  frame-driven:<fps> for a source slower than the session, or
                                  motion-then-still:<fps> for a minute of motion, then <fps>
@@ -849,8 +887,8 @@ SPIKE OPTIONS:
     -h, --help                   this help
 
 NOTES:
-    'portal' needs headless Sway + xdg-desktop-portal-wlr running in this session
-    (see design/linux-setup.md). 'synthetic' needs no capture session and always runs.
+    'portal' needs an xdg-desktop-portal ScreenCast backend and PipeWire running in this
+    session. 'synthetic' needs no capture session and always runs.
     Encoded AUs are written to a playable file AND (unless --no-loopback) fed through a
     punktfunk_core host→client loopback that reassembles and byte-verifies each one.
     Both 'serve' and 'punktfunk1-host' advertise the native service over mDNS

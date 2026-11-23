@@ -73,9 +73,14 @@ pub(crate) fn shelf_key(host: &HostTarget, preset: Option<&str>) -> String {
 }
 
 /// Every shelf there is: each paired host, then each preset pinned to it that still exists.
+/// This device's own host has its shelf alone: nothing streams it.
 pub(crate) fn shelves(known: &KnownHosts, presets: &[CardPreset]) -> Vec<Shelf> {
     let mut out = Vec::new();
     for k in known.hosts.iter().filter(|k| k.paired) {
+        let pins = match pf_client_core::trust::local::is_this_device(&k.fp_hex) {
+            true => &[][..],
+            false => &k.pinned_presets[..],
+        };
         let host = HostTarget::from(k);
         let profile = k.profile.as_ref().map(|p| p.id.clone());
         out.push(Shelf {
@@ -87,7 +92,7 @@ pub(crate) fn shelves(known: &KnownHosts, presets: &[CardPreset]) -> Vec<Shelf> 
             },
             profile: profile.clone(),
         });
-        for id in &k.pinned_presets {
+        for id in pins {
             let Some(p) = presets.iter().find(|p| &p.id == id) else {
                 continue;
             };
@@ -259,6 +264,22 @@ pub(crate) struct EndGameUi {
 pub(crate) fn open_library(svc: &Svc, target: Target) {
     svc.open_shelf
         .call(shelf_key(&target.host, target.preset.as_deref()));
+}
+
+/// Ask this device's own `host` to start title `id` on its own screen; blocks, so call it on a
+/// worker. A refusal goes to the status line; then `reload` reads the shelf again, for its
+/// running badge and End game. `launch_local` lets the host's game take the foreground first.
+pub(crate) fn launch_here(svc: &Svc, host: &HostTarget, id: &str, reload: &AsyncSetState<()>) {
+    let Some(pin) = host.fp_hex.as_deref().and_then(crate::trust::parse_hex32) else {
+        return;
+    };
+    let mgmt = host.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT);
+    let answer = library::launch_local(mgmt, host.port, &svc.ctx.identity, pin, id);
+    tracing::info!(app = %id, ?answer, "local launch");
+    if let Some(why) = answer.refusal() {
+        svc.report(Err(why));
+    }
+    reload.call(());
 }
 
 /// The host's API as this device reaches `target`'s management lane, with its pin.
@@ -589,6 +610,8 @@ struct RowCx {
     /// The rows are the hidden titles: a click shows one again.
     hidden_view: bool,
     desks: Vec<Desk>,
+    /// The shelf is this device's own host: Play starts a title there, and nothing streams it.
+    here: bool,
     /// The width of one grid column.
     tile_w: f64,
     now_ms: u64,
@@ -596,6 +619,8 @@ struct RowCx {
     set_hide: AsyncSetState<HideEdit>,
     set_details: AsyncSetState<Option<String>>,
     bump: AsyncSetState<()>,
+    /// Asks the host for the shelf again: what it has up after a Play here.
+    reload: AsyncSetState<()>,
 }
 
 /// What a row of a title's menu does.
@@ -622,7 +647,12 @@ impl RowCx {
         }
     }
 
+    /// Play title `id`: on this device's own host it starts there ([`Self::play_here`]); else
+    /// a stream launches it, and a title that runs is resumed.
     fn play(&self, id: &str) {
+        if self.here {
+            return self.play_here(id);
+        }
         // The desktop is the host, not one of its titles; a title that runs is resumed.
         if id == DESKTOP_ID || self.running.contains_key(id) {
             return self.connect();
@@ -633,6 +663,20 @@ impl RowCx {
             true => initiate_launch(&svc.ctx, target, id, ss, st),
             false => initiate_launch_waking(&svc.ctx, target, id, ss, st),
         }
+    }
+
+    /// Ask this device's own host to start title `id` on its own screen, on a worker
+    /// ([`launch_here`]).
+    fn play_here(&self, id: &str) {
+        let (svc, host, reload) = (
+            self.svc.clone(),
+            self.shelf.target.host.clone(),
+            self.reload.clone(),
+        );
+        let id = id.to_string();
+        let _ = std::thread::Builder::new()
+            .name("punktfunk-local-launch".into())
+            .spawn(move || launch_here(&svc, &host, &id, &reload));
     }
 
     /// One title's `punktfunk://` link: this shelf's host with the game's own `launch=`, and
@@ -701,7 +745,7 @@ impl RowCx {
 
     /// The rows of a title's menu, from its state now: End game only while the host can end
     /// it, Hide for its profile only where the box lets this device. A hidden title's menu
-    /// only brings it back.
+    /// only brings it back. A title up on this device's own host is played, not resumed.
     fn menu_rows(&self, g: &GameEntry) -> MenuRows<TitleAct> {
         let mut m = MenuRows::new();
         if let Some(hides) = self.hides.as_ref().filter(|_| self.hidden_view) {
@@ -710,7 +754,7 @@ impl RowCx {
         }
         let up = self.running.get(&g.id).copied();
         m.push(
-            match up {
+            match up.filter(|_| !self.here) {
                 Some(_) => client::lib_resume(),
                 None => common::common_play(),
             },
@@ -1279,6 +1323,9 @@ pub(crate) fn library_page(shell: &Shell) -> View {
     let hidden = state.hides.as_ref().zip(shell.hide.view.as_ref());
     let fp = shelf.target.host.fp_hex.as_deref().unwrap_or_default();
     let favorites = layout::favorites(&settings, fp);
+    // This device's own host has no desktop to stream, here or among the Desktops.
+    let here = pf_client_core::trust::local::is_this_device;
+    let desks = || (known.hosts.iter()).filter(|k| k.paired && !here(&k.fp_hex));
 
     // The grid's columns from the page's width. A poster's button pads 11 px each side, so
     // the row runs that far into the gutter and its faces line up with the page.
@@ -1374,10 +1421,8 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                 group: shell.library_group,
                 search,
                 columns,
-                desktops: (known.hosts.iter())
-                    .filter(|k| k.paired)
-                    .map(|k| k.name.clone())
-                    .collect(),
+                desktops: desks().map(|k| k.name.clone()).collect(),
+                own_desktop: !here(fp),
             });
             (games, state.art.clone(), listed)
         }
@@ -1457,8 +1502,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
         favorites,
         hides: state.hides.clone(),
         hidden_view: hidden.is_some(),
-        desks: (known.hosts.iter())
-            .filter(|k| k.paired)
+        desks: desks()
             .map(|k| {
                 let online = shell.probed.get(&k.card_key()).copied().unwrap_or(false);
                 Desk {
@@ -1476,6 +1520,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
                 }
             })
             .collect(),
+        here: here(fp),
         tile_w,
         now_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1484,6 +1529,7 @@ pub(crate) fn library_page(shell: &Shell) -> View {
         set_hide,
         set_details: shell.set(Msg::Details),
         bump: shell.set(|()| Msg::LibraryBump),
+        reload: reload.clone(),
     });
 
     let body: View = match instead {
@@ -1604,7 +1650,8 @@ fn details_sheet(cx: &Rc<RowCx>, g: &GameEntry, known: &KnownHosts) -> View {
     let mut acts: Vec<View> = vec![
         icon_button(
             "play",
-            match up {
+            // A title up on this device's own host is played, not resumed.
+            match up.filter(|_| !cx.here) {
                 Some(_) => client::lib_resume(),
                 None => common::common_play(),
             },

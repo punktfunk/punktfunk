@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: punktfunk <packages@unom.io>
+Date: Sat, 21 Nov 2026 10:44:05 +0100
+Subject: [PATCH 43/44] pipewire: declare an exported LINEAR capture image
+ external on Intel
+
+A capture dmabuf that takes no modifier is a plain VK_IMAGE_TILING_LINEAR
+image. Its allocation asks for export, but the image never says its
+memory is external, and since "keep dmabuf capture buffers in device
+memory" it is no longer host-visible either.
+
+Intel's driver places such an image for itself alone. From Xe2 (Lunar
+Lake, Battlemage) its first device-local memory type is compressed, and
+every image that is neither declared external nor modifier-tiled may use
+it. The consumer imports DRM_FORMAT_MOD_LINEAR, which is uncompressed, and
+reads the bytes as they lie: an Arc B580 host streamed the capture's NV12
+as 256-pixel runs of noise with a green tail.
+
+On Intel, chain VkExternalMemoryImageCreateInfo on an exported LINEAR
+image. The driver then keeps it out of compressed memory and gives it no
+auxiliary surface. Its dmabuf export is defined for LINEAR tiling. AMD's
+is defined for modifiers only, and NVIDIA's captures stay as they are.
+---
+ src/rendervulkan.cpp | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index 433cd15..abfd001 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2608,7 +2608,12 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+ 		};
+ 	}
+ 	
+-	if ( pDMA != nullptr )
++	// On Intel an exported LINEAR image says it is a dmabuf, as an imported one does. Its driver
++	// places an image it was not told about for itself alone: in compressed memory from Xe2,
++	// and the importer of a LINEAR dmabuf reads those bytes as they lie.
++	static constexpr uint32_t k_uIntelVendorID = 0x8086;
++	const bool bExportsLinear = flags.bExportable && !flags.bFlippable && tiling == VK_IMAGE_TILING_LINEAR && g_device.vendorID() == k_uIntelVendorID;
++	if ( pDMA != nullptr || bExportsLinear )
+ 	{
+ 		externalImageCreateInfo = {
+ 			.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,

@@ -532,7 +532,7 @@ pub static SETTINGS: &[Setting] = &[
     row("gamepad", "PUNKTFUNK_GAMEPAD", Kind::Enum(GAMEPADS), D::Str("auto"), Input, NextSession, "Default gamepad", "input")
         .only(LINUX_WINDOWS)
         .spellings(GAMEPAD_SPELLINGS),
-    row("pen", "PUNKTFUNK_PEN", Kind::Bool, D::Bool(true), Input, NextSession, "Pen input", "input").only(LINUX_WINDOWS),
+    row("pen", "PUNKTFUNK_PEN", Kind::Bool, D::Bool(true), Input, NextSession, "Pen input", "input"),
     row("steam_gadget", "PUNKTFUNK_STEAM_GADGET", TRI, D::Str("auto"), Input, NextSession, "Steam USB gadget", "input")
         .advanced()
         .only(LINUX)
@@ -557,6 +557,8 @@ pub static SETTINGS: &[Setting] = &[
         .spellings(TRI_SPELLINGS),
     // --- Network
     row("mdns", "PUNKTFUNK_MDNS", Kind::Bool, D::Bool(true), Network, Restart, "Local discovery", "troubleshooting-connect").advanced(),
+    // Default OFF: without NAT a router decides who reaches an IPv6 listener.
+    row("ipv6", "PUNKTFUNK_IPV6", Kind::Bool, D::Bool(false), Network, Restart, "IPv6", "ports").advanced(),
     row("idle_timeout_ms", "PUNKTFUNK_IDLE_TIMEOUT_MS", Kind::Int { min: 1_000, max: 120_000, unit: "ms" }, D::Int(8_000), Network, Restart, "Disconnect timeout", "configuration").advanced(),
     // --- Seats: what every seat shares (design/web-console-structure-2026-10.md §2.1)
     row("steam_prewarm", "PUNKTFUNK_STEAM_PREWARM", Kind::Int { min: 0, max: 8, unit: "seats" }, D::Int(1), Seats, Restart, "Seats kept warm", "profiles").only(LINUX_WINDOWS),
@@ -693,6 +695,14 @@ mod tests {
             want,
             "the settings table in configuration.md is stale — rerun with UPDATE_SETTINGS_DOCS=1"
         );
+    }
+
+    /// Linux, Windows and macOS hosts each inject a pen, so the console shows the row on all.
+    #[test]
+    fn pen_input_applies_on_every_host() {
+        let s = find("pen").expect("the row exists");
+        assert!(s.os.is_empty(), "{:?}", s.os);
+        assert_eq!(s.env, "PUNKTFUNK_PEN");
     }
 
     /// One seat starts with the host by default; a box with no seats has none to start.

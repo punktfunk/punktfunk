@@ -11,6 +11,7 @@
 //! reports the wired `Wake-on: g` bit; a Wi-Fi NIC's trigger lives in nl80211
 //! (`iw phy <phy> wowlan show`). Most wireless drivers print `Wake-on: d`
 //! whether or not WoWLAN is armed, so ethtool on Wi-Fi is actively misleading.
+//! macOS arms every NIC with one power setting, `pmset`'s `womp`.
 
 use std::net::IpAddr;
 
@@ -119,8 +120,38 @@ pub fn warn_if_not_armed(primary_ip: IpAddr) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Warn if "Wake for network access" is off: one switch for every NIC, `womp` in `pmset -g`.
+/// Never changes settings; silent when `pmset` prints no `womp` line.
+#[cfg(target_os = "macos")]
+pub fn warn_if_not_armed(_primary_ip: IpAddr) {
+    let Ok(out) = std::process::Command::new("/usr/bin/pmset")
+        .arg("-g")
+        .output()
+    else {
+        return;
+    };
+    match womp(&String::from_utf8_lossy(&out.stdout)) {
+        Some(true) => tracing::info!("Wake for network access is on (pmset womp 1)"),
+        Some(false) => tracing::warn!(
+            "Wake for network access is OFF on this Mac — clients can't wake it from sleep. \
+             Turn it on in System Settings → Energy (Battery → Options on a laptop), or run: \
+             sudo pmset -a womp 1"
+        ),
+        None => {}
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn warn_if_not_armed(_primary_ip: IpAddr) {}
+
+/// The `womp` setting in `pmset -g` output: `Some(true)` for 1, `None` when absent.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn womp(pmset: &str) -> Option<bool> {
+    pmset.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        (words.next()? == "womp").then(|| words.next() == Some("1"))
+    })
+}
 
 /// Nested option: `Some(Some("phy0"))` = wireless with a phy name; `Some(None)` = wireless,
 /// phy unread; `None` = wired (or sysfs missing — the ethtool path then applies).
@@ -244,7 +275,15 @@ fn parse_iw_wowlan(text: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ethtool_wol, parse_iw_wowlan};
+    use super::{parse_ethtool_wol, parse_iw_wowlan, womp};
+
+    #[test]
+    fn pmset_womp_reads_on_off_and_absent() {
+        let on = "System-wide power settings:\nCurrently in use:\n standby    0\n womp       1\n";
+        assert_eq!(womp(on), Some(true));
+        assert_eq!(womp(&on.replace("womp       1", "womp 0")), Some(false));
+        assert_eq!(womp(" sleep      0\n displaysleep 60\n"), None);
+    }
 
     #[test]
     fn ethtool_current_setting_not_capability_line() {

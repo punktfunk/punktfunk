@@ -29,6 +29,7 @@ import {
 	fmtNumber,
 	fmtSpan,
 } from "@/lib/format";
+import { hostText } from "@/lib/host-messages";
 import { m } from "@/paraglide/messages";
 import { levelLabel } from "@/sections/Devices/access";
 
@@ -156,14 +157,24 @@ function streamFields(stream: StreamInfo, info?: SessionInfo | null) {
 
 /** No pick: the slot is whichever comes free. Not a slot number, so it cannot collide with one. */
 const AUTO_PLAYER = "auto";
+/** Prefix of a share pick's value: `share:0` joins Player 1's controller. */
+const SHARE_PLAYER = "share:";
+
+/** The Player choice's value for a row: a share, a pick, or the first-free claim. */
+function playerValue(row: SessionRow): string {
+	if (row.shared_pad_slot != null)
+		return `${SHARE_PLAYER}${row.shared_pad_slot}`;
+	return row.preferred_pad_slot?.toString() ?? AUTO_PLAYER;
+}
 
 export interface SessionActions {
 	onStop: (row: SessionRow) => void;
 	onIdr: (row: SessionRow) => void;
 	onMute: (row: SessionRow, muted: boolean) => void;
 	onAccess: (row: SessionRow, level: string) => void;
-	/** `null` hands the session back to the host's first-free claim. */
-	onPlayer: (row: SessionRow, slot: number | null) => void;
+	/** `null` hands the session back to the host's first-free claim. `share` joins that
+	 * slot's controller instead of taking it. */
+	onPlayer: (row: SessionRow, slot: number | null, share: boolean) => void;
 	busy: boolean;
 }
 
@@ -332,15 +343,26 @@ export const SessionRowView: FC<
 							nativeLanes && {
 								kind: "choice",
 								label: m.sessions_player(),
-								value: row.preferred_pad_slot?.toString() ?? AUTO_PLAYER,
+								value: playerValue(row),
 								disabled: busy,
-								onChange: (v) =>
-									onPlayer(row, v === AUTO_PLAYER ? null : Number(v)),
+								onChange: (v) => {
+									const share = v.startsWith(SHARE_PLAYER);
+									const slot = share ? v.slice(SHARE_PLAYER.length) : v;
+									onPlayer(
+										row,
+										slot === AUTO_PLAYER ? null : Number(slot),
+										share,
+									);
+								},
 								options: [
 									{ value: AUTO_PLAYER, label: m.sessions_player_auto() },
 									...[0, 1, 2, 3].map((slot) => ({
 										value: slot.toString(),
 										label: m.sessions_player_n({ n: slot + 1 }),
+									})),
+									...[0, 1, 2, 3].map((slot) => ({
+										value: `${SHARE_PLAYER}${slot}`,
+										label: m.sessions_player_share_n({ n: slot + 1 }),
 									})),
 								],
 							},
@@ -361,9 +383,18 @@ export const SessionRowView: FC<
 	);
 };
 
+/** Why a `local` launch died when the host says, else where the game runs. */
+const localFacts = (game: ActiveGame): string =>
+	(game.outcome &&
+		hostText(game.outcome.code, game.outcome.params, undefined)) ||
+	m.games_plane_local();
+
 /**
  * A game no listed session streams: waiting for its client (`grace`, on a countdown that costs
- * unsaved progress), left running (`detached`), or one the host can't track.
+ * unsaved progress), left running (`detached`), one the host can't track, or one the host runs on
+ * its own screen (`local`). A `local` row's `client` is a key, not a device, so it is never shown;
+ * its End is offered only while the host can still end it, and its facts line is the reason a
+ * launch died when the host gives one.
  */
 export const GameRowView: FC<{
 	game: ActiveGame;
@@ -372,6 +403,7 @@ export const GameRowView: FC<{
 	isEnding: boolean;
 }> = ({ game, art, onEnd, isEnding }) => {
 	const waiting = game.state === "grace";
+	const local = game.plane === "local";
 	return (
 		<Frame
 			lead={<Cover art={art} />}
@@ -392,20 +424,24 @@ export const GameRowView: FC<{
 						? m.games_untracked_note()
 						: game.state === "detached"
 							? m.games_detached_note()
-							: [game.client, game.plane === "gamestream" ? "GameStream" : ""]
-									.filter(Boolean)
-									.join(" · ")
+							: local
+								? localFacts(game)
+								: [game.client, game.plane === "gamestream" ? "GameStream" : ""]
+										.filter(Boolean)
+										.join(" · ")
 			}
 			actions={
-				<Button
-					variant={waiting ? "destructive" : "outline"}
-					size="sm"
-					disabled={isEnding}
-					onClick={onEnd}
-				>
-					<XCircle className="size-3.5" />
-					<Label>{m.games_end_now()}</Label>
-				</Button>
+				(!local || game.endable) && (
+					<Button
+						variant={waiting ? "destructive" : "outline"}
+						size="sm"
+						disabled={isEnding}
+						onClick={onEnd}
+					>
+						<XCircle className="size-3.5" />
+						<Label>{m.games_end_now()}</Label>
+					</Button>
+				)
 			}
 		/>
 	);
@@ -544,6 +580,7 @@ function stateLabel(state: string): string {
 		case "launching":
 			return m.games_state_launching();
 		case "running":
+		case "window":
 			return m.games_state_running();
 		case "exited":
 			return m.games_state_exited();
@@ -560,7 +597,7 @@ function stateLabel(state: string): string {
 
 /** `untracked` is not an error, so it never wears `grace`'s destructive styling. */
 function stateVariant(state: string): "success" | "secondary" | "outline" {
-	if (state === "running") return "success";
+	if (state === "running" || state === "window") return "success";
 	if (state === "launching") return "secondary";
 	return "outline";
 }

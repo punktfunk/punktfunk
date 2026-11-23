@@ -205,5 +205,7 @@
 	"apple_usage_microphone": "System permission prompt for the microphone (NSMicrophoneUsageDescription).",
 	"apple_usage_face_id": "System permission prompt for Face ID (NSFaceIDUsageDescription).",
 	"apple_usage_bluetooth": "System permission prompt for Bluetooth (NSBluetoothAlwaysUsageDescription and NSBluetoothPeripheralUsageDescription).",
+	"apple_usage_host_audio_capture": "Permission prompt of the Mac host app (Punktfunk Host) for recording the system's sound (NSAudioCaptureUsageDescription).",
+	"apple_usage_host_local_network": "Permission prompt of the Mac host app (Punktfunk Host) for local network access (NSLocalNetworkUsageDescription).",
 	"apple_pad_rumble_failed": "Console notice on Apple after the Controllers tab's rumble test failed. error = the system's own error description."
 }

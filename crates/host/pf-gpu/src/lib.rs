@@ -4,14 +4,15 @@
 //! - **Enumeration** ([`enumerate`]): hardware GPUs. DXGI adapters on Windows
 //!   (WARP/Basic-Render and IddCx/display-only adapters dropped — an IddCx
 //!   adapter mirrors its render GPU's DXGI identity and would list every GPU
-//!   twice). `/dev/dri/renderD*` + sysfs PCI ids on Linux. Empty elsewhere so
-//!   management endpoints stay identical.
+//!   twice). `/dev/dri/renderD*` + sysfs PCI ids on Linux. Metal devices on
+//!   macOS. Empty elsewhere so management endpoints stay identical.
 //! - **Preference** ([`prefs`]): auto/manual in `<config>/gpu-settings.json`.
 //!   Manual is stored by stable identity (PCI vendor:device + occurrence +
 //!   name), not LUID (reassigned every boot) or adapter index.
 //! - **Selection** ([`selected_gpu`] / [`pick`]): inventory + preference → render/encode GPU.
 //!   Windows: **manual > `PUNKTFUNK_RENDER_ADAPTER` substring > auto (max dedicated VRAM)**.
-//!   Linux: manual > NVIDIA present > the node `linux_render_node` names. A vanished
+//!   Linux: manual > NVIDIA present > the node `linux_render_node` names (env, else boot
+//!   VGA, else renderD128). A vanished
 //!   preferred GPU auto-selects (`PickSource::PreferenceMissing`) so the host keeps streaming.
 //!
 //! A preference change applies to the **next session**. [`session_begin`] /
@@ -26,6 +27,8 @@ use std::sync::{Mutex, OnceLock};
 pub const VENDOR_NVIDIA: u32 = 0x10DE;
 pub const VENDOR_AMD: u32 = 0x1002;
 pub const VENDOR_INTEL: u32 = 0x8086;
+/// Apple's PCI id, given to a Metal device named `Apple …`: Metal reports no vendor id.
+pub const VENDOR_APPLE: u32 = 0x106B;
 /// Adreno, which DXGI reports as the FourCC `"QCOM"` rather than a PCI id; `0x5143` is
 /// the id the same driver reports through Vulkan. Both mean Media Foundation is the only
 /// hardware encoder on the adapter.
@@ -51,7 +54,7 @@ pub struct GpuInfo {
     /// `"{vendor:04x}-{device:04x}-{occurrence}"`. Occurrence disambiguates
     /// identical cards by inventory order among twins.
     pub id: String,
-    /// DXGI description (Windows) / vendor label + node (Linux).
+    /// DXGI description (Windows) / vendor label + node (Linux) / Metal device name (macOS).
     pub name: String,
     pub vendor_id: u32,
     pub device_id: u32,
@@ -88,8 +91,11 @@ impl GpuInfo {
 
 /// Fill `id` + `occurrence` (index among same-(vendor,device) twins). Windows
 /// sorts by LUID first so twin numbers stay stable for the boot.
-// Linux/Windows `enumerate()` only; other targets' stub leaves this unused.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+// Each platform's `enumerate()`; the stub for other targets leaves this unused.
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 fn assign_ids(gpus: &mut [GpuInfo]) {
     for i in 0..gpus.len() {
         let occ = gpus[..i]
@@ -310,7 +316,53 @@ pub fn enumerate() -> Vec<GpuInfo> {
     out
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+/// Metal devices, which name the chip on Apple silicon. Metal reports no PCI ids, so the vendor
+/// comes from the name and the device id is 0.
+#[cfg(target_os = "macos")]
+pub fn enumerate() -> Vec<GpuInfo> {
+    use objc2_metal::{MTLCopyAllDevices, MTLDevice};
+    let mut out: Vec<GpuInfo> = MTLCopyAllDevices()
+        .iter()
+        .map(|d| {
+            let name = d.name().to_string();
+            GpuInfo {
+                id: String::new(),
+                vendor_id: metal_vendor(&name),
+                device_id: 0,
+                occurrence: 0,
+                // Unified memory is the system's, not the GPU's own.
+                vram_bytes: if d.hasUnifiedMemory() {
+                    0
+                } else {
+                    d.recommendedMaxWorkingSetSize()
+                },
+                name,
+                handle: GpuHandle::default(),
+            }
+        })
+        .collect();
+    assign_ids(&mut out);
+    out
+}
+
+/// The PCI vendor a Metal device's name implies; 0 for a name none matches.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn metal_vendor(name: &str) -> u32 {
+    let name = name.to_ascii_lowercase();
+    if name.starts_with("apple") {
+        VENDOR_APPLE
+    } else if name.contains("amd") || name.contains("radeon") {
+        VENDOR_AMD
+    } else if name.contains("intel") {
+        VENDOR_INTEL
+    } else if name.contains("nvidia") {
+        VENDOR_NVIDIA
+    } else {
+        0
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn enumerate() -> Vec<GpuInfo> {
     Vec::new()
 }
@@ -548,7 +600,19 @@ pub fn selected_gpu() -> Option<SelectedGpu> {
     })
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+/// The console's view: manual preference, else the device with the most dedicated memory.
+/// VideoToolbox picks its own engine, so this names the GPU rather than steering the encoder.
+#[cfg(target_os = "macos")]
+pub fn selected_gpu() -> Option<SelectedGpu> {
+    let gpus = enumerate();
+    let (i, source) = pick(&gpus, &prefs().get(), None)?;
+    Some(SelectedGpu {
+        info: gpus.into_iter().nth(i)?,
+        source,
+    })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn selected_gpu() -> Option<SelectedGpu> {
     None
 }
@@ -579,8 +643,8 @@ pub fn render_node_env() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The manual preference's render node, else the live [`render_node_env`] read, else
-/// `/dev/dri/renderD128`.
+/// The manual preference's render node, else the live [`render_node_env`] read, else the
+/// boot-VGA GPU's ([`boot_vga_node`]), else `/dev/dri/renderD128`.
 #[cfg(target_os = "linux")]
 pub fn linux_render_node() -> PathBuf {
     if let Some(g) = manual_selection()
@@ -588,7 +652,40 @@ pub fn linux_render_node() -> PathBuf {
     {
         return node;
     }
-    render_node_env().unwrap_or_else(|| PathBuf::from("/dev/dri/renderD128"))
+    render_node_env()
+        .or_else(|| {
+            boot_vga_node(&enumerate(), |node| {
+                let name = node
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                std::fs::read_to_string(format!("/sys/class/drm/{name}/device/boot_vga"))
+                    .is_ok_and(|v| v.trim() == "1")
+            })
+        })
+        .unwrap_or_else(|| PathBuf::from("/dev/dri/renderD128"))
+}
+
+/// The render node of the GPU the firmware booted on, unless it is NVIDIA's: Mesa ranks it first,
+/// so a desktop compositor and a gamescope with no preference render there. Render minors follow
+/// driver bind order, which on two GPUs can name the idle one.
+#[cfg(target_os = "linux")]
+fn boot_vga_node(gpus: &[GpuInfo], boot_vga: impl Fn(&std::path::Path) -> bool) -> Option<PathBuf> {
+    gpus.iter()
+        .filter(|g| g.vendor_id != VENDOR_NVIDIA)
+        .filter_map(|g| g.handle.render_node.clone())
+        .find(|node| boot_vga(node))
+}
+
+/// The GPU an operator named, by the console pick or `PUNKTFUNK_RENDER_NODE`; `None` on auto.
+#[cfg(target_os = "linux")]
+pub fn linux_named_gpu() -> Option<GpuInfo> {
+    manual_selection().or_else(|| {
+        let node = render_node_env()?;
+        enumerate()
+            .into_iter()
+            .find(|g| g.handle.render_node.as_deref() == Some(node.as_path()))
+    })
 }
 
 /// NVIDIA is present when its device nodes exist; no CUDA context is
@@ -704,6 +801,29 @@ pub fn resolve_render_adapter_luid() -> Option<windows::Win32::Foundation::LUID>
 mod tests {
     use super::*;
 
+    #[test]
+    fn metal_names_map_to_their_vendor() {
+        for (name, vendor) in [
+            ("Apple M3 Max", VENDOR_APPLE),
+            ("Apple Paravirtual device", VENDOR_APPLE),
+            ("AMD Radeon Pro 5500M", VENDOR_AMD),
+            ("Intel(R) UHD Graphics 630", VENDOR_INTEL),
+            ("NVIDIA GeForce GT 750M", VENDOR_NVIDIA),
+            ("Something else", 0),
+        ] {
+            assert_eq!(metal_vendor(name), vendor, "{name}");
+        }
+    }
+
+    /// Apple silicon and a macOS VM both have a Metal device; it gets an id like any GPU.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_lists_its_metal_devices() {
+        let gpus = enumerate();
+        assert!(!gpus.is_empty());
+        assert!(gpus.iter().all(|g| !g.id.is_empty() && !g.name.is_empty()));
+    }
+
     fn gpu(vendor: u32, device: u32, name: &str, vram_gb: u64) -> GpuInfo {
         GpuInfo {
             id: String::new(),
@@ -735,6 +855,30 @@ mod tests {
                 name: name.into(),
             }),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_boot_vga_gpu_names_the_node_unless_it_is_nvidias() {
+        let at = |vendor, node: &str| GpuInfo {
+            handle: GpuHandle {
+                render_node: Some(PathBuf::from(node)),
+            },
+            ..gpu(vendor, 0, "", 0)
+        };
+        let boot = |want: &'static str| move |n: &std::path::Path| n == std::path::Path::new(want);
+        let two = [
+            at(VENDOR_INTEL, "/dev/dri/renderD128"),
+            at(VENDOR_INTEL, "/dev/dri/renderD129"),
+        ];
+        let d129 = Some(PathBuf::from("/dev/dri/renderD129"));
+        assert_eq!(boot_vga_node(&two, boot("/dev/dri/renderD129")), d129);
+        assert_eq!(boot_vga_node(&two, |_| false), None);
+        let nvidia = [
+            at(VENDOR_INTEL, "/dev/dri/renderD128"),
+            at(VENDOR_NVIDIA, "/dev/dri/renderD129"),
+        ];
+        assert_eq!(boot_vga_node(&nvidia, boot("/dev/dri/renderD129")), None);
     }
 
     #[test]

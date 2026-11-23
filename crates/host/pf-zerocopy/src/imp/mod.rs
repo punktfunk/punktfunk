@@ -229,8 +229,8 @@ impl Importer {
     pub fn new_for_capture(full_range: bool) -> anyhow::Result<Importer> {
         if flag("PUNKTFUNK_ZEROCOPY_INPROC") {
             tracing::warn!(
-                "PUNKTFUNK_ZEROCOPY_INPROC=1 — GPU import runs IN-PROCESS; a driver fault on a \
-                 dying compositor's dmabuf can take the whole host down (debug/A-B use only)"
+                "PUNKTFUNK_ZEROCOPY_INPROC=1 — GPU import runs in the host process; a driver fault \
+                 on a dying compositor's dmabuf can take the whole host down (debug/A-B use only)"
             );
             return Ok(Importer::InProc(Box::new(EglImporter::new(full_range)?)));
         }

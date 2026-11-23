@@ -7,8 +7,33 @@
 use super::Punktfunk1Source;
 use std::time::Duration;
 
+/// Whether the native plane listens on IPv6, and whom it answers there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ipv6 {
+    Off,
+    /// A peer the public internet cannot have carried: both ends outside 2000::/3.
+    Private,
+    /// Every peer, as the IPv4 listener does.
+    Public,
+}
+
+impl Ipv6 {
+    /// From `(the ipv6 row, PUNKTFUNK_IPV6_PUBLIC)`. A seat host takes the pair its box handed
+    /// on, so a client the door redirects over IPv6 finds its seat listening. Any other host,
+    /// and a seat whose box wrote none, takes its own.
+    fn resolve(of_box: Option<(bool, bool)>, own: (bool, bool)) -> Ipv6 {
+        match of_box.unwrap_or(own) {
+            (false, _) => Ipv6::Off,
+            (true, false) => Ipv6::Private,
+            (true, true) => Ipv6::Public,
+        }
+    }
+}
+
 /// The knobs the process reads once.
 pub(crate) struct HostKnobs {
+    /// Row `ipv6` and `PUNKTFUNK_IPV6_PUBLIC` ([`Ipv6::resolve`]).
+    pub(crate) ipv6: Ipv6,
     /// `PUNKTFUNK_SOURCE=software`: a software-encoded test picture instead of a display, so a
     /// headless box with the management API can prove a client end to end. Anything else is the
     /// display.
@@ -33,6 +58,14 @@ impl HostKnobs {
     pub(crate) fn get() -> &'static HostKnobs {
         static KNOBS: std::sync::OnceLock<HostKnobs> = std::sync::OnceLock::new();
         KNOBS.get_or_init(|| HostKnobs {
+            ipv6: {
+                let own = pf_host_config::config();
+                let of_box = pf_host_config::seat_defaults::of_box();
+                Ipv6::resolve(
+                    of_box.map(|d| (d.ipv6, d.ipv6_public)),
+                    (own.ipv6, own.ipv6_public),
+                )
+            },
             source: match std::env::var("PUNKTFUNK_SOURCE").as_deref() {
                 Ok("software") => Punktfunk1Source::Software,
                 _ => Punktfunk1Source::Virtual,
@@ -113,5 +146,24 @@ impl SessionKnobs {
             pad_audio: pf_host_config::row_bool("PUNKTFUNK_PAD_AUDIO"),
             session_watch: pf_host_config::row_tri("PUNKTFUNK_SESSION_WATCH"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Ipv6;
+
+    /// The row turns the listener on, the env knob opens it, and a seat host follows its box
+    /// whatever its own settings say.
+    #[test]
+    fn ipv6_follows_the_row_and_a_seat_follows_its_box() {
+        assert_eq!(Ipv6::resolve(None, (false, true)), Ipv6::Off);
+        assert_eq!(Ipv6::resolve(None, (true, false)), Ipv6::Private);
+        assert_eq!(Ipv6::resolve(None, (true, true)), Ipv6::Public);
+        assert_eq!(
+            Ipv6::resolve(Some((true, false)), (false, false)),
+            Ipv6::Private
+        );
+        assert_eq!(Ipv6::resolve(Some((false, false)), (true, true)), Ipv6::Off);
     }
 }

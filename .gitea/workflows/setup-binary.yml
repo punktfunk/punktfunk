@@ -105,6 +105,25 @@ jobs:
             punktfunk-setup_${{ matrix.arch }}
             punktfunk-setup_${{ matrix.arch }}.sha256
           key: punktfunk-setup-${{ matrix.arch }}-${{ github.run_id }}
+      # A save the cache server refuses only warns: its 5 s lock wait loses to a stalled fsync.
+      # Look the entry up, and save once more after the stall if it is missing.
+      - id: saved
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            punktfunk-setup_${{ matrix.arch }}
+            punktfunk-setup_${{ matrix.arch }}.sha256
+          key: punktfunk-setup-${{ matrix.arch }}-${{ github.run_id }}
+          lookup-only: true
+      - if: steps.saved.outputs.cache-hit != 'true'
+        run: sleep 30
+      - if: steps.saved.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            punktfunk-setup_${{ matrix.arch }}
+            punktfunk-setup_${{ matrix.arch }}.sha256
+          key: punktfunk-setup-${{ matrix.arch }}-${{ github.run_id }}
 
   # The only job that touches the PUBLISHED binary. Everything else builds from the tree, on
   # purpose — the smoke must exercise the checked-out code. This asks the other question: does

@@ -196,6 +196,28 @@ pub(crate) fn valid_playnite_id(value: &str) -> bool {
     parts.next().is_none()
 }
 
+/// Epic URI from a `<namespace>:<catalogItemId>:<appName>` triple or a bare
+/// `appName`. Charset-checked so the URI stays one argv token.
+#[cfg_attr(
+    not(any(windows, target_os = "macos")),
+    allow(dead_code, reason = "Windows and macOS launch Epic")
+)]
+pub(crate) fn epic_launch_uri(value: &str) -> Option<String> {
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    let inner = match value.split(':').collect::<Vec<_>>().as_slice() {
+        [ns, cat, app] if ok(ns) && ok(cat) && ok(app) => format!("{ns}%3A{cat}%3A{app}"),
+        [app] if ok(app) => (*app).to_string(),
+        _ => return None,
+    };
+    Some(format!(
+        "com.epicgames.launcher://apps/{inner}?action=launch&silent=true"
+    ))
+}
+
 /// Ubisoft Connect game id, interpolated into `uplay://launch/<id>/0`: digits only.
 pub(crate) fn valid_uplay_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 16 && value.bytes().all(|b| b.is_ascii_digit())
@@ -331,6 +353,20 @@ mod tests {
         assert!(!valid_steam_appid(""));
         assert!(!valid_steam_appid("570; rm -rf ~"));
         assert!(!valid_steam_appid("-1"));
+    }
+    #[test]
+    fn epic_launch_uri_triple_bare_and_guard() {
+        assert_eq!(
+            epic_launch_uri("fn:abc:Fortnite").as_deref(),
+            Some("com.epicgames.launcher://apps/fn%3Aabc%3AFortnite?action=launch&silent=true")
+        );
+        assert_eq!(
+            epic_launch_uri("Fortnite").as_deref(),
+            Some("com.epicgames.launcher://apps/Fortnite?action=launch&silent=true")
+        );
+        assert!(epic_launch_uri("bad part:x:y").is_none());
+        assert!(epic_launch_uri("Fortnite' ; touch x").is_none());
+        assert!(epic_launch_uri("").is_none());
     }
     #[test]
     fn rockstar_uninstall_entries_name_their_title() {

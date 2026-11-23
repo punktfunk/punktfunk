@@ -20,7 +20,7 @@ driver can still say no. Features that need both ends are listed under
 
 ## Host platforms
 
-Punktfunk hosts on **Linux** and **Windows**. macOS, iOS, tvOS and Android are clients only.
+Punktfunk hosts on **Linux**, **Windows** and **macOS**. iOS, tvOS and Android are clients only.
 
 ### Display and capture
 
@@ -30,6 +30,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 | Host | Own virtual display | Stream a real monitor | Headless box |
 |---|---|---|---|
 | Windows 11 22H2+ | ✅ ¹ | ✅ ² | ✅ |
+| macOS 15+ (Apple silicon) | ✅ | ✅ | ⚠️ ¹⁵ |
 | KDE Plasma (KWin) | ✅ | ✅ | ✅ |
 | GNOME (Mutter) | ✅ | ✅ | ✅ |
 | gamescope (SteamOS · Bazzite) | ✅ ³ | ⚠️ ⁴ | ✅ |
@@ -37,8 +38,9 @@ Each session gets its own display at the client's resolution and refresh rate �
 | Hyprland | ✅ | ✅ | ⚠️ ⁶ |
 | niri (biri) | ✅ ⁷ | ✅ | ✅ ⁸ |
 | Umbriel | ✅ ⁹ | ✅ | ⚠️ ¹⁰ |
-| Cinnamon (Mint · LMDE) | ❌ ¹¹ | ❌ | ❌ |
-| River, dwl, COSMIC, others | ❌ ¹² | ❌ | ❌ |
+| mango | ✅ ¹¹ | ✅ | ⚠️ ¹² |
+| Cinnamon (Mint · LMDE) | ❌ ¹³ | ❌ | ❌ |
+| River, dwl, COSMIC, others | ❌ ¹⁴ | ❌ | ❌ |
 
 1. Punktfunk's own display driver. Needs Windows 11 22H2 (build 22621); the installer refuses
    anything older. Each paired client gets its own monitor identity carrying its screen's HDR
@@ -61,15 +63,21 @@ Each session gets its own display at the client's resolution and refresh rate �
    Umbriel only directly. See [Umbriel](/docs/umbriel).
 10. Umbriel starts with no monitor plugged in, and virtual outputs should work there; not yet run
     on a box.
-11. Cinnamon's compositor has no virtual-output API. A Mint or LMDE box can still stream games
+11. mango's own headless outputs, driven over its IPC. Needs a GPU encoder: the host captures
+    mango only directly. See [mango](/docs/mango).
+12. Not yet run on a box with no monitor plugged in.
+13. Cinnamon's compositor has no virtual-output API. A Mint or LMDE box can still stream games
    through a headless gamescope — see [Requirements](/docs/requirements#cinnamon-linux-mint-and-lmde).
-12. No host backend. River is detected and takes input, but has no video path.
+14. No host backend. River is detected and takes input, but has no video path.
+15. The host is an app in your login session, so a Mac streams only while you are logged in.
+    Turn on automatic login for a Mac nobody sits at. See [macOS host](/docs/macos-host).
 
 ### Input, cursor and HDR
 
 | Host | Input backend | Approval dialog | Client-drawn cursor | HDR10 source |
 |---|---|---|---|---|
 | Windows | virtual HID device ¹¹ | none ¹ | ✅ ² | ✅ ³ |
+| macOS | system events ¹⁵ | once ¹⁶ | ✅ ¹⁷ | ✅ ¹⁸ |
 | KDE Plasma (KWin) | KWin fake input | none ⁴ | ✅ | ❌ ⁵ |
 | GNOME (Mutter) | libei, direct to Mutter | none | ✅ ⁶ | ⚠️ ⁷ |
 | gamescope | libei (gamescope's own) | none | ⚠️ ⁸ | ⚠️ ⁹ |
@@ -77,6 +85,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 | Hyprland | wlroots virtual pointer + keyboard | none | ❌ ¹⁰ | ✅ ¹³ |
 | niri (biri) | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 | Umbriel | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
+| mango | wlroots virtual pointer + keyboard | none | ❌ ¹² | ❌ ⁵ |
 
 1. The host must run in the signed-in console session, not session 0; the installed service
    starts it there. Over SSH you land in session 0 — see [Windows host](/docs/windows-host).
@@ -99,17 +108,28 @@ Each session gets its own display at the client's resolution and refresh rate �
 11. Mouse and keyboard reach Windows as a USB-style HID device, so games that refuse injected input
     take them. Text, touch and pen use `SendInput` and synthetic pointers. A seat host, and a point
     off the primary monitor, use `SendInput` too.
-12. The host doesn't carry niri's or Umbriel's pointer separately, so it is always part of the
-    video.
+12. The host doesn't carry niri's, Umbriel's or mango's pointer separately, so it is always part
+    of the video.
 13. A virtual display runs in 10-bit HDR when the client asks, and a monitor in HDR mode streams
     HDR. Needs Hyprland's colour management, on by default — see
     [HDR](/docs/hdr#linux--hyprland).
 14. Virtual displays are 8-bit. A real monitor in HDR mode streams HDR where the compositor
     reports the output's colour.
+15. Keyboard, mouse, stylus and touch are posted as system events. A stylus arrives as a
+    drawing tablet. macOS has no touch screens, so touch works as with Sidecar: a tap clicks,
+    a pan scrolls, a long press right-clicks, two fingers zoom and rotate. Games that read
+    input through Apple's GameController don't see posted events: see
+    [Input](/docs/input) for the virtual mouse and keyboard.
+16. macOS asks for screen recording, system audio and keyboard-and-mouse control; the app's
+    setup window walks through them. See [macOS host](/docs/macos-host).
+17. While macOS hands out the pointer's image. Otherwise the pointer is drawn into the video.
+18. A virtual display runs in HDR when the client asks, and a monitor in HDR mode streams HDR.
+    Needs a client that asks for HDR — see [HDR](/docs/hdr).
 
 ### Version floors worth knowing
 
 - **Windows 11 22H2 (build 22621)** — the display driver; the installer refuses anything older.
+- **macOS 15 on Apple silicon** — the host app does not start on older systems or Intel Macs.
 - **KWin** — a normal Plasma session (DRM backend) creates virtual outputs at any version; KWin's
   headless virtual backend needs **6.5.6**. Refresh rates above 60 Hz on a virtual output need
   **6.6**.
@@ -120,6 +140,7 @@ Each session gets its own display at the client's resolution and refresh rate �
   crash niri when an `off` virtual output is removed. See [niri](/docs/niri#get-biri).
 - **Umbriel built 2026-09-28 or later** — older builds can't create virtual outputs. See
   [Umbriel](/docs/umbriel#install).
+- **mango 0.17.1** — the first that names the outputs it creates; the host refuses older ones.
 - **gamescope 3.16.22** — below it, headless capture deadlocks against PipeWire 1.6 and newer.
   **3.16.23** — below it, the Steam overlay never reaches the stream. The host warns but doesn't
   refuse.
@@ -133,6 +154,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 | Windows · Intel | QSV | H.264 · HEVC · AV1 | ✅ | ✅ | ❌ |
 | Windows · other | Media Foundation ⁴ | H.264 · HEVC | ❌ | ❌ | ❌ |
 | Windows · none | — ⁵ | — | — | — | — |
+| macOS · Apple silicon | VideoToolbox | H.264 · HEVC | ✅ | ❌ | ⚠️ ⁹ |
 | Linux · NVIDIA | NVENC | H.264 · HEVC · AV1 | ✅ | ✅ | ⚠️ ² |
 | Linux · AMD, Intel | Vulkan Video ⁶ | HEVC · AV1 | ✅ | ⚠️ ⁶ | ❌ |
 | Linux · AMD, Intel | VAAPI | H.264 · HEVC | ✅ | ✅ | ❌ |
@@ -153,10 +175,11 @@ Each session gets its own display at the client's resolution and refresh rate �
 7. [PyroWave](/docs/pyrowave) runs when the client picks it, or when a Linux host's **Encoder** is
    PyroWave and the client leaves its codec on automatic. Full chroma on any vendor; modes
    around 8K fall back to 4:2:0. 10-bit SDR on Linux, and on Windows 11 24H2 and later. Not in
-   Windows ARM64 builds.
+   Windows ARM64 builds or on a Mac host.
 8. Only with `PUNKTFUNK_ENCODER=software`; `auto` never picks it on Linux.
+9. HEVC, 8-bit only: an HDR session is 4:2:0.
 
-HEVC 4:4:4 means an NVIDIA host, or pick PyroWave. Asking for 4:4:4 is a client setting, off by
+HEVC 4:4:4 means an NVIDIA host or a Mac host, or pick PyroWave. Asking for 4:4:4 is a client setting, off by
 default, on the Linux, Windows and Apple clients; Android has none, and GameStream sessions are
 4:2:0 except [PyroWave from a Moonlight fork](/docs/pyrowave#from-a-moonlight-client). See
 [Client settings](/docs/client-settings#video).
@@ -171,6 +194,7 @@ default, on the Linux, Windows and Apple clients; Android has none, and GameStre
   unrecognised GPU falls through to the first one in the box with a known vendor, then to Media
   Foundation; with neither, the session fails. An encoder pin that contradicts the selected GPU is
   ignored, and the console flags it.
+- **macOS** — VideoToolbox, the hardware encoder every Apple silicon Mac has.
 - **Codec** — the client's preferred codec wins if the host can encode it; a client with no
   preference that decodes PyroWave takes it when a Linux host's **Encoder** pins it. Otherwise
   **HEVC → AV1 → H.264**.
@@ -179,6 +203,8 @@ default, on the Linux, Windows and Apple clients; Android has none, and GameStre
 
 - **Windows** — the display driver encodes on the GPU and the host only packetises; no backend
   reads frames back to the CPU.
+- **macOS** — captured frames go to VideoToolbox as they are. An HDR session adds one GPU
+  step that sets the white level.
 - **Linux** — VAAPI takes the captured buffer directly, NVIDIA imports it through an isolated
   worker process, and PyroWave imports it on any vendor. gamescope hands over tiled buffers only
   when it is the patched build this host started; any other gamescope offers linear ones. An import
@@ -188,6 +214,7 @@ default, on the Linux, Windows and Apple clients; Android has none, and GameStre
 
 - **Windows installer** — the encoders live in the display driver: NVENC, AMF, QSV, Media
   Foundation and PyroWave on x64; Media Foundation only on ARM64.
+- **macOS app** — VideoToolbox.
 - **Linux packages** (Arch, RPM, deb, Nix) — NVENC, Vulkan Video, VAAPI, software and PyroWave.
 - **A hand `cargo build` on Linux** — VAAPI, software and PyroWave. NVENC (`nvenc`) and Vulkan
   Video (`vulkan-encode`) are cargo features: without `nvenc`, an NVIDIA box takes the AMD/Intel

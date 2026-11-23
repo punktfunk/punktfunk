@@ -110,7 +110,14 @@ jobs:
           # rsa Marvin (RUSTSEC-2023-0071) is fixed in rsa 0.10.0, which the host is on. The
           # keeper's RDP stack (picky, sspi, winscard) pins `=0.10.0-rc.18`. It logs in with a
           # password and holds no RSA private key. Drop the flag when those three move.
-          cargo audit --deny unsound --ignore RUSTSEC-2023-0071 --file crates/host/pf-seat-keeper/Cargo.lock
+          # heapless 0.7 (RUSTSEC-2026-0574…0582) comes in through ironrdp-connector's forced
+          # `scard` (winscard → iso7816), which only builds `heapless::Vec<u8, N>`. None of the
+          # flagged APIs are reached. Drop the flags when winscard leaves iso7816 0.1.
+          cargo audit --deny unsound --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0574 --ignore RUSTSEC-2026-0575 --ignore RUSTSEC-2026-0576 \
+            --ignore RUSTSEC-2026-0577 --ignore RUSTSEC-2026-0578 --ignore RUSTSEC-2026-0579 \
+            --ignore RUSTSEC-2026-0580 --ignore RUSTSEC-2026-0581 --ignore RUSTSEC-2026-0582 \
+            --file crates/host/pf-seat-keeper/Cargo.lock
           cargo audit --deny unsound --file fuzz/Cargo.lock
 
   # cargo-audit matches registry crates by name and version, so a vendored tree has no feed but
@@ -153,23 +160,8 @@ jobs:
       # advisory, the same fail-on-vulnerability stance as cargo-audit above; triage a finding by
       # bumping the dep (or, if genuinely unfixable + inapplicable, pinning a resolution and
       # noting why here).
-      #
-      # web carries one ignore, the ONLY one in a blocking tree: picomatch (GHSA-fc5q-39xc-vjpf,
-      # ReDoS on a glob pattern the attacker chooses). It is unfixable AND unreachable:
-      #   * unfixable — the vulnerable range ends at 4.0.7, the latest release. Upstream has
-      #     published no patched version, so no override can clear it.
-      #   * unreachable — every path to it is build or dev tooling (vite, storybook, the
-      #     TanStack Start and Paraglide plugins, nitropack's dev watcher, orval, tsdown, sass),
-      #     matching this repo's own patterns. The built `.output` holds no glob matcher.
-      # Drop it the moment upstream ships a fix — the bare `bun audit` is then green. Scoped
-      # per-tree so sdk/plugin-kit stay strictly fail-on-any.
       - name: bun audit
-        run: |
-          if [ "${{ matrix.tree }}" = "web" ]; then
-            bun audit --ignore=GHSA-fc5q-39xc-vjpf
-          else
-            bun audit
-          fi
+        run: bun audit
 
   # Kept OUT of the bun-audit matrix so this tree's known-advisory state can't normalize failure
   # in a shipping tree. Non-blocking via a step-level `||` (NOT job-level continue-on-error, which
@@ -188,11 +180,9 @@ jobs:
         working-directory: /
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # picomatch (GHSA-fc5q-39xc-vjpf) is ignored as in web: no fixed release exists, and the
-      # built `.output` holds no glob matcher. Drop it when upstream ships a fix.
       - name: bun audit (non-blocking)
         run: |
-          bun audit --ignore=GHSA-fc5q-39xc-vjpf \
+          bun audit \
             || echo "::warning::docs-site has a new advisory — lift it with an override, as web does"
 
   pnpm-audit:
@@ -205,14 +195,14 @@ jobs:
         working-directory: clients/decky
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # decky is pnpm-managed (pnpm-lock.yaml lockfileVersion 9.0 → pnpm 10 reads it). Like
-      # bun audit, `pnpm audit` needs no install/build — lockfile + registry advisory DB only.
+      # decky is pnpm-managed; corepack runs the pnpm its packageManager pins. Like bun audit,
+      # `pnpm audit` needs no install/build — lockfile + registry advisory DB only.
       # --prod: rollup bundles only the prod deps into the shipped plugin; devDependencies are
       # build tooling that never leaves CI (auditing them fails on toolchain advisories that
       # can't reach a user — the docs-site problem in miniature).
       - name: pnpm audit
         run: |
-          npm install -g pnpm@10
+          corepack enable
           pnpm audit --prod
 
   # The regression guard about.toml documents: fail if any crate in a shipped Rust workspace carries

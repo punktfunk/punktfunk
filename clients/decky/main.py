@@ -12,7 +12,7 @@ live in the client's own console home.
 """
 
 import decky
-from pf_decky import art, client, session, steam_input, update
+from pf_decky import art, client, host, session, steam_input, update
 
 
 class Plugin:
@@ -75,6 +75,20 @@ class Plugin:
 
     async def runner_info(self) -> dict:
         return await client.runner_info()
+
+    # This device's own host: its titles as Steam entries (pf_decky.host).
+
+    async def host_bin(self) -> dict:
+        return {"path": host.host_bin() or ""}
+
+    async def local_entries(self) -> dict:
+        return await host.entries()
+
+    async def local_art(self, game_id: str, kind: str) -> dict:
+        return await host.entry_art(game_id, kind)
+
+    async def local_map(self, steam_map: dict) -> dict:
+        return await host.put_map(steam_map)
 
     # The running stream.
 

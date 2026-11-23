@@ -174,12 +174,15 @@ pub fn input_backend_id(chosen: Compositor) -> &'static str {
         // Hyprland still speaks `zwlr_virtual_pointer_v1` + `zwp_virtual_keyboard_v1`
         // — same wlr injector as sway/river.
         // niri 26.04 serves both too, and so does biri.
-        Compositor::Wlroots | Compositor::Hyprland | Compositor::Niri => "wlr",
+        // mango maps the pointer onto its suggested output, as dwl does.
+        Compositor::Wlroots | Compositor::Hyprland | Compositor::Niri | Compositor::Mango => "wlr",
         // Same protocols, but Umbriel maps absolute motion over the whole layout and ignores
         // the pointer's output: the injector aims in layout space.
         Compositor::Umbriel => "wlr-layout",
-        // pf-inject ignores the id off Linux; Windows has one injector.
+        // pf-inject ignores the id off Linux; Windows and macOS have one injector each.
         Compositor::Windows => "windows",
+        #[cfg(target_os = "macos")]
+        Compositor::MacOs => "macos",
     }
 }
 
@@ -358,6 +361,10 @@ pub fn focus_streamed_output(compositor: Compositor, name: &str) -> bool {
             umbriel::focus_output(name);
             true
         }
+        Compositor::Mango if hyprland::is_managed_output(name) => {
+            mango::focus_output(name);
+            true
+        }
         // No `_` arm: a new backend must decide here. Silent "no focus" only
         // shows up as a game on the wrong screen.
         Compositor::Hyprland
@@ -367,6 +374,7 @@ pub fn focus_streamed_output(compositor: Compositor, name: &str) -> bool {
         | Compositor::Gamescope
         | Compositor::Niri
         | Compositor::Umbriel
+        | Compositor::Mango
         | Compositor::Windows => false,
     }
 }
@@ -408,6 +416,7 @@ impl WorkspaceClaim {
             Compositor::Wlroots => wlroots::focus_workspace(self.restore),
             Compositor::Niri => niri::desktop::focus_workspace(self.restore),
             Compositor::Umbriel => umbriel::desktop::focus_workspace(&self.output, self.restore),
+            Compositor::Mango => mango::desktop::focus_workspace(&self.output, self.restore),
             // No `_` arm: only a backend that claims can release.
             Compositor::Kwin | Compositor::Mutter | Compositor::Gamescope | Compositor::Windows => {
                 return
@@ -494,6 +503,10 @@ pub fn claim_workspace(
         Compositor::Umbriel if hyprland::is_managed_output(name) => {
             umbriel::desktop::claim_workspace(name, want)
         }
+        // mango's tags: a launch's own tag on the streamed output.
+        Compositor::Mango if hyprland::is_managed_output(name) => {
+            mango::desktop::claim_workspace(name, want)
+        }
         // No `_` arm: a new backend must decide here. KWin is a later step: its desktops span
         // every output unless 6.7's per-output desktops are on. Mutter 51 has no per-output
         // workspace; gamescope gives the game the whole session; Windows virtual desktops are
@@ -505,6 +518,7 @@ pub fn claim_workspace(
         | Compositor::Gamescope
         | Compositor::Niri
         | Compositor::Umbriel
+        | Compositor::Mango
         | Compositor::Windows => {
             tracing::info!(
                 compositor = compositor.id(), output = %name,
@@ -565,6 +579,13 @@ pub fn dedicated_game_exited(_node_id: u32) -> bool {
 #[cfg(target_os = "linux")]
 pub fn launch_is_steam(cmd: &str) -> bool {
     gamescope::is_steam_launch(cmd)
+}
+
+/// Steam owns the box's own session (Game Mode): only what Steam starts is shown there.
+/// Blocking: a `/proc` scan and X round trips.
+#[cfg(target_os = "linux")]
+pub fn steam_owns_desk() -> bool {
+    gamescope::steam_owns_desk()
 }
 
 /// Steam appid a dedicated launch targets, for the exit watcher. `None` for a
@@ -850,6 +871,7 @@ mod tests {
         assert_eq!(input_backend_id(Compositor::Hyprland), "wlr");
         assert_eq!(input_backend_id(Compositor::Niri), "wlr");
         assert_eq!(input_backend_id(Compositor::Umbriel), "wlr-layout");
+        assert_eq!(input_backend_id(Compositor::Mango), "wlr");
         assert_eq!(input_backend_id(Compositor::Windows), "windows");
     }
 
@@ -931,6 +953,8 @@ mod tests {
         assert!(claim_workspace(Compositor::Niri, "DP-1", None).is_none());
         assert!(!focus_streamed_output(Compositor::Umbriel, "DP-1"));
         assert!(claim_workspace(Compositor::Umbriel, "DP-1", None).is_none());
+        assert!(!focus_streamed_output(Compositor::Mango, "DP-1"));
+        assert!(claim_workspace(Compositor::Mango, "DP-1", None).is_none());
     }
 
     /// The console's Force managed switch is a next-session row: a toggle reaches the next

@@ -31,7 +31,9 @@ pub(crate) enum Kind {
     Window,
     /// SDL's quit: the last window closed, or the session was told to end.
     Quit,
-    /// Display changes, frame wakes, pads, text input.
+    /// SDL text input's committed text.
+    Text,
+    /// Display changes, frame wakes, pads.
     Other,
 }
 
@@ -98,10 +100,13 @@ pub(crate) fn route(k: Kind, f: &RouteFacts) -> Target {
             super_key: true, ..
         } if !f.inhibit_shortcuts => Target::Drop,
         // The ring had the keys it maps as the console; the rest stay off the host.
-        Kind::Key { .. } | Kind::KeyRepeat if f.ring_open => Target::Drop,
-        Kind::Key { .. } | Kind::KeyRepeat | Kind::KeyUp | Kind::Button | Kind::Motion => {
-            Target::Capture
-        }
+        Kind::Key { .. } | Kind::KeyRepeat | Kind::Text if f.ring_open => Target::Drop,
+        Kind::Key { .. }
+        | Kind::KeyRepeat
+        | Kind::KeyUp
+        | Kind::Text
+        | Kind::Button
+        | Kind::Motion => Target::Capture,
         // Native scroll owns the main surface's wheel; a further screen's window has only SDL's.
         Kind::Wheel if (f.native_scroll && f.on_primary) || f.wheel_blocked || !f.captured => {
             Target::Drop
@@ -193,6 +198,8 @@ mod tests {
             ("a repeat goes to capture", Kind::KeyRepeat, main, Target::Capture),
             ("a repeat stays local while the ring is up", Kind::KeyRepeat, ring, Target::Drop),
             ("a key up reaches capture while the ring is up", Kind::KeyUp, ring, Target::Capture),
+            ("the ring's keyboard types text to capture", Kind::Text, main, Target::Capture),
+            ("text stays off the host while the ring is up", Kind::Text, ring, Target::Drop),
             // Pointer.
             ("a button goes to capture, which engages a released stream", Kind::Button, main, Target::Capture),
             ("the console's verdict wins for a button", Kind::Button, took, Target::Overlay),
@@ -222,7 +229,7 @@ mod tests {
             ("quit ends the session", Kind::Quit, RouteFacts::default(), Target::Quit),
             ("the main window's events go to its handler", Kind::Window, main, Target::Window),
             ("focus goes to the main window's handler", Kind::Focus, main, Target::Window),
-            ("the console takes text input", Kind::Other, took, Target::Overlay),
+            ("the console takes text input", Kind::Text, took, Target::Overlay),
             ("displays, wakes and pads go to the loop", Kind::Other, RouteFacts::default(), Target::Loop),
         ];
         for (name, kind, facts, want) in rows {

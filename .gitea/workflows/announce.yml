@@ -35,8 +35,7 @@ jobs:
     steps:
       # SHA-pinned, not by tag: this job holds UPDATE_MANIFEST_KEY — the Ed25519 key every host
       # pins to decide whether an update is real — and a tag is mutable, so whoever can move it
-      # runs code in front of that key. Same style as the appleboy pins in deploy-services.yml;
-      # the trailing comment is the release it resolves to.
+      # runs code in front of that key. The trailing comment is the release it resolves to.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Publish the SIGNED stable update manifest — the moment every host's update check learns
@@ -143,9 +142,17 @@ jobs:
           else
             echo "no arm64 installer on ${TAG} - publishing the x64 leg only"; A64_URL=""; A64_SHA=""
           fi
+          # The macOS host image is optional on a release too. A Mac host only links to it.
+          MAC_URL="https://git.unom.io/unom/punktfunk/releases/download/${TAG}/Punktfunk-Host-${VER}.dmg"
+          if curl -fsSL "$MAC_URL" -o /tmp/host.dmg; then
+            MAC_SHA="$(sha256sum /tmp/host.dmg | awk '{print $1}')"
+          else
+            echo "no macOS host image on ${TAG} - leaving it out of the manifest"; MAC_URL=""; MAC_SHA=""
+          fi
           CHANNEL=stable VERSION="$VER" REQUIRE_KEY=1 \
             WINDOWS_URL="$URL" WINDOWS_SHA256="$SHA" \
             WINDOWS_ARM64_URL="$A64_URL" WINDOWS_ARM64_SHA256="$A64_SHA" \
+            MACOS_ARM64_URL="$MAC_URL" MACOS_ARM64_SHA256="$MAC_SHA" \
             AUTHENTICODE_SHA256="$LEAF_SHA" AUTHENTICODE_SUBJECT="$AUTHENTICODE_SUBJECT" \
             NOTES_URL="https://git.unom.io/unom/punktfunk/releases/tag/${TAG}" \
             bash scripts/ci/publish-update-manifest.sh

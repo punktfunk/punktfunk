@@ -99,7 +99,7 @@ pub use routing::{
     claim_workspace, dedicated_game_exited, focus_streamed_output, gamescope_presenting,
     gamescope_xwayland_cursor_targets, held_managed_session, launch_into_gamescope_session,
     launch_is_nested, launch_is_steam, release_managed_session, steam_appid_from_launch,
-    watch_steam_game_exit, GamescopeHdrContent, WorkspaceClaim,
+    steam_owns_desk, watch_steam_game_exit, GamescopeHdrContent, WorkspaceClaim,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,13 +122,25 @@ pub enum Compositor {
     /// Umbriel, Noctalia's wlroots compositor — `output-create` over its JSON IPC socket,
     /// captured directly (no portal). `design/umbriel-support.md`.
     Umbriel,
+    /// mango, a dwl-based wlroots compositor: a named headless output over its JSON IPC socket,
+    /// moded over output management and captured directly (no portal).
+    Mango,
     /// The pf-vdisplay IddCx driver — a Windows host's only backend. Never in [`Compositor::all`].
     Windows,
+    /// A macOS host: a session's own screen is a virtual display where macOS offers one, else
+    /// a mirror of the main display (`vdisplay/macos.rs`). Never in [`Compositor::all`].
+    #[cfg(target_os = "macos")]
+    MacOs,
 }
 
 impl Compositor {
-    /// Wire / management id: the [`punktfunk_core::CompositorPref`] spelling.
+    /// Wire / management id: the [`punktfunk_core::CompositorPref`] spelling. macOS has no
+    /// wire byte and is `macos`.
     pub fn id(self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return "macos";
+        }
         self.as_pref().as_str()
     }
 
@@ -141,6 +153,10 @@ impl Compositor {
     /// Keeps a `keep_monitors` head lit under `exclusive`: its exclusive path filters through
     /// `monitors::darkens`. Mutter's sole-monitor config and Windows never read the list.
     pub fn honours_keep_monitors(self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return true;
+        }
         matches!(
             self,
             Compositor::Kwin
@@ -148,6 +164,7 @@ impl Compositor {
                 | Compositor::Wlroots
                 | Compositor::Niri
                 | Compositor::Umbriel
+                | Compositor::Mango
         )
     }
 
@@ -162,6 +179,10 @@ impl Compositor {
     /// Makes the streamed screen the desktop's main one under `primary`. The tiling backends
     /// only focus it, so there `primary` is `extend` (`exclusive_wanted`).
     pub fn has_primary(self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self == Compositor::MacOs {
+            return true;
+        }
         matches!(
             self,
             Compositor::Kwin | Compositor::Mutter | Compositor::Windows
@@ -172,7 +193,11 @@ impl Compositor {
     pub fn places_launch_workspace(self) -> bool {
         matches!(
             self,
-            Compositor::Hyprland | Compositor::Wlroots | Compositor::Niri | Compositor::Umbriel
+            Compositor::Hyprland
+                | Compositor::Wlroots
+                | Compositor::Niri
+                | Compositor::Umbriel
+                | Compositor::Mango
         )
     }
 
@@ -191,7 +216,10 @@ impl Compositor {
             Compositor::Hyprland => "Hyprland",
             Compositor::Niri => "niri",
             Compositor::Umbriel => "Umbriel",
+            Compositor::Mango => "mango",
             Compositor::Windows => "Windows virtual display",
+            #[cfg(target_os = "macos")]
+            Compositor::MacOs => "macOS display",
         }
     }
 
@@ -205,7 +233,11 @@ impl Compositor {
             Compositor::Hyprland => P::Hyprland,
             Compositor::Niri => P::Niri,
             Compositor::Umbriel => P::Umbriel,
+            Compositor::Mango => P::Mango,
             Compositor::Windows => P::Windows,
+            // No wire byte names macOS: the Welcome echoes `Auto`.
+            #[cfg(target_os = "macos")]
+            Compositor::MacOs => P::Auto,
         }
     }
 
@@ -222,12 +254,13 @@ impl Compositor {
             P::Hyprland => Compositor::Hyprland,
             P::Niri => Compositor::Niri,
             P::Umbriel => Compositor::Umbriel,
+            P::Mango => Compositor::Mango,
             P::Windows => Compositor::Windows,
         })
     }
 
     /// Every Linux backend, in stable UI/enumeration order.
-    pub fn all() -> [Compositor; 7] {
+    pub fn all() -> [Compositor; 8] {
         [
             Compositor::Kwin,
             Compositor::Gamescope,
@@ -236,6 +269,7 @@ impl Compositor {
             Compositor::Hyprland,
             Compositor::Niri,
             Compositor::Umbriel,
+            Compositor::Mango,
         ]
     }
 }
@@ -255,7 +289,7 @@ pub fn runs_fractional_rates(backend: &str) -> bool {
     }
     matches!(
         backend,
-        "wlroots" | "hyprland" | "mutter" | "niri" | "umbriel" | "kwin"
+        "wlroots" | "hyprland" | "mutter" | "niri" | "umbriel" | "mango" | "kwin"
     )
 }
 
@@ -293,6 +327,7 @@ pub fn available() -> Vec<Compositor> {
                         Compositor::Hyprland => hyprland::is_available(),
                         Compositor::Niri => niri::is_available(),
                         Compositor::Umbriel => umbriel::is_available(),
+                        Compositor::Mango => mango::is_available(),
                         Compositor::Windows => false,
                     }
             })
@@ -314,6 +349,7 @@ fn compositor_from_pin(v: &str) -> Option<Compositor> {
         // biri is the niri fork with virtual outputs; one backend serves both.
         "niri" | "biri" => Compositor::Niri,
         "umbriel" => Compositor::Umbriel,
+        "mango" | "mangowm" | "mangowc" => Compositor::Mango,
         "wlroots" | "sway" | "wlr" | "river" => Compositor::Wlroots,
         "mutter" | "gnome" => Compositor::Mutter,
         "gamescope" => Compositor::Gamescope,
@@ -340,12 +376,16 @@ pub fn with_env_lock<R>(f: impl FnOnce() -> R) -> R {
 ///
 /// A live session is stored as a connect stores it. A unit started before its desktop
 /// inherits no `WAYLAND_DISPLAY`, so the console's reads would otherwise reach no
-/// compositor until a client connects.
+/// compositor until a client connects. A macOS host is always [`Compositor::MacOs`].
 pub fn detect() -> Result<Compositor> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Compositor::MacOs)
+    }
     // Variants are Linux backends. Off Linux, do not fall through to the XDG
     // sniff: `mgmt/display.rs` puts that error verbatim on `/display/monitors`.
     // The operator pin is gated with it — a Wayland name cannot be honoured here.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         anyhow::bail!(
             "compositor detection is Linux-only; on {} the host enumerates displays through the OS \
@@ -370,6 +410,16 @@ pub fn detect() -> Result<Compositor> {
     }
 }
 
+/// The backend [`detect`] picks from the pin or the live session, read without storing the
+/// session: for wording an error after the fact.
+#[cfg(target_os = "linux")]
+pub fn in_use() -> Option<Compositor> {
+    match pf_host_config::config().compositor.as_deref() {
+        Some(v) => compositor_from_pin(v),
+        None => compositor_for_kind(detect_active_session().kind),
+    }
+}
+
 /// Error for a `PUNKTFUNK_COMPOSITOR` value that names no backend.
 ///
 /// `cinnamon`/`muffin` get their own answer: the bare list invites `mutter`
@@ -377,7 +427,7 @@ pub fn detect() -> Result<Compositor> {
 /// There is no working desktop value; name the gamescope route instead.
 #[cfg(target_os = "linux")]
 fn unknown_pin_error(v: &str) -> anyhow::Error {
-    const ACCEPTED: &str = "kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel";
+    const ACCEPTED: &str = "kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel|mango";
     if matches!(
         v.trim().to_ascii_lowercase().as_str(),
         "cinnamon" | "muffin"
@@ -412,6 +462,8 @@ fn compositor_from_xdg(desktop: &str) -> Result<Compositor> {
         Ok(Compositor::Niri)
     } else if desktop.contains("UMBRIEL") {
         Ok(Compositor::Umbriel)
+    } else if desktop.contains("MANGO") {
+        Ok(Compositor::Mango)
     } else if desktop.contains("KDE") {
         Ok(Compositor::Kwin)
     } else if desktop.contains("GNOME") {
@@ -477,11 +529,11 @@ pub fn screen_target(fp: Option<&str>, may_choose: bool) -> (policy::DisplayTarg
 /// Heads a live mirror streams now, each with the device (fingerprint hex) it streams to.
 /// `None` is a session that named no device.
 pub fn streamed_monitors() -> Vec<(String, Option<String>)> {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
         mirror::streamed()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     Vec::new()
 }
 
@@ -510,7 +562,8 @@ pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
 }
 
 /// Open the display `target` names on `compositor`: the mirror backend for a monitor
-/// (physical head, no virtual display), else the virtual-display driver.
+/// (physical head, no virtual display), else the virtual-display driver. macOS mirrors the
+/// main display for an own screen when it has no virtual displays ([`creates_displays`]).
 /// `design/per-monitor-portal-capture.md`.
 pub fn open_for(
     compositor: Compositor,
@@ -564,7 +617,18 @@ pub fn open_for(
         )?;
         Ok(Box::new(driver::PfVdisplayDisplay::new()?))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    // Only `MacOs` makes a display: any other name here is a test's stand-in.
+    #[cfg(target_os = "macos")]
+    match target.into_monitor() {
+        None if compositor == Compositor::MacOs && creates_displays() => {
+            Ok(Box::<macos::OwnScreen>::default())
+        }
+        connector => {
+            let connector = connector.unwrap_or_else(macos::main_display);
+            Ok(Box::new(mirror::MirrorDisplay::new(compositor, connector)?))
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = (compositor, target);
         anyhow::bail!("virtual displays require Linux or Windows")
@@ -582,6 +646,7 @@ fn backend(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
         Compositor::Hyprland => Ok(Box::new(hyprland::HyprlandDisplay::new()?)),
         Compositor::Niri => Ok(Box::new(niri::NiriDisplay::new()?)),
         Compositor::Umbriel => Ok(Box::<umbriel::UmbrielDisplay>::default()),
+        Compositor::Mango => Ok(Box::<mango::MangoDisplay>::default()),
         Compositor::Windows => {
             anyhow::bail!("the Windows virtual display needs a Windows host")
         }
@@ -619,8 +684,8 @@ pub fn open_mirror(compositor: Compositor, connector: &str) -> Result<Box<dyn Vi
 
 /// Is `compositor` up and able to create a virtual output right now?
 /// KWin checks the privileged `zkde_screencast` global; Hyprland, niri and Umbriel check that
-/// their IPC answers. Gamescope, Mutter and wlroots have no pre-flight; `Ok(())` means try
-/// `create`.
+/// their IPC answers. Gamescope, Mutter, wlroots and macOS have no pre-flight;
+/// `Ok(())` means try `create`.
 pub fn probe(compositor: Compositor) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -632,6 +697,8 @@ pub fn probe(compositor: Compositor) -> Result<()> {
             Compositor::Niri => niri::probe(),
             // The IPC socket must answer, from an Umbriel new enough to create outputs.
             Compositor::Umbriel => umbriel::probe(),
+            // The IPC socket must answer.
+            Compositor::Mango => mango::probe(),
             // Spawn / D-Bus / output-on-demand: nothing to pre-check beyond "Linux".
             Compositor::Gamescope | Compositor::Mutter | Compositor::Wlroots => Ok(()),
             Compositor::Windows => {
@@ -644,7 +711,12 @@ pub fn probe(compositor: Compositor) -> Result<()> {
         let _ = compositor;
         driver::probe()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = compositor;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = compositor;
         anyhow::bail!("virtual displays require Linux or Windows")
@@ -723,9 +795,21 @@ impl DisplayAsleep {
 // Stream a head the compositor already has. `VirtualDisplay` so session
 // machinery is unchanged; `DisplayOwnership::External` so lifecycle policy
 // is not applied to someone else's monitor.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[path = "vdisplay/mirror.rs"]
 mod mirror;
+
+// The displays a macOS host lists, mirrors and makes.
+#[cfg(target_os = "macos")]
+#[path = "vdisplay/macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{creates_displays, display_hdr, hdr_displays};
+
+// The private CoreGraphics classes behind a macOS virtual display, and nothing else.
+#[cfg(target_os = "macos")]
+#[path = "vdisplay/macos_virtual.rs"]
+mod macos_virtual;
 
 // Pure lifecycle state machine (refcount + linger + pin). Registry executes the transitions.
 #[path = "vdisplay/lifecycle.rs"]
@@ -908,6 +992,16 @@ pub fn gamescope_tiled_capture(route: Option<&GamescopeRoute>) -> bool {
     )
 }
 
+/// May the capture offer tiled modifiers on this gamescope's NV12/P010? Same two terms as
+/// [`gamescope_hdr_available`]; `false` keeps the planar offer LINEAR.
+pub fn gamescope_tiled_planar_capture(route: Option<&GamescopeRoute>) -> bool {
+    gamescope_ours_and(
+        route,
+        #[cfg(target_os = "linux")]
+        gamescope::gamescope_offers_tiled_planar_capture,
+    )
+}
+
 /// May an NVENC capture take this gamescope's NV12/P010? Same two terms as
 /// [`gamescope_hdr_available`]; `false` keeps packed RGB, which costs NVIDIA less than a
 /// planar capture composited through system RAM.
@@ -1042,6 +1136,15 @@ mod umbriel;
 #[cfg(target_os = "linux")]
 pub use umbriel::UmbrielIpcMismatch;
 
+#[cfg(target_os = "linux")]
+#[path = "vdisplay/linux/mango/mod.rs"]
+mod mango;
+
+/// One head at a time over `zwlr_output_manager_v1`: Umbriel and mango.
+#[cfg(target_os = "linux")]
+#[path = "vdisplay/linux/output_mgmt.rs"]
+mod output_mgmt;
+
 /// Bounded dispatch loop shared by the in-process Wayland protocol clients.
 #[cfg(target_os = "linux")]
 #[path = "vdisplay/linux/wl_pump.rs"]
@@ -1129,6 +1232,7 @@ mod tests {
         assert_eq!(compositor_from_xdg("NIRI").unwrap(), Compositor::Niri);
         assert_eq!(compositor_from_xdg("NIRI:GNOME").unwrap(), Compositor::Niri);
         assert_eq!(compositor_from_xdg("UMBRIEL").unwrap(), Compositor::Umbriel);
+        assert_eq!(compositor_from_xdg("MANGO").unwrap(), Compositor::Mango);
     }
 
     /// The operator pin and the wire byte both name Umbriel.
@@ -1139,6 +1243,22 @@ mod tests {
         assert_eq!(Compositor::from_pref(byte), Some(Compositor::Umbriel));
         assert_eq!(Compositor::Umbriel.id(), "umbriel");
         assert!(Compositor::all().contains(&Compositor::Umbriel));
+    }
+
+    /// mango: its pin under each project name, the wire byte, and the desk integration it
+    /// implements.
+    #[test]
+    fn mango_is_named_by_its_pin_and_its_byte() {
+        for pin in ["mango", " MangoWM ", "mangowc"] {
+            assert_eq!(compositor_from_pin(pin), Some(Compositor::Mango), "{pin}");
+        }
+        let byte = punktfunk_core::CompositorPref::from_u8(9);
+        assert_eq!(Compositor::from_pref(byte), Some(Compositor::Mango));
+        assert_eq!(Compositor::Mango.id(), "mango");
+        assert!(Compositor::all().contains(&Compositor::Mango));
+        assert!(Compositor::Mango.honours_keep_monitors());
+        assert!(Compositor::Mango.places_launch_workspace());
+        assert!(runs_fractional_rates("mango"));
     }
 
     /// Muffin has no virtual-output API: there is no `PUNKTFUNK_COMPOSITOR`
@@ -1171,7 +1291,7 @@ mod tests {
         }
         let typo = unknown_pin_error("kwim").to_string();
         assert!(
-            typo.contains("kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel"),
+            typo.contains("kwin|wlroots|hyprland|mutter|gamescope|niri|umbriel|mango"),
             "{typo}"
         );
         assert!(!typo.contains("Muffin"), "{typo}");
@@ -1215,6 +1335,10 @@ mod tests {
         assert_eq!(
             compositor_for_kind(ActiveKind::DesktopUmbriel),
             Some(Compositor::Umbriel)
+        );
+        assert_eq!(
+            compositor_for_kind(ActiveKind::DesktopMango),
+            Some(Compositor::Mango)
         );
         // No live session → no backend; the caller maps this to handshake error / fallback.
         assert_eq!(compositor_for_kind(ActiveKind::None), None);

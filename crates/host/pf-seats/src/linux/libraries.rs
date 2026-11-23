@@ -19,8 +19,8 @@
 //! read-only: a seat plays what is installed, and can't update, install or rewrite an
 //! appmanifest there. The few files a game needs to write get private copies ([`spots`]).
 //!
-//! Every root the owner granted a plugin, a ROM folder say, appears read-only at its own path
-//! ([`Rom`]) through a stage, idmapped where the filesystem takes it.
+//! Every root the owner granted a plugin appears read-only at its own path ([`Rom`]) through a
+//! stage, idmapped where its filesystem takes it; a shared shortcut's folder as an [`Overlay`].
 
 use super::accounts::Passwd;
 use super::shared::{self, make_dir};
@@ -95,6 +95,21 @@ pub(super) struct Rom {
     pub idmap: Option<String>,
 }
 
+/// One of the owner's folders a seat sees at `view` as its own: the owner's files below,
+/// idmapped as the seat's, and the seat's writes above, kept under [`overlay_dir`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Overlay {
+    /// Canonical, and the owner's.
+    pub root: PathBuf,
+    /// Its stage's name: a hash of the path.
+    pub key: String,
+    pub view: PathBuf,
+    /// The uid the stage checks the folder against.
+    pub owner: u32,
+    /// `X-mount.idmap=` of the lower layer.
+    pub idmap: String,
+}
+
 /// What a seat's unit needs to show the owner's libraries and granted roots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Shares {
@@ -116,6 +131,7 @@ pub(super) struct Shares {
     /// The owner's home, canonical, when a root lies in it: an empty folder covers it in the
     /// seat, so the seat can walk to the root through a home that is closed to it.
     pub home: Option<PathBuf>,
+    pub overlays: Vec<Overlay>,
 }
 
 pub(super) fn libraries_dir(state: &Path, id: &SeatId) -> PathBuf {
@@ -142,8 +158,13 @@ fn private_dir(state: &Path, id: &SeatId, key: &str) -> PathBuf {
     shared::seat_dir(state, id).join("private").join(key)
 }
 
-fn stage_dir(id: &SeatId, key: &str) -> PathBuf {
+pub(super) fn stage_dir(id: &SeatId, key: &str) -> PathBuf {
     Path::new(STAGE_ROOT).join(id.as_str()).join(key)
+}
+
+/// Where seat `id` keeps its writes to overlay `key`: `upper` and overlayfs's `work`.
+pub(super) fn overlay_dir(state: &Path, id: &SeatId, key: &str) -> PathBuf {
+    shared::seat_dir(state, id).join("overlays").join(key)
 }
 
 /// The stage of the seat's folder on the drive of library `key`.
@@ -151,7 +172,7 @@ fn anchor_stage(id: &SeatId, key: &str) -> PathBuf {
     stage_dir(id, &format!("{key}.root"))
 }
 
-fn key(steamapps: &Path) -> String {
+pub(super) fn key(steamapps: &Path) -> String {
     use std::os::unix::ffi::OsStrExt as _;
     let bytes = steamapps.as_os_str().as_bytes();
     let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes);
@@ -160,7 +181,7 @@ fn key(steamapps: &Path) -> String {
 
 /// libmount writes each triple into the mount's user namespace as given, and the kernel reads the
 /// first id as the one on disk. mount(8) names the two columns the other way around.
-fn idmap(owner: (u32, u32), seat: &Passwd) -> String {
+pub(super) fn idmap(owner: (u32, u32), seat: &Passwd) -> String {
     format!("u:{}:{}:1 g:{}:{}:1", owner.0, seat.uid, owner.1, seat.gid)
 }
 
@@ -388,6 +409,7 @@ pub(super) fn share(
         roms,
         reader: owner.map(|owner| owner.name.clone()),
         home,
+        overlays: Vec::new(),
     })
 }
 
@@ -572,6 +594,24 @@ fn rom_root(
     Ok(root)
 }
 
+/// The folder at `path` as a seat may be shown it, or why not: a granted root's fence
+/// ([`rom_root`]) around `owner`'s home, the seats' `state` and `libraries`.
+pub(super) fn fenced(
+    path: &Path,
+    state: &Path,
+    owner: &Passwd,
+    libraries: &[Library],
+) -> Result<PathBuf, &'static str> {
+    let home = std::fs::canonicalize(&owner.home).unwrap_or_else(|_| owner.home.clone());
+    let state = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
+    let fence = Fence {
+        home: &home,
+        state: &state,
+        libraries,
+    };
+    rom_root(path, &fence, &|root: &Path| owner_reads(owner, root))
+}
+
 /// The roots at `paths` a seat can see, each once and none inside another, idmapped by `idmap`
 /// where `fstype` takes one.
 fn roms(
@@ -662,6 +702,7 @@ pub(super) fn unmounted(id: &SeatId, shares: &Shares) -> Vec<PathBuf> {
     let parent = dev(&Path::new(STAGE_ROOT).join(id.as_str()));
     libraries
         .chain(shares.roms.iter().map(|rom| stage_dir(id, &rom.key)))
+        .chain(shares.overlays.iter().map(|o| stage_dir(id, &o.key)))
         .filter(|stage| dev(stage) == parent)
         .collect()
 }
@@ -834,7 +875,7 @@ pub(super) fn forget(id: &SeatId, steam_root: &Path) {
 }
 
 /// `key`'s stage for seat `id`, under the root-only [`STAGE_ROOT`].
-fn make_stage(id: &SeatId, key: &str) -> std::io::Result<()> {
+pub(super) fn make_stage(id: &SeatId, key: &str) -> std::io::Result<()> {
     make_dir(Path::new(STAGE_ROOT), 0o700)?;
     std::fs::create_dir_all(stage_dir(id, key))
 }
@@ -882,7 +923,8 @@ fn make_spots(private: &Path, spots: &[Spot], seat: &Passwd) -> std::io::Result<
 /// that drive or [`root_dir`], at the library's [`VIEW`] path. Hide the library's own path, bind
 /// the stage, the seat's private folders ([`STAGING`] only while read-only) and its spots' copies
 /// over it, and keep the owner's library list there read-only. A folder not mounted leaves the
-/// seat an empty library, not a failed start. Then each granted root ([`rom_lines`]).
+/// seat an empty library, not a failed start. Then each granted root ([`rom_lines`]) and each
+/// overlay ([`overlay_lines`]).
 pub(super) fn unit_lines(state: &Path, id: &SeatId, shares: &Shares) -> String {
     let host = format!("{} -t 1 -m --", shares.nsenter.display());
     let ro = if shares.read_only { "ro," } else { "" };
@@ -904,6 +946,7 @@ pub(super) fn unit_lines(state: &Path, id: &SeatId, shares: &Shares) -> String {
                     &options,
                     anchor,
                     &anchor_stage,
+                    None,
                 ));
                 anchor_stage
             }
@@ -923,6 +966,7 @@ pub(super) fn unit_lines(state: &Path, id: &SeatId, shares: &Shares) -> String {
             &options,
             steamapps,
             &stage,
+            None,
         ));
         let (stage, owner) = (stage.display(), steamapps.display());
         out.push_str(&format!(
@@ -955,6 +999,32 @@ pub(super) fn unit_lines(state: &Path, id: &SeatId, shares: &Shares) -> String {
         ));
     }
     out.push_str(&rom_lines(id, shares, &host));
+    out.push_str(&overlay_lines(state, id, shares, &host));
+    out
+}
+
+/// Each overlay staged for its owner, the seat's writes kept under [`overlay_dir`], and bound
+/// at its view.
+fn overlay_lines(state: &Path, id: &SeatId, shares: &Shares, host: &str) -> String {
+    let mut out = String::new();
+    for overlay in &shares.overlays {
+        let stage = stage_dir(id, &overlay.key);
+        let options = format!("ro,nosuid,nodev,X-mount.idmap={}", overlay.idmap);
+        out.push_str(&stage_lines(
+            shares,
+            host,
+            &format!("owner={}", overlay.owner),
+            &options,
+            &overlay.root,
+            &stage,
+            Some(&overlay_dir(state, id, &overlay.key)),
+        ));
+        out.push_str(&format!(
+            "BindPaths={}:{}\n",
+            stage.display(),
+            overlay.view.display()
+        ));
+    }
     out
 }
 
@@ -981,6 +1051,7 @@ fn rom_lines(id: &SeatId, shares: &Shares, host: &str) -> String {
             &options,
             &rom.root,
             &stage,
+            None,
         ));
         out.push_str(&format!(
             "BindReadOnlyPaths={}:\"{}\"\n",
@@ -992,7 +1063,7 @@ fn rom_lines(id: &SeatId, shares: &Shares, host: &str) -> String {
 }
 
 /// The lines that mount `source` at `stage` before each start, judged by `check` where it is
-/// mounted ([`super::stage`]), and unmount it after.
+/// mounted ([`super::stage`]), below an overlay into `upper` when given, and unmount it after.
 fn stage_lines(
     shares: &Shares,
     host: &str,
@@ -1000,16 +1071,24 @@ fn stage_lines(
     options: &str,
     source: &Path,
     stage: &Path,
+    upper: Option<&Path>,
 ) -> String {
     let stage = stage.display();
+    let umount = shares.umount.display();
+    let (upper, lower) = match upper {
+        Some(upper) => (
+            format!(" {}", upper.display()),
+            format!("ExecStopPost=-+{host} {umount} -l {stage}.lower\n"),
+        ),
+        None => Default::default(),
+    };
     format!(
-        "ExecStartPre=-+{host} \"{}\" {} {check} {} \"{options}\" \"{}\" {stage}\n\
-         ExecStopPost=-+{host} {} -l {stage}\n",
+        "ExecStartPre=-+{host} \"{}\" {} {check} {} \"{options}\" \"{}\" {stage}{upper}\n\
+         ExecStopPost=-+{host} {umount} -l {stage}\n{lower}",
         shares.seats.display(),
         super::stage::VERB,
         shares.mount.display(),
         source.display(),
-        shares.umount.display(),
     )
 }
 
@@ -1314,7 +1393,40 @@ mod tests {
             roms: Vec::new(),
             reader: Some("enrico".into()),
             home: None,
+            overlays: Vec::new(),
         }
+    }
+
+    /// Each overlay is staged for its owner with the seat's upper folder, unmounted in two
+    /// steps, and bound at its view; a path may hold a space.
+    #[test]
+    fn the_drop_in_shows_each_overlay_at_its_view() {
+        let shown = Shares {
+            libraries: Vec::new(),
+            overlays: vec![Overlay {
+                root: PathBuf::from("/home/enrico/Games/My Game"),
+                key: "33dd".into(),
+                view: PathBuf::from("/run/media/punktfunk/shortcuts/33dd"),
+                owner: 1000,
+                idmap: "u:1000:987:1 g:1000:956:1".into(),
+            }],
+            ..shares(false, Vec::new())
+        };
+        let text = unit_lines(Path::new("/b"), &id(), &shown);
+        let stage = "/run/punktfunk/libraries/0123456789abcdef0123456789abcdef/33dd";
+        let upper = "/b/seats/0123456789abcdef0123456789abcdef/overlays/33dd";
+        let umount = "ExecStopPost=-+/usr/bin/nsenter -t 1 -m -- /usr/bin/umount -l";
+        assert_eq!(
+            text,
+            format!(
+                "{STAGE} owner=1000 /usr/bin/mount \
+                 \"ro,nosuid,nodev,X-mount.idmap=u:1000:987:1 g:1000:956:1\" \
+                 \"/home/enrico/Games/My Game\" {stage} {upper}\n\
+                 {umount} {stage}\n\
+                 {umount} {stage}.lower\n\
+                 BindPaths={stage}:/run/media/punktfunk/shortcuts/33dd\n"
+            )
+        );
     }
 
     /// Both shapes of the grants file give their paths, write grants and `~/` ones included;
@@ -1699,6 +1811,8 @@ mod tests {
                 browser: false,
                 browser_origins: Vec::new(),
                 background_input: false,
+                ipv6: false,
+                ipv6_public: false,
             };
             std::fs::write(&path, defaults.to_json().to_string()).unwrap();
             assert_eq!(writable(temp.path()), library_writable);

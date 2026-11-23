@@ -11,7 +11,13 @@ pub(crate) struct LinearDmabuf {
 }
 
 impl LinearDmabuf {
+    /// On the NVIDIA device.
     pub(crate) fn new(bytes: &[u8]) -> LinearDmabuf {
+        Self::on(0x10DE, bytes)
+    }
+
+    /// On the first device of PCI `vendor`: the GPU whose encoder reads the buffer.
+    pub(crate) fn on(vendor: u32, bytes: &[u8]) -> LinearDmabuf {
         use ash::vk;
         use pf_zerocopy::vkdev::{memory_type, MappedMemory};
         // SAFETY: test fixture over raw Vulkan handles it creates; the device outlives the fd's
@@ -29,8 +35,8 @@ impl LinearDmabuf {
                 .enumerate_physical_devices()
                 .expect("devices")
                 .into_iter()
-                .find(|&p| instance.get_physical_device_properties(p).vendor_id == 0x10DE)
-                .expect("an NVIDIA device");
+                .find(|&p| instance.get_physical_device_properties(p).vendor_id == vendor)
+                .expect("a device of that vendor");
             let mp = instance.get_physical_device_memory_properties(phys);
             let exts = [
                 ash::khr::external_memory_fd::NAME.as_ptr(),
@@ -151,6 +157,22 @@ impl LinearDmabuf {
             }),
             cursor: None,
         }
+    }
+
+    /// [`Self::frame`] for a two-plane picture whose chroma rows start at byte `chroma`.
+    pub(crate) fn planar_frame(
+        &self,
+        fmt: PixelFormat,
+        fourcc: &[u8; 4],
+        (w, h): (u32, u32),
+        stride: u32,
+        chroma: u32,
+    ) -> CapturedFrame {
+        let mut frame = self.frame(fmt, fourcc, w, h, stride, 0);
+        if let FramePayload::Dmabuf(d) = &mut frame.payload {
+            d.plane1 = Some((chroma, stride));
+        }
+        frame
     }
 }
 

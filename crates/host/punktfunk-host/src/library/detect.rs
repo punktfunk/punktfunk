@@ -191,6 +191,13 @@ impl From<&DetectHint> for DetectSpec {
 /// running game exited. Host-spawned children are the child; this is the shim
 /// fallback.
 pub fn spec_from_command(cmd: &str) -> DetectSpec {
+    // A macOS app opened by its bundle: the game runs from inside it.
+    if let Some(app) = app_bundle(cmd.trim()) {
+        return DetectSpec {
+            install_dir: Some(app),
+            ..Default::default()
+        };
+    }
     let Some(first) = shell_first_token(cmd) else {
         return DetectSpec::default();
     };
@@ -200,6 +207,20 @@ pub fn spec_from_command(cmd: &str) -> DetectSpec {
     } else {
         DetectSpec::default()
     }
+}
+
+/// `cmd` when it is one app bundle and nothing else: an absolute path to a `.app` directory,
+/// bare or in one pair of quotes. macOS opens one through LaunchServices.
+pub(crate) fn app_bundle(cmd: &str) -> Option<PathBuf> {
+    let bare = ['"', '\'']
+        .into_iter()
+        .find_map(|q| cmd.strip_prefix(q)?.strip_suffix(q))
+        .unwrap_or(cmd);
+    let path = Path::new(bare);
+    let named = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("app"));
+    (path.is_absolute() && named && path.is_dir()).then(|| path.to_path_buf())
 }
 
 /// Not a shell parser — only enough to recover a quoted absolute path
@@ -220,6 +241,45 @@ fn shell_first_token(cmd: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A command that is one `.app` bundle opens through LaunchServices; any other runs in `sh`.
+    #[test]
+    fn an_app_bundle_command_is_told_apart_from_a_shell_line() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let app = td.path().join("My Game.app");
+        std::fs::create_dir(&app).unwrap();
+        let shown = app.to_string_lossy().into_owned();
+        assert_eq!(app_bundle(&shown).as_deref(), Some(app.as_path()));
+        assert_eq!(
+            app_bundle(&format!("'{shown}'")).as_deref(),
+            Some(app.as_path())
+        );
+        assert_eq!(
+            app_bundle(&format!("\"{shown}\"")).as_deref(),
+            Some(app.as_path())
+        );
+        assert_eq!(
+            app_bundle(&format!("{shown} --windowed")),
+            None,
+            "arguments: a shell line"
+        );
+        assert_eq!(app_bundle("My Game.app"), None, "relative");
+        assert_eq!(
+            app_bundle(&td.path().join("Gone.app").to_string_lossy()),
+            None
+        );
+        let file = td.path().join("run.app");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(
+            app_bundle(&file.to_string_lossy()),
+            None,
+            "a file, not a bundle"
+        );
+        assert_eq!(
+            spec_from_command(&shown).install_dir.as_deref(),
+            Some(app.as_path())
+        );
+    }
 
     #[test]
     fn empty_spec_is_untrackable() {

@@ -117,6 +117,7 @@ fn zero_copy_policy(
         nvenc_raw_dmabuf: encoder.nvenc_raw_dmabuf_ok(),
         gamescope_tiled: false,
         encoder_modifiers,
+        planar_modifiers: None,
     }
 }
 
@@ -169,6 +170,7 @@ pub fn open_portal_monitor(
 /// `0` the first: absolute input for it aims at this head. `gamescope_cursor` reads the
 /// pointer from the output's nested Xwaylands (Linux; ignored elsewhere). `mirrored` is a
 /// session that streams a host monitor, whose capture worker encodes for it (Windows).
+/// `framing` is the encoder's: a macOS mirror's stream scales the head to its fitted size.
 pub(crate) struct VirtualCaptureRequest {
     pub output: OutputFormat,
     pub codec: Option<crate::encode::Codec>,
@@ -180,6 +182,8 @@ pub(crate) struct VirtualCaptureRequest {
     pub screen: u8,
     pub gamescope_cursor: bool,
     pub mirrored: bool,
+    #[cfg(target_os = "macos")]
+    pub framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
 }
 
 /// A live output's metadata without its keepalive: what [`capture_virtual_output`] needs to
@@ -278,6 +282,7 @@ pub fn capture_virtual_output(
     // the packed 10-bit fourccs.
     let bit_depth = if want.hdr || want.ten_bit_sdr { 10 } else { 8 };
     let gamescope_tiled = gamescope && pf_vdisplay::gamescope_tiled_capture(None);
+    let planar_tiled = gamescope && pf_vdisplay::gamescope_tiled_planar_capture(None);
     // NVENC copies a producer's planar frame; an older gamescope composites it through system
     // RAM, which costs more than the conversion it saves. VAAPI keeps its own rule.
     let nv12_native = want.nv12_native
@@ -347,16 +352,26 @@ pub fn capture_virtual_output(
             ..Default::default()
         },
         // No route here. A wrong "foreign" only keeps the LINEAR offer.
-        move || pf_capture::ZeroCopyPolicy {
-            gamescope_tiled,
-            ..zero_copy_policy(
-                &encoder,
-                pyrowave,
-                nv12_native,
-                modifier_codec,
-                bit_depth,
-                hdr,
-            )
+        move || {
+            // What the encoder reads a producer's NV12/P010 from. An older gamescope lists
+            // LINEAR alone, so its offer keeps what is LINEAR.
+            let planar = codec.filter(|_| nv12_native).map(|codec| {
+                let mut offer = encoder.planar_capture_modifiers(codec, bit_depth, hdr);
+                offer.retain(|&m| m == 0 || planar_tiled);
+                offer
+            });
+            pf_capture::ZeroCopyPolicy {
+                gamescope_tiled,
+                planar_modifiers: planar,
+                ..zero_copy_policy(
+                    &encoder,
+                    pyrowave,
+                    nv12_native,
+                    modifier_codec,
+                    bit_depth,
+                    hdr,
+                )
+            }
         },
     )
 }
@@ -370,6 +385,8 @@ pub fn capture_virtual_output(
 /// Linux — it depends on the resolved compositor and the installed gamescope.
 ///
 /// Windows: IDD-push enables advanced colour, so the platform answer.
+/// macOS: the capture composes PQ from any display, so the display decides: a virtual one
+/// must take an HDR mode, a mirrored one is captured as it stands.
 /// Linux + gamescope: host knob, `packaging/gamescope` 10-bit BT.2020/PQ, a
 /// spawned (not attached-foreign) sub-mode, and no earlier virtual-output HDR
 /// downgrade latched. Hyprland and wlroots: direct capture of a head lit in
@@ -396,6 +413,10 @@ pub fn capturer_supports_hdr_for(
         }
     }
     let _ = (compositor, gamescope_route, encoder);
+    #[cfg(target_os = "macos")]
+    if !pf_vdisplay::hdr_displays() {
+        return false;
+    }
     pf_capture::capturer_supports_hdr()
 }
 
@@ -447,7 +468,115 @@ pub fn capturer_delivers_sdr10_for(
 #[cfg(target_os = "windows")]
 pub(crate) use crate::windows::idd::{capture_virtual_output, open_driver_encoder};
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS: ScreenCaptureKit on the display the output stands for: a virtual display at its own
+/// mode, unscaled, or a mirrored head scaled by the stream to the encoder's fitted size
+/// ([`capture_size`]). Absolute input for screen `screen` aims at that display. The client
+/// draws the pointer only when the session forwards it.
+#[cfg(target_os = "macos")]
+pub fn capture_virtual_output(
+    vout: crate::vdisplay::VirtualOutput,
+    request: VirtualCaptureRequest,
+) -> Result<Box<dyn Capturer>> {
+    use anyhow::Context as _;
+    let VirtualCaptureRequest {
+        output,
+        // Encode resolution and PipeWire producers are other platforms' concerns.
+        codec: _codec,
+        encoder: _encoder,
+        capture: _capture,
+        kwin: _kwin,
+        gamescope: _gamescope,
+        stream_hz,
+        screen,
+        gamescope_cursor: _gamescope_cursor,
+        mirrored,
+        framing,
+    } = request;
+    let display_id = vout
+        .cg_display
+        .context("the output names no display to capture")?;
+    let (w, h, _) = vout.preferred_mode.context("the display reports no mode")?;
+    let (width, height) = capture_size(mirrored, framing, (w, h));
+    if screen == 0 {
+        crate::inject::set_stream_display(Some(display_id));
+    } else {
+        crate::inject::set_screen_display(screen, Some(display_id));
+    }
+    pf_capture::open_display(pf_capture::DisplayCaptureOpts {
+        display_id,
+        width,
+        height,
+        stream_hz,
+        metadata_cursor: output.hw_cursor,
+        output,
+        keepalive: vout.keepalive,
+    })
+}
+
+/// The size a macOS stream delivers for a display whose own mode is `mode`: a mirrored head
+/// fitted whole to the encoder's view, so the encoder takes it unscaled; anything else, a
+/// virtual display among them, at the mode. Scaling here costs nothing on the encode path.
+#[cfg(any(target_os = "macos", test))]
+fn capture_size(
+    mirrored: bool,
+    framing: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
+    mode: (u32, u32),
+) -> (u32, u32) {
+    use punktfunk_core::video_fit::{Reframe, VideoFit};
+    match framing {
+        Some((VideoFit::Fit, view)) if mirrored => Reframe::plan(VideoFit::Fit, mode, view).out,
+        _ => mode,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capture_size;
+    use punktfunk_core::video_fit::{Reframe, VideoFit};
+
+    /// A mirror of a 1080p head is captured at the picture the encoder sends, the head whole
+    /// and unstretched, so the encoder frames nothing more; a view wider or taller than the
+    /// head leaves it at its own size for the client's bars.
+    #[test]
+    fn a_mirror_is_captured_at_the_encoders_size() {
+        let head = (1920, 1080);
+        for (view, want) in [
+            ((1280, 720), (1280, 720)),
+            ((960, 540), (960, 540)),
+            ((1440, 1080), (1440, 810)),
+            ((1920, 1200), (1920, 1080)),
+        ] {
+            let got = capture_size(true, Some((VideoFit::Fit, view)), head);
+            assert_eq!(got, want, "view {view:?}");
+            assert_eq!(
+                got.0 * head.1,
+                got.1 * head.0,
+                "{got:?} keeps the head's shape"
+            );
+            let framed = Reframe::plan(VideoFit::Fit, got, view);
+            assert!(
+                framed.is_full(),
+                "{view:?}: the encoder scales nothing more"
+            );
+        }
+        let wide = capture_size(true, Some((VideoFit::Fit, (1920, 1080))), (5120, 1440));
+        assert_eq!(wide, (1920, 540));
+    }
+
+    /// A virtual display, and a framing the stream can't take, open at the display's mode.
+    #[test]
+    fn a_virtual_display_opens_at_its_mode() {
+        let mode = (2560, 1440);
+        for framing in [None, Some((VideoFit::Fit, (1280, 720)))] {
+            assert_eq!(capture_size(false, framing, mode), mode);
+        }
+        let crop = Some((VideoFit::Crop, (1280, 720)));
+        assert_eq!(capture_size(true, crop, mode), mode);
+        assert_eq!(capture_size(true, None, mode), mode);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn capture_virtual_output(
     _vout: crate::vdisplay::VirtualOutput,
     request: VirtualCaptureRequest,

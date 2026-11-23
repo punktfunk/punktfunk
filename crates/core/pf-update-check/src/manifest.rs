@@ -3,7 +3,7 @@
 //! Keys are pinned in [`crate::OFFICIAL_UPDATE_KEYS`] and checked by [`crate::sig`].
 //! TLS and the serving registry are transport, never trust. Host and Linux client share
 //! `version`/`ci_run`/`commit`; ignore a payload leg you do not need
-//! (`windows_host` today, `windows_host_arm64` for an ARM64 host).
+//! (`windows_host`, `windows_host_arm64` for an ARM64 host, `macos_host_arm64` for a Mac).
 //!
 //! Fail closed: signature over the exact bytes, then strict JSON — HTML stubs
 //! never parse. `channel` must match the URL we fetched (canary cannot replay
@@ -50,6 +50,17 @@ pub struct Manifest {
     /// never falls back to `windows_host`, which would hand it the x64 exe.
     #[serde(default)]
     pub windows_host_arm64: Option<WindowsHostAsset>,
+    /// The Apple silicon host's disk image, which a person downloads: a Mac host never applies
+    /// it itself. Absent from manifests published before the macOS host.
+    #[serde(default)]
+    pub macos_host_arm64: Option<MacHostAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MacHostAsset {
+    /// Per-version URL, never a `latest/` alias.
+    pub url: String,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -114,17 +125,26 @@ pub fn parse_verified(bytes: &[u8], expected_channel: &str) -> Result<Manifest> 
             validate_asset(key, w, expected_channel)?;
         }
     }
+    if let Some(mac) = &m.macos_host_arm64 {
+        validate_download("macos_host_arm64", &mac.url, &mac.sha256)?;
+    }
     Ok(m)
+}
+
+/// The rules every downloadable asset meets; `key` names the leg in the error.
+fn validate_download(key: &str, url: &str, sha256: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        bail!("{key}.url must be https");
+    }
+    if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("{key}.sha256 is not a hex SHA-256");
+    }
+    Ok(())
 }
 
 /// The per-asset rules; `key` names the leg in the error.
 fn validate_asset(key: &str, w: &WindowsHostAsset, expected_channel: &str) -> Result<()> {
-    if !w.url.starts_with("https://") {
-        bail!("{key}.url must be https");
-    }
-    if w.sha256.len() != 64 || !w.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-        bail!("{key}.sha256 is not a hex SHA-256");
-    }
+    validate_download(key, &w.url, &w.sha256)?;
     if w.authenticode_sha256
         .iter()
         .any(|pin| pin.len() != 64 || !pin.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -266,6 +286,27 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.starts_with("windows_host_arm64."), "{err}");
+    }
+
+    /// The Mac leg is optional, needs no Authenticode on stable, and meets the download rules.
+    #[test]
+    fn mac_asset_is_optional_and_validated() {
+        assert!(parse_verified(&bytes(&doc()), "stable")
+            .unwrap()
+            .macos_host_arm64
+            .is_none());
+        let mut v = doc();
+        v["macos_host_arm64"] = serde_json::json!({
+            "url": "https://git.unom.io/unom/punktfunk/releases/download/v0.48.0/Punktfunk-Host-0.48.0-arm64.dmg",
+            "sha256": "cc".repeat(32),
+        });
+        let m = parse_verified(&bytes(&v), "stable").unwrap();
+        assert!(m.macos_host_arm64.unwrap().url.ends_with("-arm64.dmg"));
+        v["macos_host_arm64"]["url"] = serde_json::json!("http://git.unom.io/x.dmg");
+        let err = parse_verified(&bytes(&v), "stable")
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("macos_host_arm64."), "{err}");
     }
 
     #[test]

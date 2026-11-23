@@ -20,9 +20,9 @@ use super::gamepad_raii::{
 use crate::pad_slots::PadCreateFault;
 use anyhow::{Context, Result};
 use pf_driver_proto::mouse::{
-    abs_report, keyboard_report, mouse_boot_name, relative_report, ring_slot_off, MouseShm,
-    DOORBELL_REPORT_ID, DOORBELL_USAGE_PAGE, KEYBOARD_BITMAP_LEN, MOUSE_FEATURE_RING, MOUSE_MAGIC,
-    MOUSE_RING_LEN,
+    abs_report, keyboard_report, mouse_boot_name, relative_moves, relative_report, ring_slot_off,
+    set_key, wheel_turns, MouseShm, DOORBELL_REPORT_ID, DOORBELL_USAGE_PAGE, KEYBOARD_BITMAP_LEN,
+    MOUSE_FEATURE_RING, MOUSE_MAGIC, MOUSE_RING_LEN,
 };
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::Ordering;
@@ -319,12 +319,9 @@ impl VirtualMouse {
     }
 
     /// Relative pointer motion, split into reports of at most ±32767.
-    pub fn move_by(&mut self, mut dx: i32, mut dy: i32) {
-        const MAX: i32 = i16::MAX as i32;
-        while dx != 0 || dy != 0 {
-            let (sx, sy) = (dx.clamp(-MAX, MAX), dy.clamp(-MAX, MAX));
-            self.push(&relative_report(self.buttons, sx as i16, sy as i16, 0, 0));
-            (dx, dy) = (dx - sx, dy - sy);
+    pub fn move_by(&mut self, dx: i32, dy: i32) {
+        for report in relative_moves(self.buttons, dx, dy) {
+            self.push(&report);
         }
     }
 
@@ -360,19 +357,10 @@ impl VirtualMouse {
         let per_notch = i64::from(self.channel.data().load_u32(off, Ordering::Relaxed).max(1));
         let axis = usize::from(horizontal);
         let total = self.wheel_rem[axis] + i64::from(v120) * per_notch;
-        let mut counts = total / 120;
+        let counts = total / 120;
         self.wheel_rem[axis] = total - counts * 120;
-        while counts != 0 {
-            let c = counts.clamp(-i64::from(i16::MAX), i64::from(i16::MAX));
-            let (wheel, pan) = if horizontal { (0, c) } else { (c, 0) };
-            self.push(&relative_report(
-                self.buttons,
-                0,
-                0,
-                wheel as i16,
-                pan as i16,
-            ));
-            counts -= c;
+        for report in wheel_turns(self.buttons, horizontal, counts) {
+            self.push(&report);
         }
     }
 
@@ -380,14 +368,8 @@ impl VirtualMouse {
     /// repeats a held HID key itself. `true` when the mirror moved; an up that moved nothing is
     /// a press this device never made.
     pub fn key(&mut self, usage: u8, down: bool) -> bool {
-        let Some(byte) = self.keys.get_mut(usize::from(usage / 8)) else {
-            return false;
-        };
-        let bit = 1 << (usage % 8);
-        let held = if down { *byte | bit } else { *byte & !bit };
-        let changed = held != *byte;
+        let changed = set_key(&mut self.keys, usage, down);
         if changed {
-            *byte = held;
             let report = keyboard_report(&self.keys);
             self.push(&report);
         }
@@ -637,15 +619,15 @@ pub fn channel_proof_probe() -> Result<()> {
         PROBE_INDEX as u32,
     ) {
         Ok(pid) => println!(
-            "RESULT: the devnode proved its driver is pid {pid} — the HID channel proof WORKS on \
+            "result: the devnode proved its driver is pid {pid} — the HID channel proof works on \
              this build of Windows, so the pad channel never has to trust the mailbox."
         ),
         Err(e) => println!(
-            "RESULT: no usable channel proof ({e:#}).\n\
-             If BOTH HID lines above say \"call failed\", hidclass on this build forwards neither \
+            "result: no usable channel proof ({e:#}).\n\
+             If both HID lines above say \"call failed\", hidclass on this build forwards neither \
              IOCTL to a UMDF minidriver and the HID pads/mouse need a different transport (the \
              xusb leg is unaffected — it owns its own device interface). If one says \"answered, \
-             but not a proof\", an OLD pf_mouse driver is installed: reinstall it by \
+             but not a proof\", an old pf_mouse driver is installed: reinstall it by \
              running the Punktfunk installer again."
         ),
     }

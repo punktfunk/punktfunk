@@ -204,7 +204,7 @@ fn pin_advanced_colour_off(
         tracing::error!(
             target = target_id,
             pyrowave = ask.pyrowave,
-            "IDD push: SDR session but advanced color (HDR) could NOT be turned off on the \
+            "IDD push: SDR session but advanced color (HDR) could not be turned off on the \
              virtual display (a physical display forcing HDR?) — PyroWave will likely fail \
              its first frame; H.26x would emit PQ the SDR-only client never asked for"
         );
@@ -251,7 +251,7 @@ fn read_hdr(
             set_advanced_color_returned = set,
             observed_hdr = ?observed,
             "IDD push: 10-bit HDR was negotiated but enabling advanced color on the \
-             virtual display FAILED — encoding 8-bit SDR while the client was told HDR \
+             virtual display failed — encoding 8-bit SDR while the client was told HDR \
              (check the display driver / Windows HDR support on this box). \
              observed_hdr=Some(false) ⇒ the display reports advanced colour OFF after the \
              set; None ⇒ the CCD read itself failed"

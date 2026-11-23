@@ -78,5 +78,17 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Core Audio process-tap capture.
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true }
+objc2-core-audio = { workspace = true }
+objc2-core-audio-types = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# `mac_audio_probe` prints the backend's own log lines.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
 [lints]
 workspace = true

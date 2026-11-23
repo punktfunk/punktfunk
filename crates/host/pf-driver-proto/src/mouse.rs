@@ -94,6 +94,42 @@ pub fn relative_report(
     r
 }
 
+/// Relative reports moving `dx`, `dy` with `buttons` held, each axis in steps of at most ±32767.
+pub fn relative_moves(
+    buttons: u8,
+    mut dx: i32,
+    mut dy: i32,
+) -> impl Iterator<Item = [u8; MOUSE_REL_REPORT_LEN]> {
+    const MAX: i32 = i16::MAX as i32;
+    core::iter::from_fn(move || {
+        if dx == 0 && dy == 0 {
+            return None;
+        }
+        let (sx, sy) = (dx.clamp(-MAX, MAX), dy.clamp(-MAX, MAX));
+        (dx, dy) = (dx - sx, dy - sy);
+        Some(relative_report(buttons, sx as i16, sy as i16, 0, 0))
+    })
+}
+
+/// Relative reports turning the wheel, or the pan when `horizontal`, by `counts` with `buttons`
+/// held, in steps of at most ±32767.
+pub fn wheel_turns(
+    buttons: u8,
+    horizontal: bool,
+    mut counts: i64,
+) -> impl Iterator<Item = [u8; MOUSE_REL_REPORT_LEN]> {
+    const MAX: i64 = i16::MAX as i64;
+    core::iter::from_fn(move || {
+        if counts == 0 {
+            return None;
+        }
+        let c = counts.clamp(-MAX, MAX);
+        counts -= c;
+        let (wheel, pan) = if horizontal { (0, c) } else { (c, 0) };
+        Some(relative_report(buttons, 0, 0, wheel as i16, pan as i16))
+    })
+}
+
 /// Keyboard report ([`KEYBOARD_REPORT_ID`]) for the held-usage bitmap.
 #[must_use]
 pub fn keyboard_report(bitmap: &[u8; KEYBOARD_BITMAP_LEN]) -> [u8; KEYBOARD_REPORT_LEN] {
@@ -101,6 +137,26 @@ pub fn keyboard_report(bitmap: &[u8; KEYBOARD_BITMAP_LEN]) -> [u8; KEYBOARD_REPO
     r[0] = KEYBOARD_REPORT_ID;
     r[1..].copy_from_slice(bitmap);
     r
+}
+
+/// Press or release keyboard usage `usage` in `bitmap`. `false` when nothing changed: a repeated
+/// press, a release of a key not held, or a usage past the bitmap.
+pub fn set_key(bitmap: &mut [u8; KEYBOARD_BITMAP_LEN], usage: u8, down: bool) -> bool {
+    let Some(byte) = bitmap.get_mut(usize::from(usage / 8)) else {
+        return false;
+    };
+    let bit = 1 << (usage % 8);
+    let held = if down { *byte | bit } else { *byte & !bit };
+    let changed = held != *byte;
+    *byte = held;
+    changed
+}
+
+/// [`MOUSE_RDESC`]'s relative mouse and keyboard collections alone, reports 0x02 and 0x03: the
+/// device of a host that needs neither the absolute pointer nor the doorbell (macOS).
+#[must_use]
+pub fn rel_keyboard_rdesc() -> &'static [u8] {
+    &MOUSE_RDESC[80..227]
 }
 
 /// Ring slots. 64 reports is far more than one drain ever finds; a full ring means the driver
@@ -326,6 +382,59 @@ mod tests {
             assert!(input_report_len(id).unwrap() <= MOUSE_RING_SLOT);
         }
         assert_eq!(input_report_len(DOORBELL_REPORT_ID), None);
+        let cut = rel_keyboard_rdesc();
+        assert_eq!(
+            cut[..4],
+            [0x05, 0x01, 0x09, 0x02],
+            "starts at a mouse collection"
+        );
+        assert_eq!(
+            report_lens(cut).into_iter().collect::<alloc::vec::Vec<_>>(),
+            [
+                ((INPUT, MOUSE_REL_REPORT_ID), MOUSE_REL_REPORT_LEN),
+                ((INPUT, KEYBOARD_REPORT_ID), KEYBOARD_REPORT_LEN),
+                ((FEATURE, MOUSE_REL_REPORT_ID), MOUSE_REL_FEATURE_LEN),
+            ]
+        );
+    }
+
+    #[test]
+    fn long_moves_and_turns_split_into_reports_the_descriptor_declares() {
+        let moves: alloc::vec::Vec<_> = relative_moves(0x01, 40_000, -5).collect();
+        assert_eq!(
+            moves,
+            [
+                relative_report(0x01, i16::MAX, -5, 0, 0),
+                relative_report(0x01, 7_233, 0, 0, 0),
+            ]
+        );
+        assert_eq!(relative_moves(0, 0, 0).count(), 0);
+        let turns: alloc::vec::Vec<_> = wheel_turns(0, true, -70_000).collect();
+        assert_eq!(turns.len(), 3);
+        assert_eq!(turns[0], relative_report(0, 0, 0, 0, -i16::MAX));
+        assert_eq!(turns[2], relative_report(0, 0, 0, 0, -4_466));
+        assert_eq!(
+            wheel_turns(0, false, 3).next(),
+            Some(relative_report(0, 0, 0, 3, 0))
+        );
+    }
+
+    #[test]
+    fn a_key_changes_the_bitmap_once() {
+        let mut bitmap = [0u8; KEYBOARD_BITMAP_LEN];
+        assert!(set_key(&mut bitmap, 0xE1, true));
+        assert!(
+            !set_key(&mut bitmap, 0xE1, true),
+            "a repeat changes nothing"
+        );
+        assert_eq!(bitmap[0xE1 / 8], 1 << (0xE1 % 8));
+        assert!(!set_key(&mut bitmap, 0x04, false), "a key never pressed");
+        assert!(set_key(&mut bitmap, 0xE1, false));
+        assert_eq!(bitmap, [0; KEYBOARD_BITMAP_LEN]);
+        assert!(
+            !set_key(&mut bitmap, 0xF0, true),
+            "past the declared usages"
+        );
     }
 
     #[test]

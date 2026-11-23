@@ -632,7 +632,9 @@ pub(super) struct SessionContext {
 /// The virtual-display session: bring up, then tick until the client leaves.
 pub(super) fn virtual_stream(ctx: SessionContext, prepared: Option<PreparedDisplay>) -> Result<()> {
     pf_frame::thread_qos::boost_thread_priority(true);
-    StreamState::new(ctx, prepared)?.run()
+    let state = StreamState::new(ctx, prepared)?;
+    pf_frame::thread_qos::raise_to_frame_rate(state.live.geometry.interval());
+    state.run()
 }
 
 #[cfg(test)]

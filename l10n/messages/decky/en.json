@@ -152,5 +152,38 @@
 	"decky_launch_failed_preset": "Launch failed (“{preset}”)",
 	"decky_end_game_unresolved": "Couldn't tell which game to end.",
 	"decky_trust_request_failed": "Couldn’t request access from {host}",
-	"decky_trust_bad_fingerprint": "Couldn’t read {host}’s identity — pair with a PIN instead."
+	"decky_trust_bad_fingerprint": "Couldn’t read {host}’s identity — pair with a PIN instead.",
+	"decky_local_title": "Games in Steam",
+	"decky_local_source_hint": "Adds this source's games to your Steam library, to play on this device.",
+	"decky_local_progress": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Updating your Steam library — {count} game to go",
+				"n=other": "Updating your Steam library — {count} games to go"
+			}
+		}
+	],
+	"decky_local_gone_hint": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} game added to Steam is no longer in this device's library.",
+				"n=other": "{count} games added to Steam are no longer in this device's library."
+			}
+		}
+	],
+	"decky_local_shared_layout_hint": "Has the same name as a game you stream, so it uses that stream's controller layout."
 }

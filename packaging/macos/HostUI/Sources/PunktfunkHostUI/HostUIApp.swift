@@ -1,0 +1,177 @@
+// The app: an NSStatusItem whose button opens an NSPopover hosting PanelView, and the setup
+// window. AppKit's lifecycle rather than SwiftUI's MenuBarExtra: MenuBarExtra has no way to
+// open its panel from code, and SIGUSR1 (a second launch) must show it.
+// For checks without input: PUNKTFUNK_HOST_UI_OPEN=panel|onboarding opens one at launch, and
+// PUNKTFUNK_HOST_UI_STEP=<step> (welcome, permissions, done, …) picks the setup page.
+import AppKit
+import SwiftUI
+
+@MainActor
+public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate {
+    private let store: HostStore
+    private var statusItem: NSStatusItem?
+    private let popover = NSPopover()
+    private var setupWindow: NSWindow?
+    private var onboarding: Onboarding?
+    private var signals: DispatchSourceSignal?
+    private static var shared: HostUIApp?
+
+    init(store: HostStore) {
+        self.store = store
+    }
+
+    /// Owns the main thread from here on; the process ends through `exit`, never a return.
+    public static func run(_ store: HostStore) -> Never {
+        let app = NSApplication.shared
+        let delegate = HostUIApp(store: store)
+        shared = delegate
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.mainMenu = mainMenu()
+        app.run()
+        exit(0)
+    }
+
+    public func applicationDidFinishLaunching(_ notification: Notification) {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.target = self
+        item.button?.action = #selector(togglePanel)
+        statusItem = item
+        popover.behavior = .transient
+        popover.delegate = self
+        let host = NSHostingController(rootView: PanelView(store: store))
+        host.sizingOptions = .preferredContentSize
+        popover.contentViewController = host
+        store.onChange = { [weak self] in self?.refreshGlyph() }
+        store.onShowOnboarding = { [weak self] in self?.showSetup() }
+        refreshGlyph()
+        store.start()
+        watchSIGUSR1()
+
+        let handedOver = store.context.launchedByLoginAgent && HandOver.take()
+        switch ProcessInfo.processInfo.environment["PUNKTFUNK_HOST_UI_OPEN"] {
+        // The status item is not on screen until a moment after launch.
+        case "panel": DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showPanel() }
+        case "onboarding": showSetup()
+        default:
+            // An unfinished setup comes back after every restart it caused.
+            if store.api != nil, !SetupProgress.finished || store.grants.missingRequired || !store.inApplications {
+                showSetup()
+            } else if handedOver {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showPanel() }
+            }
+        }
+    }
+
+    /// A quit from outside (the Dock, macOS's "Quit & Reopen", logout) goes through the host's
+    /// SIGTERM handler, which exits once sessions end and displays are restored.
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard store.context.hostExecutable != nil else { return .terminateNow }
+        kill(getpid(), SIGTERM)
+        return .terminateLater
+    }
+
+    private func refreshGlyph() {
+        guard let button = statusItem?.button else { return }
+        button.image = Glyph.image(store.glyph)
+        button.toolTip = store.state.headline
+        button.setAccessibilityLabel(store.state.headline)
+    }
+
+    /// A second launch's SIGUSR1. The host gives it a no-op handler before it loads the UI, never
+    /// SIG_IGN, which every child would inherit; the dispatch source fires either way.
+    private func watchSIGUSR1() {
+        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                HandOver.clear()
+                if let window = self.setupWindow, window.isVisible { self.bringToFront(window) } else { self.showPanel() }
+            }
+        }
+        source.resume()
+        signals = source
+    }
+
+    @objc private func togglePanel() {
+        if popover.isShown { popover.performClose(nil) } else { showPanel() }
+    }
+
+    func showPanel() {
+        guard let button = statusItem?.button, !popover.isShown else { return }
+        store.panelOpen = true
+        NSApp.activate()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    public func popoverDidClose(_ notification: Notification) {
+        store.panelOpen = false
+        store.confirm = nil
+    }
+
+    func showSetup() {
+        popover.performClose(nil)
+        if let window = setupWindow {
+            bringToFront(window)
+            return
+        }
+        let model = Onboarding(store: store, finished: SetupProgress.finished, reached: SetupProgress.reached)
+        if let page = ProcessInfo.processInfo.environment["PUNKTFUNK_HOST_UI_STEP"],
+           let i = model.steps.firstIndex(where: { "\($0)" == page }) { model.index = i }
+        if model.step == .done { model.arrive() }
+        model.onClose = { [weak self] in self?.setupWindow?.close() }
+        let window = NSWindow(contentViewController: NSHostingController(rootView: OnboardingView(model: model)))
+        // The page's backdrop runs under a bare title bar; the title stays for VoiceOver.
+        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.title = String(localized: L10n.setupMacWindowTitle)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        // The hosting view sizes the window only when it first shows, after `center` has run.
+        window.setContentSize(OnboardingView.size)
+        window.center()
+        onboarding = model
+        setupWindow = window
+        model.watch()
+        bringToFront(window)
+    }
+
+    /// An accessory app's window can't come to the front; while one shows, the app is regular.
+    /// macOS may refuse to activate an app that restarted itself, so the window goes in front
+    /// of every other app's on its own.
+    private func bringToFront(_ window: NSWindow) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+
+    /// Done and the close button end here. A restart for a grant or the move never does, so
+    /// the setup stays unfinished across it.
+    public func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === setupWindow else { return }
+        if store.api != nil {
+            SetupProgress.finished = true
+            SetupProgress.reached = nil
+        }
+        onboarding?.stopWatching()
+        onboarding = nil
+        setupWindow = nil
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// Only Quit: the app shows a menu bar of its own only while the setup window is open.
+    private static func mainMenu() -> NSMenu {
+        let menu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: String(localized: L10n.trayMacQuit),
+                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        menu.addItem(appItem)
+        return menu
+    }
+}

@@ -109,7 +109,12 @@ impl MicPump {
                 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                 {
                     let _ = source_name;
-                    tracing::warn!("mic passthrough unsupported on this platform — frames dropped");
+                    // Said once, when a client first sends microphone audio.
+                    if rx.recv().is_ok() {
+                        tracing::warn!(
+                            "mic passthrough unsupported on this platform — frames dropped"
+                        );
+                    }
                     for _ in rx {}
                 }
             });

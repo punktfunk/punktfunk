@@ -1,0 +1,95 @@
+---
+title: "macOS Host"
+description: "Run the Punktfunk host on a Mac: a menu bar app with its own virtual display, controllers and web console."
+---
+
+Stream a Mac's desktop or games to any Punktfunk client, at the client's resolution and refresh
+rate, HDR included, with no second monitor. To stream *to* a Mac, see the
+[Apple client](/docs/clients#apple-app-mac-iphone-ipad-apple-tv-vision-pro).
+
+The host is one app, **Punktfunk Host**, that lives in the menu bar. It runs as you, in your
+login session, so it streams while you are logged in. Keep it on a trusted network and read
+[Security & Safe Use](/docs/security).
+
+## What you need
+
+- **A Mac with Apple silicon, macOS 15 or newer.**
+- Nothing else. Capture, the H.264 and HEVC encoders, audio and the virtual display are part of
+  macOS; the app carries its web console and plugin runner.
+
+## Install
+
+1. Download `Punktfunk-Host-<ver>.dmg` from the
+   [latest release](https://git.unom.io/unom/punktfunk/releases) and open it.
+2. Drag **Punktfunk Host** onto **Applications**.
+3. Open it from Applications. Its icon appears in the menu bar and a setup window opens.
+
+The setup window lists the permissions on one page, then asks about starting at login. Each
+**Allow** button shows macOS's own prompt the first time; after that it opens the matching page
+of System Settings.
+
+| Step | What it allows | In System Settings → Privacy & Security |
+| --- | --- | --- |
+| **Screen recording** | Sending the screen to the device you stream to | Screen & System Audio Recording |
+| **Keyboard and mouse** | Typing and moving the pointer from that device | Accessibility (macOS 27: Device Control and Data Access) |
+| **System audio** | Sending the Mac's sound | Screen & System Audio Recording → System Audio Recording Only |
+| **Start at login** | Starting the host whenever you log in | General → Login Items & Extensions |
+
+macOS also asks once to let Punktfunk Host find devices on your local network. Allow it, or
+clients can't find or reach the host.
+
+After you allow screen recording or keyboard and mouse, the page offers **Reopen Punktfunk
+Host**: macOS applies those two only to a freshly started app. The setup window comes back
+where you left it.
+
+The last page shows the web console's password. Copy it: the console asks for it when you sign
+in from another device.
+
+Controllers need no permission: the app is signed to present them itself.
+
+## Pair
+
+Choose **Pair a Device** in the menu bar item and type the PIN it shows on the device. A device
+that asked to connect on its own appears there too, with **Approve** and **Deny**.
+
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console) for the same in the web
+console.
+
+## Good to know
+
+- **Menu bar item.** It shows whether the host is idle or streaming, who is connected and at
+  what mode, and has **End Session**, **Pair a Device**, **Open Web Console**, **Start at
+  Login**, **Open Logs Folder**, **Restart Punktfunk Host** and **Quit Punktfunk Host**. Quit
+  stops the host; with **Start at Login** on it comes back at your next login.
+- **Web console.** **Open Web Console** signs you in. From another device it is
+  `https://<this Mac's address>:47992`; the setup window's last page shows the first password,
+  and `~/.config/punktfunk/web-password` holds it until you sign in with it once.
+- **Settings.** Change them in the console under **Host**. A line in
+  `~/.config/punktfunk/host.env` pins a setting; **Restart Punktfunk Host** applies the file.
+  See [Configuration](/docs/configuration).
+- **Displays.** Each session gets its own display at the client's mode, in HDR when the client
+  asks. The host can stream a real monitor instead: see
+  [Stream a real monitor](/docs/stream-a-monitor).
+- **Controllers.** A client's controller reaches games as a DualSense, DualShock 4, Switch Pro
+  Controller or Xbox Wireless Controller, with rumble, motion, touchpad and light bar where the
+  real pad has them.
+- **Pen and touch.** A stylus arrives as a drawing tablet, with pressure, tilt and the eraser.
+  macOS has no touch screens, so touch works as it does with Sidecar: a tap clicks, a pan
+  scrolls, a long press right-clicks, and two fingers zoom and rotate.
+- **Monthly prompt.** macOS asks about once a month whether Punktfunk Host may keep recording
+  the screen. Answer it at the Mac, or the next session shows nothing.
+- **Plugins.** The plugin runner is part of the app, and each plugin runs in its own sandbox.
+  Install plugins from the console's store: [Plugin setup](/docs/plugin-setup).
+- **Logs.** `~/.config/punktfunk/logs/` holds `host.log`, `web.log` and `runner.log`.
+  `RUST_LOG=debug` in `host.env` adds detail.
+- **Updates.** The console says when a new version is out and links to its disk image. Quit
+  the host, drag the new app over the old one and open it. Your permissions stay.
+- **Not on a Mac host:** the microphone, streaming before you log in, and the restart and
+  shut-down power actions (sleep works).
+
+## Uninstall
+
+Turn **Start at Login** off, choose **Quit Punktfunk Host** and move the app to the Trash.
+`~/.config/punktfunk` holds the host's identity, pairings and settings; delete it to forget
+them. Remove the app's entries under **Privacy & Security** in System Settings if you want
+them gone.

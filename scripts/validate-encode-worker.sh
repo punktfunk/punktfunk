@@ -100,8 +100,8 @@ L_NOTUP='the encode worker did not come up'
 L_GRANTED='encoding in the capability-carrying worker at an elevated global queue priority'
 L_NOPRIO='encoding in the capability-carrying worker, no queue priority requested'
 L_INERT='every global queue priority class was refused'
-L_INERT_WORKER='CAP_SYS_NICE on the encode WORKER binary'      # the worker-side wording (host logs it)
-L_INERT_HOST='CAP_SYS_NICE on the host binary'                 # the in-process wording
+L_INERT_WORKER='the encode worker needs CAP_SYS_NICE'              # the worker-side wording (host logs it)
+L_INERT_HOST='only the encode worker should carry CAP_SYS_NICE'    # the in-process wording
 L_LEAVING='pyrowave: leaving the encode worker'
 L_DIED='the encode worker died mid-session'
 L_RESPAWNED='respawned the encode worker after a mid-session death'
@@ -1028,9 +1028,8 @@ leg_v4() {
          && [ "$(perf_windows "$log")" -ge 1 ]; then
         pass V4.d "an uncapped worker: the INERT warn names the WORKER binary, stream still up"
         if logs_have "$log" "$L_INERT_HOST"; then
-          fail V4.d2 "the INERT warn ALSO fired with the host-binary wording — that sentence sends"
-          info "an operator to setcap the host, which IS the 0.26.0-1 incident. It must not"
-          info "double-fire while the worker is active."
+          fail V4.d2 "the INERT warn ALSO fired with the in-process wording — the in-process"
+          info "encoder ran beside the worker. It must not double-fire while the worker is active."
         fi
       else
         fail V4.d "an uncapped worker did not produce the INERT warn + a live stream — see $log"

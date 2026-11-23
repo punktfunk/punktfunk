@@ -173,6 +173,9 @@ pub struct Feedback {
     /// How the client wants frames shaped (`0` the host's default). A level, like
     /// `link_kbps`.
     pub shape: u8,
+    /// No intra-refresh wave heals the decoder in use: a loss the host cannot anchor wants a
+    /// keyframe. A level, like `link_kbps`; a host before it sends the wave.
+    pub no_wave: bool,
     /// Ask number from 1; `0` asks nothing. A host acts on each ask once.
     pub ask: u16,
     /// Frames to invalidate, first and last.
@@ -208,6 +211,7 @@ impl Feedback {
             })
             .when(self.link_kbps != 0, |f| f.u32(8, self.link_kbps))
             .when(self.shape != 0, |f| f.u8(16, self.shape))
+            .when(self.no_wave, |f| f.bool(20, true))
             .when(self.ask != 0, |f| {
                 f.u16(4, self.ask)
                     .when(self.invalidate.is_some(), |f| {
@@ -254,6 +258,7 @@ impl Feedback {
                 17 => set_once(&mut nack_frame, u32_of(v)?)?,
                 18 => fb.stream = u8_of(v)?,
                 19 => fb.dead_ppm = u32_of(v)?,
+                20 => fb.no_wave = bool_of(v)?,
                 _ => {}
             }
         }
@@ -462,6 +467,7 @@ mod tests {
                 tail: 7,
                 sock_drops: 3,
                 shape: 1,
+                no_wave: true,
                 ..Default::default()
             },
             Feedback {

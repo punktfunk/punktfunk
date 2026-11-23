@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+PackageIdentifier: unom.PunktfunkClient
+PackageVersion: 0.47.0
+PackageLocale: pt-BR
+
+Publisher: unom
+PublisherUrl: https://git.unom.io/unom/punktfunk
+PublisherSupportUrl: https://punktfunk.unom.io/community
+PrivacyUrl: https://unom.io/en/legal/privacy#punktfunk-apps
+PackageName: Punktfunk Client
+PackageUrl: https://docs.punktfunk.unom.io/docs/install-client
+License: MIT OR Apache-2.0
+LicenseUrl: https://git.unom.io/unom/punktfunk/src/branch/main/LICENSE-MIT
+Copyright: Copyright (c) unom
+ShortDescription: Cliente de streaming de jogos de baixa latência — jogue os jogos do seu host Punktfunk em um PC ou notebook com Windows.
+Description: |-
+  O Punktfunk Client transmite jogos de um host Punktfunk para um PC ou notebook com Windows 10 ou 11,
+  em x64 e Arm64. Ele se conecta pelo protocolo QUIC nativo, decodifica o vídeo na GPU (Vulkan Video
+  ou D3D11VA) com HDR, reproduz o áudio pelo WASAPI e envia ao host a entrada de teclado, mouse e
+  controle.
+
+  O pacote também instala o Punktfunk Console, uma interface para controle pensada para uma TV ou um
+  HTPC (somente x64), e o comando punktfunk para scripts. Ele é instalado para o usuário atual e não
+  exige direitos de administrador.
+Tags:
+  - game-streaming
+  - remote-desktop
+  - streaming
+  - remote-play
+ReleaseNotesUrl: https://git.unom.io/unom/punktfunk/src/branch/main/docs/releases/v0.47.0.md
+InstallationNotes: |-
+  Abra o Punktfunk pelo menu Iniciar e pareie-o uma vez com o seu host:
+    https://docs.punktfunk.unom.io/docs/pairing
+
+  O Punktfunk Console (x64) é a interface para controle de uma TV ou de um HTPC.
+
+  Instalado em:  %LOCALAPPDATA%\Programs\Punktfunk
+  O comando `punktfunk` fica no PATH em novas janelas de terminal.
+Documentations:
+  - DocumentLabel: Cliente para Windows
+    DocumentUrl: https://docs.punktfunk.unom.io/docs/clients#windows-desktop-client
+
+ManifestType: locale
+ManifestVersion: 1.6.0

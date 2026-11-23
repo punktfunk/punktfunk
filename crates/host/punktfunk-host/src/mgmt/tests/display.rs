@@ -89,7 +89,8 @@ async fn compositors_lists_all_backends_with_flags() {
                 "wlroots",
                 "hyprland",
                 "niri",
-                "umbriel"
+                "umbriel",
+                "mango"
             ]
         );
     }
@@ -226,11 +227,15 @@ async fn display_settings_surface() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert!(enforced.contains(&"keep_alive"));
+    // A macOS display neither outlives its session nor takes a console position.
+    assert_eq!(
+        enforced.contains(&"keep_alive"),
+        cfg!(not(target_os = "macos"))
+    );
     assert!(enforced.contains(&"topology"));
     assert!(enforced.contains(&"mode_conflict"));
     assert!(enforced.contains(&"identity"));
-    assert!(enforced.contains(&"layout"));
+    assert_eq!(enforced.contains(&"layout"), cfg!(not(target_os = "macos")));
     // The console renders this list verbatim and hides anything absent from it
     // (design/web-console-overhaul.md D1), so a name here is a control an operator can
     // click. A build that cannot act on a field must not advertise it.
@@ -252,7 +257,11 @@ async fn display_settings_surface() {
     );
     assert!(
         !enforced.contains(&"capture_monitor")
-            || cfg!(any(target_os = "linux", target_os = "windows")),
+            || cfg!(any(
+                target_os = "linux",
+                target_os = "windows",
+                target_os = "macos"
+            )),
         "pinning a real monitor needs a mirror backend"
     );
     assert!(
@@ -526,8 +535,16 @@ async fn display_targets_answer_each_lane() {
         !body["yours"].is_null(),
         "a device reads its own pick: {body}"
     );
-    if !cfg!(any(target_os = "linux", target_os = "windows")) {
-        assert!(body.get("role").is_none(), "no mirror backend: {body}");
+    // A macOS own screen takes a role only as a virtual display.
+    #[cfg(target_os = "macos")]
+    let desk = crate::vdisplay::creates_displays();
+    #[cfg(not(target_os = "macos"))]
+    let desk = cfg!(any(target_os = "linux", target_os = "windows"));
+    if !desk {
+        assert!(
+            body.get("role").is_none(),
+            "no own screen with a role: {body}"
+        );
     }
 }
 

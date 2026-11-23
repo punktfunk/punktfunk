@@ -340,9 +340,9 @@ impl VirtualDisplay for KwinDisplay {
                 // KWin's reason is translated; log the compositor-side cause once here.
                 Ok(Err(e)) => bail!(
                     "KWin virtual output failed: {e} — KWin declined to create the output. It \
-                     needs a Plasma WAYLAND session on KWin's DRM backend; a nested or \
+                     needs a Plasma Wayland session on KWin's DRM backend; a nested or \
                      `kwin_wayland --virtual` KWin can only do this since 6.5.6, and on KWin 6.6+ \
-                     an output KWin creates but leaves DISABLED (stored \
+                     an output KWin creates but leaves disabled (stored \
                      ~/.config/kwinoutputconfig.json, or a display config it refused to apply) \
                      reports the same. kwin_wayland's own journal says which"
                 ),
@@ -529,6 +529,7 @@ fn journal_heads(plan: &[(String, String)], pre_enabled: &[(String, String)]) ->
         .map(|(name, mode)| Head {
             name,
             mode: (!mode.is_empty()).then_some(mode),
+            at: None,
         })
         .collect();
     let mut held = HELD_DARK.lock().unwrap_or_else(|e| e.into_inner());
@@ -661,7 +662,7 @@ fn verify_or_reassert(
                 requested_h = height,
                 stored_scale = scale,
                 our_prefix,
-                "KWin built our virtual output at a DIFFERENT size than requested (a stored \
+                "KWin built our virtual output at a different size than requested (a stored \
                  kwinoutputconfig.json mode/scale for this output name) — re-asserting the \
                  requested mode so the stream matches what the client negotiated"
             );
@@ -683,10 +684,10 @@ fn verify_or_reassert(
                         actual_h = ah,
                         requested_w = width,
                         requested_h = height,
-                        "KWin would not re-assert the requested mode — the output is STUCK at \
-                         its stored size. Clear this output's entry from kwinoutputconfig.json \
-                         (or set it to the streamed resolution in System Settings → Display) \
-                         and reconnect"
+                        "KWin would not re-assert the requested mode — the output stays at its \
+                         stored size. Clear this output's entry from kwinoutputconfig.json (or \
+                         set it to the streamed resolution in System Settings → Display) and \
+                         reconnect"
                     );
                     ((aw, ah), false)
                 }

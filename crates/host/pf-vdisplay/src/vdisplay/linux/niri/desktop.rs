@@ -229,6 +229,7 @@ pub(crate) fn disable_other_heads(ours: &str, pending: &mut Vec<u64>) {
                 .map(|name| Head {
                     name: name.clone(),
                     mode: None,
+                    at: None,
                 })
                 .collect();
             pending.push(journal::push("niri", Undo::EnableHeads { heads }));

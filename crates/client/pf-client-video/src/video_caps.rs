@@ -100,42 +100,41 @@ pub fn native_evidence(rung: NativeRung, wire: u8) -> RungEvidence {
     let (verified, note) = match (rung, wire) {
         (NativeRung::Vulkan, CODEC_H264) => (
             true,
-            "bit-exact vs libavcodec, 250/250 AUs on three drivers + 92-min soak (M2 WP-D)",
+            "bit-exact vs libavcodec, 250/250 AUs on three drivers + 92-min soak",
         ),
         (NativeRung::Vulkan, CODEC_HEVC) => (
             true,
-            "bit-exact vs libavcodec incl. Main10/4:4:4, three drivers + HDR and Deck legs (M3)",
+            "bit-exact vs libavcodec incl. Main10/4:4:4, three drivers + HDR and Deck legs",
         ),
         (NativeRung::Vulkan, CODEC_AV1) => (
             true,
-            "250/250 bit-identical to libavcodec on an RTX 5070 Ti (M7) - one vendor, no soak",
+            "250/250 bit-identical to libavcodec on an RTX 5070 Ti - one vendor, no soak",
         ),
         (NativeRung::D3d11va, CODEC_H264 | CODEC_HEVC) => (
             true,
-            "frame-hash parity on an RTX 4090 and an AMD iGPU + 30-min soak (M5)",
+            "frame-hash parity on an RTX 4090 and an AMD iGPU + 30-min soak",
         ),
         // Decode-target must not alias a referenced surface (pf-dxvadec regression test).
         (NativeRung::D3d11va, CODEC_AV1) => (
             true,
-            "250/250 delivered frames bit-identical to libavcodec on an RTX 3500 Ada AND an \
-             Intel Arc (2026-08-07), after fixing a decode target that aliased a reference \
-             surface on 268 of 274 frames - two vendors, no soak (M7)",
+            "250/250 delivered frames bit-identical to libavcodec on an RTX 3500 Ada and an \
+             Intel Arc, after fixing a decode target that aliased a reference surface on \
+             268 of 274 frames - two vendors, no soak",
         ),
         // Keep `verified` false: flipping it would put VAAPI ahead of Vulkan Video on every GPU
         // that is not NVIDIA or AMD (`prefer_vulkan_first`).
         (NativeRung::Vaapi, _) => (
             false,
-            "7 legs bit-identical to libavcodec on RDNA3 (Mesa 26.0.3, 2026-08-08) and Intel \
-             Xe-LP (iHD 26.1.2, 2026-09-24) - H.264, H.265, HEVC Main 10 and AV1, on both the \
-             conformance vectors and our own host's low-delay streams - but never soaked, and \
-             `verified` here would move `auto` off Vulkan Video on every Linux AMD/Intel \
-             client (M6/M7)",
+            "7 legs bit-identical to libavcodec on RDNA3 (Mesa 26.0.3) and Intel Xe-LP (iHD \
+             26.1.2) - H.264, H.265, HEVC Main 10 and AV1, on both the conformance vectors \
+             and our own host's low-delay streams - but never soaked, and `verified` here \
+             would move `auto` off Vulkan Video on every Linux AMD/Intel client",
         ),
         // rav1d uses two frame contexts so a damaged reference returns an error instead of aborting.
         (NativeRung::Software, CODEC_H264 | CODEC_AV1) => (
             false,
             "openh264 has never run on glass; rav1d decodes 1080p and 4K60 AV1 there and \
-             survives a mid-stream reference loss, but has no parity check or soak (M8)",
+             survives a mid-stream reference loss, but has no parity check or soak",
         ),
         _ => (false, "no hardware run recorded for this rung and codec"),
     };

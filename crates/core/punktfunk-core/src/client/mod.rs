@@ -105,10 +105,14 @@ pub(crate) fn client_label() -> String {
 pub use crate::discovery::join_host_port;
 
 /// The address to dial: an IP literal as written, else the name's first IPv4 answer (MagicDNS,
-/// `.local`). The client endpoint binds IPv4, so a v6 answer is the fallback only.
+/// `.local`), else its first IPv6 one. IPv4 goes first because a host may listen there alone.
 async fn dial_addr(host: &str, port: u16) -> Result<std::net::SocketAddr> {
-    if let Ok(addr) = join_host_port(host, port).parse() {
-        return Ok(addr);
+    if let Ok(addr) = join_host_port(host, port).parse::<std::net::SocketAddr>() {
+        // `::ffff:a.b.c.d` is that IPv4 host, and an IPv4 socket dials it.
+        return Ok(match addr.ip().to_canonical() {
+            ip @ std::net::IpAddr::V4(_) => (ip, port).into(),
+            std::net::IpAddr::V6(_) => addr,
+        });
     }
     let mut first = None;
     for addr in tokio::net::lookup_host((host, port)).await? {
@@ -937,28 +941,51 @@ impl NativeClient {
     /// Wake-on-LAN for exactly the machine that needs it. Two OS installs of a dual-boot box
     /// share one lease the same way.
     pub fn probe_identity(host: &str, port: u16, timeout: Duration) -> Option<[u8; 32]> {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let mut answer = None;
+        Self::probe_identity_then(host, port, timeout, |id| answer = id);
+        answer
+    }
+
+    /// [`Self::probe_identity`], handing the answer to `verdict` as soon as the handshake
+    /// resolves. The connection's close is already sent then; the drain after it, up to
+    /// 200 ms, still runs on this thread before the call returns.
+    pub fn probe_identity_then(
+        host: &str,
+        port: u16,
+        timeout: Duration,
+        verdict: impl FnOnce(Option<[u8; 32]>),
+    ) {
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .ok()?;
+        else {
+            return verdict(None);
+        };
         let host = host.to_string();
         rt.block_on(async move {
-            let remote = dial_addr(&host, port).await.ok()?;
+            let Ok(remote) = dial_addr(&host, port).await else {
+                return verdict(None);
+            };
             // pin = None accepts any cert and records it. Failures are DNS / no route /
             // connect timeout.
-            let (ep, observed) = endpoint::client_pinned_with_identity(None, None);
-            let ep = ep.ok()?;
+            let (ep, observed) = endpoint::client_pinned_with_identity(None, None, remote.ip());
+            let Ok(ep) = ep else {
+                return verdict(None);
+            };
             let reachable = match ep.connect(remote, "punktfunk") {
                 Ok(connecting) => {
                     matches!(tokio::time::timeout(timeout, connecting).await, Ok(Ok(_)))
                 }
                 Err(_) => false,
             };
-            ep.close(0u32.into(), b"probe");
-            let _ = tokio::time::timeout(Duration::from_millis(200), ep.wait_idle()).await;
             // The slot is written by the cert verifier, so it is only meaningful once the
             // handshake completed: a refused or timed-out connect leaves whatever it had.
-            reachable.then(|| *observed.lock().unwrap()).flatten()
+            let id = reachable.then(|| *observed.lock().unwrap()).flatten();
+            ep.close(0u32.into(), b"probe");
+            // One turn of the runtime lets the connection's driver send the close.
+            tokio::task::yield_now().await;
+            verdict(id);
+            let _ = tokio::time::timeout(Duration::from_millis(200), ep.wait_idle()).await;
         })
     }
 
@@ -1152,6 +1179,14 @@ impl NativeClient {
     /// that moment's drop count.
     pub fn recovery_reset(&self) {
         self.shared.recovery.lock().unwrap().reset();
+    }
+
+    /// Whether an intra-refresh wave heals the decoder in use; `true` until told otherwise.
+    /// `false` for one that shows nothing built on a damaged picture, or cannot take the
+    /// wave's pictures: the host then answers a loss it cannot anchor with a keyframe, and
+    /// a wave an older host still sends confirms nothing. Say it for each decoder opened.
+    pub fn set_wave_heals(&self, heals: bool) {
+        self.shared.feedback.lock().unwrap().no_wave(!heals);
     }
 
     /// The freeze's arm count, `0` with none up. A move since the last look is a loss: a
@@ -2458,6 +2493,57 @@ mod end_reason_tests {
 }
 
 #[cfg(test)]
+mod probe_tests {
+    use super::NativeClient;
+    use crate::quic::endpoint;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// The verdict is the answering endpoint's identity, and the close is sent before it: the
+    /// host sees the connection end while the prober still sits in `verdict`. A port nobody
+    /// answers on reads `None`.
+    #[test]
+    fn the_verdict_names_the_host_and_follows_the_close() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let alpns = [crate::quic::v2::registry::ALPN];
+        let (server, _socket) = rt
+            .block_on(async {
+                let addr = "127.0.0.1:0".parse().unwrap();
+                endpoint::server_shared(addr, &cert, &key, endpoint::DEFAULT_IDLE_TIMEOUT, &alpns)
+            })
+            .unwrap();
+        let port = server.local_addr().unwrap().port();
+        let host_side = rt.spawn(async move {
+            let conn = server.accept().await?.await.ok()?;
+            let closed = tokio::time::timeout(Duration::from_secs(1), conn.closed()).await;
+            Some((server, closed.is_ok()))
+        });
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let prober = std::thread::spawn(move || {
+            NativeClient::probe_identity_then("127.0.0.1", port, Duration::from_secs(2), |id| {
+                seen_tx.send(id).unwrap();
+                // The prober's runtime stands still here: nothing more leaves it.
+                let _ = release_rx.recv_timeout(Duration::from_secs(3));
+            })
+        });
+        let want = endpoint::fingerprint_of_pem(&cert).unwrap();
+        assert_eq!(seen_rx.recv().unwrap(), Some(want));
+        let closed = rt.block_on(host_side).unwrap().map(|(_, closed)| closed);
+        release_tx.send(()).unwrap();
+        prober.join().unwrap();
+        assert_eq!(closed, Some(true), "the host saw the close first");
+
+        let gone = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = gone.local_addr().unwrap().port();
+        drop(gone);
+        let miss = NativeClient::probe_identity("127.0.0.1", port, Duration::from_millis(300));
+        assert_eq!(miss, None);
+    }
+}
+
+#[cfg(test)]
 mod redial_tests {
     use super::PunktfunkEndReason;
 
@@ -2593,7 +2679,59 @@ mod host_port_tests {
                 dial_addr("192.168.1.9", 9777).await.unwrap(),
                 at("192.168.1.9:9777")
             );
+            assert_eq!(
+                dial_addr("[fd00::1]", 9777).await.unwrap(),
+                at("[fd00::1]:9777")
+            );
+            assert_eq!(
+                dial_addr("::ffff:192.168.1.9", 9777).await.unwrap(),
+                at("192.168.1.9:9777"),
+                "a v4-mapped literal is its IPv4 host"
+            );
+            let zone = |a: std::net::SocketAddr| match a {
+                std::net::SocketAddr::V6(a) => a.scope_id(),
+                std::net::SocketAddr::V4(_) => 0,
+            };
+            assert_eq!(zone(dial_addr("fe80::1%3", 9777).await.unwrap()), 3);
+            // A named zone goes to the OS resolver, which gives its interface's index.
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let lo = if cfg!(target_os = "linux") {
+                    "lo"
+                } else {
+                    "lo0"
+                };
+                let named = dial_addr(&format!("fe80::1%{lo}"), 9777).await.unwrap();
+                assert_ne!(zone(named), 0);
+            }
+            assert!(dial_addr("[fd00::1", 9777).await.is_err());
         });
+    }
+
+    /// A probe reads the certificate of the host answering on IPv6.
+    #[test]
+    fn a_probe_reaches_an_ipv6_host() {
+        use crate::quic::endpoint;
+        let Some(v6) = crate::quic::test_util::loopback_v6("a_probe_reaches_an_ipv6_host") else {
+            return;
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let idle = std::time::Duration::from_secs(8);
+        let alpns = [crate::quic::v2::registry::ALPN];
+        let (host, _media) = {
+            let _in_rt = rt.enter();
+            endpoint::server_shared((v6, 0).into(), &cert, &key, idle, &alpns).unwrap()
+        };
+        let port = host.local_addr().unwrap().port();
+        rt.spawn(async move {
+            while let Some(incoming) = host.accept().await {
+                let _ = incoming.await;
+            }
+        });
+        let fp =
+            super::NativeClient::probe_identity("::1", port, std::time::Duration::from_secs(5));
+        assert_eq!(fp, Some(endpoint::fingerprint_of_pem(&cert).unwrap()));
     }
 
     #[test]

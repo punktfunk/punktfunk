@@ -12,6 +12,77 @@ use crate::{CursorChannelSender, CursorForwardSender, EncodeCtlSender, SetEncode
 #[cfg(target_os = "linux")]
 use anyhow::Result;
 
+/// What [`open_display`] captures and how. Named fields, as [`VirtualOutputOpts`].
+#[cfg(target_os = "macos")]
+pub struct DisplayCaptureOpts {
+    /// The `CGDirectDisplayID` to capture.
+    pub display_id: u32,
+    /// The size frames arrive at. The display's own pixel size captures it unscaled; any
+    /// other size scales the whole display into it, with bars where the shape differs.
+    pub width: u32,
+    pub height: u32,
+    /// The wire rate. The capture delivers no faster.
+    pub stream_hz: u32,
+    /// The session's negotiated format: `hdr`, `ten_bit_sdr`, `chroma_444`, `full_range`.
+    pub output: pf_frame::OutputFormat,
+    /// The session forwards the pointer: [`crate::CursorSource`] reports it, and frames leave
+    /// it out while the client draws it.
+    pub metadata_cursor: bool,
+    /// Held for the capture's life: the display's lease.
+    pub keepalive: Box<dyn Send>,
+}
+
+/// ScreenCaptureKit capture of one display. Frames are [`pf_frame::FramePayload::PixelBuffer`].
+#[cfg(target_os = "macos")]
+pub fn open_display(opts: DisplayCaptureOpts) -> anyhow::Result<Box<dyn crate::Capturer>> {
+    crate::macos::open(opts)
+}
+
+/// Whether the system reports the pointer's image now, so a capture can leave the pointer out
+/// of its frames for the client to draw.
+#[cfg(target_os = "macos")]
+pub fn pointer_image_readable() -> bool {
+    crate::macos::pointer_image_readable()
+}
+
+/// Whether this process holds the Screen Recording grant. Never prompts.
+#[cfg(target_os = "macos")]
+pub fn screen_capture_access() -> bool {
+    objc2_core_graphics::CGPreflightScreenCaptureAccess()
+}
+
+/// [`open_display`] without the Screen Recording grant. A grant takes effect only after the host
+/// restarts, so a retry can't help.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub struct NoScreenRecording;
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Display for NoScreenRecording {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("this process has no Screen Recording grant")
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl std::error::Error for NoScreenRecording {}
+
+#[cfg(target_os = "macos")]
+impl NoScreenRecording {
+    /// The sentence the client shows.
+    pub fn user_message(&self) -> &'static str {
+        "The host isn't allowed to record its screen. Its owner can allow it in the host's System \
+         Settings; the web console shows how."
+    }
+}
+
+/// Ask for the Screen Recording grant. The system prompts at most once per process identity;
+/// `true` only when the grant is already in place.
+#[cfg(target_os = "macos")]
+pub fn request_screen_capture_access() -> bool {
+    objc2_core_graphics::CGRequestScreenCaptureAccess()
+}
+
 /// Least zero-copy pool depth asked of a compositor. 2 is what every producer already
 /// serves; the negotiated depth minus the hold reserve is the deferred-requeue budget.
 pub const POOL_MIN: i32 = 2;
@@ -55,6 +126,10 @@ pub struct ZeroCopyPolicy {
     pub gamescope_tiled: bool,
     /// Per-fourcc modifiers the session's direct encoder import proved. Empty keeps LINEAR.
     pub encoder_modifiers: Vec<(u32, Vec<u64>)>,
+    /// The whole offer for a producer's own NV12/P010, LINEAR (0) included, as the session's
+    /// encoder reads them (`pf_encode` `Resolved::planar_capture_modifiers`). `None` keeps
+    /// LINEAR; an empty list offers no planar format.
+    pub planar_modifiers: Option<Vec<u64>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -79,7 +154,13 @@ pub fn capturer_supports_hdr() -> bool {
 pub fn capturer_supports_hdr() -> bool {
     true
 }
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS: ScreenCaptureKit composes 10-bit BT.2100 PQ for a canonical HDR10 display; checked on
+/// macOS 27.0.
+#[cfg(target_os = "macos")]
+pub fn capturer_supports_hdr() -> bool {
+    true
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn capturer_supports_hdr() -> bool {
     false
 }
@@ -103,7 +184,12 @@ pub fn capturer_supports_444(encoder_ingests_rgb_444: bool) -> bool {
     // full-chroma, so Welcome chroma is real regardless of HDR.
     encoder_ingests_rgb_444
 }
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// macOS: ScreenCaptureKit delivers `BGRA` for 4:4:4, so the encoder converts RGB itself.
+#[cfg(target_os = "macos")]
+pub fn capturer_supports_444(encoder_ingests_rgb_444: bool) -> bool {
+    encoder_ingests_rgb_444
+}
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn capturer_supports_444(_encoder_ingests_rgb_444: bool) -> bool {
     false
 }
@@ -245,8 +331,9 @@ pub fn open_virtual_output(
 ) -> Result<Box<dyn Capturer>> {
     let knobs = Knobs::from_env();
     let try_direct = opts.allow_zerocopy && knobs.direct_capture;
-    let mut refused =
-        anyhow::anyhow!("direct capture off (software encoder or PUNKTFUNK_DIRECT_CAPTURE=0)");
+    let mut refused = anyhow::anyhow!(
+        "direct capture off (software encoder, or the direct_capture setting is off)"
+    );
     if let Some(direct) = opts.direct.take().filter(|_| try_direct) {
         let name = direct.output_name;
         let policy = (direct.policy)();

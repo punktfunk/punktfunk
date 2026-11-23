@@ -418,11 +418,21 @@ impl HostApi {
         base_url(&self.addr, self.mgmt_port)
     }
 
+    /// Where calls go: [`LOOPBACK`](crate::trust::local::LOOPBACK) for this device's own host,
+    /// so it sees a loopback peer, else `addr`.
+    fn dial(&self) -> &str {
+        use crate::trust::local;
+        match self.pin {
+            Some(p) if local::is_this_device(&crate::trust::hex(&p)) => local::LOOPBACK,
+            _ => &self.addr,
+        }
+    }
+
     /// `method` `path` with `body` as (content type, bytes), over the tunnel and then over
-    /// HTTPS with `https`. The tunnel's answer stands, except 401, 403 and 405: a host that
-    /// predates stamping the client certificate on its tunnel refuses the paired lane there, and
-    /// one before 0.47 carries no `PUT` or `PATCH`. Its refusal stands only when HTTPS can't be
-    /// reached either.
+    /// HTTPS with `https`, both to [`Self::dial`]. The tunnel's answer stands, except 401, 403
+    /// and 405: a host that predates stamping the client certificate on its tunnel refuses the
+    /// paired lane there, and one before 0.47 carries no `PUT` or `PATCH`. Its refusal stands
+    /// only when HTTPS can't be reached either.
     pub(crate) fn call(
         &self,
         https: &ureq::Agent,
@@ -439,7 +449,7 @@ impl HostApi {
                 body: body.map_or(&[], |b| b.1),
             };
             let id = (self.identity.0.as_str(), self.identity.1.as_str());
-            let (addr, port) = (&self.addr, self.stream_port);
+            let (addr, port) = (self.dial(), self.stream_port);
             match punktfunk_core::client::mgmt::request(addr, port, id, self.pin, TUNNEL_WAIT, &req)
             {
                 Ok(r) => {
@@ -476,7 +486,7 @@ impl HostApi {
         let unreachable = |e: &dyn std::fmt::Display| LibraryError::Unreachable(e.to_string());
         let mut req = ureq::http::Request::builder()
             .method(method)
-            .uri(format!("{}{path}", self.base()));
+            .uri(format!("{}{path}", base_url(self.dial(), self.mgmt_port)));
         if let Some((content_type, _)) = body {
             req = req.header("Content-Type", content_type);
         }
@@ -577,7 +587,7 @@ pub fn fetch_games<'p>(
 }
 
 /// One title currently launched, from `GET /api/v1/status`. Partial
-/// `ActiveGame`: plane and grace stay undecoded so a shelf does not break when
+/// `ActiveGame`: grace stays undecoded so a shelf does not break when
 /// the operator payload grows.
 #[derive(Clone, Debug, Deserialize)]
 pub struct RunningGame {
@@ -602,6 +612,149 @@ pub struct RunningGame {
     /// host that predates the field.
     #[serde(default)]
     pub endable: bool,
+    /// `native` | `gamestream` | `web` | `local`; empty from a host that predates the field.
+    /// `local` is a title the host started on its own screen, with no stream.
+    #[serde(default)]
+    pub plane: String,
+    /// Why a launch on the host's own screen stopped, for a while after it did.
+    #[serde(default)]
+    pub outcome: Option<LaunchVerdict>,
+}
+
+/// A launch that was refused late or died at the start: the host's `LaunchOutcome` id and its
+/// parameters, worded here ([`crate::host_text::word`]).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct LaunchVerdict {
+    pub code: String,
+    #[serde(default)]
+    pub params: serde_json::Map<String, serde_json::Value>,
+}
+
+impl LaunchVerdict {
+    /// The sentence for `title`: the host's message in this app's language, `title` filled in
+    /// where the host left it out; a code this build doesn't know reads as "didn't start".
+    pub fn line(&self, title: &str) -> String {
+        let values: Vec<(&str, String)> = (self.params.iter())
+            .map(|(k, v)| {
+                (
+                    k.as_str(),
+                    v.as_str().map_or_else(|| v.to_string(), str::to_string),
+                )
+            })
+            .chain((!self.params.contains_key("title")).then(|| ("title", title.to_string())))
+            .collect();
+        let params: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let fallback = pf_l10n::client::lib_hold_gave_up_not_started(title);
+        crate::host_text::word(&self.code, &params, &fallback)
+    }
+}
+
+/// What asking the host to start a title on its own screen came to
+/// (`POST /api/v1/game/launch`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalLaunch {
+    /// The host took it and starts the title.
+    Started,
+    /// The host already runs it.
+    Running,
+    /// The host's own sentence for why not.
+    Refused(String),
+    /// A host without the route.
+    HostTooOld,
+    Failed(String),
+}
+
+impl LocalLaunch {
+    /// A 2xx is taken: `running: true` in its body means it was already up. Otherwise the
+    /// host's sentence from its `ApiError` body, worded by its code; with none, 404 and 405 mean
+    /// the route is missing and any other status is a failure.
+    pub fn from_reply(code: u16, body: &str) -> LocalLaunch {
+        let running =
+            || serde_json::from_str::<serde_json::Value>(body).is_ok_and(|v| v["running"] == true);
+        match (code, crate::host_text::api_error(body)) {
+            (200..=299, _) if running() => LocalLaunch::Running,
+            (200..=299, _) => LocalLaunch::Started,
+            (_, Some(m)) => LocalLaunch::Refused(m),
+            (404 | 405, _) => LocalLaunch::HostTooOld,
+            (code, _) => LocalLaunch::Failed(pf_l10n::client::error_mgmt_refused(code)),
+        }
+    }
+
+    /// Whether an answer leaves the host's version open: a refusal with no `code`, which a
+    /// host without the route gives too (401 to a path no device may use).
+    pub fn uncoded(code: u16, body: &str) -> bool {
+        let coded = serde_json::from_str::<serde_json::Value>(body)
+            .is_ok_and(|v| v["code"].as_str().is_some_and(|c| !c.is_empty()));
+        !(200..=299).contains(&code) && !coded
+    }
+
+    /// An uncoded refusal, judged by `host`, the body of `GET /api/v1/host`: a host that does
+    /// not say `local_play: true` has no route, one that does refused for its own reason, and
+    /// no answer is this device's own miss (not paired, unreachable).
+    pub fn judged_by_host(self, host: Result<&[u8], &LibraryError>) -> LocalLaunch {
+        let plays = |body: &[u8]| {
+            serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|v| v["local_play"] == true)
+        };
+        match host {
+            Ok(body) if plays(body) => self,
+            Ok(_) => LocalLaunch::HostTooOld,
+            Err(e) => LocalLaunch::Failed(e.to_string()),
+        }
+    }
+
+    /// The sentence for a launch that did not happen; `None` when the host took it.
+    pub fn refusal(&self) -> Option<String> {
+        use pf_l10n::client as m;
+        match self {
+            LocalLaunch::Started | LocalLaunch::Running => None,
+            LocalLaunch::Refused(why) => Some(why.clone()),
+            LocalLaunch::HostTooOld => Some(m::error_local_host_too_old().into()),
+            LocalLaunch::Failed(why) => Some(m::dial_connect_failed(why)),
+        }
+    }
+}
+
+/// `POST /api/v1/game/launch` for `app_id` to this device's own host, at
+/// [`LOOPBACK`](crate::trust::local::LOOPBACK) on `mgmt_port` and `stream_port`. The host
+/// starts it on its own screen. An uncoded refusal asks `GET /api/v1/host` once whether the
+/// host has the route at all ([`LocalLaunch::judged_by_host`]). Blocking.
+#[cfg(desktop)]
+pub fn launch_local(
+    mgmt_port: u16,
+    stream_port: u16,
+    identity: &(String, String),
+    pin: [u8; 32],
+    app_id: &str,
+) -> LocalLaunch {
+    let https = match agent(identity, Some(pin)) {
+        Ok(a) => a,
+        Err(e) => return LocalLaunch::Failed(e.to_string()),
+    };
+    let lo = crate::trust::local::LOOPBACK;
+    let api = HostApi::new(lo, mgmt_port, stream_port, identity, Some(pin));
+    let body = serde_json::json!({ "app_id": app_id }).to_string();
+    // The host's game is not this process's child: Windows lets it take the foreground only
+    // when the window in front says so first.
+    #[cfg(windows)]
+    {
+        use windows::Win32::winuser::{AllowSetForegroundWindow, ASFW_ANY};
+        // SAFETY: takes a process id by value and touches no memory of ours.
+        if !unsafe { AllowSetForegroundWindow(ASFW_ANY) }.as_bool() {
+            tracing::debug!("foreground not handed on");
+        }
+    }
+    let json = Some(("application/json", body.as_bytes()));
+    let reply = match api.call(&https, "POST", "/api/v1/game/launch", json) {
+        Ok(r) => r,
+        Err(e) => return LocalLaunch::Failed(e.to_string()),
+    };
+    let said = String::from_utf8_lossy(&reply.body);
+    let answer = LocalLaunch::from_reply(reply.status, &said);
+    if !LocalLaunch::uncoded(reply.status, &said) {
+        return answer;
+    }
+    let host = (api.call(&https, "GET", "/api/v1/host", None)).and_then(Reply::ok);
+    answer.judged_by_host(host.as_deref())
 }
 
 /// One title's download, from `GET /api/v1/status` `downloads[]`.
@@ -1719,6 +1872,88 @@ mod tests {
             GameEnd::NotRunning.notice("Hades"),
             "Hades isn't running anymore."
         );
+    }
+
+    /// A launch on this device reads every answer of the route: taken, already up, the host's
+    /// coded sentence, an old host's bare 404 or 405, anything else a failure.
+    #[test]
+    fn a_local_launch_reads_each_answer_of_the_route() {
+        let from = LocalLaunch::from_reply;
+        assert_eq!(from(202, r#"{"via":"host"}"#), LocalLaunch::Started);
+        assert_eq!(from(202, r#"{"via":"steam"}"#), LocalLaunch::Started);
+        assert_eq!(
+            from(200, r#"{"via":"host","running":true}"#),
+            LocalLaunch::Running
+        );
+        let coded = r#"{"error":"This game is no longer in the library.","code":"local_no_such_game","params":{}}"#;
+        assert_eq!(
+            from(404, coded),
+            LocalLaunch::Refused("This game is no longer in the library.".into())
+        );
+        assert_eq!(from(404, ""), LocalLaunch::HostTooOld);
+        assert_eq!(from(405, "<html></html>"), LocalLaunch::HostTooOld);
+        assert_eq!(
+            from(500, ""),
+            LocalLaunch::Failed("the host refused it (500)".into())
+        );
+        assert_eq!(LocalLaunch::Started.refusal(), None);
+        assert_eq!(LocalLaunch::Running.refusal(), None);
+        assert_eq!(
+            LocalLaunch::HostTooOld.refusal().as_deref(),
+            Some("Update Punktfunk on this device to play here.")
+        );
+    }
+
+    /// An uncoded refusal, as a host without the route gives one, asks the host what it is: no
+    /// `local_play` is an old host, `local_play` keeps the refusal, no answer is this device's
+    /// miss. A coded refusal or a 2xx never asks.
+    #[test]
+    fn an_uncoded_refusal_is_judged_by_what_the_host_says_it_is() {
+        let old =
+            r#"{"error":"missing or invalid credentials (a paired device, or a bearer token)"}"#;
+        assert!(LocalLaunch::uncoded(401, old));
+        assert!(LocalLaunch::uncoded(404, ""));
+        let coded = r#"{"error":"No desk.","code":"local_no_desk","params":{}}"#;
+        assert!(!LocalLaunch::uncoded(409, coded));
+        assert!(!LocalLaunch::uncoded(202, "{}"));
+
+        let refused = LocalLaunch::from_reply(401, old);
+        let judged = |host: Result<&[u8], &LibraryError>| refused.clone().judged_by_host(host);
+        assert_eq!(
+            judged(Ok(br#"{"name":"Desk"}"#)),
+            LocalLaunch::HostTooOld,
+            "a host that does not say local_play"
+        );
+        assert_eq!(judged(Ok(br#"{"local_play":true}"#)), refused);
+        assert_eq!(
+            judged(Err(&LibraryError::NotPaired)),
+            LocalLaunch::Failed(
+                "the host doesn't recognize this device — pair with it first".into()
+            )
+        );
+    }
+
+    /// A row's outcome words the host's launch id with the title filled in; an id this build
+    /// doesn't know still says the title didn't start.
+    #[test]
+    fn a_launch_outcome_reads_in_this_apps_words() {
+        let local = row(
+            r#"{"app_id":"rom-manager:a","state":"exited","plane":"local",
+            "outcome":{"code":"launch_download_failed","params":{}}}"#,
+        );
+        assert_eq!(local.plane, "local");
+        let outcome = local.outcome.expect("decoded");
+        assert_eq!(outcome.line("Quail"), "Quail didn't download.");
+        let unknown = LaunchVerdict {
+            code: "launch_from_the_future".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            unknown.line("Quail"),
+            "The host didn't start Quail — nothing is running for it."
+        );
+        let old = row(r#"{"app_id":"steam:1","state":"running"}"#);
+        assert!(old.outcome.is_none() && old.plane.is_empty());
     }
 
     #[test]

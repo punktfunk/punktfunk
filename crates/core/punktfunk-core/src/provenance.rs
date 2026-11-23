@@ -4,7 +4,7 @@
 //! Pure. Asking the routing table is the caller's, injected into [`classify_with`], so this
 //! builds for wasm and armv7.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// The header a page server puts on a request or session it relays: the visitor's address, or
 /// [`CLIENT_ADDR_UNKNOWN`].
@@ -58,6 +58,39 @@ pub fn classify_with(ip: Option<IpAddr>, over_mesh: impl Fn(Ipv4Addr) -> bool) -
     }
 }
 
+/// IPv6 global unicast, 2000::/3: the only IPv6 range the public internet routes.
+pub fn is_public_v6(ip: Ipv6Addr) -> bool {
+    ip.segments()[0] & 0xe000 == 0x2000
+}
+
+/// Whether an IPv6 connection from `source` to our address `local` kept off the public
+/// internet: both ends are unicast outside 2000::/3. The internet delivers to a public address
+/// only, so `local` decides even when `source` lies. An address we could not read fails closed.
+pub fn off_internet_v6(source: IpAddr, local: Option<IpAddr>) -> bool {
+    let private = |ip: IpAddr| match ip {
+        IpAddr::V6(v6) => {
+            !is_public_v6(v6)
+                && !v6.is_unspecified()
+                && !v6.is_multicast()
+                && v6.to_ipv4_mapped().is_none()
+        }
+        IpAddr::V4(_) => false,
+    };
+    private(source) && local.is_some_and(private)
+}
+
+/// The address a per-peer limit counts by. A public IPv6 subscriber holds a /64 at least, so
+/// its /64 is the peer. Any other address is one device.
+pub fn limit_key(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) if is_public_v6(v6) => {
+            let s = v6.segments();
+            Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0).into()
+        }
+        ip => ip,
+    }
+}
+
 /// RFC 6598 shared space, 100.64/10: a mesh VPN's addresses and a CGNAT ISP's subscribers alike.
 pub fn is_cgnat(v4: Ipv4Addr) -> bool {
     v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])
@@ -93,7 +126,6 @@ pub fn is_local_name(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv6Addr;
 
     #[test]
     fn knock_sources_classify_by_address() {
@@ -138,6 +170,55 @@ mod tests {
         // fc00::/7 unique-local and fe80::/10 link-local are both on-link.
         assert_eq!(classify(Some("fd00::1".parse().unwrap())), KnockSource::Lan);
         assert_eq!(classify(Some("fe80::1".parse().unwrap())), KnockSource::Lan);
+    }
+
+    /// Only a connection with both ends outside 2000::/3 kept off the internet.
+    #[test]
+    fn a_public_end_puts_an_ipv6_connection_on_the_internet() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let ours = Some(ip("fd00::10"));
+        // Unique-local, link-local, loopback and Yggdrasil's 0200::/7.
+        for source in ["fd7a:115c:a1e0::5", "fe80::1", "::1", "200:1234::1"] {
+            assert!(off_internet_v6(ip(source), ours), "{source}");
+        }
+        // Global unicast, 6to4, Teredo, and sources no peer sends from.
+        for source in [
+            "2606:4700::1111",
+            "2002:c000:204::1",
+            "2001:0:4136:e378::1",
+            "3fff::1",
+            "::",
+            "ff02::1",
+            "::ffff:192.168.1.9",
+            "192.168.1.9",
+        ] {
+            assert!(!off_internet_v6(ip(source), ours), "{source}");
+        }
+        // A private source that reached a public address of ours came over the internet.
+        assert!(!off_internet_v6(ip("fd00::9"), Some(ip("2a02:8070::10"))));
+        assert!(!off_internet_v6(ip("fd00::9"), None), "fails closed");
+    }
+
+    /// A public IPv6 peer is counted by its /64; every other address is itself.
+    #[test]
+    fn a_limit_counts_a_public_ipv6_peer_by_its_64() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert_eq!(
+            limit_key(ip("2a02:8070:1:2:aaaa::1")),
+            ip("2a02:8070:1:2::")
+        );
+        assert_eq!(
+            limit_key(ip("2a02:8070:1:2:aaaa::1")),
+            limit_key(ip("2a02:8070:1:2:bbbb::2"))
+        );
+        assert_ne!(
+            limit_key(ip("2a02:8070:1:2::1")),
+            limit_key(ip("2a02:8070:1:3::1"))
+        );
+        for one_device in ["192.168.1.9", "fd00::9", "fe80::9", "200:1234::9"] {
+            assert_eq!(limit_key(ip(one_device)), ip(one_device), "{one_device}");
+        }
+        assert_eq!(limit_key(ip("::ffff:192.168.1.9")), ip("192.168.1.9"));
     }
 
     /// 100.64/10 is a mesh VPN's range and a CGNAT ISP's alike, so the route back decides.

@@ -323,7 +323,7 @@ echo "==> reusing the prebuilt web console from %{pf_prebuilt_web}"
 mkdir -p web/.output
 cp -a %{pf_prebuilt_web}/. web/.output/
 %else
-(cd web && bun install --frozen-lockfile && bun run build)
+(cd web && bun install --frozen-lockfile --ignore-scripts && bun run build)
 %endif
 # Asserted for BOTH paths on purpose. This is the check that says the artifact about to be packaged
 # is the bun preset (node cannot run Bun.serve) — a handed-over bundle deserves it at least as much

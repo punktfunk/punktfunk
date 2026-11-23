@@ -103,6 +103,9 @@ pub struct VirtualOutput {
     /// DXGI adapter LUID + GDI output name; host `capture::capture_virtual_output` duplicates this.
     #[cfg(target_os = "windows")]
     pub win_capture: Option<pf_frame::dxgi::WinCaptureTarget>,
+    /// The `CGDirectDisplayID` host `capture::capture_virtual_output` opens on macOS.
+    #[cfg(target_os = "macos")]
+    pub cg_display: Option<u32>,
     /// Holds the compositor resource (and its connection/thread) until drop.
     pub keepalive: Box<dyn Send>,
     /// Registry pools only [`DisplayOwnership::pooled`] outputs (`Owned`, `Spawned`); the rest
@@ -171,6 +174,8 @@ impl VirtualOutput {
             refresh_mhz: None,
             #[cfg(target_os = "windows")]
             win_capture: None,
+            #[cfg(target_os = "macos")]
+            cg_display: None,
             keepalive,
             ownership: DisplayOwnership::Owned,
             #[cfg(target_os = "linux")]

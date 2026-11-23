@@ -14,7 +14,7 @@ These links are the **stable** channel. For builds of `main`, see [Release Chann
 |--------|---------|
 | Linux desktop or laptop | [Flatpak](#linux-desktop-flatpak), or the apt, dnf or pacman package |
 | Steam Deck | [Decky plugin and Flatpak](/docs/steam-deck) |
-| Windows 10 or 11 (x64, Arm64) | [Installer](#windows) |
+| Windows 10 or 11 (x64, Arm64) | [Installer or winget](#windows) |
 | Mac (macOS 14+) | [`.dmg`](#macos) |
 | iPhone, iPad, Apple TV (17+), Apple Vision Pro | [App Store](#ios-ipados-apple-tv) |
 | Android 9+ phone or TV | [Google Play or APK](#android) |
@@ -63,6 +63,17 @@ for scripts.
 3. Open **Punktfunk** from the Start menu, or **Punktfunk Console** for the controller interface
    (x64 only: the Arm64 build has no console yet).
 
+**winget.** Add Punktfunk's source once, from an **elevated** PowerShell, then install. The install
+needs no administrator rights, and on an Arm device winget picks the Arm64 build:
+
+```powershell
+winget source add -n punktfunk https://winget.punktfunk.unom.io -t Microsoft.Rest
+winget install unom.PunktfunkClient
+```
+
+winget carries stable releases only. It's the same source as the
+[host's](/docs/windows-host#winget).
+
 **Steam overlay and Big Picture.** In Steam, **Add a Non-Steam Game** and browse to
 `%LOCALAPPDATA%\Programs\Punktfunk\punktfunk-client.exe` (or `punktfunk-console.exe`).
 
@@ -89,8 +100,9 @@ For beta builds, install Apple's [TestFlight](https://apps.apple.com/app/testfli
 app, then [join the Punktfunk beta](https://testflight.apple.com/join/Qr7uSemk).
 
 Each [release](https://git.unom.io/unom/punktfunk/releases) also carries `Punktfunk-<version>.ipa`
-for sideloading with AltStore, SideStore or Sideloadly. Wake-on-LAN and the widget's host list need
-the App Store build.
+for sideloading with AltStore, SideStore or Sideloadly. For Apple TV, sideload
+`Punktfunk-tvOS-<version>.ipa` with Sideloadly. Wake-on-LAN and the widget's host list need the App
+Store build.
 
 ## Android
 
@@ -124,7 +136,7 @@ A client and a host don't need the same version. To update the host, see [Updati
 | Flatpak | `flatpak update`, without `sudo`: `sudo` skips this install |
 | apt, dnf, pacman | Your normal system upgrade, or [`punktfunk-client --apply-update`](#the-linux-client-can-update-itself) |
 | Fedora Atomic, layered | See below |
-| Windows installer | Run the newer installer. Hosts and pairing are kept. |
+| Windows installer | Run the newer installer, or `winget upgrade unom.PunktfunkClient`. Hosts and pairing are kept. |
 | Windows MSIX or portable | Add the newer `.msix`, or unzip the newer build over the old one. An MSIX named `unom.Punktfunk` is the older package and doesn't upgrade: remove it as below first. |
 | macOS `.dmg` | Drag the newer app over the old one |
 | iPhone, iPad, Apple TV | App Store, or TestFlight for the beta |

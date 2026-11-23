@@ -256,6 +256,17 @@ pub struct VaEncMiscParameterRir {
     pub va_reserved: [u32; 4],
 }
 
+/// `VAEncMiscParameterTypeQualityLevel`: the driver's preset, from 1 (best picture) up to the
+/// `VAConfigAttribEncQualityRange` it reports (fastest); 0 is its default.
+pub const VA_ENC_MISC_PARAMETER_TYPE_QUALITY_LEVEL: u32 = 6;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct VaEncMiscParameterQualityLevel {
+    pub quality_level: u32,
+    pub va_reserved: [u32; 4],
+}
+
 /// Precedes each packed header's bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

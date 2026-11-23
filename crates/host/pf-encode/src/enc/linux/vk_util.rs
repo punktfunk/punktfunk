@@ -536,8 +536,8 @@ pub(crate) unsafe fn import_rgb_dmabuf(
 }
 
 /// Import `d` as a `usage` image plus a view; fd ownership and the memory pick are
-/// [`pf_zerocopy::vkdev::import_dmabuf_image`]'s. Also imports one-fd LINEAR NV12: UV layout
-/// from plane-1, else shared-stride contiguous planes.
+/// [`pf_zerocopy::vkdev::import_dmabuf_image`]'s. Also imports one-fd NV12/P010 at its
+/// modifier: UV layout from plane-1, else shared-stride contiguous planes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn import_rgb_dmabuf_as(
     instance: &ash::Instance,

@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Sat, 21 Nov 2026 11:13:06 +0100
+Subject: [PATCH 45/46] pipewire: put a planar capture's chroma on a 16-row
+ boundary on Intel
+
+Intel's media driver encodes an imported NV12 or P010 picture without a
+copy, and its encoder reads the chroma from a row that is a multiple of
+16, whatever row the import names. A 1080-row capture has its chroma at
+row 1080, so the encoder read from row 1088, 8 chroma rows late: colour
+sat 16 picture rows too high and the last 16 came out green. At 900 rows
+it read 12 rows late. 720 and 1200 rows were right.
+
+On Intel, allocate an exported two-plane LINEAR image with its height
+rounded up to 16. The driver then lays the second plane on such a row and
+the export names it there. The texture keeps the capture's own height, so
+nothing paints or reads the rows in between.
+---
+ src/rendervulkan.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index abfd001..af14691 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2622,6 +2622,11 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+ 		};
+ 	}
+ 
++	// Intel's encoder reads an imported picture's chroma from a row that is a multiple of 16.
++	// A taller image puts the second plane there; the rows in between are never painted.
++	if ( bExportsLinear && ( drmFormat == DRM_FORMAT_NV12 || drmFormat == DRM_FORMAT_P010 ) )
++		imageInfo.extent.height = ( height + 15 ) & ~15u;
++
+ 	m_width = width;
+ 	m_height = height;
+ 	m_depth = depth;

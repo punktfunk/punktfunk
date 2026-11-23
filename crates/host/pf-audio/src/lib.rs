@@ -2,7 +2,8 @@
 //!
 //! Linux default: a host-owned PipeWire null sink claimed as the session default
 //! (`PUNKTFUNK_STREAM_SINK=0` records the default sink's monitor). Windows: WASAPI
-//! loopback of the wiring-plan endpoint. Capture is interleaved `f32` PCM; channel
+//! loopback of the wiring-plan endpoint. macOS: a Core Audio process tap of every other
+//! process. Capture is interleaved `f32` PCM; channel
 //! count is the open request (GameStream order FL FR FC LFE RL RR [SL SR]).
 //! The host's audio planes reframe it into Opus ([`OpusEnc`]). Rate honesty: [`CaptureRate`]
 //! and `design/hi-res-audio.md`. Isolated-session names: `design/gamescope-multiuser.md`.
@@ -116,8 +117,11 @@ pub enum CaptureRate {
     Declared,
     /// Device mix rate. A request at another rate still succeeds by resampling, so only
     /// `rate ≤ this` is honest. Windows: WASAPI engine mix format. Linux: the monitor
-    /// sink's rate under `PUNKTFUNK_STREAM_SINK=0`.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+    /// sink's rate under `PUNKTFUNK_STREAM_SINK=0`. macOS: the process tap's mix rate.
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+        allow(dead_code)
+    )]
     Engine(u32),
     /// Probe failed (gone/idle sink, unreachable endpoint) or no backend. Hi-res declines.
     Unknown,
@@ -147,8 +151,8 @@ pub fn probe_capture_rate() -> CaptureRate {
 
 /// Open a live capturer for system output. Linux: a host-owned null sink's monitor, or the
 /// default sink's monitor when `capture_mode` follows the host's output. Windows: WASAPI
-/// loopback of the wiring plan's sink. `rate_hz` is a request; the grant is
-/// [`AudioCapturer::sample_rate`].
+/// loopback of the wiring plan's sink. macOS: a process tap of every other process. `rate_hz`
+/// is a request; the grant is [`AudioCapturer::sample_rate`].
 pub fn open_audio_capture(channels: u32, rate_hz: u32) -> Result<Box<dyn AudioCapturer>> {
     plat::open_audio_capture(channels, rate_hz)
 }
@@ -180,12 +184,13 @@ pub type AudioCapSlot = std::sync::Arc<std::sync::Mutex<Option<Box<dyn AudioCapt
 /// A capturer that owns a sink is dropped instead: WirePlumber elects a live sink
 /// from its default history whenever the restored output is missing. Windows drops
 /// every capturer, which restores the operator's default playback device and re-runs
-/// the wiring plan at the next open.
+/// the wiring plan at the next open. macOS drops every capturer too: a live tap would
+/// keep the Mac's speakers muted between sessions.
 pub fn park_audio_capture(
     slot: &std::sync::Mutex<Option<Box<dyn AudioCapturer>>>,
     cap: Box<dyn AudioCapturer>,
 ) {
-    if cfg!(target_os = "windows") || cap.sink_name().is_some() {
+    if cfg!(any(target_os = "windows", target_os = "macos")) || cap.sink_name().is_some() {
         drop(cap);
     } else {
         *slot.lock().unwrap() = Some(cap);
@@ -334,7 +339,8 @@ pub fn mic_legacy_buffer() -> bool {
 }
 
 /// Open a virtual mic (1 or 2 channels). Linux: PipeWire `Audio/Source`. Windows:
-/// render into a virtual device whose capture side apps see as a mic.
+/// render into a virtual device whose capture side apps see as a mic. macOS refuses: it
+/// needs an audio server plug-in.
 pub fn open_virtual_mic(channels: u32) -> Result<Box<dyn VirtualMic>> {
     plat::open_virtual_mic(channels)
 }
@@ -366,8 +372,12 @@ use self::linux as plat;
 // endpoint instead of minting a PipeWire node.
 #[cfg(target_os = "linux")]
 pub use linux::{pad_sink, pad_usb};
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use self::macos as plat;
 /// No capture backend: `open_audio_capture` bails, so there is no rate to promise either.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod plat {
     use super::*;
     pub(super) fn probe_capture_rate() -> CaptureRate {
@@ -409,6 +419,8 @@ pub mod wiring_plan;
 // platform's CI, not only Windows.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub mod capture_policy;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod replay_detect;
 
 mod capture_lease;
 mod mic_jitter;
@@ -452,14 +464,15 @@ pub fn heal_audio_defaults() {
 }
 
 /// Apps playing audio on the host right now, lowercased. Empty where the host cannot list them.
-/// Blocks on a PipeWire round trip; call it off the async runtime.
+/// Linux names the binary; macOS the bundle id. Blocks on a PipeWire round trip or one Core
+/// Audio query per process; call it off the async runtime.
 pub fn playing_apps() -> Vec<String> {
-    #[cfg(target_os = "linux")]
-    return linux::playing_apps().unwrap_or_else(|e| {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    return plat::playing_apps().unwrap_or_else(|e| {
         tracing::debug!(error = %format!("{e:#}"), "playing apps not listed");
         Vec::new()
     });
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Vec::new()
 }
 

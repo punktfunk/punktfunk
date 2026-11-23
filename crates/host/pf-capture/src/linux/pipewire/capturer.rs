@@ -936,7 +936,7 @@ impl PortalCapturer {
                          accepted the dmabuf-only offer (raw-dmabuf passthrough){}",
                         self.node_id,
                         if convicted {
-                            " — downgrading THIS path to CPU capture for the rest of the \
+                            " — downgrading this path to CPU capture for the rest of the \
                              process; the pipeline rebuild will renegotiate without dmabuf"
                         } else {
                             sentence
@@ -947,7 +947,7 @@ impl PortalCapturer {
                          accepted the dmabuf-only offer (EGL→CUDA GPU import){}",
                         self.node_id,
                         if convicted {
-                            " — downgrading THIS offer to the CPU path for the rest of the \
+                            " — downgrading this offer to the CPU path for the rest of the \
                              process; the pipeline rebuild will renegotiate without dmabuf"
                         } else {
                             sentence

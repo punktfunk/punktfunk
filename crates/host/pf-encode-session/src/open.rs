@@ -310,7 +310,7 @@ pub fn open_backend(
         _ => return Err((-1, "backend")),
     };
     opened.map_err(|e| {
-        tracing::info!("encode: backend {} open FAILED: {e:#}", spec.backend);
+        tracing::warn!("encode: backend {} open failed: {e:#}", spec.backend);
         (-1, "open")
     })
 }

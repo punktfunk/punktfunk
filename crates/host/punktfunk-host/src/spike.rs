@@ -254,6 +254,8 @@ pub fn run(opts: Options) -> Result<()> {
                     screen: 0,
                     gamescope_cursor: false,
                     mirrored: crate::vdisplay::mirrors_pinned(),
+                    #[cfg(target_os = "macos")]
+                    framing: None,
                 },
             )
             .context("capture virtual output")?

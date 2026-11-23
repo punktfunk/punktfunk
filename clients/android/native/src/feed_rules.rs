@@ -99,7 +99,8 @@ pub(crate) enum Cause {
     Oversize,
     /// The codec refused the queue call.
     Refused,
-    /// It names a lost reference and no held picture can stand in.
+    /// The decoder cannot take it: it names a lost reference no held picture can stand in
+    /// for, or it has more slices than the decoder survives.
     Unrecoverable,
 }
 
@@ -132,6 +133,32 @@ pub(crate) fn spoiled(p: &Piece, cause: Cause) -> Spoiled {
     }
 }
 
+/// What the loop does with a whole AU on a decoder that takes one slice a picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sliced {
+    /// Keep it off the decoder and ask for nothing yet.
+    Drop,
+    /// Feed it, and ask for a keyframe first.
+    AskAndFeed,
+    Feed,
+}
+
+/// One whole AU of `slices` slice NALs on such a decoder. An intra-refresh wave from NVENC
+/// codes two or three a picture, and so does a keyframe forced during the wave, so a keyframe
+/// is asked for at the first picture in one slice behind them: that one comes in one slice.
+/// `dropping`: the AUs just before this one were dropped. `keyframe`: this one is one.
+pub(crate) fn one_slice(dropping: &mut bool, slices: usize, keyframe: bool) -> Sliced {
+    if slices > 1 {
+        *dropping = true;
+        return Sliced::Drop;
+    }
+    if std::mem::take(dropping) && !keyframe {
+        Sliced::AskAndFeed
+    } else {
+        Sliced::Feed
+    }
+}
+
 /// The picture size after a fed keyframe: what an AV1 keyframe's `render_size` states, which
 /// it parses only on an AV1 session. A keyframe that states none clears it.
 pub(crate) fn render_after(
@@ -161,6 +188,56 @@ pub(crate) fn colour_after(
 #[cfg(test)]
 mod tests {
     use super::{colour_after, gate, render_after, spoiled, Cause, Gate, PartFeed, Piece, Spoiled};
+    use super::{one_slice, Sliced};
+
+    /// `(slices, keyframe)` per AU in feed order, and what each one gets.
+    #[test]
+    fn sliced_pictures_are_dropped_and_the_keyframe_asked_for_behind_them() {
+        use Sliced::{AskAndFeed, Drop, Feed};
+        type Step = ((usize, bool), Sliced);
+        let cases: &[(&str, &[Step])] = &[
+            (
+                "a wave, then the ask on the first picture behind it",
+                &[
+                    ((1, false), Feed),
+                    ((2, false), Drop),
+                    ((3, false), Drop),
+                    ((2, false), Drop),
+                    ((1, false), AskAndFeed),
+                    ((1, false), Feed),
+                ],
+            ),
+            (
+                "a keyframe forced inside the wave is dropped with it",
+                &[
+                    ((3, false), Drop),
+                    ((3, true), Drop),
+                    ((2, false), Drop),
+                    ((1, false), AskAndFeed),
+                ],
+            ),
+            (
+                "a keyframe behind the wave needs no ask",
+                &[((2, false), Drop), ((1, true), Feed), ((1, false), Feed)],
+            ),
+            (
+                "a second wave before the keyframe asks again behind it",
+                &[
+                    ((2, false), Drop),
+                    ((1, false), AskAndFeed),
+                    ((3, false), Drop),
+                    ((1, false), AskAndFeed),
+                ],
+            ),
+        ];
+        for (name, steps) in cases {
+            let mut dropping = false;
+            for (i, &((slices, keyframe), want)) in steps.iter().enumerate() {
+                let got = one_slice(&mut dropping, slices, keyframe);
+                assert_eq!(got, want, "{name}, step {i}");
+            }
+        }
+    }
     use punktfunk_core::packet::FLAG_SOF;
     use punktfunk_core::quic::ColorInfo;
     use punktfunk_core::session::{Frame, FramePart};

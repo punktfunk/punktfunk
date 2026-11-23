@@ -1005,6 +1005,21 @@ mod session_main {
             });
             return exit::TRUST_REJECTED;
         };
+        // A client never streams this device's own host: on a Game Mode box the dial takes
+        // over the session it runs in. Loopback test rigs opt in.
+        let self_stream = std::env::var_os("PUNKTFUNK_ALLOW_SELF_STREAM").is_some_and(|v| v == "1");
+        let here = |fp: &str| {
+            trust::local::look_once(port, fp);
+            trust::local::is_this_device(fp)
+        };
+        if !self_stream && here(&trust::hex(&pin)) {
+            emit(SessionLine::Error {
+                msg: pf_l10n::client::error_local_nothing_to_stream(),
+                trust_rejected: None,
+                refused: None,
+            });
+            return exit::CONNECT_FAILED;
+        }
 
         let host_label = known_host.map_or_else(|| addr.clone(), |h| h.name.clone());
         let launch = arg_value("--launch");

@@ -281,6 +281,10 @@ pub trait Encoder: Send {
     /// loss finds an anchor however long its report took. `None` before the first
     /// confirmation. Default: no-op.
     fn note_confirmed(&mut self, _acked: Option<Acked>) {}
+    /// Whether an intra-refresh wave heals this client's decoder; `true` until told. `false`:
+    /// the backend starts no wave, so a loss it cannot anchor is the caller's keyframe. Set
+    /// before each submit. Default: no-op, for a backend without waves.
+    fn set_wave_heals(&mut self, _heals: bool) {}
     /// Escalate to pipelined retrieve under GPU contention: `poll` stops waiting
     /// on the newest in-flight AU (a retrieve thread on NVENC, a completion probe
     /// on Vulkan/VA-API). An AU reaches the loop when [`set_au_wake`](Self::set_au_wake)'s
@@ -573,9 +577,7 @@ pub fn clamp_to_engines(requested: u32, hw_max: u32, engines: u32) -> u32 {
             requested,
             engines,
             using = hw_max,
-            "PUNKTFUNK_SPLIT_ENCODE asks for more NVENC engines than this GPU has — clamping. \
-             (The driver would ACCEPT the over-ask and silently encode with fewer, so the log \
-             would otherwise claim a split width that never happened.)"
+            "PUNKTFUNK_SPLIT_ENCODE asks for more NVENC engines than this GPU has — clamping"
         );
         return hw_max;
     }
@@ -646,7 +648,7 @@ pub fn validate_dimensions(codec: Codec, width: u32, height: u32) -> Result<()> 
     if codec == Codec::PyroWave && !crate::pyrowave_mode_fits_rdo(width, height, false) {
         anyhow::bail!(
             "invalid PyroWave resolution {width}x{height}: exceeds the rate controller's 16-bit \
-             block index (pyrowave-sys patches/0002) — lower the client resolution"
+             block index — lower the client resolution"
         );
     }
     Ok(())

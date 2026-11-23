@@ -346,7 +346,7 @@ fn reconfigure_ask(
         );
         Ask::Refused
     } else if !valid {
-        tracing::warn!(?mode, "mode switch rejected (invalid dimensions)");
+        tracing::warn!(?mode, "mode switch rejected (invalid size or refresh rate)");
         Ask::Refused
     } else if too_soon {
         tracing::warn!(?mode, "mode switch rejected (rate-limited)");

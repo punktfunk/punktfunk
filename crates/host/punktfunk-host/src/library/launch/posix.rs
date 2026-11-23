@@ -1,6 +1,7 @@
-//! Linux (and every non-Windows) launch: the host runs a resolved shell command, nested in
-//! gamescope or into the live session. [`command_for`] is the `LaunchSpec` → command map, which
-//! spawns nothing; [`launch_session_command`] is the spawn.
+//! Linux and macOS launch: the host runs a resolved shell command, nested in gamescope or into
+//! the live session on Linux, onto the logged-in desktop on macOS. [`command_for`] is the
+//! `LaunchSpec` → command map, which spawns nothing; [`launch_session_command`] and
+//! [`launch_mac_command`] are the spawns.
 
 use super::*;
 
@@ -76,22 +77,44 @@ pub fn launch_is_resolvable(id: &str) -> bool {
     command_for(spec).is_some()
 }
 
+/// What hands a `steam://` link to Steam: its own binary on Linux, LaunchServices on macOS,
+/// where Steam.app is no command on `PATH`.
+#[cfg(not(target_os = "macos"))]
+const STEAM_LINK: &str = "steam";
+#[cfg(target_os = "macos")]
+const STEAM_LINK: &str = "/usr/bin/open";
+
 /// Map from [`LaunchSpec`] to a shell command; it spawns nothing. `exec` and `emulator` are
 /// absent: [`exec_recipe`] builds them first.
 fn command_for(spec: &LaunchSpec) -> Option<String> {
     match spec.kind.as_str() {
         "steam_appid" => valid_steam_appid(&spec.value)
-            .then(|| format!("steam steam://rungameid/{}", spec.value)),
+            .then(|| format!("{STEAM_LINK} steam://rungameid/{}", spec.value)),
         #[cfg(target_os = "linux")]
         "lutris_id" => (!spec.value.is_empty() && spec.value.bytes().all(|b| b.is_ascii_digit()))
             .then(|| format!("lutris lutris:rungameid/{}", spec.value)),
         #[cfg(target_os = "linux")]
         "heroic" => heroic_command(&spec.value),
+        // LaunchServices hands the link to the launcher, running or not, as it does Steam's.
+        // `gui=false` shuts Heroic's window as `--no-gui` does on Linux; an older Heroic ignores it.
+        #[cfg(target_os = "macos")]
+        "heroic" => {
+            heroic_launch_uri(&spec.value).map(|uri| open_link(&format!("{uri}&gui=false")))
+        }
+        #[cfg(target_os = "macos")]
+        "epic" => epic_launch_uri(&spec.value).map(|uri| open_link(&uri)),
         // Steam client UI (design D4). `-gamepadui` boots a fresh Steam into Big Picture (SteamOS
         // game-mode when nested); an already-running Steam ignores it and obeys only the URI.
+        #[cfg(not(target_os = "macos"))]
         "steam_ui" => match spec.value.as_str() {
             "bigpicture" => Some("steam -gamepadui steam://open/bigpicture".into()),
             "desktop" => Some("steam".into()),
+            _ => None,
+        },
+        #[cfg(target_os = "macos")]
+        "steam_ui" => match spec.value.as_str() {
+            "bigpicture" => Some(format!("{STEAM_LINK} steam://open/bigpicture")),
+            "desktop" => Some(format!("{STEAM_LINK} steam://open/main")),
             _ => None,
         },
         // Other launcher UIs (design D4). Host builds the command; the plugin names the launcher.
@@ -133,11 +156,19 @@ fn command_for(spec: &LaunchSpec) -> Option<String> {
 /// session. Quote the URI: every launch route runs this value as a shell command.
 #[cfg(target_os = "linux")]
 pub(crate) fn heroic_command(value: &str) -> Option<String> {
+    let uri = heroic_launch_uri(value)?;
+    let prefix = heroic_launch_prefix()?;
+    Some(format!("{prefix} --no-gui '{uri}'"))
+}
+
+/// `<runner>:<appName>` → `heroic://launch?…`. `None` for another runner, or an appName that
+/// would not stay one URI token (Epic/Amazon alnum, GOG digits).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn heroic_launch_uri(value: &str) -> Option<String> {
     let (runner, app) = value.split_once(':')?;
     if !matches!(runner, "legendary" | "gog" | "nile") {
         return None;
     }
-    // appName charset: keep the URI a single token (Epic/Amazon alnum, GOG digits).
     if app.is_empty()
         || !app
             .bytes()
@@ -145,10 +176,13 @@ pub(crate) fn heroic_command(value: &str) -> Option<String> {
     {
         return None;
     }
-    let prefix = heroic_launch_prefix()?;
-    Some(format!(
-        "{prefix} --no-gui 'heroic://launch?appName={app}&runner={runner}'"
-    ))
+    Some(format!("heroic://launch?appName={app}&runner={runner}"))
+}
+
+/// `open` with one quoted link: LaunchServices starts the app that claims its scheme.
+#[cfg(target_os = "macos")]
+fn open_link(uri: &str) -> String {
+    format!("/usr/bin/open {}", super::exec::sh_quote(uri))
 }
 
 /// Hydra opens Big Picture from argv only, a running instance included. Every Linux build's entry
@@ -184,6 +218,16 @@ fn heroic_launch_prefix() -> Option<String> {
         .map(PathBuf::from)
         .is_some_and(|h| h.join(".var/app/com.heroicgameslauncher.hgl").is_dir());
     flatpak.then(|| "flatpak run com.heroicgameslauncher.hgl".into())
+}
+
+/// Where a launch into the live session lands.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// On the streamed head, which the last stream's capture published.
+    Stream,
+    /// On the desk as it is: the box's own screen, with no stream.
+    Desk,
 }
 
 /// Child from a session launch, for lifetime tracking
@@ -235,9 +279,31 @@ pub fn adopt_launch_workspace(
     focus_and_claim(compositor, true, Some(want))
 }
 
-/// Host-resolved command into the live Linux session, after capture is up.
-/// Shared by native and GameStream. Best-effort: failure leaves the user on
-/// the streamed desktop rather than tearing the stream down.
+/// What a launch runs on top of the session it lands in: the `sh -c` line and the variables it
+/// sets. [`launch_session_command`] spawns it; `punktfunk-host play` runs it in Steam's tree.
+#[cfg(target_os = "linux")]
+pub struct DeskCommand {
+    pub command: String,
+    pub env: Vec<(&'static str, &'static str)>,
+}
+
+/// `cmd` as a launch runs it. Errors on an empty command.
+#[cfg(target_os = "linux")]
+pub fn desk_command(cmd: &str) -> Result<DeskCommand> {
+    let command = cmd.trim();
+    anyhow::ensure!(!command.is_empty(), "empty command");
+    Ok(DeskCommand {
+        command: command.to_string(),
+        // AppImageLauncher's binfmt hook would swap an .AppImage for its integration dialog on
+        // the host's own screen; this makes it exec the image directly.
+        env: vec![("APPIMAGELAUNCHER_DISABLE", "1")],
+    })
+}
+
+/// Host-resolved command ([`desk_command`]) into the live Linux session, after capture is up,
+/// or onto the desk with no stream ([`Place::Desk`]), which aims at no head. Shared by native,
+/// GameStream and the desk. Best-effort: failure leaves the user on the streamed desktop rather
+/// than tearing the stream down.
 ///
 /// * **KWin / Mutter** — session env already retargeted, virtual output is
 ///   primary; a plain spawn lands on the stream.
@@ -261,13 +327,17 @@ pub fn launch_session_command(
     cmd: &str,
     seat: Option<&str>,
     own_workspace: bool,
+    place: Place,
 ) -> Result<SpawnedLaunch> {
     use std::os::unix::process::CommandExt;
-    let cmd = cmd.trim();
-    anyhow::ensure!(!cmd.is_empty(), "empty command");
+    let DeskCommand { command, env } = desk_command(cmd)?;
+    let cmd = command.as_str();
     // Before the spawn, so the game's first window maps where it belongs. Same
     // head as the absolute-input pointer, so focus and cursor share one.
-    let workspace = focus_and_claim(compositor, own_workspace, None);
+    let workspace = match place {
+        Place::Stream => focus_and_claim(compositor, own_workspace, None),
+        Place::Desk => None,
+    };
     let steam_forwarder = crate::vdisplay::launch_is_steam(cmd);
     let (child, group_leader) = match compositor {
         crate::vdisplay::Compositor::Gamescope => (
@@ -297,10 +367,8 @@ pub fn launch_session_command(
             c.arg(cmd)
                 // Own process group: later teardown signals the shell and its
                 // children, and not the host's group.
-                .process_group(0);
-            // AppImageLauncher's binfmt hook would swap an .AppImage for its integration
-            // dialog on the host's own screen; this makes it exec the image directly.
-            c.env("APPIMAGELAUNCHER_DISABLE", "1");
+                .process_group(0)
+                .envs(env.iter().copied());
             // Wayland apps take the live session's socket from the host, not its environment.
             pf_host_config::session::export_to(&mut c);
             // X11 apps (Steam, Lutris, most native games) need a display of their own. A systemd
@@ -335,6 +403,32 @@ pub fn launch_session_command(
         workspace,
         steam_forwarder,
     })
+}
+
+/// `cmd` started on the logged-in user's desktop, in a process group of its own so the end-game
+/// ladder reaches what it starts: an app bundle through LaunchServices (`open -a`), anything else
+/// through `sh -c`, as on Linux. `open` returns once the app is up, so the lease finds the game
+/// by its detect signals.
+#[cfg(target_os = "macos")]
+pub fn launch_mac_command(cmd: &str) -> Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    let cmd = cmd.trim();
+    anyhow::ensure!(!cmd.is_empty(), "empty command");
+    let mut c = match app_bundle(cmd) {
+        Some(app) => {
+            let mut c = std::process::Command::new("/usr/bin/open");
+            c.arg("-a").arg(app);
+            c
+        }
+        None => {
+            let mut c = std::process::Command::new("/bin/sh");
+            c.arg("-c").arg(cmd);
+            c
+        }
+    };
+    let child = c.process_group(0).spawn().context("spawn launch command")?;
+    tracing::info!(command = %cmd, pid = child.id(), "launched app on the desktop");
+    Ok(child)
 }
 
 /// A user manager to open a scope under; without one `systemd-run --user` fails the launch.
@@ -382,6 +476,19 @@ mod tests {
         }
     }
 
+    /// A launch onto the desk starts its command as it is: no streamed head, no workspace of
+    /// its own, its own process group.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_desk_launch_claims_no_head() {
+        let compositor = crate::vdisplay::Compositor::Wlroots;
+        let mut spawned = launch_session_command(compositor, "exit 0", None, true, Place::Desk)
+            .expect("spawn the desk launch");
+        assert!(spawned.workspace.is_none());
+        assert!(spawned.group_leader && !spawned.steam_forwarder);
+        assert!(spawned.child.wait().expect("reap it").success());
+    }
+
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn launcher_ui_knows_nothing_off_linux() {
@@ -397,8 +504,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            command_for(&steam).as_deref(),
-            Some("steam steam://rungameid/570")
+            command_for(&steam),
+            Some(format!("{STEAM_LINK} steam://rungameid/570"))
         );
         let evil = LaunchSpec {
             kind: "steam_appid".into(),
@@ -490,6 +597,74 @@ mod tests {
         assert_eq!(ui("nonsense"), None);
         assert_eq!(ui(""), None);
     }
+    /// macOS hands every Steam link to LaunchServices: Steam.app is no command on `PATH`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn steam_links_go_through_open_on_macos() {
+        let ui = |v: &str| {
+            command_for(&LaunchSpec {
+                kind: "steam_ui".into(),
+                value: v.into(),
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            ui("bigpicture").as_deref(),
+            Some("/usr/bin/open steam://open/bigpicture")
+        );
+        assert_eq!(
+            ui("desktop").as_deref(),
+            Some("/usr/bin/open steam://open/main")
+        );
+        assert_eq!(ui("nonsense"), None);
+        let game = LaunchSpec {
+            kind: "steam_appid".into(),
+            value: "570".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            command_for(&game).as_deref(),
+            Some("/usr/bin/open steam://rungameid/570")
+        );
+    }
+
+    /// Epic and Heroic titles open their launcher's link, quoted whole; a bad value runs nothing.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn epic_and_heroic_links_go_through_open_on_macos() {
+        let cmd = |kind: &str, value: &str| {
+            command_for(&LaunchSpec {
+                kind: kind.into(),
+                value: value.into(),
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            cmd("epic", "fn:abc:Fortnite").as_deref(),
+            Some(
+                "/usr/bin/open \
+                 'com.epicgames.launcher://apps/fn%3Aabc%3AFortnite?action=launch&silent=true'"
+            )
+        );
+        assert_eq!(
+            cmd("heroic", "gog:1207658924").as_deref(),
+            Some("/usr/bin/open 'heroic://launch?appName=1207658924&runner=gog&gui=false'")
+        );
+        assert_eq!(cmd("epic", "a'b"), None);
+        assert_eq!(cmd("heroic", "sideload:x"), None);
+        assert_eq!(cmd("heroic", "legendary:bad name"), None);
+    }
+
+    /// A plain command runs in a process group of its own and reports its exit.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_launch_runs_a_shell_line_in_its_own_group() {
+        let mut child = launch_mac_command("exit 3").expect("spawn the launch");
+        assert_eq!(child.wait().expect("reap it").code(), Some(3));
+        assert!(launch_mac_command("  ").is_err());
+    }
+
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn steam_ui_resolves_to_the_client_ui_on_linux() {
         let ui = |v: &str| {

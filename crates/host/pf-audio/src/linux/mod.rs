@@ -775,8 +775,8 @@ fn create_null_sink(
                 res,
                 message,
                 "the punktfunk stream sink was not created — no desktop audio \
-                 capture until it is. Set PUNKTFUNK_STREAM_SINK=stream for the 0.30 \
-                 topology (no created sink)"
+                 capture until it is. Set PUNKTFUNK_STREAM_SINK=stream to capture \
+                 through a stream instead (no created sink)"
             );
         })
         .register();
@@ -815,9 +815,8 @@ fn report_graph_driver(bridge: &host_bridge::HostBridge, expected: Option<&str>,
             "our audio capture group is being clocked by another \
              node — every hole in this stream is that node's \
              scheduling, not ours. Something has linked our sink to \
-             it (a loopback from its monitor is the usual cause); a \
-             USB or USB-over-IP sound card here is the 2026-08-18 \
-             defect"
+             it (a loopback from its monitor is the usual cause, a \
+             USB or USB-over-IP sound card another)"
         ),
         None => tracing::info!(
             driver,

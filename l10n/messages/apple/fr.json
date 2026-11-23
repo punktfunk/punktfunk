@@ -265,5 +265,7 @@
 	"apple_usage_microphone": "Votre microphone est diffusé vers l’hôte Punktfunk connecté, où il apparaît comme un microphone virtuel.",
 	"apple_usage_face_id": "Face ID ouvre votre propre compte sur un hôte sans son mot de passe.",
 	"apple_usage_bluetooth": "Le Bluetooth permet à Punktfunk de lire votre Steam Controller et de le transmettre à votre hôte.",
+	"apple_usage_host_audio_capture": "Punktfunk Host diffuse le son de cet appareil en même temps que l’image.",
+	"apple_usage_host_local_network": "Punktfunk Host permet aux appareils de votre réseau de le trouver et de s’y connecter pour diffuser depuis cet appareil.",
 	"apple_pad_rumble_failed": "Impossible de lancer le test de vibration — {error}"
 }

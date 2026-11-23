@@ -152,6 +152,11 @@ impl PadSlotPool {
         true
     }
 
+    /// Whether some session holds `slot` now.
+    pub fn is_taken(&self, slot: u8) -> bool {
+        usize::from(slot) < MAX_PADS && self.lock().taken & (1 << slot) != 0
+    }
+
     /// Frees `slot` whoever holds it; [`PadSlotMap::release`] passes only a slot its
     /// session holds, so a double release cannot free another session's pad. The claim
     /// on it stays as an idle preference: a re-plug lands back here, and anyone else
@@ -306,6 +311,16 @@ impl<'a> PadSlotMap<'a> {
             .iter()
             .flatten()
             .fold(0u16, |m, slot| m | (1u16 << slot))
+    }
+
+    /// Name `slot` for this session's next claim ([`PadSlotPool::reserve`]).
+    pub fn reserve(&self, slot: u8) -> bool {
+        self.pool.reserve(slot, self.owner)
+    }
+
+    /// Whether another session holds `slot`.
+    pub fn held_elsewhere(&self, slot: u8) -> bool {
+        self.pool.is_taken(slot) && self.held_mask() & (1 << slot) == 0
     }
 
     pub fn release(&mut self, wire: usize) {

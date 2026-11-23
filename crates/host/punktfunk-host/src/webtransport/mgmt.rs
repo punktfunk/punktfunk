@@ -93,11 +93,13 @@ pub(crate) fn publish_router(app: Router) {
 
 static SESSIONS: LazyLock<Mutex<HashMap<IpAddr, usize>>> = LazyLock::new(Default::default);
 
-/// One address's share of [`MAX_SESSIONS_PER_IP`], released on drop.
+/// One source's share of [`MAX_SESSIONS_PER_IP`], released on drop. A public IPv6 peer's
+/// source is its /64.
 struct IpSlot(IpAddr);
 
 impl IpSlot {
     fn take(ip: IpAddr) -> Option<IpSlot> {
+        let ip = punktfunk_core::provenance::limit_key(ip);
         let mut m = SESSIONS.lock().expect("tunnel slots");
         let n = m.entry(ip).or_insert(0);
         if *n >= MAX_SESSIONS_PER_IP {
@@ -611,8 +613,9 @@ mod tests {
         assert!(IpSlot::take(ip).is_some(), "released on drop");
     }
 
-    /// Only the headers a browser's `fetch` could have sent reach the router. `host` and the
-    /// forwarding family never do, whatever a page or a tool wrote in the head.
+    /// Only the headers a browser's `fetch` could have sent reach the router. `host`, the
+    /// forwarding family and the door's vouches never do, whatever a page or a tool wrote in
+    /// the head.
     #[tokio::test]
     async fn only_the_allowlisted_headers_reach_the_router() {
         let router = Router::new().route(
@@ -638,6 +641,9 @@ mod tests {
                 ("accept", "*/*"),
                 ("content-type", "text/plain"),
                 ("if-none-match", "\"etag\""),
+                (crate::mgmt::auth::VOUCH_HEADER, &*"ab".repeat(32)),
+                (crate::mgmt::auth::LOOPBACK_HEADER, "1"),
+                (crate::mgmt::person::VOUCH_HEADER, "a1a1a1a1a1a1"),
             ]
             .iter()
             .map(|(n, v)| (n.to_string(), v.to_string()))
@@ -812,8 +818,13 @@ mod tests {
             let _ = tunnel_quic(conn, (tx, rx), router, bind).await;
         });
         let (me_cert, me_key) = endpoint::generate_identity().unwrap();
-        let (client, _) =
-            endpoint::client_shared(None, Some((&me_cert, &me_key)), &[registry::ALPN], None);
+        let (client, _) = endpoint::client_shared(
+            None,
+            Some((&me_cert, &me_key)),
+            &[registry::ALPN],
+            bind.ip(),
+            false,
+        );
         let (client, _media) = client.unwrap();
         let conn = client.connect(bind, "punktfunk").unwrap().await.unwrap();
         let call = |ty: u64, path: &'static str| {

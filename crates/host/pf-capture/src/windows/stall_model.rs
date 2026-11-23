@@ -156,7 +156,7 @@ impl std::fmt::Display for StallVerdict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::NoTelemetry => "no driver telemetry yet (no verdict)",
-            Self::WorkerStalled => "driver-worker-stalled (heartbeat silent) — host CPU/MMCSS or a dead WUDFHost, NOT the display path",
+            Self::WorkerStalled => "driver-worker-stalled (heartbeat silent) — host CPU/MMCSS or a dead WUDFHost, not the display path",
             Self::ComposeSilence => "compose-silence (the driver's pool took no frame) — DWM composed nothing; the disturbance is below capture",
             Self::DamageIdle => "damage-idle (no cursor damage through the hole) — nothing was dirty, so DWM correctly composed nothing; an input pause, not a display stall",
         })

@@ -56,7 +56,7 @@ impl AuSection {
     ) -> Result<Self, Fail> {
         // The header read below needs the whole fixed layout to be there.
         if (section_bytes as usize) < au::HEAP_OFFSET {
-            tracing::info!("encode: AU section of {section_bytes} B is shorter than its layout");
+            tracing::warn!("encode: AU section of {section_bytes} B is shorter than its layout");
             return Err((-9, "section"));
         }
         let mut raw = [0u8; au::AU_HEADER_SIZE];
@@ -65,7 +65,7 @@ impl AuSection {
         let fits =
             au::au_readable(&header) && au::section_bytes(header.heap_bytes) <= section_bytes;
         if !fits {
-            tracing::info!("encode: AU section unreadable: {header:?} in {section_bytes} B");
+            tracing::warn!("encode: AU section unreadable: {header:?} in {section_bytes} B");
             return Err((-9, "section"));
         }
         // SAFETY: the caller's contract — `event` is ours alone to close from here on.
@@ -199,6 +199,8 @@ pub enum Ctl {
     SetReferenceFloor(Option<(u32, u16)>),
     /// The same confirmations whatever the link, for the kept anchor.
     NoteConfirmed(Option<(u32, u16)>),
+    /// Whether a wave heals the client's decoder.
+    SetWaveHeals(bool),
 }
 
 impl Ctl {
@@ -218,6 +220,7 @@ impl Ctl {
             wire::ENCODE_CTL_NOTE_CONFIRMED => Self::NoteConfirmed(
                 (req.arg1 & 1 != 0).then_some((req.arg0, (req.arg1 >> 1) as u16)),
             ),
+            wire::ENCODE_CTL_SET_WAVE_HEALS => Self::SetWaveHeals(req.arg0 != 0),
             _ => return None,
         })
     }

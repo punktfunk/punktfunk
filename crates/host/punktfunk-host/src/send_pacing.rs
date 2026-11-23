@@ -723,7 +723,7 @@ pub(crate) fn wait_next_tick(
         src_period_ns,
         false,
     );
-    while let Waited::AuReady(gate) = waited {
+    while let Waited::AuReady(gate) | Waited::Pointer(gate) = waited {
         waited = gate.resume(capturer, credit, next, false);
     }
 }
@@ -735,6 +735,8 @@ pub(crate) enum Waited {
     /// The encoder finished an access unit first: collect it without submitting, then
     /// [`TickGate::resume`] the same wait.
     AuReady(TickGate),
+    /// The pointer moved with no frame to carry it: forward it, then resume the same wait.
+    Pointer(TickGate),
 }
 
 /// One tick's feed wait as [`wait_tick_or_au`] set it: the credit gate, the keep-alive
@@ -805,7 +807,8 @@ pub(crate) fn wait_tick_or_au(
 }
 
 impl TickGate {
-    /// The feed wait under this gate, until the tick is due or an access unit is ready.
+    /// The feed wait under this gate, until the tick is due, an access unit is ready or the
+    /// pointer moved.
     /// `owed` as [`wait_tick_or_au`] takes it, read again on every resume.
     pub(crate) fn resume(
         mut self,
@@ -824,6 +827,7 @@ impl TickGate {
                 match feed.wait_paced(self.not_before, deadline) {
                     pf_capture::Paced::Due => break,
                     pf_capture::Paced::Encoded => return Waited::AuReady(self),
+                    pf_capture::Paced::Pointer => return Waited::Pointer(self),
                     pf_capture::Paced::Poked => {
                         match credit.ask_waits(Instant::now(), self.not_before, self.period) {
                             Some(latest) => {

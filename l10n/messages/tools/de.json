@@ -445,5 +445,128 @@
 	"tray_toast_streaming": "Ein Client streamt von diesem Host",
 	"tray_stop_host": "Host anhalten",
 	"tray_open_logs": "Log-Ordner öffnen",
-	"tray_stop_and_exit": "Host anhalten und Tray beenden"
+	"tray_stop_and_exit": "Host anhalten und Tray beenden",
+	"tray_mac_state_starting": "Startet…",
+	"tray_mac_state_idle": "Bereit",
+	"tray_mac_state_idle_kept": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Bereit · {count} Anzeige gehalten",
+				"n=other": "Bereit · {count} Anzeigen gehalten"
+			}
+		}
+	],
+	"tray_mac_state_streaming": "Streamt",
+	"tray_mac_state_streaming_mode": "Streamt {width}×{height}@{fps}",
+	"tray_mac_state_unavailable": "Status nicht verfügbar",
+	"tray_mac_session_mode": "{width}×{height} mit {fps} fps",
+	"tray_mac_session_connecting": "Verbindet…",
+	"tray_mac_session_end": "Sitzung beenden",
+	"tray_mac_session_end_confirm": "Stream zu {name} beenden?",
+	"tray_mac_session_end_failed": "Sitzung konnte nicht beendet werden — {why}",
+	"tray_mac_pair": "Gerät koppeln",
+	"tray_mac_pair_enter": "Gib diese PIN auf dem Gerät ein, das du koppelst.",
+	"tray_mac_pair_bound_for": "PIN für {name}",
+	"tray_mac_pair_expires": "Läuft ab in {time}",
+	"tray_mac_pair_failed": "Kopplung konnte nicht starten — {why}",
+	"tray_mac_pending_approve": "Freigeben",
+	"tray_mac_pending_guest": "Als Gast freigeben",
+	"tray_mac_pending_guest_hint": "Nur Controller, für 4 Stunden.",
+	"tray_mac_pending_deny": "Ablehnen",
+	"tray_mac_pending_arm": "Mit PIN koppeln",
+	"tray_mac_pending_from_internet": "Aus dem Internet",
+	"tray_mac_pending_through_web": "Über den Web-Client",
+	"tray_mac_pending_from_new_page": "Von einer neuen Seite",
+	"tray_mac_pending_remote_hint": "Sein Name beweist von dort nichts, also kopple es stattdessen mit einer PIN.",
+	"tray_mac_pending_code": "Gerätecode",
+	"tray_mac_pending_code_hint": "Vergleiche ihn mit dem Code auf dem Gerät, falls es einen anzeigt.",
+	"tray_mac_pending_age_now": "Gerade eben",
+	"tray_mac_pending_age_mins": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "vor {count} Minute",
+				"n=other": "vor {count} Minuten"
+			}
+		}
+	],
+	"tray_mac_pending_approve_failed": "{name} konnte nicht freigegeben werden — {why}",
+	"tray_mac_pending_deny_failed": "{name} konnte nicht abgelehnt werden — {why}",
+	"tray_mac_attention_permissions": "Berechtigungen erlauben…",
+	"tray_mac_release": "Freigeben",
+	"tray_mac_release_confirm": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Gehaltene Anzeige freigeben?",
+				"n=other": "{count} gehaltene Anzeigen freigeben?"
+			}
+		}
+	],
+	"tray_mac_release_failed": "Gehaltene Anzeigen konnten nicht freigegeben werden — {why}",
+	"tray_mac_update_available": "Version {version} ist verfügbar",
+	"tray_mac_console_down": "Die Web-Konsole antwortet nicht",
+	"tray_mac_open_console": "Web-Konsole öffnen",
+	"tray_mac_console_failed": "Web-Konsole konnte nicht geöffnet werden — {why}",
+	"tray_mac_start_at_login": "Bei der Anmeldung starten",
+	"tray_mac_login_approval": "In Anmeldeobjekten erlauben…",
+	"tray_mac_login_elsewhere": "Bewege Punktfunk Host in den Ordner „Programme“, damit es bei der Anmeldung startet.",
+	"tray_mac_login_failed": "Start bei der Anmeldung konnte nicht geändert werden — {why}",
+	"tray_mac_open_logs": "Log-Ordner öffnen",
+	"tray_mac_restart": "Punktfunk Host neu starten",
+	"tray_mac_restart_failed": "Punktfunk Host konnte nicht neu starten — {why}",
+	"tray_mac_quit": "Punktfunk Host beenden",
+	"setup_mac_window_title": "Punktfunk Host einrichten",
+	"setup_mac_welcome_title": "Willkommen bei Punktfunk Host",
+	"setup_mac_welcome_body": "Mit ein paar Berechtigungen können andere Geräte von diesem streamen.",
+	"setup_mac_welcome_network": "macOS fragt, ob Punktfunk Host Geräte in deinem Netzwerk finden darf. Erlaube es, sonst können sie sich nicht verbinden.",
+	"setup_mac_move_title": "In „Programme“ bewegen",
+	"setup_mac_move_body": "Punktfunk Host gehört in den Ordner „Programme“, von dort kann es bei der Anmeldung starten.",
+	"setup_mac_move_state": "Läuft aus {folder}",
+	"setup_mac_move": "Bewegen und neu öffnen",
+	"setup_mac_move_failed": "Punktfunk Host konnte nicht bewegt werden. Zieh es in den Ordner „Programme“ und öffne es von dort.",
+	"setup_mac_screen_title": "Bildschirmaufnahme",
+	"setup_mac_screen_body": "Damit sendet Punktfunk Host den Bildschirm dieses Geräts an das Gerät, auf das du streamst.",
+	"setup_mac_screen_allow": "Bildschirmaufnahme erlauben",
+	"setup_mac_screen_reopen": "Punktfunk Host neu öffnen",
+	"setup_mac_screen_reopen_hint": "macOS übernimmt die Berechtigung, sobald Punktfunk Host neu geöffnet ist.",
+	"setup_mac_input_title": "Tastatur und Maus",
+	"setup_mac_input_body": "Damit kann das Gerät, auf das du streamst, auf diesem Gerät tippen und den Zeiger bewegen.",
+	"setup_mac_input_allow": "Steuerung erlauben",
+	"setup_mac_audio_title": "Systemton",
+	"setup_mac_audio_body": "Damit sendet Punktfunk Host den Ton dieses Geräts an das Gerät, auf das du streamst.",
+	"setup_mac_audio_allow": "Systemton erlauben",
+	"setup_mac_open_settings": "Systemeinstellungen öffnen",
+	"setup_mac_state_allowed": "Erlaubt",
+	"setup_mac_state_denied": "Nicht erlaubt",
+	"setup_mac_state_not_asked": "Noch nicht gefragt",
+	"setup_mac_state_asked": "Gefragt",
+	"setup_mac_login_title": "Start bei der Anmeldung",
+	"setup_mac_login_body": "Geräte können sich verbinden, sobald du angemeldet bist, ohne dass du Punktfunk Host zuerst öffnest.",
+	"setup_mac_done_title": "Punktfunk Host ist bereit",
+	"setup_mac_done_body": "Kopple ein Gerät über die Menüleiste oder ändere alles Weitere in der Web-Konsole.",
+	"setup_mac_step_a11y": "Schritt {step} von {total}",
+	"setup_mac_permissions_title": "Berechtigungen",
+	"setup_mac_permissions_body": "In macOS entscheidest du, was Punktfunk Host auf diesem Gerät tun darf.",
+	"setup_mac_allow": "Erlauben",
+	"setup_mac_password_hint": "Die Web-Konsole fragt danach, wenn du dich von einem anderen Gerät anmeldest."
 }

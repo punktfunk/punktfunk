@@ -1,17 +1,23 @@
-//! Recode an HEVC stream with a 16-bit picture order count.
+//! Recode an HEVC stream for Amlogic's decoder: a 16-bit picture order count, and one
+//! current reference per picture. Both leave the decode bit-exact.
 //!
-//! Amlogic's decoder resolves a long-term reference whose picture lies behind a POC lsb wrap
-//! one cycle off, misses it, and shows nothing until the next IDR. AMF codes a 4-bit lsb, so
-//! that is every 16 frames. With 16 bits a long-term entry sits in the current cycle, the
-//! form the decoder resolves. Every picture keeps its `PicOrderCntVal`, so the decode is
-//! bit-exact; only the SPS field and the slice headers' POC fields change.
+//! The decoder resolves a long-term reference whose picture lies behind a POC lsb wrap one
+//! cycle off, misses it, and shows nothing until the next IDR. AMF codes a 4-bit lsb, so that
+//! is every 16 frames. With 16 bits a long-term entry sits in the current cycle, the form
+//! the decoder resolves. Every picture keeps its `PicOrderCntVal`.
+//!
+//! NVENC marks every long-term picture it holds as current in each slice, though the slice
+//! predicts from one picture. The decoder takes the third picture after an IDR for an error
+//! frame, and every picture after it. A P slice with one active reference gets its set with
+//! that one picture current ([`one_current`]); the others stay in the set, unused.
 //!
 //! A picture after a gap of half a cycle or more gets the POC its long-term entries need:
 //! the widener knows which pictures the decoder holds.
 
 use std::io::Cursor;
+use std::ops::Range;
 
-use cros_codecs::codec::h265::parser::{Nalu, Parser, SliceHeader, Sps};
+use cros_codecs::codec::h265::parser::{Nalu, Parser, Pps, ShortTermRefPicSet, SliceHeader, Sps};
 
 use super::conceal::{ceil_log2, escape, read_bit, unescape, Bits};
 
@@ -47,11 +53,14 @@ impl PocWidener {
         due
     }
 
-    /// The access unit with a 16-bit POC. `None` for a stream this cannot recode (long-term
-    /// candidates in the SPS, an inter-predicted slice RPS, a header that does not parse):
-    /// drop the widener, feed the stream as it came and ask for a keyframe.
+    /// The access unit recoded. `None` for a stream this cannot recode (long-term candidates
+    /// in the SPS, a header that does not parse): drop the widener, feed the stream as it
+    /// came and ask for a keyframe.
     pub fn widen(&mut self, au: &[u8]) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(au.len() + 16);
+        // Every slice of a picture codes the same set and has its own reference list: only
+        // a picture in one slice gets its set rewritten.
+        let single = vcl_nals(au) == 1;
         let mut cursor = Cursor::new(au);
         let mut end = 0usize;
         while let Ok(nalu) = Nalu::next(&mut cursor) {
@@ -94,7 +103,8 @@ impl PocWidener {
                         out.extend_from_slice(nal);
                     } else {
                         let lt = long_term_pocs(hdr, self.cur, bits, &self.held);
-                        out.extend(widen_slice(nal, nal_type, hdr, sps, &pps, self.cur, &lt)?);
+                        let cur = self.cur;
+                        out.extend(widen_slice(nal, nal_type, hdr, &pps, cur, &lt, single)?);
                     }
                     if hdr.first_slice_segment_in_pic_flag {
                         self.end_picture(hdr, sps, bits);
@@ -155,13 +165,7 @@ impl PocWidener {
     /// What the decoder holds for the next picture: this one and every RPS entry.
     fn end_picture(&mut self, hdr: &SliceHeader, sps: &Sps, bits: u32) {
         let mut held = vec![self.cur];
-        let rps = if hdr.short_term_ref_pic_set_sps_flag {
-            sps.short_term_ref_pic_set
-                .get(usize::from(hdr.short_term_ref_pic_set_idx))
-        } else {
-            Some(&hdr.short_term_ref_pic_set)
-        };
-        if let Some(rps) = rps {
+        if let Some(rps) = short_term_set(hdr, sps) {
             let s0 = &rps.delta_poc_s0[..usize::from(rps.num_negative_pics).min(16)];
             let s1 = &rps.delta_poc_s1[..usize::from(rps.num_positive_pics).min(16)];
             held.extend(s0.iter().chain(s1).map(|d| self.cur + d));
@@ -238,17 +242,141 @@ fn widen_sps(nal: &[u8]) -> Option<Vec<u8>> {
     Some(escape(&w.finish()))
 }
 
-/// One slice segment NAL with the picture's and its long-term entries' full POC in 16 bits.
-/// `lt` holds each entry's `PicOrderCntVal`.
+/// The slice's short-term set: the SPS's by index, or its own.
+fn short_term_set<'a>(hdr: &'a SliceHeader, sps: &'a Sps) -> Option<&'a ShortTermRefPicSet> {
+    if hdr.short_term_ref_pic_set_sps_flag {
+        sps.short_term_ref_pic_set
+            .get(usize::from(hdr.short_term_ref_pic_set_idx))
+    } else {
+        Some(&hdr.short_term_ref_pic_set)
+    }
+}
+
+/// Slice segment NALs in the access unit. An intra-refresh wave from NVENC codes its
+/// stripe as a slice of its own, so each of its pictures has two or three.
+pub fn vcl_nals(au: &[u8]) -> usize {
+    let mut cursor = Cursor::new(au);
+    let mut n = 0;
+    while let Ok(nalu) = Nalu::next(&mut cursor) {
+        let at = cursor.position() as usize;
+        n += usize::from(au.get(at).is_some_and(|b| (b >> 1) & 0x3f < 32));
+        cursor.set_position((at + nalu.size) as u64);
+    }
+    n
+}
+
+/// The one picture a slice predicts from, and the header bits around the list modification
+/// that named it.
+struct OneRef {
+    /// Its entry among the short-term ones, negatives then positives, or the long-term ones.
+    st: Option<usize>,
+    lt: Option<usize>,
+    /// From behind the long-term entries to the list modification.
+    kept: Range<usize>,
+    /// Behind the list modification.
+    rest: usize,
+}
+
+/// `Some` for a P slice with one active reference whose set marks more than one picture
+/// current: the picture `RefPicList0[0]` names (8.3.4). `b` stands behind the long-term
+/// entries. `None` leaves the set as it came.
+fn one_current(mut b: Bits, slice_type: u32, hdr: &SliceHeader, pps: &Pps) -> Option<OneRef> {
+    let (sps, total) = (&pps.sps, hdr.num_pic_total_curr);
+    // A picture that references itself counts in `total` and sits in neither set.
+    if slice_type != 1 || total < 2 || pps.scc_extension.curr_pic_ref_enabled_flag {
+        return None;
+    }
+    let from = b.pos;
+    if sps.temporal_mvp_enabled_flag {
+        b.flag()?; // slice_temporal_mvp_enabled_flag
+    }
+    if sps.sample_adaptive_offset_enabled_flag {
+        b.flag()?; // slice_sao_luma_flag
+        if sps.chroma_format_idc != 0 && !sps.separate_colour_plane_flag {
+            b.flag()?; // slice_sao_chroma_flag
+        }
+    }
+    // num_ref_idx_active_override_flag, num_ref_idx_l0_active_minus1
+    let active = match b.flag()? {
+        true => b.ue()?,
+        false => u32::from(pps.num_ref_idx_l0_default_active_minus1),
+    };
+    if active != 0 {
+        return None;
+    }
+    let kept = from..b.pos;
+    // ref_pic_list_modification_flag_l0, list_entry_l0[0]
+    let entry = match pps.lists_modification_present_flag && b.flag()? {
+        true => b.u(ceil_log2(total))? as usize,
+        false => 0,
+    };
+    // RefPicListTemp0: the current short-term pictures before, then after, then long-term.
+    let set = short_term_set(hdr, sps)?;
+    let neg = usize::from(set.num_negative_pics);
+    let after = (0..usize::from(set.num_positive_pics))
+        .filter_map(|i| set.used_by_curr_pic_s1[i].then_some(neg + i));
+    let st: Vec<usize> = (0..neg)
+        .filter(|&i| set.used_by_curr_pic_s0[i])
+        .chain(after)
+        .collect();
+    let lt: Vec<usize> = (0..usize::from(hdr.num_long_term_pics).min(16))
+        .filter(|&i| hdr.used_by_curr_pic_lt[i])
+        .collect();
+    let (st, lt) = match st.get(entry) {
+        Some(&i) => (Some(i), None),
+        None => (None, Some(*lt.get(entry - st.len())?)),
+    };
+    Some(OneRef {
+        st,
+        lt,
+        kept,
+        rest: b.pos,
+    })
+}
+
+/// `set` as the slice's own, with only entry `current` used by the picture.
+fn write_short_term(
+    w: &mut BitWriter,
+    set: &ShortTermRefPicSet,
+    sps_sets: u32,
+    current: Option<usize>,
+) -> Option<()> {
+    w.u(0, 1); // short_term_ref_pic_set_sps_flag
+    if sps_sets != 0 {
+        w.u(0, 1); // inter_ref_pic_set_prediction_flag
+    }
+    let neg = usize::from(set.num_negative_pics);
+    let pos = usize::from(set.num_positive_pics);
+    w.ue(neg as u32);
+    w.ue(pos as u32);
+    let mut prev = 0;
+    for i in 0..neg {
+        w.ue(u32::try_from(prev - set.delta_poc_s0[i] - 1).ok()?);
+        w.u(u32::from(current == Some(i)), 1);
+        prev = set.delta_poc_s0[i];
+    }
+    let mut prev = 0;
+    for i in 0..pos {
+        w.ue(u32::try_from(set.delta_poc_s1[i] - prev - 1).ok()?);
+        w.u(u32::from(current == Some(neg + i)), 1);
+        prev = set.delta_poc_s1[i];
+    }
+    Some(())
+}
+
+/// One slice segment NAL with the picture's and its long-term entries' full POC in 16 bits
+/// and, in a `single` slice picture, one current reference ([`one_current`]). `lt` holds
+/// each long-term entry's `PicOrderCntVal`.
 fn widen_slice(
     nal: &[u8],
     nal_type: u8,
     hdr: &SliceHeader,
-    sps: &Sps,
-    pps: &cros_codecs::codec::h265::parser::Pps,
+    pps: &Pps,
     cur: i32,
     lt: &[i32],
+    single: bool,
 ) -> Option<Vec<u8>> {
+    let sps = &pps.sps;
     let old_bits = u32::from(sps.log2_max_pic_order_cnt_lsb_minus4) + 4;
     let rbsp = unescape(nal);
     // The header ends byte-aligned behind its stop bit; slice data follows untouched.
@@ -271,7 +399,7 @@ fn widen_slice(
         b.u(ceil_log2(sps.pic_size_in_ctbs_y))?; // slice_segment_address
     }
     b.u(u32::from(pps.num_extra_slice_header_bits))?;
-    b.ue()?; // slice_type
+    let slice_type = b.ue()?;
     if pps.output_flag_present_flag {
         b.flag()?;
     }
@@ -287,10 +415,21 @@ fn widen_slice(
         if sets > 1 {
             b.u(ceil_log2(sets))?; // short_term_ref_pic_set_idx
         }
-    } else {
-        if sets != 0 && b.flag()? {
-            return None; // inter_ref_pic_set_prediction_flag
+    } else if sets != 0 && b.flag()? {
+        // inter_ref_pic_set_prediction_flag: a flag per entry of the SPS set it predicts
+        // from and one for the delta itself, each unused one followed by use_delta_flag.
+        let back = b.ue()? + 1; // delta_idx_minus1
+        b.flag()?; // delta_rps_sign
+        b.ue()?; // abs_delta_rps_minus1
+        let from = sps
+            .short_term_ref_pic_set
+            .get(sets.checked_sub(back)? as usize)?;
+        for _ in 0..=from.num_delta_pocs {
+            if !b.flag()? {
+                b.flag()?;
+            }
         }
+    } else {
         let (neg, pos) = (b.ue()?, b.ue()?);
         for _ in 0..(neg + pos).min(32) {
             b.ue()?; // delta_poc_sX_minus1
@@ -314,18 +453,32 @@ fn widen_slice(
     if b.pos > stop {
         return None;
     }
+    let after_lt = Bits {
+        data: &rbsp,
+        pos: b.pos,
+    };
+    let one = single
+        .then(|| one_current(after_lt, slice_type, hdr, pps))
+        .flatten()
+        .filter(|one| one.rest <= stop);
 
     let wide = |poc: i32| (poc & 0xffff) as u32;
     let mut w = BitWriter::default();
     w.copy(&rbsp, 0..poc_at);
     w.u(wide(cur), WIDE_BITS);
-    w.copy(&rbsp, poc_at + old_bits as usize..lt_at);
+    match &one {
+        Some(one) => write_short_term(&mut w, short_term_set(hdr, sps)?, sets, one.st)?,
+        None => w.copy(&rbsp, poc_at + old_bits as usize..lt_at),
+    }
     if sps.long_term_ref_pics_present_flag {
         w.ue(n as u32);
         let mut cycles = 0i32;
         for (i, &poc) in lt.iter().enumerate() {
             w.u(wide(poc), WIDE_BITS);
-            w.u(u32::from(hdr.used_by_curr_pic_lt[i]), 1);
+            let used = one
+                .as_ref()
+                .map_or(hdr.used_by_curr_pic_lt[i], |one| one.lt == Some(i));
+            w.u(u32::from(used), 1);
             // Whole 16-bit cycles between the two; 0 until the count wraps.
             let cycle = (cur - poc - (wide(cur) as i32 - wide(poc) as i32)) >> WIDE_BITS;
             let step = cycle - cycles;
@@ -339,7 +492,14 @@ fn widen_slice(
             }
         }
     }
-    w.copy(&rbsp, b.pos..stop);
+    match one {
+        // One current picture: the slice codes no list modification.
+        Some(one) => {
+            w.copy(&rbsp, one.kept);
+            w.copy(&rbsp, one.rest..stop);
+        }
+        None => w.copy(&rbsp, b.pos..stop),
+    }
     let mut out = w.finish();
     out.extend_from_slice(&rbsp[data_at..]);
     Some(escape(&out))
@@ -391,7 +551,9 @@ impl BitWriter {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{idr_slice, param_sets, synth_slice, SliceOpts, SpsOpts};
+    use super::super::tests::{
+        idr_slice, param_sets, param_sets_lists, synth_slice, SliceOpts, SpsOpts,
+    };
     use super::*;
 
     /// A long-term stream's opening AU and a P picture at `poc_lsb` with one used entry.
@@ -459,6 +621,101 @@ mod tests {
         let hdr = headers(&aus).pop().unwrap();
         assert_eq!(hdr.pic_order_cnt_lsb, 25);
         assert_eq!(hdr.poc_lsb_lt[0], 0);
+    }
+
+    /// A slice whose short-term set is predicted from the SPS's, as QSV codes the pictures
+    /// behind a recovery frame, recodes and keeps its set and its long-term entry.
+    #[test]
+    fn a_slice_set_predicted_from_the_sps_recodes() {
+        let mut sps = SpsOpts::default();
+        sps.long_term = true;
+        sps.chained_inter_rps = Some((2, 0));
+        let mut opening = param_sets(&sps);
+        opening.extend(idr_slice());
+        // The SPS set {-1, -2} one picture earlier: -2 and -3 dropped, the delta -1 used.
+        let predicted = |poc_lsb, lt| {
+            synth_slice(&SliceOpts {
+                poc_lsb,
+                inter_rps: Some(vec![(false, false), (false, false), (true, true)]),
+                lt,
+                sps_long_term: true,
+                num_ref_idx_l0: 1,
+                ..Default::default()
+            })
+        };
+        let aus = vec![
+            opening,
+            predicted(1, vec![]),
+            predicted(2, vec![(0, false, None)]),
+        ];
+        let hdr = headers(&aus).pop().unwrap();
+        assert_eq!(hdr.pic_order_cnt_lsb, 2);
+        let set = &hdr.short_term_ref_pic_set;
+        assert!(set.inter_ref_pic_set_prediction_flag);
+        assert_eq!((set.num_negative_pics, set.delta_poc_s0[0]), (1, -1));
+        assert_eq!((hdr.num_long_term_pics, hdr.poc_lsb_lt[0]), (1, 0));
+        assert!(!hdr.used_by_curr_pic_lt[0]);
+    }
+
+    /// NVENC's shape: the long-term picture marked current beside the short-term one, one
+    /// active reference. The recode leaves current the picture the slice predicts from, by
+    /// list order or by the list modification, and a picture in two slices keeps its set.
+    #[test]
+    fn a_slice_keeps_only_the_picture_it_predicts_from_current() {
+        let mut sps = SpsOpts::default();
+        sps.long_term = true;
+        let mut opening = param_sets_lists(&sps);
+        opening.extend(idr_slice());
+        let p = |poc_lsb, neg: &[(u32, bool)], lt: &[(u32, bool, Option<u32>)], entry| {
+            synth_slice(&SliceOpts {
+                poc_lsb,
+                neg: neg.to_vec(),
+                lt: lt.to_vec(),
+                sps_long_term: true,
+                num_ref_idx_l0: 1,
+                pps_lists_modification: true,
+                list_entry_l0: entry,
+                ..Default::default()
+            })
+        };
+        let idr = [(0, true, None)];
+        let mut two_slices = p(4, &[(0, true)], &idr, None);
+        two_slices.extend(p(4, &[(0, true)], &idr, None));
+        let aus = vec![
+            opening,
+            p(1, &[(0, true)], &[], None),
+            p(2, &[(0, true)], &idr, None),
+            p(3, &[(0, true), (0, false)], &idr, Some(1)),
+            two_slices,
+        ];
+        // (short-term entries current, the long-term entry current, NumPicTotalCurr)
+        let current = |h: &SliceHeader| {
+            let set = &h.short_term_ref_pic_set;
+            let st = set.used_by_curr_pic_s0[..usize::from(set.num_negative_pics)].to_vec();
+            (st, h.used_by_curr_pic_lt[0], h.num_pic_total_curr)
+        };
+        let h = headers(&aus);
+        assert_eq!(current(&h[1]), (vec![true], false, 1), "one already");
+        assert_eq!(
+            current(&h[2]),
+            (vec![true], false, 1),
+            "first in list order"
+        );
+        assert_eq!(
+            current(&h[3]),
+            (vec![false, false], true, 1),
+            "the list's entry"
+        );
+        assert_eq!(current(&h[4]), (vec![true], true, 2), "two slices");
+        assert_eq!((h[3].pic_order_cnt_lsb, h[3].poc_lsb_lt[0]), (3, 0));
+    }
+
+    /// Parameter sets around a picture are no slices; each slice NAL of a wave picture is.
+    #[test]
+    fn a_picture_counts_its_slice_nals() {
+        assert_eq!(vcl_nals(&opening()), 1);
+        let wave: Vec<u8> = (0..3).flat_map(|_| p(1, 0, 0)).collect();
+        assert_eq!(vcl_nals(&wave), 3);
     }
 
     /// An end-of-sequence or end-of-bitstream NAL is its two header bytes. One whose second

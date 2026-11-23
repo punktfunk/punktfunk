@@ -153,7 +153,8 @@ async fn dial(
         pin,
         identity,
         &[crate::quic::v2::registry::ALPN],
-        Some(remote.ip()),
+        remote.ip(),
+        true,
     );
     let (ep, media) = r.map_err(io_err)?;
     // Retry silence across the connect budget. One quinn dial dies after the ~8 s idle
@@ -582,12 +583,16 @@ mod tests {
         ProfileUnlock::new(UNLOCK_PASSWORD, secret, false, ENROLL_NONE, vec![]).unwrap()
     }
 
-    /// Two loopback hosts of one box and its pin: one identity, so the door's pin holds at the
-    /// seat.
     fn one_box() -> ([quinn::Endpoint; 2], [u8; 32]) {
+        one_box_on(std::net::Ipv4Addr::LOCALHOST.into())
+    }
+
+    /// Two hosts of one box on `ip`, and its pin: one identity, so the door's pin holds at the
+    /// seat.
+    fn one_box_on(ip: std::net::IpAddr) -> ([quinn::Endpoint; 2], [u8; 32]) {
         let (cert, key) = endpoint::generate_identity().unwrap();
         let host = || {
-            let addr = "127.0.0.1:0".parse().unwrap();
+            let addr = (ip, 0).into();
             let alpns = [crate::quic::v2::registry::ALPN];
             endpoint::server_shared(addr, &cert, &key, Duration::from_secs(10), &alpns)
                 .unwrap()
@@ -724,6 +729,31 @@ mod tests {
             !promised.unwrap().unwrap(),
             "a dial with no unlock announced one"
         );
+    }
+
+    /// A connect to an IPv6 host reaches its `ClientHello` from an IPv6 address.
+    #[test]
+    fn a_connect_reaches_an_ipv6_host() {
+        let Some(v6) = crate::quic::test_util::loopback_v6("a_connect_reaches_an_ipv6_host") else {
+            return;
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _in_rt = rt.enter();
+        let ([door, _], pin) = one_box_on(v6);
+        let port = door.local_addr().unwrap().port();
+        let door_side = rt.spawn(async move {
+            let (conn, _tx, _r, _h) = hello(&door).await;
+            let from = conn.remote_address();
+            conn.close(0u32.into(), b"");
+            from
+        });
+        let params = ConnectParams {
+            pin: Some(pin),
+            ..ConnectParams::new("::1", port, mode(), Duration::from_secs(5))
+        };
+        let _ = crate::client::NativeClient::connect(params);
+        let from = rt.block_on(tokio::time::timeout(Duration::from_secs(5), door_side));
+        assert!(from.unwrap().unwrap().is_ipv6());
     }
 
     /// Studio range is asked for only on the embedder's report, SDR and HDR each on its own.

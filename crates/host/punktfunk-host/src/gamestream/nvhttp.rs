@@ -301,7 +301,7 @@ async fn launch_under(
             GsDecision::Reject(why) => {
                 tracing::warn!(
                     why,
-                    "GameStream launch REJECTED — the session belongs to another client"
+                    "GameStream launch rejected — the session belongs to another client"
                 );
                 return (StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response();
             }
@@ -319,7 +319,7 @@ async fn launch_under(
             if steal {
                 // A drop, not a quit — the same as a native steal victim. `launch` clears
                 // first, so the control tick tells the old client while its media stop.
-                tracing::info!("GameStream launch STEAL — ending the live session");
+                tracing::info!("GameStream launch steals the session — ending the live one");
                 st.end_session("another client took the session");
             }
             // A previous session's media threads hold the fixed ports and finish with host-wide
@@ -381,16 +381,16 @@ async fn admit_native(
     let admitted =
         tokio::task::spawn_blocking(move || admit_under(conflict, None, mode, preempted));
     let Ok((native, reservation)) = admitted.await else {
-        tracing::warn!("GameStream launch REJECTED — the admission task did not finish");
+        tracing::warn!("GameStream launch rejected — the admission task did not finish");
         return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
     };
     match native {
         Admission::Separate => {}
         Admission::Join(_, d)
-            if d.isolation.is_none() && joined_hdr(d.hdr, hdr_asked).is_none() =>
+            if d.isolation.is_none() && joined_hdr(d.stream_hdr(), hdr_asked).is_none() =>
         {
             tracing::warn!(
-                "GameStream launch REJECTED — the display to share is HDR and this client asked for none"
+                "GameStream launch rejected — the display to share is HDR and this client asked for none"
             );
             let refusal = error_xml(crate::vdisplay::admission::JOIN_NEEDS_HDR);
             return Err((StatusCode::SERVICE_UNAVAILABLE, xml(refusal)).into_response());
@@ -400,14 +400,14 @@ async fn admit_native(
             tracing::info!(
                 requested = %format_args!("{}x{}@{}", mode.0, mode.1, mode.2),
                 live = %format_args!("{}x{}@{}", live.0, live.1, live.2),
-                "GameStream launch JOIN — sharing the native session's display"
+                "GameStream launch joins the native session's display"
             );
             return Ok((reservation, Some((live, display))));
         }
         Admission::Steal(victims) => {
             tracing::info!(
                 victims = victims.len(),
-                "GameStream launch STEAL — ending the native session(s)"
+                "GameStream launch steals the display — ending the native session(s)"
             );
             crate::session_status::stolen(&victims);
             for v in &victims {
@@ -421,12 +421,12 @@ async fn admit_native(
         }
         Admission::Join(..) => {
             tracing::warn!(
-                "GameStream launch REJECTED — the display to share is an isolated session"
+                "GameStream launch rejected — the display to share is an isolated session"
             );
             return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
         }
         Admission::Reject(_) => {
-            tracing::warn!("GameStream launch REJECTED — a native session holds the display");
+            tracing::warn!("GameStream launch rejected — a native session holds the display");
             return Err((StatusCode::SERVICE_UNAVAILABLE, xml(error_xml(BUSY))).into_response());
         }
     }

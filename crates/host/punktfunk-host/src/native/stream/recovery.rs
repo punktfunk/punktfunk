@@ -513,19 +513,11 @@ impl StreamState {
             tracing::error!(
                 period_s = format!("{:.1}", period.as_secs_f64()),
                 frames_sent = sent,
-                "THE VIDEO DATA PLANE IS NOT REACHING THE CLIENT — it reports 0 \
-                 packets received all session while this host has sent the frames \
-                 counted here, so the picture is black and every keyframe we force is \
-                 wasted. The control plane is healthy (this report arrived on it), so \
-                 the session looks alive: audio, input and the library keep working. \
-                 Video leaves the same UDP socket toward the same address as control, \
-                 so a hop is treating the two differently: one that drops full-size \
-                 datagrams (the 'wire MTU' lines say what the path carries), or one \
-                 that drops the video DSCP mark (PUNKTFUNK_DSCP=0 turns it off to \
-                 test). The client may also have received the datagrams and could not \
-                 open them: this counter is incremented AFTER decrypt and replay \
-                 checks, so a session whose every datagram failed to open reports \
-                 exactly this same zero"
+                "video isn't reaching the client — it reports 0 packets received all \
+                 session while control works, so the picture is black. A hop drops \
+                 full-size datagrams (see the 'wire MTU' lines) or the video DSCP mark \
+                 (PUNKTFUNK_DSCP=0 tests that), or the client can't open them: it counts \
+                 packets after decrypt"
             );
         } else if let Some(ppm) = self
             .facts
@@ -537,39 +529,31 @@ impl StreamState {
             tracing::warn!(
                 period_s = format!("{:.1}", period.as_secs_f64()),
                 wire_loss_ppm = ppm,
-                "client keyframe recoveries come while the path has STOPPED CARRYING VIDEO — \
-                 the client's last report window counted under a tenth of the packets this \
-                 host sent, though video did arrive earlier in the session. A client that \
-                 moved onto a path that drops full-size datagrams, or a hop that started \
-                 blocking them, does this; the 'wire MTU' lines say whether the host saw it move"
+                "client keyframe recoveries while the path stopped carrying video — the \
+                 client's last report counted under a tenth of the packets sent, after video \
+                 had arrived. A new path or a hop that drops full-size datagrams does this; \
+                 the 'wire MTU' lines say whether the client moved"
             );
         } else if matches_client_recovery_cooldown(period) {
             if client_rx == u32::MAX {
                 tracing::warn!(
                     period_s = format!("{:.1}", period.as_secs_f64()),
                     frames_sent = sent,
-                    "client keyframe recoveries land on a client software cooldown, \
-                     but this client is too old to report whether any video reached \
-                     it — so this is EITHER a client that cannot sustain the stream \
-                     and is shedding a standing receive queue, OR a client that has \
-                     received nothing at all and is re-asking on its no-video timer. \
-                     They are opposite faults; the host cannot tell them apart from \
-                     the period. Its log does: 'receive backlog stopped draining' \
-                     (with queue_depth) means the first, 'no video received … into \
-                     the session' means the second. Upgrading the client makes this \
-                     line decide on its own"
+                    "client keyframe recoveries land on a client cooldown, but this \
+                     client reports no packet count, so the host can't tell a client that \
+                     can't keep up from one that receives nothing. The client log decides: \
+                     'receive backlog stopped draining' is the first, 'no video received … \
+                     into the session' the second"
                 );
             } else {
                 tracing::warn!(
                     period_s = format!("{:.1}", period.as_secs_f64()),
                     client_packets_received = client_rx,
-                    "client keyframe recoveries match the client's jump-to-live \
-                     cooldown, and it confirms video IS arriving — the CLIENT cannot \
-                     sustain the stream and is shedding a standing receive queue \
-                     (check its log for 'receive backlog stopped draining' with \
-                     queue_depth, and for a decode rung that demoted); a slower \
-                     decode path or a link below the bitrate does this, and it is NOT \
-                     a host display disturbance"
+                    "client keyframe recoveries match the client's jump-to-live cooldown \
+                     while video arrives — the client can't keep up and sheds its receive \
+                     queue, not a host display fault. A slower decode path or a link below \
+                     the bitrate does this; its log shows 'receive backlog stopped \
+                     draining' and any decode rung that demoted"
                 );
             }
         } else if self.shared.wire_rekeys.load(Ordering::Relaxed) > 0 {
@@ -1153,6 +1137,10 @@ mod tests {
     /// A downward rate the encoder could not be rebuilt at leaves the session on its old rate,
     /// and the client is told so; the frame on the wire stays open for the encoder it belongs to.
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "VideoToolbox opens the 16x16 test size, so no rebuild is refused"
+    )]
     fn a_failed_rate_rebuild_tells_the_client_the_rate_kept() {
         let mut f = super::super::swap::tests::fake();
         let (tx, rx) = std::sync::mpsc::channel();

@@ -108,7 +108,8 @@ async fn a_tunnelled_request_is_the_lan_peer_it_came_from() {
 }
 
 /// A device token earned through the tunnel buys the paired-device lane through the tunnel, and
-/// no more — the roster that names every other device stays admin.
+/// no more — the roster that names every other device stays admin. The door's word on loopback
+/// buys nothing on it, through the tunnel or over HTTPS from the LAN.
 #[tokio::test]
 async fn a_tunnelled_device_token_reads_the_library_and_no_more() {
     use crate::webtransport::mgmt::{dispatch, Head};
@@ -192,8 +193,32 @@ async fn a_tunnelled_device_token_reads_the_library_and_no_more() {
         StatusCode::OK,
         "a device token must not reach the admin lane"
     );
-    let (status, _) = call("GET", "/api/v1/clients", bearer, vec![]).await;
+    let (status, _) = call("GET", "/api/v1/clients", bearer.clone(), vec![]).await;
     assert_ne!(status, StatusCode::OK);
+
+    let mut said = bearer;
+    for (name, value) in [
+        ("content-type", "application/json"),
+        (auth::VOUCH_HEADER, fp.as_str()),
+        (auth::LOOPBACK_HEADER, "1"),
+    ] {
+        said.push((name.to_string(), value.to_string()));
+    }
+    let launch = serde_json::json!({ "app_id": "custom:no-such-desk-title" });
+    let bytes = launch.to_string().into_bytes();
+    let (status, body) = call("POST", "/api/v1/game/launch", said.clone(), bytes).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "through the tunnel");
+    assert_eq!(body["code"], "local_not_this_device");
+    let mut req = json_req(Method::POST, "/api/v1/game/launch", launch);
+    req.extensions_mut().insert(PeerAddr(lan));
+    for (name, value) in &said {
+        let name = axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap();
+        let value = axum::http::HeaderValue::from_str(value).unwrap();
+        req.headers_mut().insert(name, value);
+    }
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "over HTTPS");
+    assert_eq!(body["code"], "local_not_this_device");
 }
 
 /// A native management connection's proven certificate is the HTTPS client certificate: a
@@ -231,6 +256,55 @@ async fn a_paired_certificate_on_a_native_tunnel_reads_the_library() {
         via(Some(fp), "/api/v1/native/clients").await,
         StatusCode::OK,
         "a paired device never reaches the admin lane"
+    );
+}
+
+/// A tunnelled call is from this machine only when its QUIC peer is: a paired device with the
+/// launch grant on a LAN tunnel is not this device, and the same call over a loopback tunnel
+/// passes the gate to the route's own answer.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn a_tunnelled_launch_is_this_device_only_from_loopback() {
+    use crate::webtransport::mgmt::{dispatch, Head};
+    use punktfunk_core::quic::GRANT_LAUNCH;
+    let _dir = ConfigDirOverride::new();
+    let path = crate::test_support::scratch().join("pf-mgmt-desk-tunnel.json");
+    let np =
+        Arc::new(crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap());
+    let fp = "ab".repeat(32);
+    let access = crate::native_pairing::Access {
+        grants: GRANT_LAUNCH,
+        expires_unix: None,
+        until_disconnect: false,
+    };
+    np.add_with_access("Phone", &fp, Some(access)).unwrap();
+    let app = test_app_native(test_state(), np);
+    let plane: std::net::SocketAddr = "0.0.0.0:9777".parse().unwrap();
+    let launch = |peer: &str| {
+        let app = app.clone();
+        let peer: std::net::SocketAddr = peer.parse().unwrap();
+        let head = Head {
+            m: "POST".into(),
+            p: "/api/v1/game/launch".into(),
+            h: vec![("content-type".into(), "application/json".into())],
+        };
+        let body = br#"{"app_id":"custom:no-such-desk-title"}"#.to_vec();
+        let cert = Some(fp.clone());
+        async move {
+            let res = dispatch(&app, peer, plane, cert, head, body).await;
+            let status = res.status();
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+            (status, json["code"].as_str().unwrap_or("").to_string())
+        }
+    };
+    assert_eq!(
+        launch("192.168.5.80:40100").await,
+        (StatusCode::FORBIDDEN, "local_not_this_device".into())
+    );
+    assert_eq!(
+        launch("127.0.0.1:40100").await,
+        (StatusCode::NOT_FOUND, "local_no_such_game".into())
     );
 }
 

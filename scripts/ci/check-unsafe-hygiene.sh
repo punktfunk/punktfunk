@@ -175,6 +175,7 @@ crates/codec/pf-vkdecode/tests/common/mod.rs:1
 crates/codec/pf-vkdecode/tests/gpu_parity.rs:2
 crates/host/pf-win-display/src/win_display.rs:2
 crates/core/punktfunk-core/src/quic/endpoint.rs:2
+crates/host/punktfunk-host/src/hostsys/app_loop.rs:2
 crates/host/punktfunk-host/src/hostsys/identity.rs:3
 crates/host/punktfunk-host/src/library/art.rs:2
 crates/host/punktfunk-host/src/main.rs:2

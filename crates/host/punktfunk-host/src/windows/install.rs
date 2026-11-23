@@ -783,7 +783,7 @@ fn set_web_password(pw_path: &Path, pw_file: Option<&str>) {
                 println!("keeping existing web console password");
                 None
             } else {
-                Some(random_password())
+                Some(crate::mgmt_token::random_password())
             }
         });
     if let Some(pw) = password {
@@ -797,20 +797,6 @@ fn set_web_password(pw_path: &Path, pw_file: Option<&str>) {
             eprintln!("warning: {} not written: {e}", pw_path.display());
         }
     }
-}
-
-/// 20 chars, URL/shell-safe (no `/ + =`).
-fn random_password() -> String {
-    use base64::Engine;
-    use rand::Rng;
-    let mut b = [0u8; 24];
-    rand::rng().fill_bytes(&mut b);
-    base64::engine::general_purpose::STANDARD
-        .encode(b)
-        .chars()
-        .filter(|c| !matches!(c, '/' | '+' | '='))
-        .take(20)
-        .collect()
 }
 
 fn first_with_ext(dir: &Path, ext: &str) -> Option<PathBuf> {

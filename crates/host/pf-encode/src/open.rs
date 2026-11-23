@@ -28,9 +28,8 @@ pub fn open_video(resolved: &Resolved, params: OpenParams) -> Result<Box<dyn Enc
     if params.cursor_blend && !inner.caps().blends_cursor {
         tracing::warn!(
             backend,
-            "session negotiated a composited cursor but this encode backend does not blend \
-             CapturedFrame::cursor — the pointer will be MISSING from the stream unless the \
-             capturer composites it"
+            "session negotiated a composited cursor but this encode backend can't blend one — \
+             the pointer is missing from the stream unless the capturer composites it"
         );
     }
     Ok(track_session(inner, backend))
@@ -105,6 +104,9 @@ impl Encoder for TrackedEncoder {
     }
     fn note_confirmed(&mut self, acked: Option<Acked>) {
         self.inner.note_confirmed(acked)
+    }
+    fn set_wave_heals(&mut self, heals: bool) {
+        self.inner.set_wave_heals(heals)
     }
     fn set_pipelined(&mut self, on: bool) -> bool {
         self.inner.set_pipelined(on)

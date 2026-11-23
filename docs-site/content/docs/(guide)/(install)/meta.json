@@ -12,6 +12,7 @@
     "steamos-host",
     "nixos",
     "windows-host",
+    "macos-host",
     "switching-from-sunshine"
   ]
 }

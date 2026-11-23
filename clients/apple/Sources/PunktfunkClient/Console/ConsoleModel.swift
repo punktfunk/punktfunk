@@ -100,13 +100,14 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     /// that list had it.
     var hiddenSeen: [GameEntry] = []
 
-    init?(entry: StoredHost?, pin: StreamPreset?, store: HostStore, discovery: HostDiscovery,
-          presets: PresetStore, power: HostPowerStore, nowPlaying: NowPlayingStore,
-          waker: HostWaker, actions: Actions) {
+    init?(entry: StoredHost?, stream: Bool, pin: StreamPreset?, store: HostStore,
+          discovery: HostDiscovery, presets: PresetStore, power: HostPowerStore,
+          nowPlaying: NowPlayingStore, waker: HostWaker, actions: Actions) {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue(),
             let bridge = ConsoleBridge(
                 options: Self.options(
-                    entry: entry, pin: pin, presets: presets.presets, hosts: store.hosts),
+                    entry: entry, stream: stream, pin: pin, presets: presets.presets,
+                    hosts: store.hosts),
                 device: device, queue: queue)
         else { return nil }
         self.device = device
@@ -177,9 +178,13 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         discovery.stop()
     }
 
-    /// Re-root the console on a shelf — a deep link, or the shelf a game was launched from.
+    /// Re-root the console on a shelf — a deep link, the shelf a game was launched from, or the
+    /// start screen's stream.
     func navigate(to shelf: LibraryTarget, pin: StreamPreset?) {
-        bridge.push(.navigate, ConsoleJSON.entry(shelf.host, pin: pin, presets: presets.presets))
+        bridge.push(
+            .navigate,
+            ConsoleJSON.entry(
+                shelf.host, pin: pin, presets: presets.presets, stream: shelf.stream))
     }
 
     /// Open the console's Pair screen for `host`: a pairing the app was asked for elsewhere.
@@ -248,7 +253,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     }
 
     private static func options(
-        entry: StoredHost?, pin: StreamPreset?, presets: [StreamPreset], hosts: [StoredHost]
+        entry: StoredHost?, stream: Bool, pin: StreamPreset?, presets: [StreamPreset],
+        hosts: [StoredHost]
     ) -> String {
         var options: [String: Any] = [
             "device_name": DeviceName.current,
@@ -282,7 +288,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
             options["screen"] = [screen.0, screen.1]
             options["safe_area"] = [screen.0, screen.1]
         }
-        if let entry, let data = ConsoleJSON.entry(entry, pin: pin, presets: presets)
+        if let entry,
+            let data = ConsoleJSON.entry(entry, pin: pin, presets: presets, stream: stream)
             .data(using: .utf8),
             let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {

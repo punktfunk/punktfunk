@@ -13,11 +13,12 @@
 //! `GET /session/last` is the other side of the same registry: what a session came
 //! to, once nothing is streaming any more.
 
-use super::auth::{AuthLane, PairedDevice};
+use super::auth::{AuthLane, Loopback, PairedDevice};
 use super::shared::*;
 use crate::pad_feed::PadFrame;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Extension;
+use punktfunk_core::quic::GRANT_LAUNCH;
 use std::sync::atomic::Ordering;
 
 /// `DELETE /session` options.
@@ -249,6 +250,11 @@ pub(crate) struct SessionAccess {
 /// stays theirs and this call answers `reserved: false`. It is remembered against
 /// the device's pairing, so the same device reconnects as the same player — an
 /// anonymous session's pick lasts only as long as the session.
+///
+/// With `share`, this session's pads join the slot's controller instead: buttons
+/// combine, each trigger and stick takes the stronger input, and every pad on it
+/// rumbles. With no one on the slot, the session takes it as a pick would. A share
+/// lasts this session only and leaves the remembered pick alone.
 #[utoipa::path(
     put,
     path = "/session/{id}/player",
@@ -284,22 +290,32 @@ pub(crate) async fn set_session_player(
     if crate::session_status::has_native_lanes(id) == Some(false) {
         return not_on_this_plane();
     }
-    let reserved = controls.set_player(req.slot);
-    // Remember it against the pairing, so the next connect is the same player. A
-    // session with no record (anonymous) keeps the pick for this session only.
-    if let (Some(np), Some(fp)) = (st.native.as_ref(), controls.fingerprint.as_deref()) {
-        if let Err(e) = np.set_pad_slot(fp, req.slot) {
-            tracing::warn!(session = id, error = %format!("{e:#}"), "store player pick");
+    let share = req.share && req.slot.is_some();
+    let reserved = if share {
+        controls.set_shared(req.slot);
+        true
+    } else {
+        controls.set_shared(None);
+        let reserved = controls.set_player(req.slot);
+        // Remember it against the pairing, so the next connect is the same player. A
+        // session with no record (anonymous) keeps the pick for this session only.
+        if let (Some(np), Some(fp)) = (st.native.as_ref(), controls.fingerprint.as_deref()) {
+            if let Err(e) = np.set_pad_slot(fp, req.slot) {
+                tracing::warn!(session = id, error = %format!("{e:#}"), "store player pick");
+            }
         }
-    }
+        reserved
+    };
     tracing::info!(
         session = id,
         slot = ?req.slot,
+        share,
         reserved,
         "management API: session player slot"
     );
     Json(SessionPlayer {
         slot: req.slot,
+        share,
         reserved,
         pads: controls.pads(),
     })
@@ -313,6 +329,10 @@ pub(crate) struct SessionPlayerRequest {
     #[schema(value_type = u32, required = false, example = 1)]
     #[serde(default)]
     slot: Option<u8>,
+    /// Join `slot`'s controller with whoever holds it, for this session only. Ignored
+    /// without a `slot`.
+    #[serde(default)]
+    share: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -320,8 +340,10 @@ pub(crate) struct SessionPlayer {
     /// The pick now stored for this session.
     #[schema(value_type = u32, required = false)]
     slot: Option<u8>,
+    /// The session's pads share `slot`'s controller.
+    share: bool,
     /// `false` = another live session asked for that slot first and keeps it; this
-    /// session stays on the first-free claim.
+    /// session stays on the first-free claim. Always `true` for a share.
     reserved: bool,
     /// OS pad slots the session holds right now. A pad already built keeps its slot
     /// until it re-plugs, so this can still name the old player for a moment.
@@ -430,21 +452,24 @@ fn not_on_this_plane() -> Response {
 }
 
 /// Who may end which launched game. The operator, the plugin runner and a person on their own
-/// seat host reach every launch; a paired device reaches only its own, and nothing once its
-/// access expired.
+/// seat host reach every launch; a paired device reaches only its own, and the desk's when it
+/// holds the launch grant and calls from this machine, and nothing once its access expired.
 pub(crate) struct GameEnder {
     /// `None` = every device's launches.
     owner: Option<String>,
+    /// The desk's own launches are in reach.
+    desk: bool,
     /// A paired device whose access expired, or a lane that ends nothing.
     refused: bool,
 }
 
 impl GameEnder {
-    pub(crate) fn of(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> Self {
+    pub(crate) fn of(st: &MgmtState, lane: AuthLane, fp: Option<&str>, loopback: bool) -> Self {
         match lane {
             // A person ends what plays on their own seat host.
             AuthLane::Admin | AuthLane::Plugin | AuthLane::Person => Self {
                 owner: None,
+                desk: true,
                 refused: false,
             },
             AuthLane::Cert => {
@@ -455,11 +480,13 @@ impl GameEnder {
                 });
                 Self {
                     owner: fp.map(str::to_string),
+                    desk: loopback && super::downloads::granted(st, fp, GRANT_LAUNCH),
                     refused: !live,
                 }
             }
             AuthLane::PersonVouched | AuthLane::Public => Self {
                 owner: None,
+                desk: false,
                 refused: true,
             },
         }
@@ -473,17 +500,19 @@ impl GameEnder {
     pub(crate) fn may_end(&self, state: &str, launched_by: Option<&str>) -> bool {
         !self.refused
             && !matches!(state, "exited" | "untracked")
-            && crate::gamelease::launched_by(launched_by, self.scope())
+            && (crate::gamelease::launched_by(launched_by, self.scope())
+                || (self.desk && launched_by == Some(crate::desk::KEY)))
     }
 }
 
 /// End a launched game
 ///
-/// Ends games nobody is streaming: those waiting out the reconnect window and
-/// launches left running after their session ended (`detached` in `GET /status`).
-/// With `streaming`, also ends games still on a live session; the session itself
-/// stays up (`DELETE /session` plus `game_on_session_end`). `app_id` narrows it to
-/// one title. A paired device ends only games it launched.
+/// Ends games nobody is streaming: those waiting out the reconnect window and launches left
+/// running after their session ended (`detached` in `GET /status`). With `streaming`, also ends
+/// games still on a live session; the session itself stays up (`DELETE /session` plus
+/// `game_on_session_end`). `app_id` narrows it to one title. A game this host started on its
+/// own screen (`local`) ends only when `app_id` names it. A paired device ends only games it
+/// launched, and a `local` game when it holds the launch grant and calls from this device.
 #[utoipa::path(
     post,
     path = "/game/end",
@@ -501,9 +530,11 @@ pub(crate) async fn end_game(
     State(st): State<Arc<MgmtState>>,
     Extension(lane): Extension<AuthLane>,
     device: Option<Extension<PairedDevice>>,
+    loopback: Option<Extension<Loopback>>,
     ApiJson(req): ApiJson<EndGameRequest>,
 ) -> Response {
-    let ender = GameEnder::of(&st, lane, device.as_ref().map(|d| d.0 .0.as_str()));
+    let fp = device.as_ref().map(|d| d.0 .0.as_str());
+    let ender = GameEnder::of(&st, lane, fp, loopback.is_some_and(|l| l.0 .0));
     if ender.refused {
         return api_error_coded(
             StatusCode::FORBIDDEN,
@@ -516,6 +547,10 @@ pub(crate) async fn end_game(
     for d in crate::launchreg::take_detached(ender.scope(), app) {
         crate::gamelease::end_detached(d, "ended from the management API");
         ended += 1;
+    }
+    // A blanket call leaves the desk's games: someone at the box plays them.
+    if let Some(app) = app.filter(|_| ender.desk) {
+        ended += crate::desk::end(app);
     }
     if req.streaming {
         for shared in crate::session_status::live_games(app) {
@@ -538,6 +573,178 @@ pub(crate) async fn end_game(
     }
     tracing::info!(app_id = ?req.app_id, ended, device = ?ender.scope(), "management API: game ended");
     Json(EndGameResult { ended }).into_response()
+}
+
+/// Start a game on this host's own screen
+///
+/// For a client on this same device: the host starts the title on its own screen, with no
+/// stream, and holds it until it is gone. What happens next rides `GET /status` as a `local`
+/// row. The operator always may; a paired device may when it holds the launch grant and calls
+/// from this device. The title is the owner profile's, whichever device asked.
+#[utoipa::path(
+    post,
+    path = "/game/launch",
+    tag = "session",
+    operation_id = "launchGame",
+    request_body = LaunchGameRequest,
+    responses(
+        (status = ACCEPTED, description = "Claimed: the title starts", body = LaunchGameResult),
+        (status = OK, description = "This host already runs it; nothing new starts", body = LaunchGameResult),
+        (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
+        (status = FORBIDDEN, description = "This device may not start games, or isn't this device", body = ApiError),
+        (status = NOT_FOUND, description = "No such title", body = ApiError),
+        (status = CONFLICT, description = "No screen of its own, nobody signed in, no desktop running, or no Steam entry", body = ApiError),
+    )
+)]
+pub(crate) async fn launch_game(
+    State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<AuthLane>,
+    device: Option<Extension<PairedDevice>>,
+    loopback: Option<Extension<Loopback>>,
+    ApiJson(req): ApiJson<LaunchGameRequest>,
+) -> Response {
+    let fp = device.as_ref().map(|d| d.0 .0.as_str());
+    match lane {
+        AuthLane::Admin => {}
+        AuthLane::Cert if super::downloads::granted(&st, fp, GRANT_LAUNCH) => {
+            if !loopback.is_some_and(|l| l.0 .0) {
+                return api_error_coded(
+                    StatusCode::FORBIDDEN,
+                    "local_not_this_device",
+                    "This host starts games on its own screen only for a client on the same \
+                     device.",
+                );
+            }
+        }
+        _ => return not_allowed_to_start_games(),
+    }
+    if !crate::desk::has_desk(pf_paths::seat::role()) {
+        return no_desk();
+    }
+    let (owner, opens) = desk_owner(&st, fp);
+    if !opens {
+        return not_allowed_to_start_games();
+    }
+    let (view, profile) = desk_view(owner);
+    let app = req.app_id.clone();
+    let started =
+        tokio::task::spawn_blocking(move || crate::desk::start(&view, &app, profile)).await;
+    let refused = match started {
+        Ok(Ok((via, running))) => {
+            tracing::info!(app_id = %req.app_id, ?via, running, "management API: game started on the desk");
+            let status = if running {
+                StatusCode::OK
+            } else {
+                StatusCode::ACCEPTED
+            };
+            return (status, Json(LaunchGameResult { via, running })).into_response();
+        }
+        Ok(Err(refused)) => refused,
+        Err(e) => {
+            tracing::error!(error = %e, "desk launch worker did not finish");
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "desk launch worker did not finish",
+            );
+        }
+    };
+    refusal(refused)
+}
+
+/// The coded answer for a desk launch the host refused.
+fn refusal(refused: crate::desk::Refused) -> Response {
+    use crate::desk::Refused;
+    match refused {
+        Refused::NoSuchGame => api_error_coded(
+            StatusCode::NOT_FOUND,
+            "local_no_such_game",
+            "This game is no longer in the library.",
+        ),
+        Refused::NobodySignedIn => api_error_coded(
+            StatusCode::CONFLICT,
+            "local_nobody_signed_in",
+            "Nobody is signed in on this PC. Sign in, then start the game again.",
+        ),
+        Refused::NoSession => api_error_coded(
+            StatusCode::CONFLICT,
+            "local_no_session",
+            "No desktop is running on this host. Sign in, then start the game again.",
+        ),
+        Refused::NotInSteam => api_error_coded(
+            StatusCode::CONFLICT,
+            "local_not_in_steam",
+            "This game isn't in Steam yet. Add its source to Steam in the Punktfunk panel.",
+        ),
+    }
+}
+
+/// A seat, the owner's headless row or the door: no screen of its own.
+fn no_desk() -> Response {
+    api_error_coded(
+        StatusCode::CONFLICT,
+        "local_no_desk",
+        "This host has no screen of its own to play on.",
+    )
+}
+
+/// A device without the launch grant, or one a locked owner profile doesn't let in.
+fn not_allowed_to_start_games() -> Response {
+    api_error_coded(
+        StatusCode::FORBIDDEN,
+        "device_not_allowed_to_start_games",
+        "This device isn't allowed to start games on this host.",
+    )
+}
+
+/// What `owner` plays at the desk: its library view, and the profile its play time goes to.
+fn desk_view(
+    owner: Option<crate::profiles::Resolved>,
+) -> (crate::library::View, Option<crate::events::ProfileRef>) {
+    let view = owner
+        .as_ref()
+        .map_or_else(crate::library::View::here, crate::library::View::session);
+    let profile = owner.map(|o| crate::events::ProfileRef {
+        id: o.id,
+        display_name: o.display_name,
+    });
+    (view, profile)
+}
+
+/// [`desk_view`] of the owner's profile, for the operator's lane.
+pub(super) fn desk_library(
+    st: &MgmtState,
+) -> (crate::library::View, Option<crate::events::ProfileRef>) {
+    desk_view(desk_owner(st, None).0)
+}
+
+/// The owner's profile, which plays the desk, and whether device `fp` opens it as a connect
+/// with no PIN would be let in (`profiles::Profiles::opens`). The operator (`None`) always
+/// does. No profile store, as in a test that skips `serve`, names no owner and locks nothing.
+fn desk_owner(st: &MgmtState, fp: Option<&str>) -> (Option<crate::profiles::Resolved>, bool) {
+    let Some(profiles) = st.app.profiles.get() else {
+        return (None, true);
+    };
+    let id = profiles
+        .owner_id()
+        .unwrap_or_else(|| crate::profiles::OPERATOR_PROFILE_ID.to_string());
+    let opens = fp.is_none() || profiles.opens(&id, fp) == crate::profiles::Opens::Yes;
+    (profiles.pick(None, Some(&id)).ok(), opens)
+}
+
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct LaunchGameRequest {
+    /// Store-qualified library id (`steam:570`), as `GET /library` lists it.
+    pub app_id: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct LaunchGameResult {
+    /// `host`: this host starts it. `steam`: the Steam that owns this host's screen was asked to.
+    via: crate::desk::Via,
+    /// Present and true when this host already runs it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    running: bool,
 }
 
 /// Release a seat's held launch
@@ -563,6 +770,175 @@ pub(crate) async fn release_game_hold(Path(token): Path<String>) -> Response {
     } else {
         api_error(StatusCode::NOT_FOUND, "no launch waits on that hold")
     }
+}
+
+/// Hand a launch to Steam's tree
+///
+/// `punktfunk-host play` calls this from inside the Steam entry a title was synced as, with
+/// Steam's game id for that entry and the pad filter Steam set for it. The host finds the title
+/// in its Steam map and claims it for its own screen, then runs the download wait, the launch
+/// hold and emulator prepare with the pads that filter leaves, and answers the command to run
+/// and a token to report on. A title the host already runs answers `running`: start nothing, and
+/// wait until `GET /status` no longer lists it. Admin lane only.
+#[utoipa::path(
+    post,
+    path = "/game/handoff",
+    tag = "session",
+    operation_id = "handOffGame",
+    request_body = HandoffRequest,
+    responses(
+        (status = OK, description = "What to run, or that the title already runs", body = HandoffAnswer),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "The title the entry names is no longer in the library", body = ApiError),
+        (status = CONFLICT, description = "No screen of its own, no synced title for that entry, or the launch ended before it started", body = ApiError),
+    )
+)]
+pub(crate) async fn hand_off_game(
+    State(st): State<Arc<MgmtState>>,
+    ApiJson(req): ApiJson<HandoffRequest>,
+) -> Response {
+    use crate::desk::{Handoff, NoHandoff};
+    if !crate::desk::has_desk(pf_paths::seat::role()) {
+        return no_desk();
+    }
+    let (view, profile) = desk_library(&st);
+    let handed = tokio::task::spawn_blocking(move || {
+        let (ignore, except) = (&req.sdl_ignore, &req.sdl_ignore_except);
+        crate::desk::handoff(&view, &req.steam_gameid, ignore, except, profile)
+    })
+    .await;
+    let answer = |token, game: crate::gamelease::GameRef| HandoffAnswer {
+        token,
+        app_id: game.id.unwrap_or_default(),
+        title: game.title,
+        command: None,
+        env: None,
+        cwd: None,
+        running: false,
+    };
+    match handed {
+        Ok(Ok(Handoff::Start {
+            token,
+            game,
+            command,
+            env,
+        })) => {
+            tracing::info!(title = %game.title, "management API: launch handed to Steam's tree");
+            let env = env.into_iter().map(|(k, v)| (k.into(), v.into()));
+            Json(HandoffAnswer {
+                command: Some(command),
+                env: Some(env.collect()),
+                ..answer(token, game)
+            })
+            .into_response()
+        }
+        Ok(Ok(Handoff::Running { token, game })) => Json(HandoffAnswer {
+            running: true,
+            ..answer(token, game)
+        })
+        .into_response(),
+        Ok(Err(NoHandoff::Refused(refused))) => refusal(refused),
+        Ok(Err(NoHandoff::Declined(why))) if !why.message.is_empty() => {
+            api_error(StatusCode::CONFLICT, &why.message)
+        }
+        Ok(Err(NoHandoff::Declined(_) | NoHandoff::CalledOff)) => {
+            api_error(StatusCode::CONFLICT, "the launch ended before it started")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "handoff worker did not finish");
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "handoff worker did not finish",
+            )
+        }
+    }
+}
+
+/// Report on a handed-over launch
+///
+/// `play` reports `started` once, with the process id of the game; the host watches that
+/// process only if it is its own user's and started after the handoff. Then `exited` once, with
+/// the exit code. Sent without `started`, `exited` says nothing started. A token nobody reported
+/// a start on within 10 minutes is dropped. Admin lane only.
+#[utoipa::path(
+    post,
+    path = "/game/handoff/{token}",
+    tag = "session",
+    operation_id = "reportHandoff",
+    params(("token" = String, Path, description = "The `token` of the handoff's answer")),
+    request_body = HandoffEvent,
+    responses(
+        (status = NO_CONTENT, description = "Taken"),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "No handoff waits on that token: never issued, spent or dropped", body = ApiError),
+        (status = CONFLICT, description = "Reported already, or the process is not one this launch started", body = ApiError),
+    )
+)]
+pub(crate) async fn report_handoff(
+    Path(token): Path<String>,
+    ApiJson(event): ApiJson<HandoffEvent>,
+) -> Response {
+    use crate::desk::{Report, ReportRefused};
+    let report = match event {
+        HandoffEvent::Started { pid } => Report::Started(pid),
+        HandoffEvent::Exited { code } => Report::Exited(code),
+    };
+    match crate::desk::report(&token, report) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(ReportRefused::Unknown) => {
+            api_error(StatusCode::NOT_FOUND, "no launch waits on that token")
+        }
+        Err(ReportRefused::OutOfTurn) => {
+            api_error(StatusCode::CONFLICT, "that launch reported this already")
+        }
+        Err(ReportRefused::NotOurs) => api_error(
+            StatusCode::CONFLICT,
+            "that process is not one this launch started",
+        ),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct HandoffRequest {
+    /// Steam's 64-bit game id of the entry (`SteamGameId`), in decimal.
+    #[schema(example = "12412508506844823552")]
+    steam_gameid: String,
+    /// `SDL_GAMECONTROLLER_IGNORE_DEVICES` as Steam set it for the entry; empty when unset.
+    sdl_ignore: String,
+    /// `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT` as Steam set it; empty when unset.
+    sdl_ignore_except: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct HandoffAnswer {
+    /// What the reports name: `POST /game/handoff/{token}`. 64 hex. A `running` answer's
+    /// names nothing.
+    token: String,
+    /// The title's library id, as `GET /status` lists it.
+    app_id: String,
+    title: String,
+    /// What `sh -c` runs. Absent when the title already runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    /// Set on top of Steam's environment for the game. Absent when the title already runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    env: Option<std::collections::BTreeMap<String, String>>,
+    /// Always null: the command changes into its own directory.
+    cwd: Option<String>,
+    /// Present and true when this host already runs the title.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    running: bool,
+}
+
+/// What `play` reports on a handoff.
+#[derive(Deserialize, ToSchema)]
+#[serde(tag = "event", rename_all = "lowercase")]
+pub(crate) enum HandoffEvent {
+    /// The game's process, which `play` started.
+    Started { pid: u32 },
+    /// That process exited with `code`. Before `started`: nothing started.
+    Exited { code: i32 },
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -821,12 +1197,13 @@ mod game_ender_tests {
     fn device(fp: &str) -> GameEnder {
         GameEnder {
             owner: Some(fp.into()),
+            desk: false,
             refused: false,
         }
     }
 
     /// A device ends its own launches, in any hex case, and nobody else's. An
-    /// anonymous launch belongs to no device.
+    /// anonymous launch belongs to no device, and the desk's is not its own.
     #[test]
     fn a_device_may_end_only_what_it_launched() {
         let me = device("abcdef");
@@ -834,16 +1211,33 @@ mod game_ender_tests {
         assert!(me.may_end("detached", Some("abcdef")));
         assert!(!me.may_end("running", Some("123456")));
         assert!(!me.may_end("running", None));
+        assert!(!me.may_end("running", Some(crate::desk::KEY)));
+    }
+
+    /// A device on this machine with the launch grant reaches the desk's games, and still no
+    /// other device's.
+    #[test]
+    fn a_device_at_the_desk_may_end_the_desk_s_games() {
+        let here = GameEnder {
+            desk: true,
+            ..device("abcdef")
+        };
+        assert!(here.may_end("running", Some(crate::desk::KEY)));
+        assert!(here.may_end("launching", Some(crate::desk::KEY)));
+        assert!(!here.may_end("exited", Some(crate::desk::KEY)));
+        assert!(!here.may_end("running", Some("123456")));
     }
 
     #[test]
     fn the_operator_may_end_any_launch_the_host_can_still_end() {
         let op = GameEnder {
             owner: None,
+            desk: true,
             refused: false,
         };
         assert!(op.may_end("grace", None));
         assert!(op.may_end("launching", Some("abcdef")));
+        assert!(op.may_end("running", Some(crate::desk::KEY)));
         assert!(
             !op.may_end("untracked", Some("abcdef")),
             "exit is never seen"
@@ -855,8 +1249,10 @@ mod game_ender_tests {
     fn an_expired_device_may_end_nothing() {
         let expired = GameEnder {
             owner: Some("abcdef".into()),
+            desk: true,
             refused: true,
         };
         assert!(!expired.may_end("running", Some("abcdef")));
+        assert!(!expired.may_end("running", Some(crate::desk::KEY)));
     }
 }

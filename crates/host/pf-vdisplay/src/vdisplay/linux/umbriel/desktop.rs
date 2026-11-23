@@ -7,8 +7,9 @@
 //! output; window moves and full-screen act on the focused window, so they focus it first.
 
 use super::ipc::{self, Action, Output, Window, Workspace};
-use super::{focus_output, list_monitors, output_mgmt};
+use super::{focus_output, list_monitors};
 use crate::monitors::DISABLE_BUDGET;
+use crate::output_mgmt;
 use crate::toplevels::{Toplevel, WindowVerb};
 use crate::topology_journal::{self as journal, Head, Undo};
 use anyhow::{bail, Context, Result};
@@ -209,6 +210,7 @@ pub(crate) fn disable_other_heads(ours: &str, pending: &mut Vec<u64>) {
                     .iter()
                     .find(|(n, _)| n == name)
                     .map(|(_, m)| m.clone()),
+                at: None,
             })
             .collect();
         pending.push(journal::push("umbriel", Undo::EnableHeads { heads }))
@@ -239,7 +241,7 @@ fn disable_head(name: &str) -> Result<()> {
 /// meanwhile.
 fn restore_heads(heads: &[Head]) -> Vec<String> {
     let mut dark = Vec::new();
-    for Head { name, mode } in heads {
+    for Head { name, mode, .. } in heads {
         let Ok(outputs) = ipc::outputs() else {
             dark.push(name.clone());
             continue;
