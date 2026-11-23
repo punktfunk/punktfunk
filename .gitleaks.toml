@@ -23,3 +23,9 @@ regexes = [
   '''b8e4a1c07f2d4e6a9b3c5d8e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c''',
   '''s3cr3t-abcdefghijkl''',
 ]
+
+[[allowlists]]
+description = "Placeholder key in clients/shared/connect-request-vectors.json"
+regexes = [
+  '''-----BEGIN PRIVATE KEY-----\\nMIIE\\n-----END PRIVATE KEY-----''',
+]
