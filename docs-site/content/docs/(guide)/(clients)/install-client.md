@@ -100,8 +100,9 @@ For beta builds, install Apple's [TestFlight](https://apps.apple.com/app/testfli
 app, then [join the Punktfunk beta](https://testflight.apple.com/join/Qr7uSemk).
 
 Each [release](https://git.unom.io/unom/punktfunk/releases) also carries `Punktfunk-<version>.ipa`
-for sideloading with AltStore, SideStore or Sideloadly. Wake-on-LAN and the widget's host list need
-the App Store build.
+for sideloading with AltStore, SideStore or Sideloadly. For Apple TV, sideload
+`Punktfunk-tvOS-<version>.ipa` with Sideloadly. Wake-on-LAN and the widget's host list need the App
+Store build.
 
 ## Android
 
