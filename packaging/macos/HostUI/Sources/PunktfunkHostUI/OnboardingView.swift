@@ -1,102 +1,101 @@
-// The setup window's pages. Each grant page says why in one sentence, shows the live state
-// and offers one button; the footer moves between pages.
+// The setup window's pages. Every page sits on one scaffold: an icon, a title and a sentence at
+// a fixed height, then the page's cards. The footer moves between pages.
+import AppKit
 import SwiftUI
 
 struct OnboardingView: View {
     @Bindable var model: Onboarding
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Every page has this size, so the window can be placed before it first lays out.
-    static let size = CGSize(width: 540, height: 440)
+    static let size = CGSize(width: 600, height: 600)
 
     var body: some View {
         VStack(spacing: 0) {
             page
-                .padding(.horizontal, 48)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            HStack {
-                Dots(count: model.steps.count, index: model.index)
-                Spacer()
-                if model.index > 0 && model.step != .done {
-                    Button(L10n.commonBack) { model.back() }
-                }
-                if model.step == .done {
-                    Button(L10n.commonDone) { model.finish() }
-                        .keyboardShortcut(.defaultAction)
-                        .buttonStyle(.borderedProminent)
-                } else {
-                    Button(L10n.commonNext) { model.next() }
-                        .keyboardShortcut(.defaultAction)
-                }
-            }
-            .controlSize(.large)
-            .padding(20)
+                .id(model.step)
+                .transition(transition)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            Divider().opacity(0.5)
+            footer
         }
         .frame(width: Self.size.width, height: Self.size.height)
+        .background { Backdrop() }
+        .ignoresSafeArea()
         .tint(.brand)
+        .animation(.snappy(duration: 0.3), value: model.index)
+    }
+
+    /// A page slides in from the side it lies on; with reduced motion it only fades.
+    private var transition: AnyTransition {
+        if reduceMotion { return .opacity }
+        let shift: CGFloat = model.forward ? 28 : -28
+        return .asymmetric(insertion: .opacity.combined(with: .offset(x: shift)),
+                           removal: .opacity.combined(with: .offset(x: -shift)))
     }
 
     @ViewBuilder private var page: some View {
         switch model.step {
         case .welcome:
-            Page(icon: { BrandMark(size: 64) }, title: L10n.setupMacWelcomeTitle, text: L10n.setupMacWelcomeBody) {
-                Label { Text(L10n.setupMacWelcomeNetwork) } icon: { Image(systemName: "network") }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 400)
+            Page(title: L10n.setupMacWelcomeTitle, text: L10n.setupMacWelcomeBody, top: 76, heroHeight: 124) {
+                BrandMark(size: 116).shadow(color: Color.brand.opacity(0.35), radius: 22, y: 10)
+            } content: {
+                Card { NoteRow(symbol: "network", text: Text(L10n.setupMacWelcomeNetwork)) }
             }
         case .move:
-            Page(symbol: "folder", title: L10n.setupMacMoveTitle, text: L10n.setupMacMoveBody) {
+            Page(title: L10n.setupMacMoveTitle, text: L10n.setupMacMoveBody) {
+                IconTile(symbol: "arrow.down.app.fill")
+            } content: {
                 if let folder = Relocation.folderName(of: model.store.context.bundle) {
-                    StateLine(text: L10n.setupMacMoveState(folder: folder), icon: "info.circle", tint: .secondary)
+                    Card { NoteRow(symbol: "folder.fill", text: Text(L10n.setupMacMoveState(folder: folder))) }
                 }
-                Button(L10n.setupMacMove) { model.move() }.buttonStyle(.borderedProminent)
+                Button(L10n.setupMacMove) { model.move() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .padding(.top, 4)
                 if model.moveFailed {
                     Text(L10n.setupMacMoveFailed).font(.callout).foregroundStyle(.red)
                         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 }
             }
-        case .screen:
-            Page(symbol: "rectangle.dashed.badge.record", title: L10n.setupMacScreenTitle, text: L10n.setupMacScreenBody) {
-                if model.grants.screen {
-                    GrantState(grant: .allowed)
-                } else if model.screenAsked {
-                    StateLine(text: String(localized: L10n.setupMacScreenReopenHint), icon: "arrow.clockwise.circle", tint: .secondary)
-                    HStack {
-                        Button(L10n.setupMacOpenSettings) { model.screenAction() }
-                        Button(L10n.setupMacScreenReopen) { model.reopen() }.buttonStyle(.borderedProminent)
+        case .permissions:
+            Page(title: L10n.setupMacPermissionsTitle, text: L10n.setupMacPermissionsBody) {
+                IconTile(symbol: "lock.shield.fill")
+            } content: {
+                Card {
+                    GrantRow(symbol: "rectangle.dashed.badge.record", title: L10n.setupMacScreenTitle, text: L10n.setupMacScreenBody) {
+                        grantControl(.of(granted: model.grants.screen, asked: model.screenAsked),
+                                     ask: L10n.setupMacScreenAllow) { model.screenAction() }
                     }
-                } else {
-                    GrantState(grant: .denied)
-                    Button(L10n.setupMacScreenAllow) { model.screenAction() }.buttonStyle(.borderedProminent)
-                }
-            }
-        case .input:
-            Page(symbol: "keyboard", title: L10n.setupMacInputTitle, text: L10n.setupMacInputBody) {
-                if model.grants.input {
-                    GrantState(grant: .allowed)
-                } else if model.inputAsked {
-                    // As with screen recording, the grant reads as allowed only after a restart.
-                    StateLine(text: String(localized: L10n.setupMacScreenReopenHint), icon: "arrow.clockwise.circle", tint: .secondary)
-                    HStack {
-                        Button(L10n.setupMacOpenSettings) { model.inputAction() }
-                        Button(L10n.setupMacScreenReopen) { model.reopen() }.buttonStyle(.borderedProminent)
+                    RowDivider()
+                    GrantRow(symbol: "keyboard.fill", title: L10n.setupMacInputTitle, text: L10n.setupMacInputBody) {
+                        grantControl(.of(granted: model.grants.input, asked: model.inputAsked),
+                                     ask: L10n.setupMacInputAllow) { model.inputAction() }
                     }
-                } else {
-                    GrantState(grant: .denied)
-                    Button(L10n.setupMacInputAllow) { model.inputAction() }.buttonStyle(.borderedProminent)
+                    RowDivider()
+                    GrantRow(symbol: "speaker.wave.2.fill", title: L10n.setupMacAudioTitle, text: L10n.setupMacAudioBody) {
+                        grantControl(.of(granted: model.grants.audio == .allowed, asked: model.audioAsked),
+                                     ask: L10n.setupMacAudioAllow) { model.audioAction() }
+                    }
                 }
-            }
-        case .audio:
-            Page(symbol: "speaker.wave.2", title: L10n.setupMacAudioTitle, text: L10n.setupMacAudioBody) {
-                GrantState(grant: model.grants.audio, asked: model.audioAsked)
-                grantButton(GrantAction.of(granted: model.grants.audio == .allowed, asked: model.audioAsked),
-                            ask: L10n.setupMacAudioAllow) { model.audioAction() }
+                if model.needsReopen { ReopenBanner { model.reopen() } }
             }
         case .login:
-            Page(symbol: "person.badge.clock", title: L10n.setupMacLoginTitle, text: L10n.setupMacLoginBody) {
-                Toggle(isOn: $model.startAtLogin) { Text(L10n.trayMacStartAtLogin) }
-                    .toggleStyle(.switch)
-                    .disabled(!model.store.inApplications)
+            Page(title: L10n.setupMacLoginTitle, text: L10n.setupMacLoginBody) {
+                IconTile(symbol: "power")
+            } content: {
+                Card {
+                    HStack(spacing: 12) {
+                        IconTile(symbol: "clock.arrow.circlepath", size: 34)
+                        Text(L10n.trayMacStartAtLogin).font(.headline)
+                        Spacer()
+                        Toggle(isOn: $model.startAtLogin) { Text(L10n.trayMacStartAtLogin) }
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .disabled(!model.store.inApplications)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
                 if !model.store.inApplications {
                     Text(L10n.trayMacLoginElsewhere).font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
@@ -105,85 +104,272 @@ struct OnboardingView: View {
                 }
             }
         case .done:
-            Page(symbol: "checkmark.circle", title: L10n.setupMacDoneTitle, text: L10n.setupMacDoneBody) {
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
-                    GridRow { Text(L10n.setupMacScreenTitle); GrantState(grant: model.grants.screen ? .allowed : .denied) }
-                    GridRow { Text(L10n.setupMacInputTitle); GrantState(grant: model.grants.input ? .allowed : .denied) }
-                    GridRow { Text(L10n.setupMacAudioTitle); GrantState(grant: model.grants.audio, asked: model.audioAsked) }
-                }
-                .font(.callout)
-                if let verdict = model.controllers {
-                    VStack(spacing: 2) {
-                        Label {
-                            Text(verdict.text)
-                        } icon: {
-                            Image(systemName: verdict.available ? "gamecontroller.fill" : "gamecontroller")
-                        }
-                        if let impact = verdict.impact { Text(impact).foregroundStyle(.secondary) }
+            Page(title: L10n.setupMacDoneTitle, text: L10n.setupMacDoneBody) {
+                IconTile(symbol: "checkmark", color: .green)
+            } content: {
+                if let password = model.consolePassword { PasswordCard(password: password) }
+                Card {
+                    SummaryRow(symbol: "rectangle.dashed.badge.record", title: Text(L10n.setupMacScreenTitle)) {
+                        GrantState(grant: frozen(model.grants.screen, asked: model.screenAsked), asked: model.screenAsked)
                     }
-                    .font(.callout)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 400)
+                    RowDivider(inset: 44)
+                    SummaryRow(symbol: "keyboard", title: Text(L10n.setupMacInputTitle)) {
+                        GrantState(grant: frozen(model.grants.input, asked: model.inputAsked), asked: model.inputAsked)
+                    }
+                    RowDivider(inset: 44)
+                    SummaryRow(symbol: "speaker.wave.2", title: Text(L10n.setupMacAudioTitle)) {
+                        GrantState(grant: model.grants.audio, asked: model.audioAsked)
+                    }
+                    if let verdict = model.controllers {
+                        RowDivider(inset: 44)
+                        SummaryRow(symbol: verdict.available ? "gamecontroller.fill" : "gamecontroller",
+                                   title: Text(verdict.text), detail: verdict.impact) { EmptyView() }
+                    }
                 }
-                Button(L10n.trayMacOpenConsole) { model.store.openConsole() }
             }
         }
     }
 
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Dots(count: model.steps.count, index: model.index)
+            Spacer()
+            if model.index > 0 && model.step != .done {
+                Button(L10n.commonBack) { model.back() }
+            }
+            if model.step == .done {
+                Button(L10n.trayMacOpenConsole) { model.store.openConsole() }
+                Button(L10n.commonDone) { model.finish() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            } else if model.step == .permissions && model.grants.missingRequired {
+                // The grants are this page's main buttons; Return must not skip them.
+                Button(L10n.commonNext) { model.next() }
+            } else {
+                Button(L10n.commonNext) { model.next() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .controlSize(.large)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+
+    /// A grant macOS answers only after a restart: asked in this run, its answer is not known.
+    private func frozen(_ granted: Bool, asked: Bool) -> Grant {
+        granted ? .allowed : asked ? .unknown : .denied
+    }
+
+    /// One grant's control: its button until macOS allows it, then the state.
     @ViewBuilder
-    private func grantButton(_ action: GrantAction, ask: LocalizedStringResource, run: @escaping () -> Void) -> some View {
+    private func grantControl(_ action: GrantAction, ask: LocalizedStringResource, run: @escaping () -> Void) -> some View {
         switch action {
-        case .ask: Button(ask, action: run).buttonStyle(.borderedProminent)
-        case .openSettings: Button(L10n.setupMacOpenSettings, action: run).buttonStyle(.borderedProminent)
-        case .none: EmptyView()
+        case .none: GrantState(grant: .allowed)
+        case .ask:
+            Button(L10n.setupMacAllow, action: run).buttonStyle(.borderedProminent).accessibilityLabel(Text(ask))
+        case .openSettings: Button(L10n.setupMacOpenSettings, action: run)
         }
     }
 }
 
-private struct Page<Icon: View, Content: View>: View {
-    @ViewBuilder let icon: () -> Icon
+/// The window's ground: the system's own colour with the brand's glow from the top edge.
+private struct Backdrop: View {
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color(nsColor: .windowBackgroundColor)
+            EllipticalGradient(colors: [Color.brand.opacity(0.24), Color.brand.opacity(0)],
+                               center: .top, startRadiusFraction: 0, endRadiusFraction: 0.7)
+                .frame(height: 400)
+        }
+    }
+}
+
+private struct Page<Hero: View, Content: View>: View {
     let title: LocalizedStringResource
     let text: LocalizedStringResource
+    var top: CGFloat = 40
+    var heroHeight: CGFloat = 84
+    @ViewBuilder let hero: () -> Hero
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(spacing: 14) {
-            icon().padding(.bottom, 4)
-            Text(title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
-            Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        VStack(spacing: 0) {
+            hero().frame(height: heroHeight)
+            Text(title).font(.largeTitle.weight(.bold)).multilineTextAlignment(.center)
+                .padding(.top, 14)
+            Text(text).font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 400)
-            VStack(spacing: 12) { content() }.padding(.top, 6)
+                .frame(maxWidth: 430)
+                .padding(.top, 6)
+            VStack(spacing: 12) { content() }.padding(.top, 20)
+        }
+        .padding(.horizontal, 44)
+        .padding(.top, top)
+    }
+}
+
+/// A symbol on a rounded tile, as System Settings draws its icons.
+private struct IconTile: View {
+    let symbol: String
+    var size: CGFloat = 64
+    var color: Color = .brand
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+        shape.fill(color.gradient)
+            .overlay {
+                shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.4), .white.opacity(0)],
+                                                  startPoint: .top, endPoint: .bottom))
+            }
+            .overlay {
+                Image(systemName: symbol).font(.system(size: size * 0.44, weight: .semibold)).foregroundStyle(.white)
+            }
+            .frame(width: size, height: size)
+            .shadow(color: color.opacity(0.32), radius: size * 0.16, y: size * 0.08)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct Card<Content: View>: View {
+    @Environment(\.colorScheme) private var scheme
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        VStack(spacing: 0) { content() }
+            .frame(maxWidth: .infinity)
+            .background(Color.white.opacity(scheme == .dark ? 0.06 : 0.8), in: shape)
+            .overlay { shape.strokeBorder(Color.primary.opacity(scheme == .dark ? 0.1 : 0.07)) }
+    }
+}
+
+private struct RowDivider: View {
+    var inset: CGFloat = 60
+    var body: some View { Divider().padding(.leading, inset) }
+}
+
+private struct GrantRow<Trailing: View>: View {
+    let symbol: String
+    let title: LocalizedStringResource
+    let text: LocalizedStringResource
+    @ViewBuilder let trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 12) {
+            IconTile(symbol: symbol, size: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(text).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+/// A sentence beside a symbol, for what a page only says.
+private struct NoteRow: View {
+    let symbol: String
+    let text: Text
+
+    var body: some View {
+        HStack(spacing: 12) {
+            IconTile(symbol: symbol, size: 34)
+            text.font(.callout).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+private struct SummaryRow<Trailing: View>: View {
+    let symbol: String
+    let title: Text
+    var detail: String?
+    @ViewBuilder let trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                title
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing()
+        }
+        .font(.callout)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+}
+
+/// The restart a screen recording or control grant needs before macOS applies it.
+private struct ReopenBanner: View {
+    let run: () -> Void
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.clockwise.circle.fill").font(.title2).foregroundStyle(Color.brand)
+            Text(L10n.setupMacScreenReopenHint).font(.callout).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(L10n.setupMacScreenReopen, action: run).buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.brand.opacity(0.1), in: shape)
+        .overlay { shape.strokeBorder(Color.brand.opacity(0.25)) }
+    }
+}
+
+/// The console's first password: hidden until asked for, with a button that copies it.
+private struct PasswordCard: View {
+    let password: String
+    @State private var shown = false
+    @State private var copied = false
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.wizardPasswordTitle).font(.headline)
+                HStack(spacing: 8) {
+                    Text(verbatim: shown ? password : String(repeating: "•", count: password.count))
+                        .font(.system(.title3, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .accessibilityHidden(!shown)
+                    Button { shown.toggle() } label: { Image(systemName: shown ? "eye.slash" : "eye") }
+                        .help(Text(shown ? L10n.wizardPasswordHide : L10n.wizardPasswordShow))
+                        .accessibilityLabel(Text(shown ? L10n.wizardPasswordHide : L10n.wizardPasswordShow))
+                    Button(copied ? L10n.wizardPasswordCopied : L10n.wizardPasswordCopy) { copy() }
+                }
+                Text(L10n.setupMacPasswordHint).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
-}
 
-extension Page where Icon == PageSymbol {
-    init(symbol: String, title: LocalizedStringResource, text: LocalizedStringResource,
-         @ViewBuilder content: @escaping () -> Content)
-    {
-        self.init(icon: { PageSymbol(name: symbol) }, title: title, text: text, content: content)
-    }
-}
-
-private struct PageSymbol: View {
-    let name: String
-    var body: some View {
-        Image(systemName: name).font(.system(size: 46, weight: .regular)).foregroundStyle(Color.brand)
-            .frame(height: 64).accessibilityHidden(true)
-    }
-}
-
-private struct StateLine: View {
-    let text: String
-    let icon: String
-    let tint: Color
-
-    var body: some View {
-        Label { Text(text).foregroundStyle(.secondary) } icon: { Image(systemName: icon).foregroundStyle(tint) }
-            .font(.callout)
-            .fixedSize(horizontal: false, vertical: true)
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(password, forType: .string)
+        copied = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            copied = false
+        }
     }
 }
 
@@ -193,14 +379,18 @@ private struct GrantState: View {
 
     var body: some View {
         switch grant {
-        case .allowed:
-            StateLine(text: String(localized: L10n.setupMacStateAllowed), icon: "checkmark.circle.fill", tint: .green)
-        case .denied:
-            StateLine(text: String(localized: L10n.setupMacStateDenied), icon: "xmark.circle", tint: .secondary)
+        case .allowed: line(L10n.setupMacStateAllowed, "checkmark.circle.fill", .green)
+        case .denied: line(L10n.setupMacStateDenied, "xmark.circle", .secondary)
         case .unknown:
-            StateLine(text: String(localized: asked ? L10n.setupMacStateAsked : L10n.setupMacStateNotAsked),
-                      icon: "circle.dashed", tint: .secondary)
+            line(asked ? L10n.setupMacStateAsked : L10n.setupMacStateNotAsked, "circle.dashed", .secondary)
         }
+    }
+
+    /// The icon carries the colour; the word stays in the text colour, which reads on any ground.
+    private func line(_ text: LocalizedStringResource, _ icon: String, _ tint: Color) -> some View {
+        Label { Text(text) } icon: { Image(systemName: icon).foregroundStyle(tint) }
+            .font(.callout.weight(.medium))
+            .fixedSize()
     }
 }
 
@@ -211,7 +401,8 @@ private struct Dots: View {
     var body: some View {
         HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { i in
-                Circle().fill(i == index ? Color.brand : Color.secondary.opacity(0.35)).frame(width: 7, height: 7)
+                Capsule().fill(i == index ? Color.brand : Color.primary.opacity(0.18))
+                    .frame(width: i == index ? 20 : 7, height: 7)
             }
         }
         .accessibilityElement(children: .ignore)

@@ -564,5 +564,9 @@
 	"setup_mac_login_body": "Geräte können sich verbinden, sobald du angemeldet bist, ohne dass du Punktfunk Host zuerst öffnest.",
 	"setup_mac_done_title": "Punktfunk Host ist bereit",
 	"setup_mac_done_body": "Kopple ein Gerät über die Menüleiste oder ändere alles Weitere in der Web-Konsole.",
-	"setup_mac_step_a11y": "Schritt {step} von {total}"
+	"setup_mac_step_a11y": "Schritt {step} von {total}",
+	"setup_mac_permissions_title": "Berechtigungen",
+	"setup_mac_permissions_body": "In macOS entscheidest du, was Punktfunk Host auf diesem Gerät tun darf.",
+	"setup_mac_allow": "Erlauben",
+	"setup_mac_password_hint": "Die Web-Konsole fragt danach, wenn du dich von einem anderen Gerät anmeldest."
 }
