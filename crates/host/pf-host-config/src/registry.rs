@@ -532,7 +532,7 @@ pub static SETTINGS: &[Setting] = &[
     row("gamepad", "PUNKTFUNK_GAMEPAD", Kind::Enum(GAMEPADS), D::Str("auto"), Input, NextSession, "Default gamepad", "input")
         .only(LINUX_WINDOWS)
         .spellings(GAMEPAD_SPELLINGS),
-    row("pen", "PUNKTFUNK_PEN", Kind::Bool, D::Bool(true), Input, NextSession, "Pen input", "input").only(LINUX_WINDOWS),
+    row("pen", "PUNKTFUNK_PEN", Kind::Bool, D::Bool(true), Input, NextSession, "Pen input", "input"),
     row("steam_gadget", "PUNKTFUNK_STEAM_GADGET", TRI, D::Str("auto"), Input, NextSession, "Steam USB gadget", "input")
         .advanced()
         .only(LINUX)
@@ -695,6 +695,14 @@ mod tests {
             want,
             "the settings table in configuration.md is stale — rerun with UPDATE_SETTINGS_DOCS=1"
         );
+    }
+
+    /// Linux, Windows and macOS hosts each inject a pen, so the console shows the row on all.
+    #[test]
+    fn pen_input_applies_on_every_host() {
+        let s = find("pen").expect("the row exists");
+        assert!(s.os.is_empty(), "{:?}", s.os);
+        assert_eq!(s.env, "PUNKTFUNK_PEN");
     }
 
     /// One seat starts with the host by default; a box with no seats has none to start.

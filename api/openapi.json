@@ -11654,7 +11654,7 @@
               "format": "int32",
               "minimum": 0
             },
-            "description": "TCP ports on this computer the plugin wants to connect to, for a server that runs\nbeside the host. Each answers as `127.0.0.1:<port>`, where the plugin connects once the\noperator says yes: a network plugin reaches nothing else on this computer. Refused for\na plugin without `network`, for a port of the host's own, and off Linux."
+            "description": "TCP ports on this computer the plugin wants to connect to, for a server that runs\nbeside the host. Each answers as `127.0.0.1:<port>`, where the plugin connects once the\noperator says yes: a network plugin reaches nothing else on this computer. Refused for\na plugin without `network`, for a port of the host's own, and on Windows."
           },
           "reason": {
             "type": [
@@ -16275,7 +16275,7 @@
           },
           "os_name": {
             "type": "string",
-            "description": "Human-readable OS name (os-release `PRETTY_NAME`; `\"Windows\"`/`\"macOS\"` elsewhere).",
+            "description": "Human-readable OS name: os-release `PRETTY_NAME`, `\"Windows\"`, or macOS with its version\nand build (`\"macOS 27.0.1 (27A123)\"`).",
             "example": "Bazzite 42 (Kinoite)"
           },
           "ports": {
@@ -16574,7 +16574,7 @@
           },
           "takes_ports": {
             "type": "boolean",
-            "description": "The plugin uses the network on a host that can forward it a port of this computer\n(Linux): the console offers to allow one."
+            "description": "The plugin uses the network on a host that can forward it a port of this computer\n(Linux, macOS): the console offers to allow one."
           },
           "tier": {
             "type": "string",
@@ -21799,7 +21799,7 @@
           },
           "channel_hint": {
             "type": "string",
-            "description": "Copy-paste update command for this install kind."
+            "description": "Copy-paste update command for this install kind; for `mac-app`, the newer disk image's\ndownload link once a check found one."
           },
           "check_disabled": {
             "type": "boolean",
@@ -21810,7 +21810,7 @@
           },
           "install_kind": {
             "type": "string",
-            "description": "`windows-installer` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |\n`steamos-source` | `nix` | `source`."
+            "description": "`windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |\n`steamos-source` | `nix` | `source`."
           },
           "job": {
             "oneOf": [

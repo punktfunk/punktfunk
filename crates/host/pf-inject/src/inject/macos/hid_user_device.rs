@@ -11,7 +11,7 @@ use anyhow::{bail, Result};
 use block2::{DynBlock, RcBlock};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2_core_foundation::{
-    CFData, CFDictionary, CFIndex, CFNumber, CFRetained, CFString, CFType,
+    CFBoolean, CFData, CFDictionary, CFIndex, CFNumber, CFRetained, CFString, CFType,
 };
 use objc2_io_kit::{
     kIOHIDManufacturerKey, kIOHIDProductIDKey, kIOHIDProductKey, kIOHIDReportDescriptorKey,
@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 unsafe extern "C" {
@@ -256,28 +256,49 @@ impl Drop for HidUserDevice {
     }
 }
 
-/// A vendor-defined one-byte input report: no driver binds it.
-const PROBE_RDESC: &[u8] = &[
-    0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x01,
-    0x81, 0x02, 0xC0,
-];
+/// The entitlement every create needs.
+const ENTITLEMENT: &str = "com.apple.developer.hid.virtual.device";
 
-/// Whether this process may create a virtual HID device: one create of a neutral device on the
-/// first call, removed at once; later calls return that answer.
-pub fn probe() -> bool {
-    static READY: OnceLock<bool> = OnceLock::new();
-    *READY.get_or_init(|| {
-        let probe = Identity {
-            vendor: 0,
-            product: 0,
-            version: 0,
-            name: "Punktfunk probe",
-            manufacturer: "Punktfunk",
-            serial: "punktfunk-probe".into(),
-            rdesc: PROBE_RDESC,
-            bluetooth: false,
-            features: Vec::new(),
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    /// `SecTaskRef` for this process, +1. A NULL allocator is the default one.
+    fn SecTaskCreateFromSelf(allocator: *const std::ffi::c_void) -> *mut CFType;
+    /// The entitlement's value in `task`'s signature, +1; NULL when absent.
+    fn SecTaskCopyValueForEntitlement(
+        task: &CFType,
+        entitlement: &CFString,
+        error: *mut *mut CFType,
+    ) -> *mut CFType;
+}
+
+/// Whether this process's signature carries [`ENTITLEMENT`]. Reads the signature and creates no
+/// device. macOS kills at launch a process that claims this restricted entitlement without a
+/// profile allowing it, so a claim in a running process is a granted one.
+pub fn entitled() -> bool {
+    let name = CFString::from_str(ENTITLEMENT);
+    // SAFETY: both calls follow the Create/Copy rule, so each non-NULL return is +1 and
+    // `CFRetained::from_raw` adopts it exactly once. `task` and `name` are live CF objects for
+    // the second call, and a NULL error out-pointer is allowed.
+    let value = unsafe {
+        let Some(task) = NonNull::new(SecTaskCreateFromSelf(std::ptr::null())) else {
+            return false;
         };
-        HidUserDevice::open(&probe).is_ok()
-    })
+        let task = CFRetained::from_raw(task);
+        NonNull::new(SecTaskCopyValueForEntitlement(
+            &task,
+            &name,
+            std::ptr::null_mut(),
+        ))
+        .map(|v| CFRetained::from_raw(v))
+    };
+    value.is_some_and(|v| v.downcast_ref::<CFBoolean>().is_some_and(|b| b.as_bool()))
+}
+
+#[cfg(test)]
+mod tests {
+    /// A test binary is linker-signed with no entitlements: the read answers, and answers no.
+    #[test]
+    fn a_test_binary_is_not_entitled() {
+        assert!(!super::entitled());
+    }
 }

@@ -31,7 +31,7 @@ pub(super) fn final_path_of(f: &std::fs::File) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())).ok()
 }
 
-/// macOS twin (dev builds only — the shipped hosts are Linux and Windows): `F_GETPATH`.
+/// macOS twin: `F_GETPATH`.
 #[cfg(not(target_os = "linux"))]
 pub(super) fn final_path_of(f: &std::fs::File) -> Option<std::path::PathBuf> {
     use std::os::fd::AsRawFd as _;

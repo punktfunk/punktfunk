@@ -154,16 +154,25 @@ switch (process.argv[2]) {
 
 // ---- one unit, inside its sandbox (spawned by the supervisor; never run by hand) --------------
 //
-// The other half of runner-linux.ts's sandbox: `bwrap` re-execs this bundle with one unit to run,
+// The other half of a sandbox: `bwrap` or `sandbox-exec` re-execs this bundle with one unit to run,
 // so a plugin's code gets a process — and a token — of its own. Everything it can see was decided
 // by the argv on the outside; there is nothing left to enforce in here. The exit code is how the
 // supervisor learns the plugin failed, and what makes it restart on the usual backoff.
 const runUnit = arg("--run-unit");
 if (runUnit) {
 	const unit = { name: arg("--unit-name") ?? runUnit, file: runUnit };
-	// Set only on Linux, where the supervisor forwards every plugin's UI.
+	// Set only on Linux and macOS, where the supervisor forwards every plugin's UI. macOS names the
+	// socket: it has no bind to put it at the fixed path.
 	const uiPort = Number(process.env.PUNKTFUNK_UI_PORT);
-	if (uiPort > 0) redirectUiServe(uiPort);
+	if (uiPort > 0) redirectUiServe(uiPort, process.env.PUNKTFUNK_UI_SOCKET);
+	// macOS has no parent-death signal: a plugin whose runner died ends itself within a second,
+	// before the restarted runner starts it again.
+	if (process.platform === "darwin") {
+		const parent = process.ppid;
+		setInterval(() => {
+			if (process.ppid !== parent) process.exit(1);
+		}, 1000).unref();
+	}
 	// Set only for a Windows container, whose page goes over the host's channel on its pipe.
 	const channel = process.env.PUNKTFUNK_UI_CHANNEL;
 	const pipe = process.env.PUNKTFUNK_MGMT_UNIX;

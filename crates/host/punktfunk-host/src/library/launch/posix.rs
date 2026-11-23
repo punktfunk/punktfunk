@@ -1,6 +1,7 @@
-//! Linux (and every non-Windows) launch: the host runs a resolved shell command, nested in
-//! gamescope or into the live session. [`command_for`] is the `LaunchSpec` → command map, which
-//! spawns nothing; [`launch_session_command`] is the spawn.
+//! Linux and macOS launch: the host runs a resolved shell command, nested in gamescope or into
+//! the live session on Linux, onto the logged-in desktop on macOS. [`command_for`] is the
+//! `LaunchSpec` → command map, which spawns nothing; [`launch_session_command`] and
+//! [`launch_mac_command`] are the spawns.
 
 use super::*;
 
@@ -76,12 +77,19 @@ pub fn launch_is_resolvable(id: &str) -> bool {
     command_for(spec).is_some()
 }
 
+/// What hands a `steam://` link to Steam: its own binary on Linux, LaunchServices on macOS,
+/// where Steam.app is no command on `PATH`.
+#[cfg(not(target_os = "macos"))]
+const STEAM_LINK: &str = "steam";
+#[cfg(target_os = "macos")]
+const STEAM_LINK: &str = "/usr/bin/open";
+
 /// Map from [`LaunchSpec`] to a shell command; it spawns nothing. `exec` and `emulator` are
 /// absent: [`exec_recipe`] builds them first.
 fn command_for(spec: &LaunchSpec) -> Option<String> {
     match spec.kind.as_str() {
         "steam_appid" => valid_steam_appid(&spec.value)
-            .then(|| format!("steam steam://rungameid/{}", spec.value)),
+            .then(|| format!("{STEAM_LINK} steam://rungameid/{}", spec.value)),
         #[cfg(target_os = "linux")]
         "lutris_id" => (!spec.value.is_empty() && spec.value.bytes().all(|b| b.is_ascii_digit()))
             .then(|| format!("lutris lutris:rungameid/{}", spec.value)),
@@ -89,9 +97,16 @@ fn command_for(spec: &LaunchSpec) -> Option<String> {
         "heroic" => heroic_command(&spec.value),
         // Steam client UI (design D4). `-gamepadui` boots a fresh Steam into Big Picture (SteamOS
         // game-mode when nested); an already-running Steam ignores it and obeys only the URI.
+        #[cfg(not(target_os = "macos"))]
         "steam_ui" => match spec.value.as_str() {
             "bigpicture" => Some("steam -gamepadui steam://open/bigpicture".into()),
             "desktop" => Some("steam".into()),
+            _ => None,
+        },
+        #[cfg(target_os = "macos")]
+        "steam_ui" => match spec.value.as_str() {
+            "bigpicture" => Some(format!("{STEAM_LINK} steam://open/bigpicture")),
+            "desktop" => Some(format!("{STEAM_LINK} steam://open/main")),
             _ => None,
         },
         // Other launcher UIs (design D4). Host builds the command; the plugin names the launcher.
@@ -371,6 +386,32 @@ pub fn launch_session_command(
     })
 }
 
+/// `cmd` started on the logged-in user's desktop, in a process group of its own so the end-game
+/// ladder reaches what it starts: an app bundle through LaunchServices (`open -a`), anything else
+/// through `sh -c`, as on Linux. `open` returns once the app is up, so the lease finds the game
+/// by its detect signals.
+#[cfg(target_os = "macos")]
+pub fn launch_mac_command(cmd: &str) -> Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    let cmd = cmd.trim();
+    anyhow::ensure!(!cmd.is_empty(), "empty command");
+    let mut c = match app_bundle(cmd) {
+        Some(app) => {
+            let mut c = std::process::Command::new("/usr/bin/open");
+            c.arg("-a").arg(app);
+            c
+        }
+        None => {
+            let mut c = std::process::Command::new("/bin/sh");
+            c.arg("-c").arg(cmd);
+            c
+        }
+    };
+    let child = c.process_group(0).spawn().context("spawn launch command")?;
+    tracing::info!(command = %cmd, pid = child.id(), "launched app on the desktop");
+    Ok(child)
+}
+
 /// A user manager to open a scope under; without one `systemd-run --user` fails the launch.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
 fn user_manager_up() -> bool {
@@ -444,8 +485,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            command_for(&steam).as_deref(),
-            Some("steam steam://rungameid/570")
+            command_for(&steam),
+            Some(format!("{STEAM_LINK} steam://rungameid/570"))
         );
         let evil = LaunchSpec {
             kind: "steam_appid".into(),
@@ -537,6 +578,47 @@ mod tests {
         assert_eq!(ui("nonsense"), None);
         assert_eq!(ui(""), None);
     }
+    /// macOS hands every Steam link to LaunchServices: Steam.app is no command on `PATH`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn steam_links_go_through_open_on_macos() {
+        let ui = |v: &str| {
+            command_for(&LaunchSpec {
+                kind: "steam_ui".into(),
+                value: v.into(),
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            ui("bigpicture").as_deref(),
+            Some("/usr/bin/open steam://open/bigpicture")
+        );
+        assert_eq!(
+            ui("desktop").as_deref(),
+            Some("/usr/bin/open steam://open/main")
+        );
+        assert_eq!(ui("nonsense"), None);
+        let game = LaunchSpec {
+            kind: "steam_appid".into(),
+            value: "570".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            command_for(&game).as_deref(),
+            Some("/usr/bin/open steam://rungameid/570")
+        );
+    }
+
+    /// A plain command runs in a process group of its own and reports its exit.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_launch_runs_a_shell_line_in_its_own_group() {
+        let mut child = launch_mac_command("exit 3").expect("spawn the launch");
+        assert_eq!(child.wait().expect("reap it").code(), Some(3));
+        assert!(launch_mac_command("  ").is_err());
+    }
+
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn steam_ui_resolves_to_the_client_ui_on_linux() {
         let ui = |v: &str| {

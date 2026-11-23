@@ -740,6 +740,8 @@ fn attach_pipeline(
             screen,
             gamescope_cursor: plan.gamescope_cursor,
             mirrored: plan.mirrored,
+            #[cfg(target_os = "macos")]
+            framing: intent.framing(),
         },
     )
     .context("capture virtual output")?;

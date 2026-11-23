@@ -2,8 +2,9 @@
 //!
 //! Package ops (`add`/`remove`/`list`) go to the bun runner (`sdk/src/plugins.ts`):
 //! this binary locates it; it owns the vendored bun, `@punktfunk` scope, and plugins dir.
-//! Service ops (`enable`/`disable`/`status`) run here — `systemctl --user` or the
-//! `PunktfunkScripting` scheduled task — so they work without the runner package.
+//! Service ops (`enable`/`disable`/`status`) run here — `systemctl --user`, the
+//! `PunktfunkScripting` scheduled task, or the macOS host's own child — so they work without
+//! the runner package.
 //!
 //! Windows: `add`, `remove`, `enable` and `disable` need elevation (`%ProgramData%\punktfunk`
 //! is ACL'd; the task is admin-owned). Refuse unelevated rather than a bare EACCES from `bun add`.
@@ -228,8 +229,8 @@ fn grant(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<()
     // A port on this computer, spelled as its request spells it. The operator's own hand: only
     // Punktfunk's own range is refused, whatever port the API was moved to.
     if let Some(port) = access::port_of(dir) {
-        if !cfg!(target_os = "linux") {
-            bail!("a port on this computer is granted on a Linux host only");
+        if !access::FORWARDS_PORTS {
+            bail!("a port on this computer is granted on a Linux or macOS host only");
         }
         let store = access::AccessStore::open(pf_paths::config_dir());
         let allowed = store
@@ -607,7 +608,7 @@ pub(crate) fn runtime_status_as(person: bool) -> RuntimeStatus {
 }
 
 /// Has the operator turned the per-plugin sandbox off for the runner?
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub(crate) fn runner_sandbox_off() -> bool {
     plat::runner_sandbox_off()
 }
@@ -615,13 +616,13 @@ pub(crate) fn runner_sandbox_off() -> bool {
 /// Why the runner stopped at its last start instead of running a plugin unsandboxed, in its own
 /// words. It leaves `plugin-state/runner.refused` then and removes it at the next start that
 /// gets past its probe. The host can't repeat that probe: it runs outside the runner's unit.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub(crate) fn sandbox_refusal() -> Option<String> {
     sandbox_refusal_in(&pf_paths::config_dir())
 }
 
 /// One line, no control characters, 300 at most: the runner's text ends up in the console.
-#[cfg(any(test, target_os = "linux", windows))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
 fn sandbox_refusal_in(config_dir: &std::path::Path) -> Option<String> {
     let file = config_dir.join("plugin-state").join("runner.refused");
     let text = std::fs::read_to_string(file).ok()?;
@@ -817,11 +818,13 @@ pub(crate) fn publish_sandbox_override() {
 /// Give the runner every root a plugin declared or was granted: on Linux the unit's drop-in,
 /// which bwrap binds from and whose empty home hides the rest, restarting the runner when the
 /// set changed; on Windows an ACE per root for the runner's account, stripped when its plugin
-/// goes. On Linux a declared write outside `/tmp` first files the request the operator answers.
+/// goes. The macOS runner needs neither: it is unconfined, each plugin's profile names its roots,
+/// and it reads `plugin-grants.json` itself.
+/// Off Windows a declared write outside `/tmp` first files the request the operator answers.
 /// `true` when a root or ACE changed.
 pub(crate) fn converge_runner_roots() -> bool {
-    // Tests never touch the operator's systemd config or a folder's ACL; macOS has no runner.
-    if cfg!(test) || !(cfg!(target_os = "linux") || cfg!(windows)) || !runtime_status().installed {
+    // Tests never touch the operator's systemd config or a folder's ACL.
+    if cfg!(test) || !runtime_status().installed {
         return false;
     }
     // Two quick decisions must not race: the later one reads the grants the earlier wrote.
@@ -832,7 +835,7 @@ pub(crate) fn converge_runner_roots() -> bool {
     };
     let manifests = manifest::runner_plugins();
     let store = access::AccessStore::open(pf_paths::config_dir());
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     if let Err(e) = store.request_declared_writes(&manifests) {
         tracing::warn!(error = %e, "declared plugin writes not filed as requests");
     }

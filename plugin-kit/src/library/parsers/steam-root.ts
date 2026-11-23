@@ -58,6 +58,8 @@ export const steamRoots = (): string[] => {
 				path.join(home, ".steam/root"),
 				// Flatpak Steam
 				path.join(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+				// macOS: Steam.app keeps its data, `steamapps` included, here.
+				path.join(home, "Library/Application Support/Steam"),
 			);
 		}
 	}

@@ -60,7 +60,7 @@ pub(crate) struct AccessRequest {
     /// TCP ports on this computer the plugin wants to connect to, for a server that runs
     /// beside the host. Each answers as `127.0.0.1:<port>`, where the plugin connects once the
     /// operator says yes: a network plugin reaches nothing else on this computer. Refused for
-    /// a plugin without `network`, for a port of the host's own, and off Linux.
+    /// a plugin without `network`, for a port of the host's own, and on Windows.
     #[serde(default)]
     pub ports: Vec<u16>,
     /// Why the plugin wants it, in the plugin's words. Optional, sanitized, ≤120 chars.
@@ -274,8 +274,7 @@ pub(crate) async fn request_plugin_access(
         let networked =
             crate::plugins::manifest::for_provider(&id).is_some_and(|manifest| manifest.network);
         for &port in &req.ports {
-            // Only the Linux runner gives a plugin a network of its own to forward a port into.
-            if !cfg!(target_os = "linux") {
+            if !crate::plugins::access::FORWARDS_PORTS {
                 outcomes.push(crate::plugins::access::RequestOutcome {
                     path: crate::plugins::access::port_path(port),
                     outcome: "refused:unsupported".into(),

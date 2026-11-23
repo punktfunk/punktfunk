@@ -274,17 +274,18 @@ pub(crate) fn has_desk(role: HostRole) -> bool {
     matches!(role, HostRole::Plain | HostRole::Seat(SeatRole::Owner))
 }
 
-/// How a desk launch starts on this box. Windows starts every title itself. Linux needs a live
+/// How a desk launch starts on this box. Windows and macOS start every title themselves
+/// (`host_starts`): the macOS host runs in the logged-in user's session. Linux needs a live
 /// session (`session`); in the gamescope Steam owns, a Steam title (`steam_cmd`) or a title with
 /// a Steam entry of its own (`has_entry`) goes to that Steam, and any other title has no way in.
 fn route(
-    windows: bool,
+    host_starts: bool,
     session: Option<Compositor>,
     steam_owns: bool,
     steam_cmd: bool,
     has_entry: bool,
 ) -> Result<Via, Refused> {
-    if windows {
+    if host_starts {
         return Ok(Via::Host);
     }
     match session {
@@ -338,7 +339,7 @@ pub(crate) fn start(
         .then(|| SteamEntries::load().entry_for(id))
         .flatten();
     let via = route(
-        cfg!(windows),
+        cfg!(windows) || cfg!(target_os = "macos"),
         session,
         steam_owns,
         steam_cmd,
@@ -699,7 +700,10 @@ impl Drop for Unsettled {
 /// nothing spawns, and the row goes with no outcome.
 #[cfg_attr(
     not(any(windows, target_os = "linux")),
-    allow(unused_variables, reason = "no launch path")
+    allow(
+        unused_variables,
+        reason = "macOS starts on the desktop the host runs in"
+    )
 )]
 fn run(n: u64, target: LaunchTarget, owner: LaunchOwner, at: At, cancel: &AtomicBool) {
     let _unsettled = Unsettled {
@@ -816,7 +820,11 @@ mod tests {
         for bits in 0..8u8 {
             let (owns, cmd, entry) = (bits & 4 != 0, bits & 2 != 0, bits & 1 != 0);
             let row = format!("steam owns {owns}, steam command {cmd}, entry {entry}");
-            assert_eq!(route(true, None, owns, cmd, entry), host, "Windows: {row}");
+            assert_eq!(
+                route(true, None, owns, cmd, entry),
+                host,
+                "Windows, macOS: {row}"
+            );
             let none = route(false, None, owns, cmd, entry);
             assert_eq!(none, Err(Refused::NoSession), "no session: {row}");
             for desktop in [Kwin, Mutter] {

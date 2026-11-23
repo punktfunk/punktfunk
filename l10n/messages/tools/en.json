@@ -445,5 +445,124 @@
 	"tray_toast_streaming": "A client is streaming from this host",
 	"tray_stop_host": "Stop host",
 	"tray_open_logs": "Open logs folder",
-	"tray_stop_and_exit": "Stop host and exit tray"
+	"tray_stop_and_exit": "Stop host and exit tray",
+	"tray_mac_state_starting": "Starting…",
+	"tray_mac_state_idle": "Idle",
+	"tray_mac_state_idle_kept": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Idle · {count} display kept",
+				"n=other": "Idle · {count} displays kept"
+			}
+		}
+	],
+	"tray_mac_state_streaming": "Streaming",
+	"tray_mac_state_streaming_mode": "Streaming {width}×{height}@{fps}",
+	"tray_mac_state_unavailable": "Status unavailable",
+	"tray_mac_session_mode": "{width}×{height} @ {fps} fps",
+	"tray_mac_session_connecting": "Connecting…",
+	"tray_mac_session_end": "End Session",
+	"tray_mac_session_end_confirm": "End the stream to {name}?",
+	"tray_mac_session_end_failed": "Couldn't end the session — {why}",
+	"tray_mac_pair": "Pair a Device",
+	"tray_mac_pair_enter": "Enter this PIN on the device you're pairing.",
+	"tray_mac_pair_bound_for": "PIN for {name}",
+	"tray_mac_pair_expires": "Expires in {time}",
+	"tray_mac_pair_failed": "Couldn't start pairing — {why}",
+	"tray_mac_pending_approve": "Approve",
+	"tray_mac_pending_guest": "Approve as Guest",
+	"tray_mac_pending_guest_hint": "Controller only, for 4 hours.",
+	"tray_mac_pending_deny": "Deny",
+	"tray_mac_pending_arm": "Pair with PIN",
+	"tray_mac_pending_from_internet": "From the internet",
+	"tray_mac_pending_through_web": "Through the web client",
+	"tray_mac_pending_from_new_page": "From a new page",
+	"tray_mac_pending_remote_hint": "Its name proves nothing from there, so pair it with a PIN instead.",
+	"tray_mac_pending_code": "Device code",
+	"tray_mac_pending_code_hint": "Compare it with the code on the device, if it shows one.",
+	"tray_mac_pending_age_now": "Just now",
+	"tray_mac_pending_age_mins": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{count} minute ago",
+				"n=other": "{count} minutes ago"
+			}
+		}
+	],
+	"tray_mac_pending_approve_failed": "Couldn't approve {name} — {why}",
+	"tray_mac_pending_deny_failed": "Couldn't deny {name} — {why}",
+	"tray_mac_attention_permissions": "Allow Permissions…",
+	"tray_mac_release": "Release",
+	"tray_mac_release_confirm": [
+		{
+			"declarations": [
+				"input count",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "Release the kept display?",
+				"n=other": "Release {count} kept displays?"
+			}
+		}
+	],
+	"tray_mac_release_failed": "Couldn't release the kept displays — {why}",
+	"tray_mac_update_available": "Version {version} is available",
+	"tray_mac_console_down": "The web console isn't responding",
+	"tray_mac_open_console": "Open Web Console",
+	"tray_mac_console_failed": "Couldn't open the web console — {why}",
+	"tray_mac_start_at_login": "Start at Login",
+	"tray_mac_login_approval": "Allow in Login Items…",
+	"tray_mac_login_elsewhere": "Move Punktfunk Host to Applications to start it at login.",
+	"tray_mac_login_failed": "Couldn't change the login start — {why}",
+	"tray_mac_open_logs": "Open Logs Folder",
+	"tray_mac_restart": "Restart Punktfunk Host",
+	"tray_mac_restart_failed": "Couldn't restart Punktfunk Host — {why}",
+	"tray_mac_quit": "Quit Punktfunk Host",
+	"setup_mac_window_title": "Punktfunk Host Setup",
+	"setup_mac_welcome_title": "Welcome to Punktfunk Host",
+	"setup_mac_welcome_body": "A few permissions let other devices stream from this one.",
+	"setup_mac_welcome_network": "macOS will ask to let Punktfunk Host find devices on your network. Allow it, or they can't connect.",
+	"setup_mac_move_title": "Move to Applications",
+	"setup_mac_move_body": "Punktfunk Host belongs in the Applications folder, where it can start at login.",
+	"setup_mac_move_state": "Running from {folder}",
+	"setup_mac_move": "Move and Reopen",
+	"setup_mac_move_failed": "Couldn't move Punktfunk Host. Drag it to the Applications folder, then open it from there.",
+	"setup_mac_screen_title": "Screen recording",
+	"setup_mac_screen_body": "Lets Punktfunk Host send this device's screen to the device you stream to.",
+	"setup_mac_screen_allow": "Allow Screen Recording",
+	"setup_mac_screen_reopen": "Reopen Punktfunk Host",
+	"setup_mac_screen_reopen_hint": "macOS applies the permission once Punktfunk Host reopens.",
+	"setup_mac_input_title": "Keyboard and mouse",
+	"setup_mac_input_body": "Lets the device you stream to type and move the pointer on this device.",
+	"setup_mac_input_allow": "Allow Control",
+	"setup_mac_audio_title": "System audio",
+	"setup_mac_audio_body": "Lets Punktfunk Host send this device's sound to the device you stream to.",
+	"setup_mac_audio_allow": "Allow System Audio",
+	"setup_mac_open_settings": "Open System Settings",
+	"setup_mac_state_allowed": "Allowed",
+	"setup_mac_state_denied": "Not allowed",
+	"setup_mac_state_not_asked": "Not asked yet",
+	"setup_mac_state_asked": "Asked",
+	"setup_mac_login_title": "Start at login",
+	"setup_mac_login_body": "Devices can connect whenever you're logged in, without opening Punktfunk Host first.",
+	"setup_mac_done_title": "Punktfunk Host is ready",
+	"setup_mac_done_body": "Pair a device from the menu bar, or change anything else in the web console.",
+	"setup_mac_step_a11y": "Step {step} of {total}"
 }

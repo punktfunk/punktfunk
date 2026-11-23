@@ -230,6 +230,14 @@ pub(crate) fn offers_update(
     }
 }
 
+/// Where an install that updates by hand downloads the build `manifest` names: the Mac app's
+/// disk image. Only an Apple silicon host reads the arm64 image.
+pub(crate) fn download_url(kind: detect::InstallKind, manifest: &Manifest) -> Option<String> {
+    let mac = kind == detect::InstallKind::MacApp && cfg!(target_arch = "aarch64");
+    mac.then(|| manifest.macos_host_arm64.as_ref().map(|a| a.url.clone()))
+        .flatten()
+}
+
 /// Blocking feed fetch; call from a blocking thread.
 fn fetch_manifest_blocking(channel: &str) -> Result<Manifest, FeedError> {
     pf_update_check::feed::fetch_manifest_blocking(
@@ -379,6 +387,8 @@ pub(crate) enum ForceError {
 pub(crate) enum ApplyError {
     /// No one-click leg; the console shows the command instead.
     Unsupported,
+    /// The Mac app, which a person updates from its disk image.
+    DiskImage,
     Disabled,
     /// In-process job, or a spawned installer that has not resolved yet.
     JobRunning,
@@ -396,7 +406,10 @@ pub(crate) fn start_apply(force: bool, session_active: bool) -> Result<(), Apply
     }
     let (kind, channel) = detect::detect();
     // The table [`apply_support`] reads, so a direct POST meets the same refusals.
-    let leg = apply_leg(kind, Caps::probe()).ok_or(ApplyError::Unsupported)?;
+    let leg = apply_leg(kind, Caps::probe()).ok_or(match kind {
+        detect::InstallKind::MacApp => ApplyError::DiskImage,
+        _ => ApplyError::Unsupported,
+    })?;
     let windows_leg = leg == Leg::Installer;
     if session_active && !force {
         return Err(ApplyError::SessionActive);
@@ -644,10 +657,11 @@ mod tests {
         }
     }
 
-    const KINDS: [detect::InstallKind; 10] = {
+    const KINDS: [detect::InstallKind; 11] = {
         use detect::InstallKind as K;
         [
             K::WindowsInstaller,
+            K::MacApp,
             K::Flatpak,
             K::Sysext,
             K::RpmOstree,
@@ -713,6 +727,7 @@ mod tests {
             (K::RpmOstree, Some(Leg::Helper), "staged"),
             (K::SteamosSource, Some(Leg::SteamosSource), "full"),
             (K::Flatpak, None, "notify"),
+            (K::MacApp, None, "notify"),
             (K::Nix, None, "notify"),
             (K::Source, None, "notify"),
         ] {
@@ -784,6 +799,27 @@ mod tests {
             let want = (kind == detect::InstallKind::WindowsInstaller).then_some(Leg::Installer);
             assert_eq!(apply_leg(kind, elsewhere), want, "{}", kind.as_str());
         }
+    }
+
+    /// The Mac app is offered the manifest's disk image; every other kind keeps its command,
+    /// and a manifest without the Mac leg leaves the Mac its fallback.
+    #[test]
+    fn the_mac_app_downloads_the_manifests_disk_image() {
+        use detect::InstallKind as K;
+        let url = "https://git.unom.io/unom/punktfunk/releases/download/v0.48.0/Punktfunk-Host-0.48.0-arm64.dmg";
+        let with: Manifest = serde_json::from_value(serde_json::json!({
+            "schema": 1, "channel": "stable", "serial": 1, "version": "0.48.0",
+            "macos_host_arm64": { "url": url, "sha256": "cc".repeat(32) },
+        }))
+        .unwrap();
+        let want = cfg!(target_arch = "aarch64").then(|| url.to_string());
+        assert_eq!(download_url(K::MacApp, &with), want);
+        assert_eq!(download_url(K::Source, &with), None);
+        let without: Manifest = serde_json::from_value(serde_json::json!({
+            "schema": 1, "channel": "stable", "serial": 1, "version": "0.48.0",
+        }))
+        .unwrap();
+        assert_eq!(download_url(K::MacApp, &without), None);
     }
 
     /// `last_error` and `not_published` never arrive together. The benign

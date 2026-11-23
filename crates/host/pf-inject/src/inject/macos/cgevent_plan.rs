@@ -7,15 +7,18 @@
 //! - Keys: the wire's US-positional VK → the ANSI-positional macOS key code ([`mac_key`]).
 //!   Every event carries the flags of the modifiers held, with the side bits a keyboard sets.
 //!   A modifier is a flags-changed event; the client's auto-repeat is posted as auto-repeat.
-//! - Pointer: every location lands on [`Desk::bounds`], relative motion from where the planner
-//!   last put the pointer while the cursor read back still lags it. A press close to the last
-//!   one in time and place counts up the click state; a move with a button held is a drag.
+//! - Pointer: an absolute location lands on its screen's display ([`Desk::screen`]), relative
+//!   motion on the screen display the pointer is on, from where the planner last put it while
+//!   the cursor read back still lags it. A press close to the last one in time and place
+//!   counts up the click state; a move with a button held is a drag.
 //! - Scroll: the shared mapper's libei plan (point distance, v120 clicks, stops) as pixel
 //!   and line events; a phased wire gesture also carries the scroll phase.
+//! - Touch: [`crate::touch_plan`] emulates it with the pointer, scroll and gestures.
 
 use crate::held::HeldInput;
 use crate::plan::Abs;
 use crate::scroll::{ScrollBackend, ScrollMapper, ScrollOp, WheelAxis};
+use crate::touch_plan::{Act, TouchPlanner};
 use punktfunk_core::input::scroll::{ScrollEvent, ScrollPhase};
 use punktfunk_core::input::{InputEvent, InputKind};
 use std::collections::VecDeque;
@@ -62,6 +65,14 @@ pub(crate) mod phase {
     pub const CHANGED: u32 = 2;
     pub const ENDED: u32 = 4;
     pub const CANCELLED: u32 = 8;
+    pub const MAY_BEGIN: u32 = 128;
+}
+
+/// `CGMomentumScrollPhase` values. A momentum event carries no scroll phase.
+pub(crate) mod momentum {
+    pub const BEGIN: u32 = 1;
+    pub const CONTINUE: u32 = 2;
+    pub const END: u32 = 3;
 }
 
 /// `kVK_Space`: the key a text event rides on.
@@ -70,7 +81,7 @@ const KVK_CAPS_LOCK: u16 = 0x39;
 
 /// How far apart two presses land and still count up, in points: Windows' default
 /// double-click rectangle.
-const CLICK_SLOP: f64 = 4.0;
+pub(crate) const CLICK_SLOP: f64 = 4.0;
 
 /// Known pointer locations kept: more than a back-to-back burst of moves leaves unapplied when
 /// the cursor is read back.
@@ -82,13 +93,35 @@ const BUTTONS: [u32; 5] = [0, 2, 1, 3, 4];
 /// `(x, y, w, h)` in global display points, y down from the main display's top.
 pub(crate) type Rect = (f64, f64, f64, f64);
 
+/// The screens of a session: the first and [`crate::EXTRA_SCREENS`] more.
+pub(crate) const SCREENS: usize = 1 + crate::EXTRA_SCREENS;
+
 /// What a pointer event reads off the desktop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Desk {
     /// Where the window server has the cursor now. It lags the events it has not applied.
     pub cursor: (f64, f64),
-    /// The display absolute input maps into, and every posted location stays on.
-    pub bounds: Rect,
+    /// The display each screen's absolute input maps into, the first at 0. A screen with no
+    /// display of its own has the first's.
+    pub screens: [Rect; SCREENS],
+}
+
+impl Desk {
+    /// Screen `screen`'s display; the first's for a screen past the last.
+    pub fn screen(&self, screen: u8) -> Rect {
+        let i = usize::from(screen);
+        self.screens.get(i).copied().unwrap_or(self.screens[0])
+    }
+
+    /// The screen display `p` is on, else the first's: every posted location stays on one.
+    fn holding(&self, (x, y): (f64, f64)) -> Rect {
+        let on = |&(bx, by, bw, bh): &Rect| x >= bx && x < bx + bw && y >= by && y < by + bh;
+        self.screens
+            .iter()
+            .copied()
+            .find(on)
+            .unwrap_or(self.screens[0])
+    }
 }
 
 /// One event to post, every field decided.
@@ -115,10 +148,41 @@ pub(crate) enum Post {
         flags: u64,
     },
     /// Wheel 1 is vertical, positive up; wheel 2 horizontal, positive left. In lines or points.
+    /// `phase` is a [`phase`], `momentum` a [`momentum`]; one of them is 0.
     Scroll {
         lines: bool,
         wheel1: i32,
         wheel2: i32,
+        phase: u32,
+        momentum: u32,
+        flags: u64,
+    },
+    /// A pen sample: a mouse event of type `ty` with the tablet-point subtype. `buttons` are
+    /// `NX_TABLET_BUTTON_*` bits, `pressure` 0..1, `tilt` -1..1 on each axis, `rotation` in
+    /// degrees.
+    Tablet {
+        ty: u32,
+        at: (f64, f64),
+        buttons: u32,
+        pressure: f64,
+        tilt: (f64, f64),
+        rotation: f64,
+        clicks: i64,
+    },
+    /// The pen entering or leaving range: its `NX_TABLET_POINTER_*` and the
+    /// `NX_TABLET_CAPABILITY_*` bits it reports.
+    Proximity {
+        enter: bool,
+        pointer: u32,
+        caps: u32,
+        at: (f64, f64),
+    },
+    /// A trackpad gesture at the pointer: `subtype` and `phase` are
+    /// [`crate::touch_plan::gesture`] values, `value` the magnification or degrees since the
+    /// last one.
+    Gesture {
+        subtype: i64,
+        value: f64,
         phase: u32,
         flags: u64,
     },
@@ -137,6 +201,8 @@ struct Press {
 pub(crate) struct Planner {
     /// Keys (low-byte VKs) and wire buttons pressed and not released.
     held: HeldInput,
+    /// Keys the HID keyboard holds ([`Self::shadow`]).
+    shadow: HeldInput,
     /// Caps Lock's lock, flipped by each press.
     caps: bool,
     /// `CGMouseButton`s down, one bit each.
@@ -154,12 +220,14 @@ pub(crate) struct Planner {
     wheel: [WheelAxis; 2],
     /// Axes inside a phased gesture. macOS phases one gesture over both axes.
     open: [bool; 2],
+    touch: TouchPlanner,
 }
 
 impl Planner {
     pub fn new(double_click: Duration) -> Self {
         Planner {
             held: HeldInput::default(),
+            shadow: HeldInput::default(),
             caps: false,
             buttons: 0,
             press: None,
@@ -169,6 +237,7 @@ impl Planner {
             px: [0.0; 2],
             wheel: Default::default(),
             open: [false; 2],
+            touch: TouchPlanner::new(),
         }
     }
 
@@ -180,7 +249,10 @@ impl Planner {
             InputKind::MouseMove => {
                 let d = desk();
                 let (x, y) = self.pointer(d.cursor);
-                let at = clamp_to(d.bounds, (x + f64::from(ev.x), y + f64::from(ev.y)));
+                let at = clamp_to(
+                    d.holding((x, y)),
+                    (x + f64::from(ev.x), y + f64::from(ev.y)),
+                );
                 vec![self.motion(at, (ev.x, ev.y))]
             }
             InputKind::MouseMoveAbs => {
@@ -188,7 +260,7 @@ impl Planner {
                     return Vec::new();
                 };
                 let d = desk();
-                let ((fx, fy), b) = (abs.normalized(), d.bounds);
+                let ((fx, fy), b) = (abs.normalized(), d.screen(abs.screen));
                 let at = clamp_to(b, (b.0 + fx * b.2, b.1 + fy * b.3));
                 let (x, y) = self.pointer(d.cursor);
                 let delta = ((at.0 - x).round() as i32, (at.1 - y).round() as i32);
@@ -204,11 +276,13 @@ impl Planner {
                 let ops = self.scroll.plan(ev);
                 self.lower(ops, phased)
             }
-            // Touch and pen stay off on macOS; pads are another plane.
-            InputKind::TouchDown
-            | InputKind::TouchMove
-            | InputKind::TouchUp
-            | InputKind::GamepadButton
+            InputKind::TouchDown | InputKind::TouchMove | InputKind::TouchUp => {
+                let d = desk();
+                let acts = self.touch.step(ev, now, &d, self.flags());
+                self.act(acts, now, d)
+            }
+            // Pads are another plane.
+            InputKind::GamepadButton
             | InputKind::GamepadAxis
             | InputKind::GamepadState
             | InputKind::GamepadRemove
@@ -216,23 +290,69 @@ impl Planner {
         }
     }
 
-    /// When a held scroll stop falls due ([`Self::flush`]).
+    /// When a held scroll stop, a long press or a momentum frame falls due ([`Self::flush`]).
     pub fn due(&self) -> Option<Instant> {
-        self.scroll.stop_due()
+        match (self.scroll.stop_due(), self.touch.due()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
-    /// The scroll stops due by `now`.
-    pub fn flush(&mut self, now: Instant) -> Vec<Post> {
+    /// The scroll stops, long press and momentum frame due by `now`.
+    pub fn flush(&mut self, now: Instant, desk: &dyn Fn() -> Desk) -> Vec<Post> {
         let ops = self.scroll.flush_due(now);
-        self.lower(ops, false)
+        let mut out = self.lower(ops, false);
+        let acts = self.touch.flush(now, self.flags());
+        if !acts.is_empty() {
+            out.extend(self.act(acts, now, desk()));
+        }
+        out
     }
 
-    /// The ups for every key and button still held, then the end of an open scroll gesture.
+    /// The ups for every key and button still held, then the end of an open scroll gesture and
+    /// of what touch left open.
     pub fn release(&mut self, now: Instant, desk: &dyn Fn() -> Desk) -> Vec<Post> {
         let ups = self.held.clone().release();
         let mut out: Vec<Post> = ups.iter().flat_map(|up| self.plan(up, now, desk)).collect();
         let ops = self.scroll.cancel_all();
         out.extend(self.lower(ops, false));
+        let acts = self.touch.release(self.flags());
+        if !acts.is_empty() {
+            out.extend(self.act(acts, now, desk()));
+        }
+        out
+    }
+
+    /// Touch's acts as events: a point is a move there, a button a press like the client's.
+    fn act(&mut self, acts: Vec<Act>, now: Instant, d: Desk) -> Vec<Post> {
+        let mut out = Vec::new();
+        for a in acts {
+            match a {
+                Act::Point(p) => {
+                    let (x, y) = self.pointer(d.cursor);
+                    let at = clamp_to(d.holding(p), p);
+                    let delta = ((at.0 - x).round() as i32, (at.1 - y).round() as i32);
+                    out.push(self.motion(at, delta));
+                }
+                Act::Button(code, down) => {
+                    let kind = if down {
+                        InputKind::MouseButtonDown
+                    } else {
+                        InputKind::MouseButtonUp
+                    };
+                    let ev = InputEvent {
+                        kind,
+                        _pad: [0; 3],
+                        code,
+                        x: 0,
+                        y: 0,
+                        flags: 0,
+                    };
+                    out.extend(self.button(&ev, now, &|| d));
+                }
+                Act::Post(p) => out.push(p),
+            }
+        }
         out
     }
 
@@ -274,10 +394,25 @@ impl Planner {
         })
     }
 
-    /// The modifier flags of every held key and the Caps Lock lock.
+    /// Note a key the HID keyboard took. Events posted here carry its modifier and its Caps
+    /// Lock flip; it posts nothing, and [`Self::release`] leaves it to that keyboard.
+    pub fn shadow(&mut self, ev: &InputEvent) {
+        let vk = ev.code & 0xff;
+        let changed = self.shadow.note(&InputEvent { code: vk, ..*ev });
+        if changed && ev.kind == InputKind::KeyDown && mac_key(vk as u8) == Some(KVK_CAPS_LOCK) {
+            self.caps = !self.caps;
+        }
+    }
+
+    /// The HID keyboard is gone, and the keys it held with it.
+    pub fn unshadow(&mut self) {
+        self.shadow = HeldInput::default();
+    }
+
+    /// The modifier flags of every held key, the HID keyboard's too, and the Caps Lock lock.
     fn flags(&self) -> u64 {
         let caps = if self.caps { flag::ALPHA_SHIFT } else { 0 };
-        (self.held.keys())
+        (self.held.keys().chain(self.shadow.keys()))
             .filter_map(|vk| modifier(mac_key(vk as u8)?))
             .fold(caps, |f, m| f | m)
     }
@@ -290,7 +425,8 @@ impl Planner {
         }
         let down = ev.kind == InputKind::MouseButtonDown;
         let d = desk();
-        let at = clamp_to(d.bounds, self.pointer(d.cursor));
+        let p = self.pointer(d.cursor);
+        let at = clamp_to(d.holding(p), p);
         self.moved_to(at);
         let (press, release, _) = button_types(button);
         let clicks = if down {
@@ -433,6 +569,7 @@ fn scroll(lines: bool, horizontal: bool, value: i32, phase: u32, flags: u64) -> 
         wheel1,
         wheel2,
         phase,
+        momentum: 0,
         flags,
     }
 }
@@ -464,8 +601,39 @@ pub(crate) fn pick_bounds(stream: Option<Rect>, main: Rect) -> Rect {
     stream.filter(|r| r.2 >= 1.0 && r.3 >= 1.0).unwrap_or(main)
 }
 
+/// Display rects read once per display-configuration epoch, keyed by display id. A new epoch
+/// drops every rect read before it.
+pub(crate) struct BoundsCache {
+    epoch: u64,
+    rects: Vec<(u32, Rect)>,
+}
+
+impl BoundsCache {
+    pub const fn new() -> Self {
+        BoundsCache {
+            epoch: 0,
+            rects: Vec::new(),
+        }
+    }
+
+    /// The rect of `display` in `epoch`, from `read` when this epoch has not read it. Load the
+    /// epoch before reading the rect: a change between the two then costs one extra read.
+    pub fn get(&mut self, epoch: u64, display: u32, read: impl FnOnce() -> Rect) -> Rect {
+        if self.epoch != epoch {
+            self.epoch = epoch;
+            self.rects.clear();
+        }
+        if let Some(&(_, r)) = self.rects.iter().find(|(d, _)| *d == display) {
+            return r;
+        }
+        let r = read();
+        self.rects.push((display, r));
+        r
+    }
+}
+
 /// `p` moved onto `b`. The far edge, `x + w`, is the next display's first column.
-fn clamp_to(b: Rect, (x, y): (f64, f64)) -> (f64, f64) {
+pub(crate) fn clamp_to(b: Rect, (x, y): (f64, f64)) -> (f64, f64) {
     let last = |o: f64, n: f64| o + (n - 1.0).max(0.0);
     (x.clamp(b.0, last(b.0, b.2)), y.clamp(b.1, last(b.1, b.3)))
 }
@@ -634,10 +802,11 @@ mod tests {
     const KVK_RIGHT_SHIFT: u16 = 0x3C;
     const SHIFTED: u64 = flag::SHIFT | flag::L_SHIFT;
 
-    /// A cursor left of the stream display, which sits right of a 1920-wide main one.
+    /// A cursor left of the stream display, which sits right of a 1920-wide main one. No
+    /// further screen has a display of its own.
     const DESK: Desk = Desk {
         cursor: (100.0, 100.0),
-        bounds: (1920.0, 0.0, 2560.0, 1440.0),
+        screens: [(1920.0, 0.0, 2560.0, 1440.0); SCREENS],
     };
 
     fn ev(kind: InputKind, code: u32) -> InputEvent {
@@ -748,6 +917,35 @@ mod tests {
                 key(ty::KEY_UP, KVK_A, SHIFTED, false),
                 key(ty::FLAGS_CHANGED, KVK_SHIFT, 0, false),
             ]
+        );
+    }
+
+    /// A Shift the HID keyboard holds rides a click posted here, and release leaves it alone.
+    #[test]
+    fn a_hid_keyboard_modifier_rides_posted_events() {
+        let mut p = planner();
+        p.shadow(&down(VK_LSHIFT));
+        let posts = run(&mut p, &[ev(InputKind::MouseButtonDown, 1)]);
+        let Post::Mouse { flags, .. } = posts[0] else {
+            panic!("{posts:?}");
+        };
+        assert_eq!(flags, SHIFTED);
+        p.shadow(&down(VK_CAPITAL));
+        p.shadow(&down(VK_CAPITAL));
+        assert_eq!(p.flags(), SHIFTED | flag::ALPHA_SHIFT, "one flip per press");
+        let ups = p.release(Instant::now(), &|| DESK);
+        assert!(
+            ups.iter().all(|p| !matches!(p, Post::Key { .. })),
+            "{ups:?}"
+        );
+        p.shadow(&up(VK_LSHIFT));
+        assert_eq!(p.flags(), flag::ALPHA_SHIFT);
+        p.shadow(&down(VK_LSHIFT));
+        p.unshadow();
+        assert_eq!(
+            p.flags(),
+            flag::ALPHA_SHIFT,
+            "a gone keyboard holds nothing"
         );
     }
 
@@ -906,6 +1104,36 @@ mod tests {
             ..abs(1, 1)
         };
         assert!(run(&mut planner(), &[zero]).is_empty());
+    }
+
+    /// A further screen's absolute input lands on its own display, and relative motion from
+    /// there stays on it. A screen past the last lands on the first.
+    #[test]
+    fn each_screen_lands_on_its_own_display() {
+        let second = (4480.0, 0.0, 1280.0, 720.0);
+        let mut desk = DESK;
+        desk.screens[1] = second;
+        let mut p = planner();
+        let now = Instant::now();
+        let mut at = |e: InputEvent, desk: Desk| match p.plan(&e, now, &|| desk)[..] {
+            [Post::Mouse { at, .. }] => at,
+            ref other => panic!("{other:?}"),
+        };
+        let abs = |screen| {
+            InputEvent {
+                x: 640,
+                y: 360,
+                flags: (1280 << 16) | 720,
+                ..ev(InputKind::MouseMoveAbs, 0)
+            }
+            .on_screen(screen)
+        };
+        assert_eq!(at(abs(1), desk), (5120.0, 360.0));
+        desk.cursor = (5120.0, 360.0);
+        let far = at(moved(1000, 0), desk);
+        assert_eq!(far, (5759.0, 360.0), "stays on the second");
+        assert_eq!(at(abs(0), desk), (3200.0, 720.0));
+        assert_eq!(at(abs(9), desk), (3200.0, 720.0), "no such screen");
     }
 
     /// A drag is the lowest held button's: left, then right, then the others.
@@ -1082,9 +1310,9 @@ mod tests {
             ]
         );
         let due = p.due().expect("the lift waits for momentum");
-        assert!(p.flush(due - Duration::from_millis(1)).is_empty());
+        assert!(p.flush(due - Duration::from_millis(1), &|| DESK).is_empty());
         assert_eq!(
-            wheels(&p.flush(due + Duration::from_secs(1))),
+            wheels(&p.flush(due + Duration::from_secs(1), &|| DESK)),
             [(false, 0, 0, phase::ENDED)],
             "the gesture ends once both axes stopped"
         );
@@ -1158,6 +1386,79 @@ mod tests {
         );
     }
 
+    /// Touch lands on the stream display as the mouse does: a tap is a click there, a second
+    /// quick tap a double click, a long press a right drag the injector's deadline wakes for.
+    #[test]
+    fn a_tap_clicks_and_a_long_press_right_drags() {
+        let touch = |kind, x, y| InputEvent {
+            x,
+            y,
+            flags: (1280 << 16) | 720,
+            ..ev(kind, 1)
+        };
+        let (dn, mv, lift) = (
+            InputKind::TouchDown,
+            InputKind::TouchMove,
+            InputKind::TouchUp,
+        );
+        let mut p = planner();
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut at = |n, e| p.plan(&e, ms(n), &|| DESK);
+        let first = at(0, touch(dn, 640, 360));
+        let Post::Mouse { ty, at: point, .. } = first[0] else {
+            panic!("{first:?}")
+        };
+        assert_eq!((ty, point), (ty::MOVED, (3200.0, 720.0)));
+        let taps = [at(50, touch(lift, 0, 0)), at(150, touch(dn, 640, 360))].concat();
+        let taps = [taps, at(200, touch(lift, 0, 0))].concat();
+        assert_eq!(
+            mice(&taps),
+            [
+                (ty::LEFT_DOWN, 0, 1),
+                (ty::LEFT_UP, 0, 1),
+                (ty::MOVED, 0, 0),
+                (ty::LEFT_DOWN, 0, 2),
+                (ty::LEFT_UP, 0, 2),
+            ]
+        );
+
+        at(1000, touch(dn, 100, 100));
+        assert_eq!(p.due(), Some(ms(1500)));
+        let mut posts = p.flush(ms(1500), &|| DESK);
+        posts.extend(p.plan(&touch(mv, 200, 100), ms(1600), &|| DESK));
+        posts.extend(p.plan(&touch(lift, 0, 0), ms(1700), &|| DESK));
+        assert_eq!(
+            mice(&posts),
+            [
+                (ty::RIGHT_DOWN, 1, 1),
+                (ty::RIGHT_DRAGGED, 1, 1),
+                (ty::RIGHT_UP, 1, 1)
+            ]
+        );
+    }
+
+    /// A pan the injector still holds when it goes is cancelled.
+    #[test]
+    fn release_cancels_a_touch_scroll() {
+        let touch = |kind, y| InputEvent {
+            x: 640,
+            y,
+            flags: (1280 << 16) | 720,
+            ..ev(kind, 1)
+        };
+        let mut p = planner();
+        run(
+            &mut p,
+            &[
+                touch(InputKind::TouchDown, 300),
+                touch(InputKind::TouchMove, 340),
+            ],
+        );
+        let posts = p.release(Instant::now(), &|| DESK);
+        assert_eq!(wheels(&posts), [(false, 0, 0, phase::CANCELLED)]);
+    }
+
     #[test]
     fn a_missing_stream_display_falls_back_to_the_main_one() {
         let main = (0.0, 0.0, 1512.0, 982.0);
@@ -1169,5 +1470,26 @@ mod tests {
             main,
             "a gone display"
         );
+    }
+
+    /// A rect is read once per epoch and display; a new epoch, a resize included, reads again.
+    #[test]
+    fn a_cached_rect_lives_one_epoch() {
+        let mut cache = BoundsCache::new();
+        let reads = std::cell::Cell::new(0);
+        let mut get = |epoch, display, r: Rect| {
+            cache.get(epoch, display, || {
+                reads.set(reads.get() + 1);
+                r
+            })
+        };
+        let (small, big) = ((0.0, 0.0, 1280.0, 720.0), (0.0, 0.0, 2560.0, 1440.0));
+        assert_eq!(get(1, 7, small), small);
+        assert_eq!(get(1, 7, big), small, "the same epoch serves the cache");
+        assert_eq!(get(1, 8, big), big, "another display reads its own");
+        assert_eq!(reads.get(), 2);
+        assert_eq!(get(2, 7, big), big, "a reconfiguration reads again");
+        assert_eq!(get(2, 8, small), small);
+        assert_eq!(reads.get(), 4);
     }
 }

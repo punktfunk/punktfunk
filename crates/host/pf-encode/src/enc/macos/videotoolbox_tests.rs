@@ -476,6 +476,45 @@ fn a_larger_picture_is_scaled_to_the_session_size() {
     );
 }
 
+/// With a wake, `poll` does not wait for a lone frame and its output rings the wake, through a
+/// reset too. Wound back, `poll` waits for the frame again.
+#[test]
+#[ignore = "needs the media engine"]
+fn each_output_rings_the_wake_across_a_reset() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let rings = Arc::new(AtomicU32::new(0));
+    let r = rings.clone();
+    let (w, h) = (3840, 2160);
+    let format = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    let mut enc = VtEncoder::open(&params(Codec::H265, w, h, 40_000_000)).unwrap();
+    enc.set_au_wake(Some(Arc::new(move || {
+        r.fetch_add(1, Ordering::SeqCst);
+    })));
+    for round in 1..=2 {
+        let f = pixel_frame(w, h, round, format);
+        enc.submit(&f).unwrap();
+        let t = Instant::now();
+        let early = enc.poll().unwrap();
+        assert!(
+            t.elapsed() < Duration::from_millis(5),
+            "a lone frame is waited for"
+        );
+        while rings.load(Ordering::SeqCst) < round {
+            assert!(
+                t.elapsed() < Duration::from_secs(1),
+                "round {round}: no ring"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let au = early.or_else(|| enc.poll().unwrap()).expect("the rung AU");
+        assert!(au.keyframe, "round {round}");
+        assert!(enc.reset());
+    }
+    assert!(!enc.set_pipelined(false));
+    enc.submit(&pixel_frame(w, h, 3, format)).unwrap();
+    assert!(enc.poll().unwrap().is_some(), "wound back, poll waits");
+}
+
 #[test]
 #[ignore = "needs the media engine; prints timings"]
 fn encode_time_per_frame() {

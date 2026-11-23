@@ -441,6 +441,8 @@ pub(super) fn send_loop(
     probe_seq: bool,
 ) {
     pf_frame::thread_qos::boost_thread_priority(false);
+    let (_, _, hz) = unpack_mode(stats.mode.load(Ordering::Relaxed));
+    pf_frame::thread_qos::raise_to_frame_rate(std::time::Duration::from_secs(1) / hz.max(1));
     // A large frame waits on the session's seal and parity lanes: they run at this priority.
     punktfunk_core::session::set_lane_boost(|| pf_frame::thread_qos::boost_thread_priority(false));
     let wire = WireLine::new(stats.wire_sock.take());

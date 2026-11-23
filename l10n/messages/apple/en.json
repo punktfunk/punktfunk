@@ -277,5 +277,7 @@
 	"apple_usage_microphone": "Your microphone is streamed to the connected Punktfunk host, where it appears as a virtual microphone.",
 	"apple_usage_face_id": "Face ID opens your own account on a host without its password.",
 	"apple_usage_bluetooth": "Bluetooth lets Punktfunk read your Steam Controller and pass it through to your host.",
+	"apple_usage_host_audio_capture": "Punktfunk Host streams this device's sound along with its picture.",
+	"apple_usage_host_local_network": "Punktfunk Host lets devices on your network find it and connect to stream from it.",
 	"apple_pad_rumble_failed": "Couldn't run the rumble test — {error}"
 }

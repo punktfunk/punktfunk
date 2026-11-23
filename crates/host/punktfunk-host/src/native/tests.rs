@@ -238,6 +238,20 @@ fn a_node_less_output_reaches_the_client_in_words() {
     assert!(said.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
 }
 
+/// A Mac host without the Screen Recording grant tells the player who can fix it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_missing_screen_recording_grant_reaches_the_client_in_words() {
+    use anyhow::Context;
+    let buried = Err::<(), _>(pf_capture::NoScreenRecording)
+        .context("capture display 1")
+        .context("build the session pipeline")
+        .unwrap_err();
+    let said = setup_failed_sentence(&buried).expect("a missing grant has words for the user");
+    assert_eq!(said.id, "close_no_screen_recording");
+    assert!(said.text.len() <= punktfunk_core::quic::REFUSED_REASON_MAX);
+}
+
 #[test]
 fn live_mode_pack_roundtrips() {
     use crate::session_status::{pack_mode, unpack_mode};

@@ -951,6 +951,8 @@ fn gs_capture_output(
             screen: 0,
             gamescope_cursor: crate::session_plan::gamescope_cursor_for(gamescope, route),
             mirrored: plan.mirrored,
+            #[cfg(target_os = "macos")]
+            framing: None,
         },
     )
     .context("capture virtual output")?;

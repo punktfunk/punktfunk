@@ -62,6 +62,20 @@ pub(crate) fn random_token() -> String {
     hex::encode(buf)
 }
 
+/// A web console login password: 20 characters, safe in a URL, a shell and `KEY=VALUE`.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn random_password() -> String {
+    use base64::Engine;
+    let mut b = [0u8; 24];
+    rand::rng().fill_bytes(&mut b);
+    base64::engine::general_purpose::STANDARD
+        .encode(b)
+        .chars()
+        .filter(|c| !matches!(c, '/' | '+' | '='))
+        .take(20)
+        .collect()
+}
+
 /// The tray's bearer for `GET /local/summary`, minted fresh at every start and never read
 /// back by the host. The file is the one credential a standard account may read
 /// (`replace_users_readable_file`); on a box with other accounts it buys the summary alone.

@@ -6,9 +6,9 @@
 //! `packaging/linux/49-punktfunk-power.rules`. A foreign inhibitor or a second
 //! local user makes logind refuse, and that is a `409 blocked`. The door has no
 //! session, so `49-punktfunk-door.rules` grants it the second-user variants.
-//! Windows uses the interactive token's `SeShutdownPrivilege`. macOS sleeps through IOKit; it
-//! has no unprivileged public reboot or shutdown, and no supervisor restarts its host, so those
-//! verbs are refused. Other platforms have no executor; the mgmt route answers `501`.
+//! Windows uses the interactive token's `SeShutdownPrivilege`. macOS sleeps through IOKit and
+//! has no unprivileged public reboot or shutdown; its host restarts through the login agent or
+//! by reopening the app. Other platforms have no executor; the mgmt route answers `501`.
 //!
 //! [`probe`] and [`act`] block on a D-Bus round trip or a Win32 call. Call them
 //! from `spawn_blocking`. The dedicated thread matches
@@ -23,8 +23,12 @@ pub enum PowerVerb {
     Restart,
 }
 
-/// Exit status that asks the Windows service supervisor for an immediate relaunch.
-#[cfg_attr(not(windows), allow(dead_code, reason = "Windows service reads it"))]
+/// Exit status that asks the supervisor for an immediate relaunch: the Windows service, or the
+/// Mac login agent, which restarts on any failed exit. No other exit of the host uses it.
+#[cfg_attr(
+    not(any(windows, target_os = "macos")),
+    allow(dead_code, reason = "the Windows service and the Mac host read it")
+)]
 pub const RESTART_EXIT_CODE: u32 = 75;
 
 /// The `punktfunk-host*.service` user unit a `/proc/self/cgroup` places this process in.
@@ -307,21 +311,100 @@ pub fn act(verb: PowerVerb) -> Result<(), String> {
     }
 }
 
-/// Sleep only: the console user may sleep the Mac, as `pmset sleepnow` does.
+/// How a Mac host comes back from `host.restart`.
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq)]
+enum MacRestart {
+    /// The login agent starts it again after a [`RESTART_EXIT_CODE`] exit.
+    Agent,
+    /// A relauncher opens this app again once the process is gone.
+    Reopen(std::path::PathBuf),
+    /// Nothing would start it again.
+    Refused,
+}
+
+#[cfg(target_os = "macos")]
+fn mac_restart(agent: bool, bundle: Option<&std::path::Path>) -> MacRestart {
+    match (agent, bundle) {
+        (true, _) => MacRestart::Agent,
+        (false, Some(app)) => MacRestart::Reopen(app.to_path_buf()),
+        (false, None) => MacRestart::Refused,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn mac_restart_here() -> MacRestart {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let bundle = crate::hostsys::app_loop::bundle_of(&exe).and_then(|b| b.canonicalize().ok());
+    mac_restart(crate::hostsys::app_loop::login_agent(), bundle.as_deref())
+}
+
+/// `sh` waits for `pid` to exit, then runs `opener -n` on `app` with `env` forwarded, so the
+/// app comes back on the same config folder and ports. Its own process group outlives ours.
+#[cfg(target_os = "macos")]
+fn reopener(
+    pid: u32,
+    app: &std::path::Path,
+    env: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    opener: &str,
+) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+    let mut sh = std::process::Command::new("/bin/sh");
+    sh.arg("-c")
+        .arg("pid=$1; shift; while kill -0 \"$pid\" 2>/dev/null; do sleep 0.2; done; exec \"$@\"")
+        .args(["sh", &pid.to_string(), opener, "-n"]);
+    for (key, value) in env {
+        let mut pair = key;
+        pair.push("=");
+        pair.push(value);
+        sh.arg("--env").arg(pair);
+    }
+    sh.arg(app)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+    sh
+}
+
+/// Sleep, and restart when something will start the host again. The console user may sleep the
+/// Mac, as `pmset sleepnow` does.
 #[cfg(target_os = "macos")]
 fn os_probe(verb: PowerVerb) -> Availability {
     match verb {
         PowerVerb::Sleep => Availability::yes(),
-        PowerVerb::Reboot | PowerVerb::Shutdown | PowerVerb::Restart => unsupported(),
+        PowerVerb::Restart if mac_restart_here() != MacRestart::Refused => Availability::yes(),
+        PowerVerb::Restart => Availability::refused(
+            "host_restart_no_user_service",
+            "The host isn't running as its user service, so nothing would start it again",
+        ),
+        PowerVerb::Reboot | PowerVerb::Shutdown => unsupported(),
     }
 }
 
 /// Asks the power manager to sleep now. Our display-awake assertion is an idle one, which a
-/// deliberate sleep overrides.
+/// deliberate sleep overrides. A restart stops as the stop signal does, then comes back.
 #[cfg(target_os = "macos")]
 pub fn act(verb: PowerVerb) -> Result<(), String> {
     use objc2_io_kit::{kIOMainPortDefault, kIOReturnSuccess, IOPMFindPowerManagement};
     use objc2_io_kit::{IOPMSleepSystem, IOServiceClose};
+    if verb == PowerVerb::Restart {
+        return match mac_restart_here() {
+            MacRestart::Agent => crate::native::stop_exiting(RESTART_EXIT_CODE as i32),
+            MacRestart::Reopen(app) => {
+                // What the operator set, not what `host.env` gave: the file is read again.
+                let env = std::env::vars_os().filter(|(k, _)| {
+                    k.to_string_lossy().starts_with("PUNKTFUNK_")
+                        && !crate::hostsys::app_loop::from_host_env(k)
+                });
+                reopener(std::process::id(), &app, env, "/usr/bin/open")
+                    .spawn()
+                    .map_err(|e| format!("start the relauncher: {e}"))?;
+                crate::native::stop_self()
+            }
+            MacRestart::Refused => Err("nothing would start the host again".into()),
+        };
+    }
     if verb != PowerVerb::Sleep {
         return Err("not supported on this host platform".into());
     }
@@ -379,6 +462,49 @@ pub fn set_closing(closing: bool) {
 #[cfg(test)]
 mod tests {
     use super::host_unit;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_host_restarts_through_the_agent_or_the_app() {
+        use super::{mac_restart, MacRestart};
+        let app = std::path::Path::new("/Applications/Punktfunk Host.app");
+        assert_eq!(mac_restart(true, Some(app)), MacRestart::Agent);
+        assert_eq!(mac_restart(true, None), MacRestart::Agent);
+        assert_eq!(
+            mac_restart(false, Some(app)),
+            MacRestart::Reopen(app.into())
+        );
+        assert_eq!(mac_restart(false, None), MacRestart::Refused);
+    }
+
+    /// The app opens only once the old host is gone, with the host's environment.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_relauncher_opens_the_app_after_the_host_exits() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (opener, marker) = (dir.path().join("open"), dir.path().join("opened"));
+        let script = format!("#!/bin/sh\necho \"$@\" > '{}'\n", marker.display());
+        std::fs::write(&opener, script).unwrap();
+        std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut host = std::process::Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .unwrap();
+        let env = [("PUNKTFUNK_CONFIG_DIR".into(), "/tmp/pf a".into())].into_iter();
+        let app = std::path::Path::new("/Apps/X.app");
+        let mut relauncher = super::reopener(host.id(), app, env, opener.to_str().unwrap())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!marker.exists(), "opened while the host still ran");
+        host.wait().unwrap();
+        assert!(relauncher.wait().unwrap().success());
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            "-n --env PUNKTFUNK_CONFIG_DIR=/tmp/pf a /Apps/X.app\n"
+        );
+    }
 
     #[test]
     fn restart_needs_the_host_user_unit() {

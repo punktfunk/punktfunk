@@ -263,6 +263,27 @@ mod tests {
         assert_eq!(to_frame((-720.0, -1.0), bounds, content), None);
     }
 
+    /// A 1080p head captured at a mirror's fitted sizes fills each frame with no bar, and the
+    /// pointer lands at the same fraction of the frame as of the head.
+    #[test]
+    fn a_scaled_mirror_fills_its_frame_and_keeps_the_pointer() {
+        let bounds = [0.0, 0.0, 1920.0, 1080.0];
+        for frame in [(1280, 720), (960, 540), (1440, 810), (1920, 1080)] {
+            let (w, h) = (f64::from(frame.0), f64::from(frame.1));
+            let content = fit((1920.0, 1080.0), frame);
+            assert_eq!(content, [0.0, 0.0, w, h], "{frame:?}");
+            assert_eq!(
+                to_frame((960.0, 540.0), bounds, content),
+                Some((w / 2.0, h / 2.0))
+            );
+            assert_eq!(to_frame((0.0, 0.0), bounds, content), Some((0.0, 0.0)));
+            let (x, y) = to_frame((1919.0, 1079.0), bounds, content).expect("on the head");
+            assert!(
+                (x - w * 1919.0 / 1920.0).abs() < 1e-9 && (y - h * 1079.0 / 1080.0).abs() < 1e-9
+            );
+        }
+    }
+
     #[test]
     fn unpremultiply_restores_straight_alpha() {
         let mut px = [128, 64, 0, 128, 10, 20, 30, 255, 9, 9, 9, 0];

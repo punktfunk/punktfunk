@@ -1,9 +1,8 @@
 //! Ending a launched game: the polite-then-kill ladder per platform, and ending a game an
 //! earlier launch left running.
 
-#[cfg(any(target_os = "linux", windows))]
 use super::reported_proc;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::OwnedChild;
 use super::{report_exit, LeaseKind, LeaseShared, TERM_GRACE};
 use std::sync::atomic::Ordering;
@@ -65,7 +64,7 @@ pub(super) fn terminate_blocking(shared: &LeaseShared) {
             if let Some(p) = &shared.procs {
                 crate::launchreg::ending(p);
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             unix_term_ladder(shared);
             #[cfg(windows)]
             windows_term_ladder(shared);
@@ -80,7 +79,7 @@ pub(super) fn terminate_blocking(shared: &LeaseShared) {
 /// Whether the host-spawned child is gone, reaping it when it has exited.
 /// `waitpid` answers for our own child only: already reaped elsewhere
 /// ([`super::reap_later`], the watcher's `try_wait`), or never ours, is gone too.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn reap_child(owned: Option<OwnedChild>) -> bool {
     let Some(c) = owned else {
         return true;
@@ -93,7 +92,7 @@ fn reap_child(owned: Option<OwnedChild>) -> bool {
 /// SIGTERM, wait, SIGKILL, reap. Targets are fixed at entry. Each matcher hit is
 /// re-verified by start time before a signal ([`crate::procscan::Scanner::alive`]),
 /// the child only while the lease still holds it.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn unix_term_ladder(shared: &LeaseShared) {
     let scanner = crate::procscan::Scanner::system();
     let owned = shared.owned_child();

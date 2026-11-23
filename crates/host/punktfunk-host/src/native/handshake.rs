@@ -394,7 +394,7 @@ pub(super) fn cursor_forward(
         compositor.is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
             && encoder.cursor_blend_capable(codec, cuda_planned, bit_depth == 10, hdr)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
         // Windows: the v5 IddCx hardware-cursor channel. Without it DWM paints the pointer
         // into the IDD frame and a second copy doubles it. The encoder is not consulted: the
@@ -402,6 +402,19 @@ pub(super) fn cursor_forward(
         // A capture worker's picture carries the pointer already.
         let _ = (compositor, codec, bit_depth, hdr, encoder);
         !worker && crate::windows::idd::hw_cursor_capable()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Every session's stream is its own, a mirror's and a joiner's too, and paints the
+        // pointer on the capture-mouse flip; no encoder blends. Its image must be readable now,
+        // or the frames carry the pointer under the client's.
+        let _ = (compositor, codec, bit_depth, hdr, worker, encoder);
+        pf_capture::pointer_image_readable()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (compositor, codec, bit_depth, hdr, worker, encoder);
+        false
     }
 }
 
@@ -2235,6 +2248,30 @@ pub(crate) mod tests {
             assert!(!runs_exact_rate(Some(c), true), "{c:?} shared");
         }
         assert!(runs_exact_rate(None, false));
+    }
+
+    /// A Mac forwards the pointer to a client that asked, a mirror or a joiner too, and only
+    /// while the system hands out the pointer's image.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_offers_the_pointer_only_when_it_can_leave_it_out() {
+        let encoder = crate::encode::resolve();
+        let asks = punktfunk_core::quic::CLIENT_CAP_CURSOR;
+        let offer = |caps, worker| {
+            cursor_forward(
+                caps,
+                None,
+                crate::encode::Codec::H265,
+                8,
+                false,
+                worker,
+                &encoder,
+            )
+        };
+        assert!(!offer(0, false), "a client that did not ask");
+        let readable = pf_capture::pointer_image_readable();
+        assert_eq!(offer(asks, false), readable);
+        assert_eq!(offer(asks, true), readable, "a mirror's stream is its own");
     }
 
     /// A rate stored for PyroWave reads as Automatic once the host lands on HEVC: the session

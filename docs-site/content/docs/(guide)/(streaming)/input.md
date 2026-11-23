@@ -44,12 +44,16 @@ speed there; no client has a sensitivity setting.
 | GNOME | **Settings → Mouse & Touchpad**: the speed and acceleration every mouse shares |
 | Sway, Hyprland | The compositor's input settings for the device named `Punktfunk Mouse` (Sway: `4617:20557:Punktfunk_Mouse`) |
 | gamescope, a headless Linux session | One pixel a count, as gamescope moves a plugged-in mouse. No setting |
+| macOS | One point a count, with no acceleration. With the virtual mouse on: **System Settings → Mouse** |
 
 - On Linux the **Punktfunk Mouse** appears with the first input a client sends and stays until
   the host stops. Its buttons and wheel follow the host's mouse settings too: left-handed
   buttons, natural scrolling.
 - Out of the box KDE Plasma moves it one pixel a count, with no acceleration. GNOME, Sway and
   Hyprland accelerate it like any mouse: a fast stroke travels up to twice as far.
+- A Mac host started with `PUNKTFUNK_HID_INPUT=1` in its environment adds a virtual mouse and
+  keyboard, which games that read input through Apple's GameController also see. The host's
+  signature needs the HID virtual device entitlement; without it, input works as before.
 - A game that reads the mouse directly gets the counts untouched on every host, so its own
   sensitivity applies, as it does to a mouse on the host.
 - The Linux, Windows, Mac, iPhone, iPad and Android clients send counts. A TV's or a console's
@@ -129,6 +133,7 @@ Touch passthrough depends on the host:
 |---|---|
 | KDE Plasma, GNOME | Full multi-touch |
 | Windows 10 1809 and newer | Full multi-touch |
+| macOS | As Sidecar does it: a tap clicks, a pan scrolls with momentum, a long press right-clicks and drags, two fingers scroll or pinch and rotate |
 | Sway, Hyprland, niri, Umbriel and other wlroots compositors | Not supported: the client uses Trackpad and says so |
 | gamescope | One finger, as an absolute pointer ([gamescope](/docs/gamescope)) |
 
@@ -222,6 +227,7 @@ so drawing apps on the host see a real pen.
 |---|---|
 | Linux | A **Punktfunk Pen** tablet for the session, mapped by your compositor. Needs `/dev/uinput`, the `input` group step of your [install guide](/docs/install) |
 | Windows 10 1809 and newer | A system pen with pressure, tilt, rotation, barrel button and eraser |
+| macOS | A tablet pen with pressure, tilt, rotation, both barrel buttons and eraser |
 
 Without host support, the stylus works as a finger, without pressure or tilt. To turn pen off
 for every client, switch off **Pen input** in the web console under **Host → Input**,

@@ -12,11 +12,12 @@
 //!
 //! On hardware: `examples/mac_capture_probe.rs`, which needs the Screen Recording grant.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use block2::{DynBlock, RcBlock};
 use dispatch2::{DispatchQoS, DispatchQueue, DispatchQueueAttr, DispatchRetained};
 use objc2::rc::Retained;
@@ -59,11 +60,15 @@ const FIRST_FRAME: Duration = Duration::from_secs(5);
 /// Each ScreenCaptureKit call that answers through a completion handler.
 const ANSWER: Duration = Duration::from_secs(5);
 
-/// ScreenCaptureKit capture of `opts.display_id`, scaled into the session's size.
+pub(crate) use cursor::readable as pointer_image_readable;
+
+/// ScreenCaptureKit capture of `opts.display_id`, scaled into the session's size. Fails as
+/// [`crate::NoScreenRecording`] without the grant.
 pub(crate) fn open(opts: DisplayCaptureOpts) -> Result<Box<dyn Capturer>> {
     let id = opts.display_id;
     if !crate::screen_capture_access() {
-        bail!("capture display {id}: this process has no Screen Recording grant");
+        return Err(anyhow::Error::new(crate::NoScreenRecording))
+            .with_context(|| format!("capture display {id}"));
     }
     let request = plan::request(&opts.output)?;
     let display = find_display(id)?;
@@ -79,9 +84,20 @@ pub(crate) fn open(opts: DisplayCaptureOpts) -> Result<Box<dyn Capturer>> {
             "display aspect differs from the session: letterboxed"
         );
     }
+    let lift = (request.lift.map(white::Lift::new).transpose()).context("set up HDR capture")?;
+    let shared = Arc::new(Shared {
+        tag_601: request.tag_601,
+        lift,
+        ..Shared::default()
+    });
+    let moved: Arc<dyn Fn() + Send + Sync> = {
+        let shared = shared.clone();
+        Arc::new(move || shared.update(|st| st.moved = true))
+    };
+    let period = Duration::from_secs(1) / opts.stream_hz.max(1);
     let pointer = opts
         .metadata_cursor
-        .then(|| cursor::Pointer::open(id, (opts.width, opts.height)))
+        .then(|| cursor::Pointer::open(id, (opts.width, opts.height), period, moved))
         .flatten();
     if opts.metadata_cursor && pointer.is_none() {
         tracing::warn!(
@@ -98,12 +114,6 @@ pub(crate) fn open(opts: DisplayCaptureOpts) -> Result<Box<dyn Capturer>> {
             &NSArray::new(),
         )
     };
-    let lift = (request.lift.map(white::Lift::new).transpose()).context("set up HDR capture")?;
-    let shared = Arc::new(Shared {
-        tag_601: request.tag_601,
-        lift,
-        ..Shared::default()
-    });
     let output = Output::new(shared.clone());
     let attr = DispatchQueueAttr::with_qos_class(
         DispatchQueueAttr::SERIAL,
@@ -136,6 +146,9 @@ pub(crate) fn open(opts: DisplayCaptureOpts) -> Result<Box<dyn Capturer>> {
     Ok(Box::new(ScCapturer {
         shared,
         stream,
+        shows_cursor: pointer.is_none(),
+        applying: Arc::default(),
+        config,
         _output: output,
         _queue: queue,
         pointer,
@@ -253,6 +266,8 @@ struct State {
     paused: bool,
     poked: bool,
     encoded: bool,
+    /// The pointer moved while the client draws it.
+    moved: bool,
     /// Complete frames, the `source_seq`.
     complete: u64,
     /// Frames with no new pixels: idle (nothing changed), and blank, suspended or started.
@@ -378,8 +393,9 @@ impl Shared {
         }
     }
 
-    /// [`Feed::wait_paced`]: a nudge ends it at any point and is taken; a frame or a stop ends
-    /// it once `not_before` has passed; else `deadline` does. Never takes the frame.
+    /// [`Feed::wait_paced`]: a nudge or a pointer move ends it at any point and is taken; a
+    /// frame or a stop ends it once `not_before` has passed; else `deadline` does. Never takes
+    /// the frame.
     fn wait_paced(&self, not_before: Instant, deadline: Instant) -> Paced {
         let mut st = self.lock();
         loop {
@@ -388,6 +404,9 @@ impl Shared {
             }
             if std::mem::take(&mut st.poked) {
                 return Paced::Poked;
+            }
+            if std::mem::take(&mut st.moved) {
+                return Paced::Pointer;
             }
             let now = Instant::now();
             let until = if now < not_before {
@@ -497,7 +516,9 @@ fn host_ns(t: CMTime) -> Option<u64> {
 }
 
 /// The wire stamp of a frame presented at `pts_host` on the host clock: realtime at delivery
-/// less the frame's age, as Linux rebases a compositor stamp.
+/// less the frame's age, as Linux rebases a compositor stamp. ScreenCaptureKit stamps the
+/// refresh a frame is shown at, about a millisecond after it delivers it: a stamp past
+/// delivery is delivery, or the loop reads the frame as not yet captured.
 fn wire_pts(pts_host: Option<u64>) -> u64 {
     let delivery_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -506,7 +527,9 @@ fn wire_pts(pts_host: Option<u64>) -> u64 {
     // SAFETY: a read of Core Media's process-wide host clock.
     let now = unsafe { host_ns(CMClock::host_time_clock().time()) }.unwrap_or(0);
     let rt_minus_host = delivery_ns as i64 - now as i64;
-    crate::pts_provenance::wire_pts(pts_host.map(|p| p as i64), delivery_ns, rt_minus_host).pts_ns
+    let rebased =
+        crate::pts_provenance::wire_pts(pts_host.map(|p| p as i64), delivery_ns, rt_minus_host);
+    rebased.pts_ns.min(delivery_ns)
 }
 
 fn fourcc(code: u32) -> String {
@@ -555,6 +578,12 @@ impl Output {
 struct ScCapturer {
     shared: Arc<Shared>,
     stream: Retained<SCStream>,
+    /// The stream's configuration as last applied.
+    config: Retained<SCStreamConfiguration>,
+    /// The frames carry the pointer.
+    shows_cursor: bool,
+    /// A configuration is on its way to the stream, or the stream refused the last one.
+    applying: Arc<AtomicBool>,
     /// The stream's output and delegate, which it does not keep alive itself.
     _output: Retained<Output>,
     _queue: DispatchRetained<DispatchQueue>,
@@ -564,9 +593,9 @@ struct ScCapturer {
     keepalive: Option<Box<dyn Send>>,
 }
 
-// SAFETY: `SCStream` may be started and stopped from any thread; it runs its handlers on its own
-// queues. `Output`'s only state is an `Arc` of `Send + Sync` cells, and the dispatch queue is
-// thread-safe.
+// SAFETY: `SCStream` may be started, stopped and reconfigured from any thread; it runs its
+// handlers on its own queues. The configuration is touched only through `&mut self`. `Output`'s
+// only state is an `Arc` of `Send + Sync` cells, and the dispatch queue is thread-safe.
 unsafe impl Send for ScCapturer {}
 
 impl ScCapturer {
@@ -611,7 +640,67 @@ impl Capturer for ScCapturer {
     }
 
     fn cursor(&mut self) -> Option<&mut dyn CursorSource> {
-        self.pointer.as_mut().map(|p| p as &mut dyn CursorSource)
+        match self.pointer {
+            Some(_) => Some(self),
+            None => None,
+        }
+    }
+}
+
+impl CursorSource for ScCapturer {
+    /// None while the stream may still paint the pointer the client is about to draw, so the
+    /// client hides its own until the frames lose theirs.
+    fn overlay(&mut self) -> Option<pf_frame::CursorOverlay> {
+        if !self.shows_cursor && self.applying.load(Ordering::Relaxed) {
+            return None;
+        }
+        self.pointer.as_mut()?.overlay()
+    }
+
+    /// The encoder can't blend a pointer, so while the client does not draw it the stream
+    /// paints it. A switch reaches the frames once the stream applies it.
+    fn set_forward(&mut self, client_draws: bool) {
+        let Some(pointer) = self.pointer.as_mut() else {
+            return;
+        };
+        pointer.set_forward(client_draws);
+        if self.shows_cursor != client_draws {
+            return;
+        }
+        self.shows_cursor = !client_draws;
+        // SAFETY: a setter on the configuration this capturer owns.
+        unsafe { self.config.setShowsCursor(self.shows_cursor) };
+        self.apply_config();
+    }
+}
+
+impl ScCapturer {
+    /// Hand the stream [`Self::config`]; it applies it to a later frame. [`Self::applying`]
+    /// clears once it has; a refusal leaves it set and is logged.
+    fn apply_config(&self) {
+        let (id, asked, applying) = (self.display_id, Instant::now(), self.applying.clone());
+        applying.store(true, Ordering::Relaxed);
+        let done = RcBlock::new(move |error: *mut NSError| {
+            // SAFETY: `error` is null or valid for the handler's duration.
+            match unsafe { error.as_ref() } {
+                Some(e) => {
+                    tracing::warn!(display = id, error = %describe(e), "screencapturekit configuration not applied")
+                }
+                None => {
+                    applying.store(false, Ordering::Relaxed);
+                    tracing::debug!(
+                        display = id,
+                        after_us = asked.elapsed().as_micros() as u64,
+                        "screencapturekit configuration applied"
+                    )
+                }
+            }
+        });
+        // SAFETY: a live stream and configuration; the stream keeps the handler until it answers.
+        unsafe {
+            self.stream
+                .updateConfiguration_completionHandler(&self.config, Some(&done))
+        };
     }
 }
 
@@ -712,14 +801,19 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(1));
     }
 
-    /// A nudge from another thread ends the wait with its own answer, the gate before
-    /// `not_before` included, and is taken; a frame waits the gate out and stays.
+    /// A nudge or a pointer move from another thread ends the wait with its own answer, the
+    /// gate before `not_before` included, and is taken; a frame waits the gate out and stays.
     #[test]
     fn a_nudge_ends_the_gate_and_a_frame_waits_for_it() {
         let shared = Shared::default();
         let poke: fn(&mut State) = |st| st.poked = true;
         let encoded: fn(&mut State) = |st| st.encoded = true;
-        for (set, answer) in [(poke, Paced::Poked), (encoded, Paced::Encoded)] {
+        let moved: fn(&mut State) = |st| st.moved = true;
+        for (set, answer) in [
+            (poke, Paced::Poked),
+            (encoded, Paced::Encoded),
+            (moved, Paced::Pointer),
+        ] {
             let t0 = Instant::now();
             let (gate, deadline) = (t0 + Duration::from_secs(2), t0 + Duration::from_secs(3));
             let woke = std::thread::scope(|s| {

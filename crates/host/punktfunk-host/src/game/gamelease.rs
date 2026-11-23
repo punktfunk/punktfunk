@@ -24,23 +24,20 @@ use std::time::{Duration, Instant};
 
 mod exit;
 mod terminate;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 use exit::{Presence, Sighting, Verdict};
 pub use terminate::{end_others_for_new_launch, end_previous_launch, terminate};
 
 /// 300 s cold-start budget. A Steam boot plus first-run shader compile can take
 /// that long. A miss leaves the session streaming the launcher, which is valid.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 const START_GRACE: Duration = Duration::from_secs(300);
 /// 1 s poll. Imperceptible against startup/shutdown; a `/proc` sweep stays a
 /// fraction of one core.
 const POLL: Duration = Duration::from_secs(1);
 /// 3 s unseen before exit. A launcher re-exec or mid-game restart is shorter.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 pub(crate) const EXIT_CONFIRM: Duration = Duration::from_secs(3);
 /// 5 s successful child exit = launcher hand-off, never the game. Apollo's `auto_detach` uses
 /// the same 5 s for any exit code.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 pub(crate) const SHIM_WINDOW: Duration = Duration::from_secs(5);
 /// 10 s after SIGTERM / WM_CLOSE before SIGKILL. Enough to save.
 const TERM_GRACE: Duration = Duration::from_secs(10);
@@ -51,21 +48,18 @@ const TERM_GRACE: Duration = Duration::from_secs(10);
 /// whatever the hint says. Steam's Windows `Running` flag can stay set after
 /// an unclean exit; an unbounded veto never ends the session. Ending a moment
 /// early (reconnect; `finish` does not kill) is cheaper than ending never.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 const VETO_LIMIT: Duration = Duration::from_secs(30);
 /// 60 s between play-time flushes ([`crate::library::record_run_time`]). A
 /// host crash loses at most this much of the current run.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 const STATS_FLUSH: Duration = Duration::from_secs(60);
 
 /// Spawned child, and whether a group signal is safe for it.
 #[derive(Clone, Copy, Debug)]
 pub struct OwnedChild {
-    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
     pub pid: u32,
     /// Group leader? `kill(-pid)` hits the group whose id is `pid`. A
     /// non-leader shares the host's group — signal that pid only.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux only"))]
+    #[cfg_attr(windows, allow(dead_code, reason = "POSIX only"))]
     pub group_leader: bool,
 }
 
@@ -144,7 +138,6 @@ impl GameState {
 
 /// Identity, live state, and enough to end the game. Outlives the session:
 /// held in an `Arc` by the watcher and, after a disconnect, the grace registry.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 pub struct LeaseShared {
     pub game: GameRef,
     pub client: String,
@@ -194,7 +187,6 @@ pub struct LeaseShared {
 
 impl LeaseShared {
     /// The profile play time is credited to.
-    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
     fn profile_id(&self) -> Option<String> {
         self.profile.as_ref().map(|p| p.id.clone())
     }
@@ -223,7 +215,7 @@ impl LeaseShared {
     }
 
     /// Everything this lease's signals match, inside its scope if it has one.
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     fn find_procs(&self, scanner: &crate::procscan::Scanner) -> Vec<crate::procscan::ProcRef> {
         let live = scanner.find(&self.spec, self.launch_stamp);
         match self.scope_pid {
@@ -233,7 +225,7 @@ impl LeaseShared {
     }
 
     /// What the record holds of this launch, still alive. Empty for an unrecorded one.
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     fn recorded(&self) -> Vec<crate::procscan::ProcRef> {
         self.procs.as_ref().map_or_else(Vec::new, |slot| {
             crate::procscan::alive(&slot.lock().unwrap_or_else(|e| e.into_inner()))
@@ -242,7 +234,7 @@ impl LeaseShared {
 
     /// All an [`LeaseKind::Adopted`] lease can end: [`Self::recorded`] and what descends
     /// from it. Empty for every other kind, whose ladders find their own targets.
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     pub(super) fn adopted_tree(&self) -> Vec<crate::procscan::ProcRef> {
         if !matches!(self.kind, LeaseKind::Adopted) {
             return Vec::new();
@@ -259,13 +251,11 @@ impl LeaseShared {
         self.state.store(s as u8, Ordering::Relaxed);
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
     fn owned_child(&self) -> Option<OwnedChild> {
         *self.child.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// After reap: never signal this pid; the kernel may reuse the number.
-    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
     fn forget_child(&self) {
         *self.child.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -425,7 +415,6 @@ pub type OutcomeTx = tokio::sync::mpsc::UnboundedSender<punktfunk_core::quic::La
 /// Only a *failing* exit inside [`SHIM_WINDOW`] with nothing left to recognize.
 /// A launcher hands off cleanly, and a Proton prefix build never reaches here at
 /// all: its shell exits with success and the scan waits out [`START_GRACE`].
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 fn died_on_the_spot(quick: bool, success: bool, fallback: &LeaseKind) -> bool {
     quick && !success && matches!(fallback, LeaseKind::Untracked)
 }
@@ -434,7 +423,6 @@ fn died_on_the_spot(quick: bool, success: bool, fallback: &LeaseKind) -> bool {
 ///
 /// 127 and 126 are the shell's own "no such command" / "cannot execute"; named,
 /// because a number is not a next move. Anything else gets how long it lasted.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 fn early_exit_message(
     title: &str,
     code: Option<i32>,
@@ -616,13 +604,13 @@ fn spawn_watcher(
         reap_later(child, &shared);
         return None;
     }
-    // No matcher (macOS has no launch path): status lease, no poll.
-    #[cfg(not(any(target_os = "linux", windows)))]
+    // No matcher on this platform: status lease, no poll.
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = (child, procs, on_exit, window);
         None
     }
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         std::thread::Builder::new()
             .name("pf1-gamelease".into())
@@ -841,7 +829,6 @@ fn apply_on_window(stage: &WindowStage, win: &crate::vdisplay::Toplevel) {
 ///
 /// Not [`finish`]: nothing ran, so there is no play time to credit and no game
 /// exit to end the session on.
-#[cfg_attr(target_os = "macos", allow(dead_code, reason = "no watcher on macOS"))]
 fn report_early_exit(shared: &LeaseShared, code: Option<i32>, ran: Duration) {
     let outcome = early_exit_message(&shared.game.title, code, ran.as_secs_f32());
     tracing::warn!(
@@ -861,7 +848,7 @@ fn report_early_exit(shared: &LeaseShared, code: Option<i32>, ran: Duration) {
 }
 
 /// What the watcher does when the launch command leaves before the game was seen.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 #[derive(Debug, PartialEq, Eq)]
 enum Handoff {
     /// Signals exist: the scan decides; this may have been a wrapper.
@@ -876,7 +863,7 @@ enum Handoff {
 
 /// `success` is the exit status, `true` for a spawned pid that vanished (no status);
 /// `fallback` is the kind the lease falls back to without its launch command.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn handoff(quick: bool, success: bool, fallback: &LeaseKind) -> Handoff {
     if died_on_the_spot(quick, success, fallback) {
         Handoff::Failed
@@ -891,7 +878,7 @@ fn handoff(quick: bool, success: bool, fallback: &LeaseKind) -> Handoff {
 
 /// One launch's watch: phase 1 waits for the game to appear, phase 2 for its window
 /// and then for it to stay gone.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 struct Watcher {
     shared: Arc<LeaseShared>,
     child: Option<std::process::Child>,
@@ -910,7 +897,7 @@ struct Watcher {
 
 /// Wait for the game to appear, then for its window, then for it to stay gone. An adopted
 /// launch has appeared already ([`Watcher::resume`]).
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn watch(
     shared: Arc<LeaseShared>,
     child: Option<std::process::Child>,
@@ -938,7 +925,7 @@ fn watch(
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 impl Watcher {
     fn cancelled(&self) -> bool {
         self.shared.cancel.load(Ordering::Relaxed)
@@ -1193,7 +1180,11 @@ impl Watcher {
         mut known: Vec<crate::procscan::ProcRef>,
         window: Option<WindowSource>,
     ) {
+        #[cfg(not(target_os = "macos"))]
         let mut stage = window.map(WindowWatch::new);
+        // No window source on macOS: the lease ends its launch hold at `running`.
+        #[cfg(target_os = "macos")]
+        let _ = window;
         let mut run = self
             .credit
             .take()
@@ -1219,6 +1210,7 @@ impl Watcher {
                     still if still.is_empty() => shared.find_procs(&self.scanner),
                     still => still,
                 };
+                #[cfg(not(target_os = "macos"))]
                 if let Some(w) = stage.as_mut() {
                     if w.poll(&shared, &live) {
                         stage = None;
@@ -1279,7 +1271,7 @@ impl Watcher {
 /// Play-time clock for one run, credited to a library id and the launching profile.
 /// Flushes deltas, so a reconnect's second watcher adds to the same run instead of
 /// restarting it.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 struct RunClock {
     id: String,
     profile: Option<String>,
@@ -1289,7 +1281,7 @@ struct RunClock {
     last_flush: Instant,
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 impl RunClock {
     fn since(id: String, profile: Option<String>, started: Instant) -> Self {
         Self {
@@ -1322,7 +1314,7 @@ impl RunClock {
 
 /// Record the exit: flush the run's play time, then the state. Skip `on_exit`
 /// when the host itself ended the game.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn finish(shared: &Arc<LeaseShared>, on_exit: &OnExit, why: &str, run: Option<RunClock>) {
     if let Some(mut run) = run {
         run.flush();
@@ -1382,7 +1374,7 @@ pub fn game_event_ref(shared: &LeaseShared) -> crate::events::GameRefPayload {
 /// has no target. Rule 1 applies: this pid arrives from a plugin, so a
 /// start before [`LeaseShared::launch_stamp`] is never a target, and on
 /// Windows neither is a process outside this host's session.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn reported_proc(shared: &LeaseShared) -> Option<crate::procscan::ProcRef> {
     let pid = shared
         .game
@@ -1409,7 +1401,7 @@ fn reported_proc(shared: &LeaseShared) -> Option<crate::procscan::ProcRef> {
 /// `ProcRef::start` in seconds on the [`LeaseShared::launch_stamp`] scale.
 /// Duplicated because the matcher never sees a reported pid; the
 /// predates-launch test pins the conversion.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn start_secs(p: crate::procscan::ProcRef) -> f64 {
     #[cfg(target_os = "linux")]
     let per_sec = {
@@ -1426,6 +1418,9 @@ fn start_secs(p: crate::procscan::ProcRef) -> f64 {
     // 10_000_000 FILETIME ticks per second (100 ns).
     #[cfg(windows)]
     let per_sec = 10_000_000.0;
+    // A macOS start is in microseconds.
+    #[cfg(target_os = "macos")]
+    let per_sec = 1_000_000.0;
     p.start as f64 / per_sec
 }
 
@@ -2003,7 +1998,7 @@ mod tests {
 
     /// A reaped exit status and a spawned pid that vanished (read as success) take the
     /// same ladder out of phase 1.
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     #[test]
     fn a_launch_command_that_leaves_takes_one_handoff_ladder() {
         use LeaseKind::{Matched, Reported, Untracked};
@@ -2082,7 +2077,7 @@ mod tests {
 
     /// A session switch takes the game down with its session: that exit is the host's, so the
     /// hook that ends the stream on the player quitting does not run.
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     #[test]
     fn a_game_ended_with_its_session_does_not_end_the_stream() {
         let ran = Arc::new(AtomicBool::new(false));
@@ -2570,7 +2565,7 @@ mod tests {
 
     /// Matcher platforms must have a launch stamp. `None` silently disables
     /// the floor ([`crate::procscan::Scanner::find`]).
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     #[test]
     fn a_launch_always_gets_a_reference_instant_to_adopt_against() {
         assert!(

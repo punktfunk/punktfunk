@@ -4,6 +4,10 @@
 <dict>
 	<key>Label</key>
 	<string>io.unom.punktfunk.host</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>io.unom.punktfunk.host</string>
+	</array>
 	<key>BundleProgram</key>
 	<string>Contents/MacOS/punktfunk-host</string>
 	<key>ProgramArguments</key>
@@ -20,6 +24,8 @@
 	</dict>
 	<key>ThrottleInterval</key>
 	<integer>2</integer>
+	<key>ExitTimeOut</key>
+	<integer>45</integer>
 	<key>ProcessType</key>
 	<string>Interactive</string>
 	<key>LimitLoadToSessionType</key>

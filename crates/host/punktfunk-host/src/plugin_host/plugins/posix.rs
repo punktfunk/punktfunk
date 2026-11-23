@@ -1,5 +1,7 @@
 //! The plugin runner off Windows: a `punktfunk-scripting` wrapper found by rung, driven as a
-//! systemd USER unit on Linux. Other Unix hosts resolve the runner but cannot run it.
+//! systemd USER unit on Linux. On macOS it is the app bundle's, which the serving host runs as
+//! its child ([`crate::hostsys::companions`]). Other Unix hosts resolve the runner but cannot
+//! run it.
 //!
 //! On a person's own account the unit is their seat's instance of `punktfunk-scripting-seat@`,
 //! which reads the seat's config dir. The seat's host starts and stops it in their user manager
@@ -64,14 +66,26 @@ pub(super) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
     let exe = std::env::current_exe().ok();
     let path_var = std::env::var("PATH").ok();
     let home = std::env::var("HOME").ok();
+    #[cfg(target_os = "macos")]
+    let bundle = crate::hostsys::companions::runner_payload();
+    #[cfg(not(target_os = "macos"))]
+    let bundle = None;
     resolve_runner_in(
         std::env::var("PUNKTFUNK_SCRIPTING").ok().as_deref(),
         exe.as_deref().and_then(std::path::Path::parent),
+        bundle,
         path_var.as_deref(),
         home.as_deref().map(std::path::Path::new),
         &|p| p.is_file(),
     )
-    .ok_or_else(|| anyhow::anyhow!("{RUNNER_MISSING}"))
+    .ok_or_else(|| {
+        let missing = if cfg!(target_os = "macos") {
+            RUNNER_MISSING_MACOS
+        } else {
+            RUNNER_MISSING
+        };
+        anyhow::anyhow!("{missing}")
+    })
 }
 
 /// Shared with [`runtime_status`] so CLI and console say the same thing.
@@ -81,14 +95,20 @@ pub(super) const RUNNER_MISSING: &str =
      `services.punktfunk.scripting`). If it is installed somewhere else, point PUNKTFUNK_SCRIPTING \
      at the punktfunk-scripting executable.";
 
-/// Rungs: `PUNKTFUNK_SCRIPTING` → beside the host → `PATH` → `/usr` → `~/.local`.
-/// Injected so tests do not mutate process env (races `getenv` in parallel).
+/// [`RUNNER_MISSING`] on macOS, where the app carries the runner.
+const RUNNER_MISSING_MACOS: &str =
+    "the plugin runner isn't installed — it comes inside Punktfunk Host, so reinstall the app";
+
+/// Rungs: `PUNKTFUNK_SCRIPTING` → beside the host → `bundle`, the macOS app's own pair →
+/// `PATH` → `/usr` → `~/.local`. Injected so tests do not mutate process env (races `getenv`
+/// in parallel).
 ///
 /// `PATH` is the only rung a Nix install can land on: `punktfunk-scripting` is its
 /// own derivation, neither beside the host nor under `/usr`.
 fn resolve_runner_in(
     env: Option<&str>,
     exe_dir: Option<&std::path::Path>,
+    bundle: Option<(std::path::PathBuf, std::path::PathBuf)>,
     path_var: Option<&str>,
     home: Option<&std::path::Path>,
     exists: &dyn Fn(&std::path::Path) -> bool,
@@ -108,6 +128,9 @@ fn resolve_runner_in(
     }
     if let Some(p) = exe_dir.map(|d| d.join(RUNNER_BIN)).filter(|p| exists(p)) {
         return Some((p, Vec::new()));
+    }
+    if let Some(cmd) = bundle.and_then(|(bun, runner)| pair(bun, runner)) {
+        return Some(cmd);
     }
     if let Some(p) = path_var
         .into_iter()
@@ -205,9 +228,9 @@ pub(super) fn disable() -> Result<()> {
     Ok(())
 }
 
-/// Shown while systemd restarts a runner that dies at start, and once it has stopped for good
-/// on a box with no sandbox. "Switched off" would send the operator to a switch that is on.
-#[cfg(target_os = "linux")]
+/// Shown while a runner that dies at start is restarted, and once it has stopped for good on a
+/// box with no sandbox. "Switched off" would send the operator to a switch that is on.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const RUNNER_FAILING: &str =
     "The plugin runner isn't running. Troubleshooting → Plugins shows why.";
 
@@ -251,7 +274,56 @@ pub(super) fn runtime_status() -> RuntimeStatus {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// The bundle's runner as the serving host supervises it: installed when the app carries it,
+/// enabled until switched off, running while the host's child is.
+#[cfg(target_os = "macos")]
+pub(super) fn runtime_status() -> RuntimeStatus {
+    use crate::hostsys::companions;
+    let installed = companions::runner_installed();
+    let enabled = companions::runner_enabled();
+    let running = companions::runner_running();
+    RuntimeStatus {
+        installed,
+        enabled,
+        running,
+        unit: "punktfunk-scripting",
+        principal: None,
+        detail: if !installed {
+            RUNNER_MISSING_MACOS.into()
+        } else if enabled && !running {
+            RUNNER_FAILING.into()
+        } else {
+            String::new()
+        },
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn enable() -> Result<()> {
+    crate::hostsys::companions::set_runner_enabled(true)?;
+    println!("Plugin runner enabled. Punktfunk Host runs it.");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn disable() -> Result<()> {
+    crate::hostsys::companions::set_runner_enabled(false)?;
+    println!("Plugin runner disabled. Punktfunk Host stops it.");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn restart_runtime() -> Result<()> {
+    crate::hostsys::companions::restart_runner()
+}
+
+/// The runner reads `PUNKTFUNK_PLUGIN_SANDBOX` from the environment its host gave it.
+#[cfg(target_os = "macos")]
+pub(super) fn runner_sandbox_off() -> bool {
+    crate::hostsys::companions::sandbox_off()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn runtime_status() -> RuntimeStatus {
     RuntimeStatus {
         installed: false,
@@ -423,17 +495,17 @@ pub(super) fn converge_runner_roots(
     Ok(false)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn enable() -> Result<()> {
     bail!("the plugin runner is only available on Linux and Windows hosts")
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn disable() -> Result<()> {
     bail!("the plugin runner is only available on Linux and Windows hosts")
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn restart_runtime() -> Result<()> {
     bail!("the plugin runner is only available on Linux and Windows hosts")
 }
@@ -459,6 +531,7 @@ mod tests {
             resolve_runner_in(
                 None,
                 Some(beside),
+                None,
                 Some(nix.to_str().unwrap()),
                 None,
                 &exists
@@ -471,6 +544,7 @@ mod tests {
             resolve_runner_in(
                 Some("/nix/store/abc/bin/punktfunk-scripting"),
                 Some(beside),
+                None,
                 Some("/usr/bin"),
                 Some(home),
                 &exists
@@ -479,12 +553,12 @@ mod tests {
         );
         // Override is not existence-checked: a typo fails naming that path.
         assert_eq!(
-            resolve_runner_in(Some("/nope/pf"), Some(beside), None, None, &exists),
+            resolve_runner_in(Some("/nope/pf"), Some(beside), None, None, None, &exists),
             Some(("/nope/pf".into(), Vec::new()))
         );
         // Empty/whitespace is unset, not a path.
         assert_eq!(
-            resolve_runner_in(Some("  "), Some(beside), None, None, &exists),
+            resolve_runner_in(Some("  "), Some(beside), None, None, None, &exists),
             Some((beside.join(RUNNER_BIN), Vec::new()))
         );
         let exists = present(vec![beside.join(RUNNER_BIN), nix.join(RUNNER_BIN)]);
@@ -492,6 +566,7 @@ mod tests {
             resolve_runner_in(
                 None,
                 Some(beside),
+                None,
                 Some(nix.to_str().unwrap()),
                 None,
                 &exists
@@ -504,6 +579,7 @@ mod tests {
             resolve_runner_in(
                 None,
                 Some(Path::new("/nowhere")),
+                None,
                 Some(":/nope:/run/current-system/sw/bin"),
                 None,
                 &exists
@@ -517,6 +593,7 @@ mod tests {
             resolve_runner_in(
                 None,
                 Some(Path::new("/nowhere")),
+                None,
                 Some("/nope"),
                 None,
                 &exists
@@ -530,20 +607,26 @@ mod tests {
             .join("runner-cli.js");
         let exists = present(vec![bun.clone(), cli.clone()]);
         assert_eq!(
-            resolve_runner_in(None, None, None, None, &exists),
+            resolve_runner_in(None, None, None, None, None, &exists),
             Some((bun, vec![cli.to_string_lossy().into_owned()]))
         );
         // Half of that layout is not a rung — do not spawn bun with no script.
         let exists = present(vec![PathBuf::from(PACKAGED_BUN)]);
-        assert_eq!(resolve_runner_in(None, None, None, None, &exists), None);
+        assert_eq!(
+            resolve_runner_in(None, None, None, None, None, &exists),
+            None
+        );
 
         // SteamOS payload is user-scoped; reached only via HOME.
         let exists = present(vec![home.join(".local/bin").join(RUNNER_BIN)]);
         assert_eq!(
-            resolve_runner_in(None, None, None, Some(home), &exists),
+            resolve_runner_in(None, None, None, None, Some(home), &exists),
             Some((home.join(".local/bin").join(RUNNER_BIN), Vec::new()))
         );
-        assert_eq!(resolve_runner_in(None, None, None, None, &exists), None);
+        assert_eq!(
+            resolve_runner_in(None, None, None, None, None, &exists),
+            None
+        );
         let bun = home.join(".local/lib").join(RUNNER_BIN).join("bun");
         let cli = home
             .join(".local/share")
@@ -551,14 +634,30 @@ mod tests {
             .join("runner-cli.js");
         let exists = present(vec![bun.clone(), cli.clone()]);
         assert_eq!(
-            resolve_runner_in(None, None, None, Some(home), &exists),
+            resolve_runner_in(None, None, None, None, Some(home), &exists),
             Some((bun, vec![cli.to_string_lossy().into_owned()]))
         );
 
         let exists = present(vec![]);
         assert_eq!(
-            resolve_runner_in(None, Some(beside), Some("/nope"), Some(home), &exists),
+            resolve_runner_in(None, Some(beside), None, Some("/nope"), Some(home), &exists),
             None
+        );
+
+        // The macOS app's pair comes before PATH, and only whole.
+        let app = Path::new("/Applications/Punktfunk Host.app/Contents");
+        let pair = || Some((app.join("Helpers/bun"), app.join("Resources/runner-cli.js")));
+        let (bun, cli) = pair().unwrap();
+        let exists = present(vec![bun.clone(), cli.clone(), nix.join(RUNNER_BIN)]);
+        let path = Some(nix.to_str().unwrap());
+        assert_eq!(
+            resolve_runner_in(None, Some(beside), pair(), path, None, &exists),
+            Some((bun.clone(), vec![cli.to_string_lossy().into_owned()]))
+        );
+        let exists = present(vec![bun, nix.join(RUNNER_BIN)]);
+        assert_eq!(
+            resolve_runner_in(None, Some(beside), pair(), path, None, &exists),
+            Some((nix.join(RUNNER_BIN), Vec::new()))
         );
     }
 

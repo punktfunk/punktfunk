@@ -4,8 +4,8 @@
 //! - **Enumeration** ([`enumerate`]): hardware GPUs. DXGI adapters on Windows
 //!   (WARP/Basic-Render and IddCx/display-only adapters dropped — an IddCx
 //!   adapter mirrors its render GPU's DXGI identity and would list every GPU
-//!   twice). `/dev/dri/renderD*` + sysfs PCI ids on Linux. Empty elsewhere so
-//!   management endpoints stay identical.
+//!   twice). `/dev/dri/renderD*` + sysfs PCI ids on Linux. Metal devices on
+//!   macOS. Empty elsewhere so management endpoints stay identical.
 //! - **Preference** ([`prefs`]): auto/manual in `<config>/gpu-settings.json`.
 //!   Manual is stored by stable identity (PCI vendor:device + occurrence +
 //!   name), not LUID (reassigned every boot) or adapter index.
@@ -27,6 +27,8 @@ use std::sync::{Mutex, OnceLock};
 pub const VENDOR_NVIDIA: u32 = 0x10DE;
 pub const VENDOR_AMD: u32 = 0x1002;
 pub const VENDOR_INTEL: u32 = 0x8086;
+/// Apple's PCI id, given to a Metal device named `Apple …`: Metal reports no vendor id.
+pub const VENDOR_APPLE: u32 = 0x106B;
 /// Adreno, which DXGI reports as the FourCC `"QCOM"` rather than a PCI id; `0x5143` is
 /// the id the same driver reports through Vulkan. Both mean Media Foundation is the only
 /// hardware encoder on the adapter.
@@ -52,7 +54,7 @@ pub struct GpuInfo {
     /// `"{vendor:04x}-{device:04x}-{occurrence}"`. Occurrence disambiguates
     /// identical cards by inventory order among twins.
     pub id: String,
-    /// DXGI description (Windows) / vendor label + node (Linux).
+    /// DXGI description (Windows) / vendor label + node (Linux) / Metal device name (macOS).
     pub name: String,
     pub vendor_id: u32,
     pub device_id: u32,
@@ -89,8 +91,11 @@ impl GpuInfo {
 
 /// Fill `id` + `occurrence` (index among same-(vendor,device) twins). Windows
 /// sorts by LUID first so twin numbers stay stable for the boot.
-// Linux/Windows `enumerate()` only; other targets' stub leaves this unused.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+// Each platform's `enumerate()`; the stub for other targets leaves this unused.
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 fn assign_ids(gpus: &mut [GpuInfo]) {
     for i in 0..gpus.len() {
         let occ = gpus[..i]
@@ -311,7 +316,53 @@ pub fn enumerate() -> Vec<GpuInfo> {
     out
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+/// Metal devices, which name the chip on Apple silicon. Metal reports no PCI ids, so the vendor
+/// comes from the name and the device id is 0.
+#[cfg(target_os = "macos")]
+pub fn enumerate() -> Vec<GpuInfo> {
+    use objc2_metal::{MTLCopyAllDevices, MTLDevice};
+    let mut out: Vec<GpuInfo> = MTLCopyAllDevices()
+        .iter()
+        .map(|d| {
+            let name = d.name().to_string();
+            GpuInfo {
+                id: String::new(),
+                vendor_id: metal_vendor(&name),
+                device_id: 0,
+                occurrence: 0,
+                // Unified memory is the system's, not the GPU's own.
+                vram_bytes: if d.hasUnifiedMemory() {
+                    0
+                } else {
+                    d.recommendedMaxWorkingSetSize()
+                },
+                name,
+                handle: GpuHandle::default(),
+            }
+        })
+        .collect();
+    assign_ids(&mut out);
+    out
+}
+
+/// The PCI vendor a Metal device's name implies; 0 for a name none matches.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn metal_vendor(name: &str) -> u32 {
+    let name = name.to_ascii_lowercase();
+    if name.starts_with("apple") {
+        VENDOR_APPLE
+    } else if name.contains("amd") || name.contains("radeon") {
+        VENDOR_AMD
+    } else if name.contains("intel") {
+        VENDOR_INTEL
+    } else if name.contains("nvidia") {
+        VENDOR_NVIDIA
+    } else {
+        0
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn enumerate() -> Vec<GpuInfo> {
     Vec::new()
 }
@@ -549,7 +600,19 @@ pub fn selected_gpu() -> Option<SelectedGpu> {
     })
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+/// The console's view: manual preference, else the device with the most dedicated memory.
+/// VideoToolbox picks its own engine, so this names the GPU rather than steering the encoder.
+#[cfg(target_os = "macos")]
+pub fn selected_gpu() -> Option<SelectedGpu> {
+    let gpus = enumerate();
+    let (i, source) = pick(&gpus, &prefs().get(), None)?;
+    Some(SelectedGpu {
+        info: gpus.into_iter().nth(i)?,
+        source,
+    })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn selected_gpu() -> Option<SelectedGpu> {
     None
 }
@@ -737,6 +800,29 @@ pub fn resolve_render_adapter_luid() -> Option<windows::Win32::Foundation::LUID>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metal_names_map_to_their_vendor() {
+        for (name, vendor) in [
+            ("Apple M3 Max", VENDOR_APPLE),
+            ("Apple Paravirtual device", VENDOR_APPLE),
+            ("AMD Radeon Pro 5500M", VENDOR_AMD),
+            ("Intel(R) UHD Graphics 630", VENDOR_INTEL),
+            ("NVIDIA GeForce GT 750M", VENDOR_NVIDIA),
+            ("Something else", 0),
+        ] {
+            assert_eq!(metal_vendor(name), vendor, "{name}");
+        }
+    }
+
+    /// Apple silicon and a macOS VM both have a Metal device; it gets an id like any GPU.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_lists_its_metal_devices() {
+        let gpus = enumerate();
+        assert!(!gpus.is_empty());
+        assert!(gpus.iter().all(|g| !g.id.is_empty() && !g.name.is_empty()));
+    }
 
     fn gpu(vendor: u32, device: u32, name: &str, vram_gb: u64) -> GpuInfo {
         GpuInfo {

@@ -48,6 +48,9 @@ pub(crate) fn register_all(reg: &Diagnostics, door: bool) {
     device(ids::PAD_DRIVER, pad_driver);
     device(ids::ENCODER_SHARING, encoder_sharing);
     device(ids::GPU_FIRMWARE, gpu_firmware);
+    device(ids::SCREEN_RECORDING, screen_recording);
+    device(ids::INPUT_CONTROL, input_control);
+    device(ids::VIRTUAL_CONTROLLERS, virtual_controllers);
     let no_plugins = (
         "diag_plugin_sandbox_door_summary",
         "The door runs no plugins. The owner's host runs them.",
@@ -95,7 +98,7 @@ pub(crate) fn restart_pending() -> HostCheck {
 
 /// The runner's own refusal, unless it runs again since. Its probe runs inside its unit, which
 /// can refuse what this process may do, so the file it leaves is the only way to hear of it.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn runner_refusal(status: &crate::plugins::RuntimeStatus) -> Option<String> {
     if status.running {
         return None;
@@ -105,7 +108,7 @@ fn runner_refusal(status: &crate::plugins::RuntimeStatus) -> Option<String> {
 
 /// The runner stopped rather than run a plugin unsandboxed. `why` is its reason, `start` the
 /// command that starts it again on this platform.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn runner_stopped(id: &str, why: &str, start: &str) -> HostCheck {
     let (cause, impact_id) = if why.is_empty() {
         (String::new(), "diag_plugin_sandbox_stopped_impact")
@@ -417,8 +420,52 @@ fn plugin_sandbox() -> HostCheck {
     }
 }
 
-/// macOS has no plugin runner.
-#[cfg(not(any(target_os = "linux", windows)))]
+/// The app's runner, which the host supervises, sandboxes each plugin or stops and says why.
+/// host.env turns the sandbox off, as on Windows.
+#[cfg(target_os = "macos")]
+fn plugin_sandbox() -> HostCheck {
+    let id = ids::PLUGIN_SANDBOX;
+    let status = crate::plugins::runtime_status();
+    if !status.installed {
+        return HostCheck::inapplicable(id, "The plugin runner is not installed on this host.")
+            .worded("diag_plugin_sandbox_na_not_installed", None, None);
+    }
+    if crate::plugins::runner_sandbox_off() {
+        return HostCheck::problem(
+            id,
+            CheckStatus::Warn,
+            Severity::Critical,
+            "Plugin sandboxing is turned off",
+            "Every installed plugin runs with your account's access: your files, your session, \
+             and the host's own credentials."
+                .to_string(),
+        )
+        .with_remedy(Remedy {
+            text: "Remove PUNKTFUNK_PLUGIN_SANDBOX from host.env, then restart the host.".into(),
+            command: None,
+            relogin_required: false,
+        })
+        .worded(
+            "diag_plugin_sandbox_off_summary",
+            Some("diag_plugin_sandbox_off_impact"),
+            Some("diag_plugin_sandbox_off_windows_remedy"),
+        );
+    }
+    match runner_refusal(&status) {
+        Some(why) => {
+            let host = std::env::current_exe().unwrap_or_else(|_| "punktfunk-host".into());
+            runner_stopped(id, &why, &format!("\"{}\" plugins enable", host.display()))
+        }
+        None => HostCheck::ok(id, "Each plugin runs in its own sandbox.").worded(
+            "diag_plugin_sandbox_ok_summary",
+            None,
+            None,
+        ),
+    }
+}
+
+/// A host with no plugin runner.
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn plugin_sandbox() -> HostCheck {
     HostCheck::inapplicable(
         ids::PLUGIN_SANDBOX,
@@ -710,6 +757,159 @@ fn pad_driver() -> HostCheck {
         "The virtual controller driver is a Windows component.",
     )
     .worded("diag_pad_driver_na_windows_only", None, None)
+}
+
+/// A macOS grant row: each field is a message id and its English. `na` is the row off macOS.
+struct MacGrant {
+    id: &'static str,
+    severity: Severity,
+    na: (&'static str, &'static str),
+    ok: (&'static str, &'static str),
+    summary: (&'static str, &'static str),
+    impact: (&'static str, &'static str),
+    remedy: (&'static str, &'static str),
+}
+
+/// Without it the capture refuses to open, so no stream starts.
+const SCREEN_RECORDING: MacGrant = MacGrant {
+    id: ids::SCREEN_RECORDING,
+    severity: Severity::Critical,
+    na: (
+        "diag_screen_recording_na_not_macos",
+        "Screen Recording permission is a macOS feature.",
+    ),
+    ok: (
+        "diag_screen_recording_ok_summary",
+        "Punktfunk Host may record the screen.",
+    ),
+    summary: (
+        "diag_screen_recording_summary",
+        "Punktfunk Host isn't allowed to record the screen",
+    ),
+    impact: (
+        "diag_screen_recording_impact",
+        "Every stream fails to start: the host can't capture the screen without it.",
+    ),
+    remedy: (
+        "diag_screen_recording_remedy",
+        "In System Settings, open Privacy & Security, allow Punktfunk Host to record the \
+         screen, then restart Punktfunk Host.",
+    ),
+};
+
+/// Posting keyboard and mouse events. macOS 27 renamed its pane, so the remedy names both.
+const INPUT_CONTROL: MacGrant = MacGrant {
+    id: ids::INPUT_CONTROL,
+    severity: Severity::Critical,
+    na: (
+        "diag_input_control_na_not_macos",
+        "Keyboard and mouse permission is a macOS feature.",
+    ),
+    ok: (
+        "diag_input_control_ok_summary",
+        "Punktfunk Host may control the keyboard and mouse.",
+    ),
+    summary: (
+        "diag_input_control_summary",
+        "Punktfunk Host isn't allowed to control the keyboard and mouse",
+    ),
+    impact: (
+        "diag_input_control_impact",
+        "Streams show the screen, but keyboard and mouse input from clients does nothing.",
+    ),
+    remedy: (
+        "diag_input_control_remedy",
+        "In System Settings, open Privacy & Security, turn on Punktfunk Host under \
+         Accessibility (Device Control and Data Access on macOS 27 and later), then restart \
+         Punktfunk Host.",
+    ),
+};
+
+/// The HID virtual device entitlement, which only a build signed with its profile carries.
+const VIRTUAL_CONTROLLERS: MacGrant = MacGrant {
+    id: ids::VIRTUAL_CONTROLLERS,
+    severity: Severity::Warning,
+    na: (
+        "diag_virtual_controllers_na_not_macos",
+        "Apple's virtual controller permission is a macOS feature.",
+    ),
+    ok: (
+        "diag_virtual_controllers_ok_summary",
+        "This build of Punktfunk Host can create virtual controllers.",
+    ),
+    summary: (
+        "diag_virtual_controllers_summary",
+        "This build of Punktfunk Host can't create virtual controllers",
+    ),
+    impact: (
+        "diag_virtual_controllers_impact",
+        "Games see no controller from clients. Keyboard and mouse still work.",
+    ),
+    remedy: (
+        "diag_virtual_controllers_remedy",
+        "Install Punktfunk Host from the official disk image. A build signed any other way \
+         lacks Apple's permission for virtual controllers.",
+    ),
+};
+
+/// `granted` is `None` off macOS.
+fn mac_grant(row: &MacGrant, granted: Option<bool>) -> HostCheck {
+    match granted {
+        None => HostCheck::inapplicable(row.id, row.na.1).worded(row.na.0, None, None),
+        Some(true) => HostCheck::ok(row.id, row.ok.1).worded(row.ok.0, None, None),
+        Some(false) => HostCheck::problem(
+            row.id,
+            CheckStatus::Fail,
+            row.severity,
+            row.summary.1,
+            row.impact.1,
+        )
+        .with_remedy(Remedy {
+            text: row.remedy.1.into(),
+            command: None,
+            relogin_required: false,
+        })
+        .worded(row.summary.0, Some(row.impact.0), Some(row.remedy.0)),
+    }
+}
+
+/// The probes show nothing on screen: no prompt, no device.
+#[cfg(target_os = "macos")]
+mod mac_probe {
+    pub(super) fn screen_recording() -> Option<bool> {
+        Some(pf_capture::screen_capture_access())
+    }
+    pub(super) fn input_control() -> Option<bool> {
+        Some(crate::inject::post_event_access())
+    }
+    pub(super) fn virtual_controllers() -> Option<bool> {
+        Some(crate::inject::hid_device_probe() == crate::inject::HidDeviceVerdict::Ready)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod mac_probe {
+    pub(super) fn screen_recording() -> Option<bool> {
+        None
+    }
+    pub(super) fn input_control() -> Option<bool> {
+        None
+    }
+    pub(super) fn virtual_controllers() -> Option<bool> {
+        None
+    }
+}
+
+fn screen_recording() -> HostCheck {
+    mac_grant(&SCREEN_RECORDING, mac_probe::screen_recording())
+}
+
+fn input_control() -> HostCheck {
+    mac_grant(&INPUT_CONTROL, mac_probe::input_control())
+}
+
+fn virtual_controllers() -> HostCheck {
+    mac_grant(&VIRTUAL_CONTROLLERS, mac_probe::virtual_controllers())
 }
 
 /// The Windows virtual-display driver answers, or the host has no video at all. A driver whose
@@ -1598,6 +1798,19 @@ mod tests {
             assert_eq!(gpu_firmware_verdict(Some(fine)).status, CheckStatus::Ok);
         }
         assert_eq!(gpu_firmware_verdict(None).status, CheckStatus::Inapplicable);
+    }
+
+    /// A missing grant fails and names its fix; a held one is fine; off macOS the row says why.
+    #[test]
+    fn a_missing_mac_grant_fails_with_its_remedy() {
+        for row in [&SCREEN_RECORDING, &INPUT_CONTROL, &VIRTUAL_CONTROLLERS] {
+            let missing = mac_grant(row, Some(false));
+            assert_eq!(missing.status, CheckStatus::Fail, "{}", row.id);
+            assert_eq!(missing.remedy_id.as_deref(), Some(row.remedy.0));
+            assert!(!missing.impact.is_empty() && missing.remedy.is_some());
+            assert_eq!(mac_grant(row, Some(true)).status, CheckStatus::Ok);
+            assert_eq!(mac_grant(row, None).status, CheckStatus::Inapplicable);
+        }
     }
 
     #[test]

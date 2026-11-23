@@ -139,6 +139,17 @@ fn run(args: &[&str], json: bool) -> Result<()> {
         #[cfg(unix)]
         "console-url" => {
             let url = console_stub()?;
+            #[cfg(target_os = "macos")]
+            if rest.contains(&"--open") {
+                match std::process::Command::new("/usr/bin/open")
+                    .arg(&url)
+                    .status()
+                {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => return Err(Failure::api(format!("open the browser: {s}"))),
+                    Err(e) => return Err(Failure::api(format!("open the browser: {e}"))),
+                }
+            }
             out(json, &json!({ "url": url }), move |_| println!("{url}"));
             Ok(())
         }
@@ -756,8 +767,9 @@ fn render_stats(v: &Value) {
 ///
 /// **Why a file and not the URL.** `/proc/<pid>/cmdline` is world-readable, so a ticket passed to
 /// the browser as an argument is legible to every other local user for its whole lifetime. The
-/// ticket lives in a 0600 file under `$XDG_RUNTIME_DIR`, and only its PATH reaches argv. No
-/// runtime dir means no private place to put it, so this fails.
+/// ticket lives in a 0600 file under `$XDG_RUNTIME_DIR/punktfunk`, on macOS under
+/// `<config_dir>/run`, and only its PATH reaches argv. No runtime dir means no private place to
+/// put it, so this fails.
 ///
 /// TTL and single-use are the redeemer's to enforce: a stub left from an earlier launch is spent.
 #[cfg(unix)]
@@ -767,13 +779,19 @@ fn console_stub() -> Result<String> {
     let mut raw = [0u8; 16];
     rand::Rng::fill_bytes(&mut rand::rng(), &mut raw);
     let nonce = hex::encode(raw);
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
-        Failure::unreachable(
-            "no XDG_RUNTIME_DIR — there is nowhere to put a ticket that another local user cannot \
-             read. Open the console and log in instead."
-                .to_string(),
-        )
-    })?;
+    // macOS sets no XDG_RUNTIME_DIR; the config dir is the user's own private folder.
+    #[cfg(target_os = "macos")]
+    let runtime = dir.join("run");
+    #[cfg(not(target_os = "macos"))]
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|r| std::path::Path::new(&r).join("punktfunk"))
+        .ok_or_else(|| {
+            Failure::unreachable(
+                "no XDG_RUNTIME_DIR — there is nowhere to put a ticket that another local user \
+                 cannot read. Open the console and log in instead."
+                    .to_string(),
+            )
+        })?;
     // The console's own port, not the mgmt one. It is not published anywhere the way
     // `mgmt-endpoint` is, so the documented default stands until somebody moves it.
     // `127.0.0.1`, not `localhost`: the console binds IPv4 only, and any local user can
@@ -792,7 +810,7 @@ fn console_stub() -> Result<String> {
         let ticket = handoff_ticket(&token, ts, &nonce)?;
         format!("https://127.0.0.1:47992/_auth/handoff?t={ticket}")
     };
-    write_stub(&std::path::Path::new(&runtime).join("punktfunk"), &target)
+    write_stub(&runtime, &target)
 }
 
 /// Where the browser lands when no ticket came: the console's sentence for a refused one.
@@ -1154,11 +1172,13 @@ DEVICES
     unpair <FP> | unpair --all [--yes]
 
 CONSOLE
-    console-url                  write a one-shot login page under $XDG_RUNTIME_DIR and print its
-                                 file:// URL, so a browser opened at it lands already logged in.
-                                 The ticket stays out of argv, where every local user can read it.
+    console-url                  write a one-shot login page under $XDG_RUNTIME_DIR (macOS: the
+                                 config dir's run/) and print its file:// URL, so a browser opened
+                                 at it lands already logged in. The ticket stays out of argv,
+                                 where every local user can read it.
                                  Inside a seat it opens that person's own Punktfunk instead.
-                                 Windows: inside a seat only; prints the URL. --open opens it.
+                                 Windows: inside a seat only; prints the URL.
+                                 --open also opens it (Windows, macOS).
 
 DISPLAYS
     display                      the virtual-display policy, every preset, and the live displays.

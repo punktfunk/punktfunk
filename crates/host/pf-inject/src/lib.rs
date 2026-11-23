@@ -513,7 +513,14 @@ pub fn touch_supported() -> bool {
     pen::synthetic_pen_available()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// Contacts land as the pointer, scroll and gestures macOS emulates touch with
+/// (`touch_plan`).
+#[cfg(target_os = "macos")]
+pub fn touch_supported() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn touch_supported() -> bool {
     false
 }
@@ -556,7 +563,14 @@ pub fn pen_supported() -> bool {
     pen::synthetic_pen_available()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// CoreGraphics tablet events, posted with the Accessibility grant the mouse needs. Same
+/// `PUNKTFUNK_PEN` kill-switch.
+#[cfg(target_os = "macos")]
+pub fn pen_supported() -> bool {
+    pf_host_config::row_bool("PUNKTFUNK_PEN")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn pen_supported() -> bool {
     false
 }
@@ -830,16 +844,16 @@ mod pad_driver_verdict_tests {
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HidDeviceVerdict {
-    /// A neutral probe device was created and removed.
+    /// The host's signature carries the HID virtual device entitlement.
     Ready,
-    /// The system refused it: the host's signature lacks the HID virtual device entitlement.
+    /// It does not, as in an unsigned or ad hoc build: the system refuses every pad.
     Refused,
 }
 
-/// One create of a neutral device, on the first call only; later calls return its answer.
+/// Reads this process's signature; creates no device, so a running game never sees a pad.
 #[cfg(target_os = "macos")]
 pub fn hid_device_probe() -> HidDeviceVerdict {
-    if hid_user_device::probe() {
+    if hid_user_device::entitled() {
         HidDeviceVerdict::Ready
     } else {
         HidDeviceVerdict::Refused
@@ -1278,11 +1292,28 @@ mod cgevent;
 #[cfg(any(target_os = "macos", test))]
 #[path = "inject/macos/cgevent_plan.rs"]
 mod cgevent_plan;
+/// The virtual HID mouse and keyboard in front of CGEvent, behind `PUNKTFUNK_HID_INPUT=1`.
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/hid_input.rs"]
+mod hid_input;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/pen_plan.rs"]
+mod pen_plan;
+#[cfg(any(target_os = "macos", test))]
+#[path = "inject/macos/touch_plan.rs"]
+mod touch_plan;
 #[cfg(target_os = "macos")]
-pub use cgevent::{post_event_access, request_post_event_access, set_stream_display};
-/// Stub — pen injection needs the Linux uinput tablet or Windows synthetic pointers.
-/// `pen_supported()` is false here, so no host advertises the cap and no batches arrive.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub use cgevent::{
+    post_event_access, request_post_event_access, set_screen_display, set_stream_display,
+};
+/// The session's stylus as CoreGraphics tablet events.
+#[cfg(target_os = "macos")]
+pub mod pen {
+    pub use crate::cgevent::VirtualPen;
+}
+/// Stub — no pen injection backend on this platform. `pen_supported()` is false here, so no
+/// host advertises the cap and no batches arrive.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub mod pen {
     use anyhow::{bail, Result};
     pub struct VirtualPen;

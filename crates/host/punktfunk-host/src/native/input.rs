@@ -1852,6 +1852,31 @@ mod tests {
     use crate::inject::pad_pool::PadIdentity;
     use punktfunk_core::input::{InputEvent, InputKind};
 
+    /// A mirror the stream scales to the picture maps a pointer as the encoder-scaled one did:
+    /// neither crops, so the event keeps its fraction of the picture for the injector.
+    #[test]
+    fn a_scaled_mirror_points_where_it_did() {
+        use punktfunk_core::video_fit::{Reframe, VideoFit};
+        for view in [(1280, 720), (960, 540), (1440, 1080)] {
+            let encoder_scaled = Reframe::plan(VideoFit::Fit, (1920, 1080), view);
+            let stream_scaled = Reframe::full(encoder_scaled.out);
+            assert_eq!(stream_scaled.out, encoder_scaled.out, "{view:?}");
+            let (w, h) = encoder_scaled.out;
+            let ev = InputEvent {
+                kind: InputKind::MouseMoveAbs,
+                _pad: [0; 3],
+                code: 0,
+                x: (w / 3) as i32,
+                y: (h / 4) as i32,
+                flags: (w << 16) | h,
+            };
+            let (mut before, mut after) = (ev, ev);
+            reframe_input(&mut before, &encoder_scaled);
+            reframe_input(&mut after, &stream_scaled);
+            assert_eq!((before, after), (ev, ev), "{view:?}");
+        }
+    }
+
     #[test]
     fn a_cropped_joiner_points_into_the_owner_picture() {
         use punktfunk_core::video_fit::{Reframe, VideoFit};

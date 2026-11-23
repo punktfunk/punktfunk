@@ -139,6 +139,9 @@ struct Args {
     /// client), flip to the capture model at 15 s and back at 35 s, wiggling throughout. The
     /// host's encoder must follow each flip.
     cursor_channel: bool,
+    /// `--cursor-watch` — `--cursor-channel`'s flips with no wiggle: the probe sends no input,
+    /// so a pointer moved by hand on the host shows in the per-second `0xD0` line.
+    cursor_watch: bool,
     /// `--discover [SECS]` — browse the LAN for native (`_punktfunk._udp`) hosts for `SECS`
     /// seconds (default 4), print what's found, and exit. No connection is made.
     discover: Option<u64>,
@@ -423,6 +426,7 @@ fn parse_argv(argv: Vec<String>) -> Args {
         cursor_capture: argv.iter().any(|a| a == "--cursor-capture"),
         cursor_nochannel: argv.iter().any(|a| a == "--cursor-nochannel"),
         cursor_channel: argv.iter().any(|a| a == "--cursor-channel"),
+        cursor_watch: argv.iter().any(|a| a == "--cursor-watch"),
         screens: get("--screens")
             .and_then(|s| s.parse::<u8>().ok())
             .unwrap_or(1)
@@ -937,7 +941,7 @@ async fn handshake(
             // `--cursor-channel` advertise it; `--cursor-capture` then flips the channel to the
             // capture model, so the HOST composites and the dump shows the pointer.
             client_caps: {
-                let mut c = if args.cursor_capture || args.cursor_channel {
+                let mut c = if args.cursor_capture || args.cursor_channel || args.cursor_watch {
                     punktfunk_core::quic::CLIENT_CAP_CURSOR
                 } else {
                     0
@@ -1127,7 +1131,16 @@ async fn control_plane(
     } else if let Some(test) = args.speed_test {
         spawn_speed_test(conn, send, recv, test, counters);
     } else if args.cursor_capture || args.cursor_nochannel || args.cursor_channel {
-        spawn_cursor_test(conn, send, recv, args.cursor_capture, args.cursor_channel);
+        spawn_cursor_test(
+            conn,
+            send,
+            recv,
+            args.cursor_capture,
+            args.cursor_channel,
+            true,
+        );
+    } else if args.cursor_watch {
+        spawn_cursor_test(conn, send, recv, false, true, false);
     } else {
         spawn_loss_relay(conn.conn.clone(), send, counters, link_kbps);
         spawn_screen_log(recv);
@@ -1383,13 +1396,14 @@ fn spawn_speed_test(
 /// capture-latched client) — the host must composite unprompted. Owns BOTH control
 /// halves: the host may send CursorShape (`MSG_CURSOR_SHAPE`) messages while a negotiated
 /// channel is still in its initial client-draws state, and dropping our recv half would fail
-/// those writes host-side.
+/// those writes host-side. Without `wiggle` the probe sends no input at all.
 fn spawn_cursor_test(
     conn: &Wire,
     mut cs: CtlTx,
     mut cr: CtlRx,
     flip_channel: bool,
     flip_twice: bool,
+    wiggle: bool,
 ) {
     tokio::spawn(async move {
         if flip_twice {
@@ -1440,6 +1454,9 @@ fn spawn_cursor_test(
             }
         }
     });
+    if !wiggle {
+        return;
+    }
     let wiggle_conn = conn.clone();
     tokio::spawn(async move {
         // Relative circles, forever: keeps the host pointer moving (and, on metadata-cursor
@@ -1863,7 +1880,41 @@ enum SideDatagram<'a> {
     HdrMeta(punktfunk_core::quic::HdrMeta),
     Hid(punktfunk_core::quic::HidOutput),
     HostTiming(punktfunk_core::quic::HostTiming),
+    Cursor(punktfunk_core::quic::CursorState),
     Other,
+}
+
+/// `0xD0` cursor states over each second: how many came, how many moved the pointer, the last.
+#[derive(Default)]
+struct CursorTally {
+    since: Option<std::time::Instant>,
+    states: u32,
+    moves: u32,
+    last: Option<punktfunk_core::quic::CursorState>,
+}
+
+impl CursorTally {
+    fn note(&mut self, s: punktfunk_core::quic::CursorState) {
+        let since = *self.since.get_or_insert_with(std::time::Instant::now);
+        self.states += 1;
+        if self.last.is_some_and(|l| (l.x, l.y) != (s.x, s.y)) {
+            self.moves += 1;
+        }
+        self.last = Some(s);
+        if since.elapsed() >= std::time::Duration::from_secs(1) {
+            tracing::info!(
+                states = self.states,
+                moves = self.moves,
+                visible = s.visible(),
+                x = s.x,
+                y = s.y,
+                serial = s.serial,
+                "cursor states (0xD0) over the last second"
+            );
+            self.since = Some(std::time::Instant::now());
+            (self.states, self.moves) = (0, 0);
+        }
+    }
 }
 
 fn classify_side_datagram(d: &[u8], lossless: bool) -> SideDatagram<'_> {
@@ -1886,6 +1937,8 @@ fn classify_side_datagram(d: &[u8], lossless: bool) -> SideDatagram<'_> {
         SideDatagram::Hid(hid)
     } else if let Some(t) = q::decode_host_timing_datagram(d) {
         SideDatagram::HostTiming(t)
+    } else if let Some(c) = q::decode_cursor_state_datagram(d) {
+        SideDatagram::Cursor(c)
     } else {
         SideDatagram::Other
     }
@@ -2050,6 +2103,9 @@ impl LatencySplit {
         self.net_us
             .push(hostnet_us.saturating_sub(t.host_us as u64));
         if let Some(s) = t.stages {
+            // `RUST_LOG=punktfunk_probe::au=debug`: one line per AU, in the order they arrive.
+            tracing::debug!(target: "punktfunk_probe::au", pts_ns = t.pts_ns, host_us = t.host_us,
+                queue_us = s.queue_us, encode_us = s.encode_us, "au");
             self.queue_us.push(s.queue_us as u64);
             self.enc_us.push(s.encode_us as u64);
             self.pace_us.push(s.pace_us as u64);
@@ -2218,6 +2274,7 @@ fn spawn_datagram_rx(
         use std::sync::atomic::Ordering::Relaxed;
         let mut hdr_logged = false;
         let mut rumble_logged = false;
+        let mut cursor = CursorTally::default();
         let mut audio = AudioTap::new(
             channels,
             rate_hz,
@@ -2292,6 +2349,7 @@ fn spawn_datagram_rx(
                 SideDatagram::HostTiming(t) => {
                     let _ = ht_tx.try_send(t);
                 }
+                SideDatagram::Cursor(s) => cursor.note(s),
                 SideDatagram::Other => {}
             }
         }

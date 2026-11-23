@@ -11,6 +11,9 @@
 // only when it declared network (`sandboxCommand`). The host's loopback and abstract sockets are
 // never in it, so its UI reaches the console through a second socket (`ui-forward.ts`). Pin:
 // `sandbox.test.ts`.
+//
+// macOS has no namespaces: `seatbeltProfile` grants the same set as Seatbelt rules, by real path.
+// Pin: `runner-macos.test.ts`.
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -314,10 +317,13 @@ const STARTUP = [
 	".config/i3",
 	".config/labwc",
 	".xsession",
+	"Library/LaunchAgents",
+	"Library/Preferences",
+	"Library/Application Support/com.apple.backgroundtaskmanagementagent",
 ];
 
-/** Under the home: browser profiles, keyrings, cloud credentials and the display's cookies. No
- * bind holds one. */
+/** Under the home: browser profiles, keyrings, other apps' containers, macOS's privacy grants, cloud
+ * credentials and the display's cookies. No bind holds one. */
 const SECRETS = [
 	".Xauthority",
 	".ICEauthority",
@@ -345,6 +351,18 @@ const SECRETS = [
 	".docker",
 	".config/gcloud",
 	".config/gh",
+	"Library/Keychains",
+	"Library/Cookies",
+	"Library/Safari",
+	"Library/Containers",
+	"Library/Group Containers",
+	"Library/Application Support/com.apple.TCC",
+	"Library/Application Support/Google/Chrome",
+	"Library/Application Support/Chromium",
+	"Library/Application Support/BraveSoftware",
+	"Library/Application Support/Microsoft Edge",
+	"Library/Application Support/Vivaldi",
+	"Library/Application Support/Firefox",
 ];
 
 /**
@@ -371,6 +389,7 @@ const TMP_SOCKETS = [
 	"emacs*",
 	"xauth*",
 	".Xauth*",
+	"com.apple.launchd.*",
 ];
 
 /**
@@ -444,7 +463,7 @@ const traverses = (p: string): boolean => p.split("/").includes("..");
 /** Where manifest or grant path `p` binds, or `undefined` when it may not. */
 const bindable = (
 	p: string,
-	paths: SandboxPaths,
+	paths: Pick<SandboxPaths, "home" | "configDir">,
 	write: boolean,
 	operator: boolean,
 ): string | undefined => {
@@ -636,6 +655,179 @@ export const grantedRoots = (configDir: string, id: string): GrantedRoot[] => {
 	}
 };
 
+/**
+ * The Seatbelt rules every macOS sandbox starts from, shared with {@link sandboxProbe}: the system
+ * read-only and runnable, as bwrap's `/usr` bind gives it, and no other process. `deny default`
+ * refuses every mach service, so no plugin reaches the pasteboard, the screen, TCC or WindowServer
+ * under the host's privacy grants. Seatbelt matches a path once every link and firmlink resolved,
+ * so a link on the way needs its own metadata rule (`/var`, `/etc`, `/tmp`). A sandboxed process
+ * can't apply another sandbox, and its exec of a setuid program fails.
+ */
+export const SEATBELT_BASE = `(version 1)
+(deny default)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(deny process-info*)
+(allow process-info* (target self))
+(allow sysctl-read)
+(deny sysctl-read (sysctl-name-prefix "kern.proc"))
+(allow file-read* process-exec (literal "/") (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/System/Library") (subpath "/System/Cryptexes") (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone") (literal "/private/etc/localtime") (subpath "/private/etc/ssl") (subpath "/private/var/select"))
+(allow file-read-metadata (literal "/var") (literal "/etc") (literal "/tmp") (literal "/private") (literal "/private/var") (literal "/private/etc") (literal "/private/var/db"))
+(allow file-read* file-write-data (literal "/dev/null") (literal "/dev/zero"))
+(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))
+`;
+
+/** Seatbelt's front end: deprecated on paper, still shipped on macOS 27. */
+export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+
+/** In a macOS sandbox's dir: its token, its way to the host, its page's socket and its temp dir. */
+export const VIEW = { token: "plugin-token", socket: "host.sock", ui: "ui.sock", tmp: "tmp" } as const;
+
+/** What a macOS sandbox is built from. */
+export interface SeatbeltPaths {
+	/** Where this plugin's own files live: read-write. */
+	stateDir: string;
+	/**
+	 * The runner's dir for this attempt, which stands in for `/run/punktfunk` ({@link VIEW}):
+	 * read-only, but for its temp dir and the page socket the plugin binds.
+	 */
+	view: string;
+	/** The plugin install root: its code, read-only. */
+	pluginsDir: string;
+	bun: string;
+	runner: string;
+	home: string;
+	/** The host's config dir, which no plugin may read. */
+	configDir: string;
+	/** Whether the runner forwards a port to the plugin's page. */
+	ui: boolean;
+}
+
+/** The environment inside a macOS sandbox: {@link sandboxEnv}, with the view standing in. */
+export const seatbeltEnv = (home: string, view: string, uiPort?: number): Record<string, string> =>
+	sandboxEnv(home, {
+		PUNKTFUNK_CONFIG_DIR: view,
+		PUNKTFUNK_MGMT_UNIX: path.join(view, VIEW.socket),
+		TMPDIR: path.join(view, VIEW.tmp),
+		...(uiPort
+			? { PUNKTFUNK_UI_PORT: String(uiPort), PUNKTFUNK_UI_SOCKET: path.join(view, VIEW.ui) }
+			: {}),
+	});
+
+/**
+ * `p` as spelled and as Seatbelt matches it, after every link and firmlink. A path that does not
+ * exist yet resolves through its nearest parent that does.
+ */
+const spellings = (p: string): string[] => {
+	const abs = path.resolve(p);
+	for (let head = abs, tail = ""; ; ) {
+		try {
+			return [...new Set([abs, path.join(fs.realpathSync(head), tail)])];
+		} catch {
+			if (head === "/") return [abs];
+			tail = path.join(path.basename(head), tail);
+			head = path.dirname(head);
+		}
+	}
+};
+
+/**
+ * The Seatbelt profile for one plugin: {@link SEATBELT_BASE}, then the set {@link bwrapArgv}
+ * binds, from the same rules. Read-only and runnable: its code, manifest `reads`, granted roots.
+ * Read-write: its state dir, its temp dir, manifest `writes` under `/tmp`, grants marked `write`.
+ * A path whose quote, backslash or control character could end an SBPL string is left out, as is
+ * anything {@link refusedRoot} refuses.
+ *
+ * Its only socket is the host's, until it declared network: then the internet, DNS through
+ * mDNSResponder, and of this computer's loopback only `ports`, what pasta forwards on Linux.
+ * Seatbelt names no address but loopback, so this computer's own LAN address stays reachable,
+ * which pasta's namespace does not lead back to.
+ */
+export const seatbeltProfile = (
+	manifest: PluginManifest,
+	paths: SeatbeltPaths,
+	grants: readonly GrantedRoot[] = [],
+	ports: readonly number[] = [],
+): string => {
+	const read: string[] = [];
+	const write: string[] = [];
+	const meta = new Set<string>();
+	const quotable = (s: string) => !/["\\\p{Cc}]/u.test(s);
+	// Every spelling of `p` as `kind` into `into`, and each parent's metadata, which bwrap's
+	// parents give. `false` when `p` was left out.
+	const add = (into: string[] | Set<string>, p: string, kind = "subpath"): boolean => {
+		const all = spellings(p);
+		if (!all.every(quotable)) return false;
+		for (const s of all) {
+			const rule = `(${kind} "${s}")`;
+			if (Array.isArray(into)) into.push(rule);
+			else into.add(rule);
+			for (let up = path.dirname(s); up !== "/"; up = path.dirname(up)) meta.add(`(literal "${up}")`);
+		}
+		return true;
+	};
+	add(read, paths.pluginsDir);
+	add(read, paths.bun, "literal");
+	add(read, paths.runner, "literal");
+	// bun lists the directory of the module it starts from, which bwrap leaves holding the bundle.
+	add(read, path.dirname(paths.runner), "literal");
+	add(read, paths.view);
+	add(write, paths.stateDir);
+	add(write, path.join(paths.view, VIEW.tmp));
+	for (const p of [...(manifest.reads ?? []), ...(manifest.files ?? [])]) {
+		const abs = bindable(p, paths, false, false);
+		if (abs) add(read, abs);
+	}
+	for (const p of manifest.writes ?? []) {
+		const abs = bindable(p, paths, true, false);
+		if (abs) add(write, abs);
+	}
+	for (const grant of grants) {
+		const abs = bindable(grant.path, paths, grant.write, true);
+		if (!abs) continue;
+		add(grant.write ? write : read, abs);
+		// The link itself is read on the way to its target, which the grant holds.
+		for (const link of grant.links ?? []) {
+			if (
+				link.path === path.resolve(link.path) &&
+				!traverses(link.target) &&
+				bindable(link.path, paths, false, true)
+			)
+				add(meta, link.path, "literal");
+		}
+	}
+	const socket: string[] = [];
+	add(socket, path.join(paths.view, VIEW.socket), "literal");
+	const rules = [SEATBELT_BASE.trimEnd()];
+	// An allow with no filter allows everything, so a list that came out empty adds no rule.
+	const allow = (ops: string, filters: Iterable<string>) => {
+		const list = [...filters];
+		if (list.length > 0) rules.push(`(allow ${ops} ${list.join(" ")})`);
+	};
+	allow("file-read* process-exec", read);
+	allow("file-read* file-write* process-exec", write);
+	allow("file-read-metadata", meta);
+	rules.push("(allow system-socket (socket-domain AF_UNIX))");
+	allow("network-outbound", socket);
+	if (paths.ui) {
+		const page = spellings(path.join(paths.view, VIEW.ui)).filter(quotable);
+		allow("file-write-create file-write-unlink", page.map((s) => `(literal "${s}")`));
+		allow("network-bind", page.map((s) => `(local unix-socket (path-literal "${s}"))`));
+	}
+	if (manifest.network) {
+		rules.push(
+			"(allow system-socket (socket-domain AF_INET) (socket-domain AF_INET6))",
+			'(allow network-outbound (remote ip "*:*"))',
+			'(deny network-outbound (remote ip "localhost:*"))',
+			'(allow mach-lookup (global-name "com.apple.SystemConfiguration.DNSConfiguration"))',
+			'(allow network-outbound (literal "/private/var/run/mDNSResponder"))',
+		);
+		const open = ports.filter((p) => Number.isInteger(p) && p >= 1 && p <= 65535);
+		allow("network-outbound", open.map((p) => `(remote tcp "localhost:${p}")`));
+	}
+	return `${rules.join("\n")}\n`;
+};
+
 // NixOS has no FHS /bin/true and no ld-linux under /usr. A store `true` needs /nix
 // for its loader, /run/current-system for the profile symlink. Probe scope only —
 // plugins do not get the whole store read-only for a diagnostic.
@@ -702,8 +894,23 @@ export const sandboxProbe = (
 			? { ok: true }
 			: { ok: false, reason: `${hostExe()} is missing — reinstall punktfunk, or set PUNKTFUNK_PLUGIN_SANDBOX=off` };
 	}
+	if (platform === "darwin") {
+		// The base every plugin's profile starts from, and a program it lets run.
+		const probe = run(SANDBOX_EXEC, ["-p", SEATBELT_BASE, "/usr/bin/true"]);
+		if (probe.status === 0) return { ok: true };
+		if (probe.status === null) {
+			return {
+				ok: false,
+				reason: probe.signal
+					? `sandbox-exec was killed by ${probe.signal} before it could report`
+					: `${SANDBOX_EXEC} is missing — this macOS can't confine plugins; set PUNKTFUNK_PLUGIN_SANDBOX=off to run them unconfined`,
+			};
+		}
+		const line = (probe.stderr ?? "").split("\n")[0]?.trim();
+		return { ok: false, reason: line || `sandbox-exec refused the plugin profile (exit ${probe.status})` };
+	}
 	if (platform !== "linux") {
-		return { ok: false, reason: "sandboxing is Linux-only here" };
+		return { ok: false, reason: `sandboxing is not built for ${platform}` };
 	}
 	// The namespace flags `bwrapArgv` actually uses. Probing a weaker set reports a box as
 	// sandbox-capable that then refuses every plugin.

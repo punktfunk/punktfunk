@@ -34,6 +34,9 @@ pub mod ids {
     pub const GPU_FIRMWARE: &str = "gpu_firmware";
     pub const PLUGIN_SANDBOX: &str = "plugin_sandbox";
     pub const RESTART_PENDING: &str = "restart_pending";
+    pub const SCREEN_RECORDING: &str = "screen_recording";
+    pub const INPUT_CONTROL: &str = "input_control";
+    pub const VIRTUAL_CONTROLLERS: &str = "virtual_controllers";
 }
 
 /// Probe result. `Inapplicable` is not `Ok`: "never on this box" and "works here" are different
@@ -579,6 +582,9 @@ mod tests {
             ids::VDISPLAY_DRIVER,
             ids::ENCODER_SHARING,
             ids::GPU_FIRMWARE,
+            ids::SCREEN_RECORDING,
+            ids::INPUT_CONTROL,
+            ids::VIRTUAL_CONTROLLERS,
         ] {
             assert!(
                 ids.iter().any(|i| i == expected),

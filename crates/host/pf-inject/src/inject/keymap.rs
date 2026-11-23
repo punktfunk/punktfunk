@@ -251,6 +251,44 @@ pub(crate) fn scan_to_hid_usage(scan: u16, extended: bool) -> Option<u8> {
     (usage != 0).then_some(usage)
 }
 
+/// Evdev key ([`vk_to_evdev`]) → HID keyboard usage: the usage the Windows device reaches
+/// through the key's set-1 scancode. `None` for media keys and the Korean IME keys, which a
+/// keyboard reports on other usages.
+pub(crate) fn evdev_to_hid_usage(code: u16) -> Option<u8> {
+    let (scan, extended) = match code {
+        85 => (0x29, false), // KEY_ZENKAKUHANKAKU, on the JIS grave position
+        // Below KEY_ZENKAKUHANKAKU an evdev code is the key's set-1 make.
+        0..=0x58 => (code, false),
+        89 => (0x73, false), // KEY_RO
+        92 => (0x79, false), // KEY_HENKAN
+        93 => (0x70, false), // KEY_KATAKANAHIRAGANA
+        94 => (0x7B, false), // KEY_MUHENKAN
+        96 => (0x1C, true),  // KEY_KPENTER
+        97 => (0x1D, true),  // KEY_RIGHTCTRL
+        98 => (0x35, true),  // KEY_KPSLASH
+        99 => (0x37, true),  // KEY_SYSRQ: Print Screen
+        100 => (0x38, true), // KEY_RIGHTALT
+        102 => (0x47, true), // KEY_HOME
+        103 => (0x48, true), // KEY_UP
+        104 => (0x49, true), // KEY_PAGEUP
+        105 => (0x4B, true), // KEY_LEFT
+        106 => (0x4D, true), // KEY_RIGHT
+        107 => (0x4F, true), // KEY_END
+        108 => (0x50, true), // KEY_DOWN
+        109 => (0x51, true), // KEY_PAGEDOWN
+        110 => (0x52, true), // KEY_INSERT
+        111 => (0x53, true), // KEY_DELETE
+        119 => return Some(HID_USAGE_PAUSE),
+        121 => (0x7E, false), // KEY_KPCOMMA
+        124 => (0x7D, false), // KEY_YEN
+        125 => (0x5B, true),  // KEY_LEFTMETA
+        126 => (0x5C, true),  // KEY_RIGHTMETA
+        127 => (0x5D, true),  // KEY_COMPOSE
+        _ => return None,
+    };
+    scan_to_hid_usage(scan, extended)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +356,38 @@ mod tests {
             if code <= 0x58 && !matches!(code, 0x54 | 0x55) {
                 assert!(scan_to_hid_usage(code, false).is_some(), "vk {vk:#x}");
             }
+        }
+    }
+
+    /// Every wire key but the media and Korean IME keys has a usage, and two VKs share one only
+    /// where one names the other: a generic modifier and its left side, and the JIS 半角/全角 on
+    /// the grave position.
+    #[test]
+    fn wire_keys_reach_the_usages_a_keyboard_sends() {
+        let usage = |vk: u8| vk_to_evdev(vk).and_then(evdev_to_hid_usage);
+        let none = [0xB0, 0xB1, 0xB2, 0xB3, 0x15, 0x19];
+        let shared = [(0x10, 0xA0), (0x11, 0xA2), (0x12, 0xA4), (0xC0, 0xF3)];
+        let mut seen = std::collections::HashMap::new();
+        for vk in 0..=255u8 {
+            let want = vk_to_evdev(vk).is_some() && !none.contains(&vk);
+            assert_eq!(usage(vk).is_some(), want, "vk {vk:#04x}");
+            if let Some(first) = usage(vk).and_then(|u| seen.insert(u, vk)) {
+                assert!(shared.contains(&(first, vk)), "{first:#04x} and {vk:#04x}");
+            }
+        }
+        for (vk, want) in [
+            (0x41, 0x04), // A
+            (0x5A, 0x1D), // Z, on the US position
+            (0x6C, 0x58), // VK_SEPARATOR: keypad Enter
+            (0xA3, 0xE4), // right Ctrl
+            (0x26, 0x52), // Up
+            (0x5B, 0xE3), // left Windows
+            (0x13, 0x48), // Pause
+            (0x2C, 0x46), // Print Screen
+            (0xE2, 0x64), // the ISO key left of Z
+            (0xE1, 0x89), // JIS ¥
+        ] {
+            assert_eq!(usage(vk), Some(want), "vk {vk:#04x}");
         }
     }
 }

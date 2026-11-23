@@ -15,7 +15,7 @@
     "crates/core/pf-dmabuf": 3,
     "crates/core/punktfunk-core": 14,
     "crates/host/pf-audio": 27,
-    "crates/host/pf-capture": 73,
+    "crates/host/pf-capture": 74,
     "crates/host/pf-clipboard": 7,
     "crates/host/pf-driver-proto": 3,
     "crates/host/pf-encode": 47,
@@ -31,7 +31,7 @@
     "crates/host/pf-win-display": 18,
     "crates/host/pf-zerocopy": 53,
     "crates/host/punktfunk-capture-worker": 3,
-    "crates/host/punktfunk-host": 68,
+    "crates/host/punktfunk-host": 74,
     "crates/install/punktfunk-tray": 7,
     "packaging/windows/drivers": 55,
     "packaging/windows/pf-vkhdr-layer": 41

@@ -8,6 +8,8 @@ pub(crate) mod encoder_sessions;
 #[forbid(unsafe_code)]
 pub(crate) mod link_health;
 pub(crate) mod log_capture;
+#[cfg(target_os = "macos")]
+pub(crate) mod log_file;
 pub(crate) mod net_health;
 pub(crate) mod session_status;
 pub(crate) mod stats_recorder;

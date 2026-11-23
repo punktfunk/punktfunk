@@ -18,7 +18,8 @@ use std::sync::OnceLock;
 pub struct OsInfo {
     /// `windows` | `macos` | `linux[/<family>][/<id>]` — see the module doc for the grammar.
     pub chain: String,
-    /// Human-readable OS name (os-release `PRETTY_NAME`; `"Windows"`/`"macOS"` elsewhere).
+    /// Human-readable OS name: os-release `PRETTY_NAME`, `"Windows"`, or macOS with its version
+    /// and build (`macOS 27.0.1 (27A123)`).
     pub pretty: String,
 }
 
@@ -31,15 +32,73 @@ pub fn detect() -> &'static OsInfo {
                 pretty: "Windows".into(),
             }
         } else if cfg!(target_os = "macos") {
-            // The host only runs on Windows/Linux; macOS is the dev-build platform.
             OsInfo {
                 chain: "macos".into(),
-                pretty: "macOS".into(),
+                pretty: mac_pretty(mac::product_version(), mac::build()),
             }
         } else {
             linux_os_info()
         }
     })
+}
+
+/// `macOS 27.0.1 (27A123)`, dropping whichever part the system did not answer.
+fn mac_pretty(version: Option<String>, build: Option<String>) -> String {
+    match (version, build) {
+        (Some(v), Some(b)) => format!("macOS {v} ({b})"),
+        (Some(v), None) => format!("macOS {v}"),
+        _ => "macOS".into(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::ffi::CStr;
+
+    /// `27.0.1`.
+    pub fn product_version() -> Option<String> {
+        sysctl_string(c"kern.osproductversion")
+    }
+
+    /// `27A123`.
+    pub fn build() -> Option<String> {
+        sysctl_string(c"kern.osversion")
+    }
+
+    fn sysctl_string(name: &CStr) -> Option<String> {
+        let mut buf = [0u8; 256];
+        let mut len = buf.len();
+        // SAFETY: `name` is NUL-terminated and `buf` is `len` writable bytes; the kernel writes at
+        // most `len` bytes and stores the count in `len`. A NULL new value sets nothing.
+        let rc = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                buf.as_mut_ptr().cast(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        let text = CStr::from_bytes_until_nul(buf.get(..len)?)
+            .ok()?
+            .to_str()
+            .ok()?;
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod mac {
+    pub fn product_version() -> Option<String> {
+        None
+    }
+    pub fn build() -> Option<String> {
+        None
+    }
 }
 
 /// `ID_LIKE` ancestors kept as the chain's middle token — families clients have icon art for.
@@ -242,6 +301,21 @@ mod tests {
         let (chain, pretty) = parsed("ID='opensuse-tumbleweed'\nID_LIKE='opensuse suse'\nPRETTY_NAME='openSUSE Tumbleweed'\n");
         assert_eq!(chain, "linux/opensuse/opensuse-tumbleweed");
         assert_eq!(pretty, "openSUSE Tumbleweed");
+    }
+
+    #[test]
+    fn mac_pretty_names_version_and_build() {
+        let (v, b) = (Some("27.0.1".to_string()), Some("27A123".to_string()));
+        assert_eq!(mac_pretty(v.clone(), b.clone()), "macOS 27.0.1 (27A123)");
+        assert_eq!(mac_pretty(v, None), "macOS 27.0.1");
+        assert_eq!(mac_pretty(None, b), "macOS");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn this_mac_answers_both_sysctls() {
+        assert!(mac::product_version().is_some_and(|v| v.contains('.')));
+        assert!(mac::build().is_some());
     }
 
     #[test]

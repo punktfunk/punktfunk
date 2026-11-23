@@ -62,10 +62,6 @@ mod windows {
         pub(crate) fn topology_reassert_gen() -> u64 {
             0
         }
-        #[cfg_attr(target_os = "linux", allow(dead_code, reason = "macOS reads it"))]
-        pub(crate) fn hw_cursor_capable() -> bool {
-            false
-        }
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn open_driver_encoder(
             _plan: &crate::session_plan::SessionPlan,
@@ -234,13 +230,22 @@ unsafe extern "C" {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    let args = launch_args();
+    // SAFETY: the first thing this process does: no other thread exists yet.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        hostsys::app_loop::apply_host_env(&args)
+    };
     // Before any `ureq` agent (cover-art, webhooks, catalog, updates).
     punktfunk_core::tls::install_default_provider();
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into())
+    };
     // SCM `service run` has no console; log to a file, not stderr.
     if windows::entry::service_run_requested() {
-        windows::entry::init_file_logging(filter);
+        windows::entry::init_file_logging(filter());
     } else {
         // stderr so stdout stays machine-readable (`openapi > spec.json`). The ring tees DEBUG+
         // past this filter, so the Logs tab keeps every line stderr drops.
@@ -253,13 +258,24 @@ fn main() {
         } else {
             fmt.with_ansi(false)
         };
+        // A serving Mac host also logs to a file: launchd sends stderr nowhere.
+        #[cfg(target_os = "macos")]
+        let file = (args.first().map(String::as_str) == Some("serve")).then(|| {
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(|| telemetry::log_file::Writer)
+                .with_filter(filter())
+        });
+        #[cfg(not(target_os = "macos"))]
+        let file: Option<tracing_subscriber::layer::Identity> = None;
         log_capture::install_global(
             tracing_subscriber::registry()
                 .with(
                     log_capture::RingLayer
                         .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
                 )
-                .with(fmt.with_filter(filter)),
+                .with(fmt.with_filter(filter()))
+                .with(file),
         );
     }
 
@@ -286,21 +302,25 @@ fn main() {
             .to_string();
         let backtrace = std::backtrace::Backtrace::force_capture();
         let ts_ms = clock::unix_ms();
-        log_capture::ring().push_remote(
-            "ERROR",
-            "punktfunk_host::panic",
-            &format!("PANIC: {payload} (thread={thread}, at {location})\n{backtrace}"),
-            ts_ms,
-        );
+        let line = format!("PANIC: {payload} (thread={thread}, at {location})\n{backtrace}");
+        log_capture::ring().push_remote("ERROR", "punktfunk_host::panic", &line, ts_ms);
+        #[cfg(target_os = "macos")]
+        telemetry::log_file::write_panic(&line);
         default_panic(info);
     }));
     windows::entry::install_crash_handler();
 
     #[cfg(target_os = "macos")]
-    if hostsys::app_loop::wanted() {
-        hostsys::app_loop::run_beside(run);
-    }
+    hostsys::app_loop::start(&args, run);
     run();
+}
+
+/// The command line this process runs: argv, except that a bare launch of the Mac app serves.
+fn launch_args() -> Vec<String> {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(target_os = "macos")]
+    let argv = hostsys::app_loop::launch_args(argv, &std::env::current_exe().unwrap_or_default());
+    argv
 }
 
 fn run() {
@@ -488,7 +508,7 @@ fn startup(args: &[String]) {
 
 fn real_main() -> Result<()> {
     take_env_credentials();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = launch_args();
     // `play`'s environment is the game's: no encoder opt-in of the host's in it.
     #[cfg(target_os = "linux")]
     let play = args.first().is_some_and(|a| a == "play");
@@ -616,7 +636,7 @@ fn real_main() -> Result<()> {
             print_usage();
             Ok(())
         }
-        // No implicit `serve`; bare invocation is `None` above and prints help.
+        // A bare launch prints help above, unless `launch_args` made it the Mac app's `serve`.
         Some(other) => match windows::entry::subcommand(other, &args) {
             Some(result) => result,
             None => bail!("unknown command '{other}' (try --help)"),

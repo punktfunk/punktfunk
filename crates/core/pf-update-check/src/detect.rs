@@ -10,7 +10,7 @@
 //! is a pure function over [`Probe`], so each rung is unit-testable without
 //! a box.
 
-use crate::version::{conf_channel, windows_channel_of, Channel};
+use crate::version::{canary_run, conf_channel, windows_channel_of, Channel};
 use std::path::{Path, PathBuf};
 
 /// Which program is asking. Mixing host and client would misreport a client-only box as an un-updatable host.
@@ -58,6 +58,8 @@ pub const OSTREE_BOOTED: &str = "/run/ostree-booted";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallKind {
     WindowsInstaller,
+    /// The macOS app bundle from the disk image. It updates by hand.
+    MacApp,
     /// Client only — the sandboxed GTK app (`io.unom.punktfunk`).
     Flatpak,
     Sysext,
@@ -74,6 +76,7 @@ impl InstallKind {
     pub fn as_str(self) -> &'static str {
         match self {
             InstallKind::WindowsInstaller => "windows-installer",
+            InstallKind::MacApp => "mac-app",
             InstallKind::Flatpak => "flatpak",
             InstallKind::Sysext => "sysext",
             InstallKind::RpmOstree => "rpm-ostree",
@@ -91,6 +94,7 @@ impl InstallKind {
 #[derive(Debug, Default)]
 pub struct Probe {
     pub windows: bool,
+    pub macos: bool,
     pub exe: PathBuf,
     pub home: Option<PathBuf>,
     pub flatpak: bool,
@@ -145,6 +149,7 @@ pub fn gather(product: Product, version: &str) -> Probe {
     };
     Probe {
         windows: cfg!(target_os = "windows"),
+        macos: cfg!(target_os = "macos"),
         source_head: head
             .filter(|_| product == Product::Host)
             .and_then(|h| std::fs::read_to_string(h).ok()),
@@ -161,9 +166,9 @@ pub fn gather(product: Product, version: &str) -> Probe {
     }
 }
 
-/// Order matters; each rung is a fact the caller cannot forge.
-/// flatpak > sysext > Nix store > cargo `target/` > a Deck build's system copy > user-owned
-/// Deck build > package marker (rpm-ostree when ostree-booted) > `source`.
+/// Order matters; each rung is a fact the caller cannot forge. Windows and macOS each have one
+/// delivery. Elsewhere: flatpak > sysext > Nix store > cargo `target/` > a Deck build's system
+/// copy > user-owned Deck build > package marker (rpm-ostree when ostree-booted) > `source`.
 pub fn classify(p: &Probe, product: Product) -> (InstallKind, Channel) {
     if p.windows {
         // Only the installer is a Windows delivery. A cargo build is not under
@@ -179,6 +184,21 @@ pub fn classify(p: &Probe, product: Product) -> (InstallKind, Channel) {
                 InstallKind::WindowsInstaller,
                 windows_channel_of(&p.version),
             )
+        } else {
+            (InstallKind::Source, Channel::Stable)
+        };
+    }
+
+    // An app bundle wherever it was dragged, `/Applications` or `~/Applications`, but not one
+    // assembled in a cargo tree. A canary bundle's version carries its CI run.
+    if p.macos {
+        let exe = p.exe.to_string_lossy();
+        return if exe.contains(".app/Contents/MacOS/") && !exe.contains("/target/") {
+            let channel = match canary_run(&p.version) {
+                Some(_) => Channel::Canary,
+                None => Channel::Stable,
+            };
+            (InstallKind::MacApp, channel)
         } else {
             (InstallKind::Source, Channel::Stable)
         };
@@ -264,6 +284,10 @@ pub fn update_command(kind: InstallKind, product: Product) -> String {
         (InstallKind::WindowsInstaller, _) => {
             "winget upgrade unom.PunktfunkHost   (or re-run the newer installer)".into()
         }
+        // The host shows the manifest's disk image instead when it knows one.
+        (InstallKind::MacApp, _) => "https://git.unom.io/unom/punktfunk/releases   (download the \
+             disk image, then drag Punktfunk Host into Applications)"
+            .into(),
         (InstallKind::Flatpak, _) => "flatpak update --user io.unom.punktfunk".into(),
         // The signed feed carries the host image only; the client sysext is a local rebuild.
         (InstallKind::Sysext, Product::Host) => "sudo punktfunk-sysext update   (an image you \
@@ -477,6 +501,49 @@ mod tests {
         );
         p.exe = PathBuf::from("C:\\src\\punktfunk\\target\\release\\punktfunk-host.exe");
         assert_eq!(classify(&p, Product::Host).0, InstallKind::Source);
+    }
+
+    /// A bundle anywhere a person drags it is the Mac app; a loose binary or a bundle built in a
+    /// cargo tree is source. `~/Applications` is not the Deck rung.
+    #[test]
+    fn a_mac_app_bundle_is_its_own_kind() {
+        let mac = |exe: &str, version: &str| Probe {
+            macos: true,
+            exe: PathBuf::from(exe),
+            home: Some(PathBuf::from("/Users/me")),
+            version: version.into(),
+            ..Default::default()
+        };
+        let bin = "Punktfunk Host.app/Contents/MacOS/punktfunk-host";
+        for (exe, version, want) in [
+            (
+                format!("/Applications/{bin}"),
+                "0.48.0",
+                (InstallKind::MacApp, Channel::Stable),
+            ),
+            (
+                format!("/Users/me/Applications/{bin}"),
+                "0.48.0~ci41234.g0123abcd",
+                (InstallKind::MacApp, Channel::Canary),
+            ),
+            (
+                format!("/Users/me/punktfunk/target/release/{bin}"),
+                "0.48.0",
+                (InstallKind::Source, Channel::Stable),
+            ),
+            (
+                "/Users/me/punktfunk/target/release/punktfunk-host".to_string(),
+                "0.48.0",
+                (InstallKind::Source, Channel::Stable),
+            ),
+            (
+                "/usr/local/bin/punktfunk-host".to_string(),
+                "0.48.0",
+                (InstallKind::Source, Channel::Stable),
+            ),
+        ] {
+            assert_eq!(classify(&mac(&exe, version), Product::Host), want, "{exe}");
+        }
     }
 
     #[test]

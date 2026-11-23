@@ -120,7 +120,7 @@ pub(crate) struct InstalledView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked: Option<String>,
     /// The plugin uses the network on a host that can forward it a port of this computer
-    /// (Linux): the console offers to allow one.
+    /// (Linux, macOS): the console offers to allow one.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     #[schema(required = false)]
     pub takes_ports: bool,
@@ -297,7 +297,7 @@ fn build_installed(live: &[String]) -> Vec<InstalledView> {
                 .and_then(crate::plugins::manifest::for_provider)
                 .is_some_and(|manifest| manifest.network);
             InstalledView {
-                takes_ports: cfg!(target_os = "linux") && networked,
+                takes_ports: crate::plugins::access::FORWARDS_PORTS && networked,
                 // No manifest record means the CLI put it there (`cli` tier).
                 tier: rec
                     .map(|r| r.tier)

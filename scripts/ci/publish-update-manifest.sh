@@ -23,6 +23,8 @@
 #   WINDOWS_SHA256       hex sha256 of that installer                      (paired with WINDOWS_URL)
 #   WINDOWS_ARM64_URL    the ARM64 installer's immutable URL               (optional; same pins/subject)
 #   WINDOWS_ARM64_SHA256 hex sha256 of that installer                      (paired with WINDOWS_ARM64_URL)
+#   MACOS_ARM64_URL      the macOS host disk image's immutable URL         (optional)
+#   MACOS_ARM64_SHA256   hex sha256 of that disk image                     (paired with MACOS_ARM64_URL)
 #   AUTHENTICODE_SHA256  comma-separated signing-leaf sha256s              (required for stable)
 #   AUTHENTICODE_SUBJECT expected signing-cert subject CN — the host then  (required for stable)
 #                        demands a trusted chain (S_OK) + this subject
@@ -57,6 +59,9 @@ if [ -n "${COMMIT:-}" ] && ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; 
 fi
 if [ -n "${WINDOWS_URL:-}" ] && ! printf '%s' "${WINDOWS_SHA256:-}" | grep -Eq '^[0-9a-f]{64}$'; then
   echo "WINDOWS_SHA256 must be 64 hex chars when WINDOWS_URL is set" >&2; exit 1
+fi
+if [ -n "${MACOS_ARM64_URL:-}" ] && ! printf '%s' "${MACOS_ARM64_SHA256:-}" | grep -Eq '^[0-9a-f]{64}$'; then
+  echo "MACOS_ARM64_SHA256 must be 64 hex chars when MACOS_ARM64_URL is set" >&2; exit 1
 fi
 if [ -n "${AUTHENTICODE_SHA256:-}" ] && ! printf '%s' "$AUTHENTICODE_SHA256" \
     | grep -Eq '^[0-9a-fA-F]{64}(,[0-9a-fA-F]{64})*$'; then
@@ -121,6 +126,8 @@ jq -n \
   --arg win_sha "${WINDOWS_SHA256:-}" \
   --arg a64_url "${WINDOWS_ARM64_URL:-}" \
   --arg a64_sha "${WINDOWS_ARM64_SHA256:-}" \
+  --arg mac_url "${MACOS_ARM64_URL:-}" \
+  --arg mac_sha "${MACOS_ARM64_SHA256:-}" \
   --argjson auth "$AUTH_JSON" \
   --arg auth_subject "${AUTHENTICODE_SUBJECT:-}" \
   --arg ci_run "${CI_RUN:-}" \
@@ -134,6 +141,7 @@ jq -n \
       + (if $auth_subject != "" then {authenticode_subject: $auth_subject} else {} end))} else {} end)
   + (if $a64_url != "" then {windows_host_arm64: ({url: $a64_url, sha256: $a64_sha, authenticode_sha256: $auth}
       + (if $auth_subject != "" then {authenticode_subject: $auth_subject} else {} end))} else {} end)
+  + (if $mac_url != "" then {macos_host_arm64: {url: $mac_url, sha256: $mac_sha}} else {} end)
   ' > "$MANIFEST"
 echo "manifest:"; cat "$MANIFEST"
 

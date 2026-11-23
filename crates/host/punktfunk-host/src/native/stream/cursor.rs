@@ -138,10 +138,10 @@ impl StreamState {
     }
 
     /// Route this tick's cursor: forward it when the client draws, else put the live overlay on
-    /// the frame for the encoder blend. Either way the capturer hears the host places it, so it
-    /// bakes no second copy. An invisible cursor never reaches the encoder.
+    /// the frame for the encoder blend. The capturer hears which
+    /// ([`pf_capture::CursorSource::set_forward`]). An invisible cursor never reaches the encoder.
     pub(super) fn tick_cursor(&mut self) {
-        if let Some(fwd) = self.display.cursor_fwd.as_mut() {
+        if self.display.cursor_fwd.is_some() {
             let client_draws = self.shared.cursor_client_draws.load(Ordering::Relaxed);
             if let Some(c) = self.live.capturer.cursor() {
                 c.set_forward(client_draws);
@@ -164,18 +164,7 @@ impl StreamState {
                 }
             }
             if client_draws {
-                let live = self.live.capturer.cursor().and_then(|c| c.overlay());
-                let reframe = *self
-                    .shared
-                    .frame_map
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                fwd.tick(
-                    live.as_ref().or(self.live.frame.cursor.as_ref()),
-                    &reframe,
-                    &self.facts.conn,
-                    &self.ends.cursor_shape_tx,
-                );
+                self.forward_pointer();
                 self.live.frame.cursor = None;
             } else {
                 #[cfg(not(target_os = "windows"))]
@@ -200,6 +189,29 @@ impl StreamState {
         if self.live.frame.cursor.as_ref().is_some_and(|c| !c.visible) {
             self.live.frame.cursor = None;
         }
+    }
+
+    /// Send a client that draws the pointer its live place: each tick, and on a move between
+    /// ticks ([`crate::send_pacing::Waited::Pointer`]).
+    pub(super) fn forward_pointer(&mut self) {
+        let Some(fwd) = self.display.cursor_fwd.as_mut() else {
+            return;
+        };
+        if !self.display.cursor_client_drew {
+            return;
+        }
+        let live = self.live.capturer.cursor().and_then(|c| c.overlay());
+        let reframe = *self
+            .shared
+            .frame_map
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        fwd.tick(
+            live.as_ref().or(self.live.frame.cursor.as_ref()),
+            &reframe,
+            &self.facts.conn,
+            &self.ends.cursor_shape_tx,
+        );
     }
 
     /// Hand the capture's live overlay to the encoder blend. Each of the two outcomes is logged once.

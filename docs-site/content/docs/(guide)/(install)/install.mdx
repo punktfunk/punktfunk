@@ -17,6 +17,7 @@ Install the host on the PC you stream *from*. Pick your system:
   <Card title="SteamOS (Steam Deck as host)" href="/docs/steamos-host" description="One script, built on the device." />
   <Card title="NixOS" href="/docs/nixos" description="A flake input and a NixOS module, with a binary cache." />
   <Card title="Windows 11" href="/docs/windows-host" description="winget or a signed installer." />
+  <Card title="macOS" href="/docs/macos-host" description="A disk image: drag the app to Applications." />
 </Cards>
 
 Streaming *to* a device instead? That's a client: [Install a Client](/docs/install-client).
@@ -39,8 +40,8 @@ press Enter to install, or edit a row. It then asks for a console password and w
 should listen. Without a terminal it takes the defaults.
 
 It covers Ubuntu, Debian, Fedora, Arch and its derivatives, Bazzite / Fedora Atomic and SteamOS.
-On SteamOS it hands over to the on-device build. For NixOS and Windows it points you to their
-pages. It doesn't install GPU drivers: it warns when an NVIDIA GPU has no working driver. When
+On SteamOS it hands over to the on-device build. For NixOS, Windows and macOS it points you to
+their pages. It doesn't install GPU drivers: it warns when an NVIDIA GPU has no working driver. When
 Sunshine, Apollo or Vibeshine is running, it moves the management API off their port. Re-running
 it is safe.
 
