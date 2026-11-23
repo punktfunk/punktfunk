@@ -110,6 +110,8 @@ pub(crate) struct SessionShared {
     /// A report window showed loss. The stream loop takes it and holds the encoder on
     /// confirmed references until ten seconds past the last.
     pub(crate) lossy_window: Arc<AtomicBool>,
+    /// No wave heals the client's decoder (`Feedback::no_wave`): the encoder starts none.
+    pub(crate) no_wave: Arc<AtomicBool>,
     /// The bring-up ramp's window: probe requests are served on the bound data plane without
     /// the control task's spacing until the send thread takes the session (`stream::ramp`).
     /// Open from the handshake, because the client asks as soon as its session starts.
@@ -303,6 +305,7 @@ impl SessionWiring {
                 resend: Arc::default(),
                 acked: Arc::new(AtomicU64::new(NONE_ACKED)),
                 lossy_window: Arc::default(),
+                no_wave: Arc::default(),
                 ramp_open: Arc::new(AtomicBool::new(
                     welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_RAMP != 0,
                 )),

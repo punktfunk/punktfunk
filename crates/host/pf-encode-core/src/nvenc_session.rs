@@ -550,6 +550,8 @@ pub struct NvSession {
     pub reference_floor: Option<crate::codec::Acked>,
     /// What the client confirmed it decoded clean, whatever the link.
     pub confirmed: Option<crate::codec::Acked>,
+    /// A wave heals this client's decoder ([`crate::codec::Encoder::set_wave_heals`]).
+    pub wave_heals: bool,
     /// The loop's AU wake, which every retrieve thread rings. Outlives each session.
     pub au_wake: crate::AuWake,
 }
@@ -618,6 +620,7 @@ impl NvSession {
             ltr_frames: 0,
             reference_floor: None,
             confirmed: None,
+            wave_heals: true,
             au_wake: Default::default(),
         }
     }
@@ -663,10 +666,11 @@ impl NvSession {
     }
 
     /// How this session recovers. The driver owns the sweep: it ignores a re-force mid-sweep,
-    /// so a loss there queues a fresh wave, and nothing abandons the one in flight.
+    /// so a loss there queues a fresh wave, and nothing abandons the one in flight. A client
+    /// no wave heals gets none.
     fn policy(&self) -> RecoveryPolicy {
         RecoveryPolicy {
-            cycle: Some(self.wave_cycle()).filter(|&c| c != 0),
+            cycle: Some(self.wave_cycle()).filter(|&c| c != 0 && self.wave_heals),
             mid_wave: MidWave::Queue,
             abandons: false,
         }
@@ -2262,6 +2266,18 @@ mod recovery_tests {
         };
         assert_eq!(s.wave_cycle(), cycle.unwrap_or(0));
         (nvenc(cycle).0, Session { s, floor: false })
+    }
+
+    /// A client no wave heals: a loss with no anchor arms no wave and is the caller's keyframe.
+    #[test]
+    fn a_client_no_wave_heals_gets_the_keyframe() {
+        let mut s = stub_session(Codec::H265, 128);
+        encode(&mut s).expect("the opening IDR");
+        s.wave_heals = false;
+        assert!(!s.invalidate_ref_frames(0, 0), "no anchor and no wave");
+        assert_eq!(s.wave, None);
+        s.wave_heals = true;
+        assert!(s.invalidate_ref_frames(0, 0), "a wave is armed");
     }
 
     /// A wave's start frame the driver refuses: the wave must not move on without its sweep,

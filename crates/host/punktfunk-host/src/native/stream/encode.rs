@@ -440,6 +440,9 @@ impl StreamState {
             .enc
             .note_confirmed(super::recovery::confirmed(acked));
         self.live.enc.set_reference_floor(floor);
+        self.live
+            .enc
+            .set_wave_heals(!self.shared.no_wave.load(Ordering::Relaxed));
         let submitted = match owed {
             Some(_) => Ok(()),
             None => self.live.enc.submit_indexed(&self.live.frame, wire_index),

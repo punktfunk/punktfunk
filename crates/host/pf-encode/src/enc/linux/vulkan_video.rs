@@ -1263,6 +1263,8 @@ pub struct VulkanVideoEncoder {
     prev_slot: usize,
     /// The newest frame the client confirmed, while the host holds confirmed references.
     reference_floor: Option<crate::Acked>,
+    /// A wave heals this client's decoder ([`Encoder::set_wave_heals`]).
+    wave_heals: bool,
     /// What the client confirmed it decoded clean, whatever the link.
     confirmed: Option<crate::Acked>,
     /// The two pictures [`setup_slot`] never overwrites: a late loss's anchor.
@@ -2051,6 +2053,7 @@ impl VulkanVideoEncoder {
             dpb_views,
             slot_wire: vec![-1; DPB_SLOTS as usize],
             reference_floor: None,
+            wave_heals: true,
             confirmed: None,
             kept: crate::rfi::Kept::default(),
             slot_poc: vec![-1; DPB_SLOTS as usize],
@@ -2401,7 +2404,7 @@ impl VulkanVideoEncoder {
     fn recovery_policy(&self) -> RecoveryPolicy {
         RecoveryPolicy {
             // RADV's stripe unit is the 64-px CTB row for HEVC and AV1.
-            cycle: self.intra_refresh.map(|ir| {
+            cycle: self.intra_refresh.filter(|_| self.wave_heals).map(|ir| {
                 crate::rfi::wave_cycle(self.height.div_ceil(64), self.fps, ir.max_cycle, ir.pinned)
             }),
             mid_wave: MidWave::Restart,
@@ -2777,6 +2780,10 @@ impl Encoder for VulkanVideoEncoder {
 
     fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
         self.reference_floor = acked;
+    }
+
+    fn set_wave_heals(&mut self, heals: bool) {
+        self.wave_heals = heals;
     }
 
     fn note_confirmed(&mut self, acked: Option<crate::Acked>) {

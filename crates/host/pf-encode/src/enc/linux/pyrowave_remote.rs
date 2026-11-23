@@ -665,6 +665,10 @@ impl Encoder for RemotePyroWave {
         // Intra-only: no reference to keep.
     }
 
+    fn set_wave_heals(&mut self, _heals: bool) {
+        // Intra-only: every frame is a whole picture, so no wave ever starts.
+    }
+
     fn set_pipelined(&mut self, _on: bool) -> bool {
         // Encode is synchronous; no pipelined-retrieve mode.
         false
