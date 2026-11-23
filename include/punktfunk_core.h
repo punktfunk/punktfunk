@@ -856,9 +856,9 @@
 #define PUNKTFUNK_HOST_CAP_CLIPBOARD 2
 
 // [`Welcome::host_caps`]: the inject backend can type committed Unicode
-// ([`InputKind::TextInput`](crate::input::InputKind::TextInput)). Windows, wlroots and
-// KWin with keysyms can; libei / gamescope only press layout keycodes and leave this clear.
-// Absent the bit, the client keeps VK synthesis.
+// ([`InputKind::TextInput`](crate::input::InputKind::TextInput)). Windows, macOS, wlroots,
+// KWin with keysyms and gamescope's input method can; GNOME's libei only presses layout
+// keycodes and leaves this clear. Absent the bit, the client keeps VK synthesis.
 #define PUNKTFUNK_HOST_CAP_TEXT_INPUT 4
 
 // [`Hello::client_caps`]: the client draws the host cursor locally from
