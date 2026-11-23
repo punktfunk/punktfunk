@@ -523,8 +523,9 @@ mod pool {
         }
     }
 
-    /// Live display a `mode_conflict: join` session shares: Active, same backend, mode,
-    /// isolation, colourimetry and epoch, and its join name known. The first match is the
+    /// Live display a `mode_conflict: join` session shares: Active, same backend, size and
+    /// whole rate, isolation, colourimetry and epoch, and its join name known. A joiner asks
+    /// in whole hertz and streams at the entry's own exact rate. The first match is the
     /// oldest, which is the session admission named. The cursor mode rides each session's
     /// own cast, so it is not a key.
     pub(super) fn join_target(
@@ -538,7 +539,8 @@ mod pool {
         entries.iter().position(|e| {
             matches!(e.life, lifecycle::State::Active { .. })
                 && e.backend == backend
-                && e.mode == mode
+                && (e.mode.width, e.mode.height, e.mode.refresh_hz)
+                    == (mode.width, mode.height, mode.refresh_hz)
                 && e.isolation == *isolation
                 && e.hdr == hdr
                 && epoch_matches(e.ownership, e.epoch, cur_epoch)
@@ -1042,11 +1044,27 @@ mod pool {
             assert_eq!(join_target(&pool, "hyprland", m, &None, false, 0), Some(2));
             let other = Mode { width: 1280, ..m };
             assert_eq!(join_target(&pool, "hyprland", other, &None, false, 0), None);
+            // A joiner asks in whole hertz; an owner at 59.94 Hz still takes it.
+            let exact = Mode::exact(1920, 1080, 59_940);
+            assert_eq!(
+                join_target(&pool, "hyprland", exact, &None, false, 0),
+                Some(2)
+            );
             let iso = Some("seat-2".to_string());
             assert_eq!(join_target(&pool, "hyprland", m, &iso, false, 0), None);
             assert_eq!(join_target(&pool, "hyprland", m, &None, true, 0), None);
             assert_eq!(join_target(&pool, "hyprland", m, &None, false, 1), None);
             assert_eq!(join_target(&pool, "kwin", m, &None, false, 0), None);
+            let mut pool = pool;
+            for e in &mut pool {
+                e.mode = exact;
+            }
+            assert_eq!(join_target(&pool, "hyprland", m, &None, false, 0), Some(2));
+            let fifty = Mode {
+                refresh_hz: 50,
+                ..m
+            };
+            assert_eq!(join_target(&pool, "hyprland", fifty, &None, false, 0), None);
         }
 
         /// A display is shared while a second hold is on it: a joiner's beside its owner's.
