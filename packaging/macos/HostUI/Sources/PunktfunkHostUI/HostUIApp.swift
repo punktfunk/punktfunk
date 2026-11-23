@@ -140,10 +140,13 @@ public final class HostUIApp: NSObject, NSApplicationDelegate, NSPopoverDelegate
     }
 
     /// An accessory app's window can't come to the front; while one shows, the app is regular.
+    /// macOS may refuse to activate an app that restarted itself, so the window goes in front
+    /// of every other app's on its own.
     private func bringToFront(_ window: NSWindow) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     /// Done and the close button end here. A restart for a grant or the move never does, so

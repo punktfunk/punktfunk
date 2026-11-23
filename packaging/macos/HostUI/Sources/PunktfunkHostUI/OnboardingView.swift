@@ -18,7 +18,9 @@ struct OnboardingView: View {
             Divider().opacity(0.5)
             footer
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        // The window adds its title bar's height to this size, and the page fills that too.
+        .frame(width: Self.size.width)
+        .frame(minHeight: Self.size.height, maxHeight: .infinity)
         .background { Backdrop() }
         .ignoresSafeArea()
         .tint(.brand)
