@@ -76,6 +76,13 @@ enum Relocation {
         return path.hasPrefix("/Applications/") || path.hasPrefix(homeApps + "/")
     }
 
+    /// The folder the app runs from, as Finder names it. Nil for a quarantined app, which macOS
+    /// runs from a randomized folder that is not where the reader put it.
+    static func folderName(of bundle: URL) -> String? {
+        let folder = bundle.deletingLastPathComponent().path
+        return folder.contains("/AppTranslocation/") ? nil : FileManager.default.displayName(atPath: folder)
+    }
+
     /// Copies the bundle into /Applications (or ~/Applications when that is not writable),
     /// replacing an older copy, and checks the copy's signature. Returns the copy.
     static func copyToApplications(_ bundle: URL) throws -> URL {

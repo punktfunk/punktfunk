@@ -175,6 +175,13 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(!FileManager.default.fileExists(atPath: note.path))
     }
 
+    /// A translocated launch names no folder: its path is macOS's, not the reader's.
+    @Test func translocatedFolderHasNoName() {
+        let moved = URL(fileURLWithPath: "/private/var/folders/x3/T/AppTranslocation/0FB6770B/d/Punktfunk Host.app")
+        #expect(Relocation.folderName(of: moved) == nil)
+        #expect(Relocation.folderName(of: URL(fileURLWithPath: "/tmp/Punktfunk Host.app")) != nil)
+    }
+
     @Test func requiredGrants() {
         #expect(!Grants.all.missingRequired)
         #expect(Grants(screen: true, input: true, audio: .denied).missingRequired == false, "audio is not required")

@@ -46,7 +46,9 @@ struct OnboardingView: View {
             }
         case .move:
             Page(symbol: "folder", title: L10n.setupMacMoveTitle, text: L10n.setupMacMoveBody) {
-                StateLine(text: L10n.setupMacMoveState(folder: folderName), icon: "info.circle", tint: .secondary)
+                if let folder = Relocation.folderName(of: model.store.context.bundle) {
+                    StateLine(text: L10n.setupMacMoveState(folder: folder), icon: "info.circle", tint: .secondary)
+                }
                 Button(L10n.setupMacMove) { model.move() }.buttonStyle(.borderedProminent)
                 if model.moveFailed {
                     Text(L10n.setupMacMoveFailed).font(.callout).foregroundStyle(.red)
@@ -127,10 +129,6 @@ struct OnboardingView: View {
                 Button(L10n.trayMacOpenConsole) { model.store.openConsole() }
             }
         }
-    }
-
-    private var folderName: String {
-        FileManager.default.displayName(atPath: model.store.context.bundle.deletingLastPathComponent().path)
     }
 
     @ViewBuilder
