@@ -226,7 +226,7 @@
 			],
 			"match": {
 				"n=one": "Network '{names}' is set to Public, and the firewall rules below don't apply there — the host will be unreachable until the network is Private or the public rules are added ({url})",
-				"n=other": "Network '{names}' is set to Public, and the firewall rules below don't apply there — the host will be unreachable until the network is Private or the public rules are added ({url})"
+				"n=other": "Networks '{names}' are set to Public, and the firewall rules below don't apply there — the host will be unreachable until the networks are Private or the public rules are added ({url})"
 			}
 		}
 	],

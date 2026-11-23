@@ -71,7 +71,7 @@ impl SessionAccess {
         self.deadline.map(|d| d.saturating_duration_since(now))
     }
 
-    /// Overlay chip text (`"Controller only · ends in 1 h 58 m"`), or `None` when
+    /// Overlay chip text (`"Controller only · ends in 1 h 58 min"`), or `None` when
     /// [`Self::is_default`] — no chip on a full permanent session.
     pub fn chip_text(&self, now: Instant) -> Option<String> {
         if self.is_default() {
@@ -188,7 +188,7 @@ mod tests {
         };
         assert_eq!(
             expiring.chip_text(now).as_deref(),
-            Some("Full control · ends in 1 h 58 m")
+            Some("Full control · ends in 1 h 58 min")
         );
     }
 
@@ -197,10 +197,10 @@ mod tests {
         let text = |secs| format_remaining(Duration::from_secs(secs));
         assert_eq!(text(0), None);
         assert_eq!(text(59), None);
-        assert_eq!(text(60).as_deref(), Some("1 m"));
-        assert_eq!(text(58 * 60).as_deref(), Some("58 m"));
+        assert_eq!(text(60).as_deref(), Some("1 min"));
+        assert_eq!(text(58 * 60).as_deref(), Some("58 min"));
         assert_eq!(text(2 * 3600).as_deref(), Some("2 h"));
-        assert_eq!(text(3600 + 58 * 60 + 30).as_deref(), Some("1 h 58 m"));
+        assert_eq!(text(3600 + 58 * 60 + 30).as_deref(), Some("1 h 58 min"));
     }
 
     #[test]
@@ -221,7 +221,7 @@ mod tests {
         };
         assert_eq!(
             update_notice(GRANT_GAMEPAD, &warned, now).as_deref(),
-            Some("Access ends in 5 m")
+            Some("Access ends in 5 min")
         );
         let same = SessionAccess {
             grants: GRANT_POINTER,

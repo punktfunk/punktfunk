@@ -175,7 +175,7 @@
 	"desktop_stream_console_library": "Bibliothek",
 	"desktop_stream_console_library_host": "Bibliothek · {host}",
 	"desktop_stream_streaming": "Stream läuft",
-	"desktop_stream_streaming_to": "Stream mit {host} läuft",
+	"desktop_stream_streaming_to": "Stream von {host} läuft",
 	"desktop_stream_own_window": "Der Stream hat ein eigenes Fenster – dieses kommt zurück, wenn die Sitzung endet.",
 	"desktop_stream_stats_waiting": "Warten auf die ersten Statistikwerte…",
 	"desktop_stream_stats_off": "Das Statistik-Overlay ist aus – {keys} im Streamfenster schaltet es ein.",

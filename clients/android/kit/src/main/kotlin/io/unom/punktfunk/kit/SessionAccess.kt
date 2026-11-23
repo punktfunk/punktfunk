@@ -73,7 +73,7 @@ object SessionAccess {
     class Remaining(val message: Int, val args: List<Int>)
 
     /**
-     * Compact time-left wording for the Access chip ("1 h 58 m", "12 m", "45 s") — hours and
+     * Compact time-left wording for the Access chip ("1 h 58 min", "12 min", "45 s") — hours and
      * minutes once the span has them, bare seconds only under a minute (the final countdown).
      */
     fun remaining(secs: Int): Remaining {

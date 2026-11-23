@@ -168,7 +168,7 @@
 	"desktop_stream_console_library": "Biblioteca",
 	"desktop_stream_console_library_host": "Biblioteca · {host}",
 	"desktop_stream_streaming": "Transmitiendo",
-	"desktop_stream_streaming_to": "Transmitiendo a {host}",
+	"desktop_stream_streaming_to": "Transmitiendo desde {host}",
 	"desktop_stream_own_window": "La transmisión tiene su propia ventana — esta vuelve cuando termina la sesión.",
 	"desktop_stream_stats_waiting": "Esperando las primeras estadísticas…",
 	"desktop_stream_stats_off": "La superposición de estadísticas está desactivada — {keys} en la ventana de la transmisión la activa.",
