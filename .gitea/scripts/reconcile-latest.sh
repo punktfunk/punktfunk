@@ -4,8 +4,8 @@
 #
 # This is what we do instead of pinning consumers by @sha256: digest
 # (security-review-2026-08-05, H-6 — see the reasoning at the top of docker.yml). The
-# content key is a hash of the ci/ tree (the cross image also folds in
-# rust-toolchain.toml), so "which image should :latest be?" has an answer derivable
+# content key is a hash of the ci/ tree and rust-toolchain.toml, so "which image should
+# :latest be?" has an answer derivable
 # from the commit alone. Checking it on every run turns :latest from a tag someone
 # remembered to move into a function of the tree.
 #

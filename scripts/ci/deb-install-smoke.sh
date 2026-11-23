@@ -17,6 +17,8 @@ set -euo pipefail
 DIST="${PF_APT_DISTRIBUTION:-stable}"
 EXPECT="${PF_EXPECT_VERSION:-}"
 REPO_URL="https://git.unom.io/api/packages/unom/debian"
+# The distro's own packages come from ci-core's LAN mirror; ours from the real registry.
+MIRROR_SH=$(cat "$(dirname "$0")/../../ci/pkg-mirror.sh")
 
 # THE SUPPORT MATRIX, as an assertion instead of a paragraph. Each row is
 # "<image>|<packages that must install>". A package absent from a row is one we do NOT claim works
@@ -60,7 +62,9 @@ for row in "${MATRIX[@]}"; do
   if docker run --rm --platform linux/amd64 \
         -e DEBIAN_FRONTEND=noninteractive \
         -e DIST="$DIST" -e PACKAGES="$PACKAGES" -e EXPECT="$EXPECT" -e REPO_URL="$REPO_URL" \
+        -e MIRROR_SH="$MIRROR_SH" \
         "$IMAGE" bash -euxc '
+          sh -c "$MIRROR_SH"
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends curl ca-certificates
           install -d -m 0755 /etc/apt/keyrings

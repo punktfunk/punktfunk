@@ -12,6 +12,10 @@
 ARG FEDORA_VERSION=43
 FROM fedora:${FEDORA_VERSION}
 
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
+
 # Stock Fedora only: the host links nothing from RPM Fusion any more.
 RUN dnf -y install \
       # rpmbuild + source-tarball tooling; nodejs runs the Gitea Actions JS (checkout/cache) only
@@ -67,7 +71,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 COPY rustup.env install-rustup.sh /tmp/
+# docker.yml passes rust-toolchain.toml's channel, so jobs find the pinned toolchain baked in.
+ARG RUST_TOOLCHAIN=stable
 RUN sh /tmp/install-rustup.sh -y --no-modify-path --profile minimal \
+        --default-toolchain "$RUST_TOOLCHAIN" --component rustfmt,clippy \
     && rm /tmp/rustup.env /tmp/install-rustup.sh \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME" \
     && rustc --version && cargo --version

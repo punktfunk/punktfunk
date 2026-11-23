@@ -130,6 +130,12 @@
 	"apierr_library_own_account_person": "Spiele nur für ein Profil mit bestehendem Konto fügt die Person selbst hinzu, von ihrem eigenen Desktop aus.",
 	"apierr_library_override_name_taken": "Eine andere gemeinsame Vorgabe heißt schon so. Wähle einen anderen Namen.",
 	"apierr_library_page_marker_invalid": "Diese Seitenmarke ist ungültig. Lade die Liste noch einmal von vorn",
+	"apierr_local_no_desk": "Dieser Host hat keinen eigenen Bildschirm, auf dem gespielt werden kann.",
+	"apierr_local_no_session": "Auf diesem Host läuft kein Desktop. Melde dich an und starte das Spiel dann erneut.",
+	"apierr_local_no_such_game": "Dieses Spiel ist nicht mehr in der Bibliothek.",
+	"apierr_local_nobody_signed_in": "An diesem PC ist niemand angemeldet. Melde dich an und starte das Spiel dann erneut.",
+	"apierr_local_not_in_steam": "Dieses Spiel ist noch nicht in Steam. Füge seine Quelle im Punktfunk-Panel zu Steam hinzu.",
+	"apierr_local_not_this_device": "Dieser Host startet Spiele auf seinem eigenen Bildschirm nur für einen Client auf demselben Gerät.",
 	"apierr_log_bundle_not_deleted": "Das Log-Paket konnte nicht gelöscht werden",
 	"apierr_log_bundle_not_read": "Das Log-Paket konnte nicht gelesen werden",
 	"apierr_log_bundle_not_stored": "Das Log-Paket konnte nicht gespeichert werden",
@@ -442,6 +448,7 @@
 			}
 		}
 	],
+	"diag_pad_audio_provisioning_summary": "Der Host richtet den Lautsprecher-Endpunkt für Controller noch ein.",
 	"diag_pad_audio_refused_impact": "Spiele können den DualSense nicht mit seinem Lautsprecher verbinden, deshalb fällt die Haptik auf Vibration zurück und der Controller bleibt stumm.",
 	"diag_pad_audio_refused_remedy": "Aktualisiere Steam – sein Streaming-Audiotreiber steckt hinter dem Endpunkt – und starte den Punktfunk-Host neu. Bleibt es so, führe „punktfunk-host pad-endpoint repair“ als Administrator aus.",
 	"diag_pad_audio_refused_summary": "Der Lautsprecher-Endpunkt für Controller lehnt das 4-Kanal-Format ab",

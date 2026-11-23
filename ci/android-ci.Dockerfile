@@ -12,6 +12,10 @@
 # absent (AGP auto-downloads it if a build ever needs it — same note as the old workflow).
 FROM ubuntu:26.04
 
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
+
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git unzip zip python3 openjdk-21-jdk-headless \
@@ -47,7 +51,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 COPY rustup.env install-rustup.sh /tmp/
+# docker.yml passes rust-toolchain.toml's channel; the targets below land on that toolchain.
+ARG RUST_TOOLCHAIN=stable
 RUN sh /tmp/install-rustup.sh -y --no-modify-path --profile minimal \
+        --default-toolchain "$RUST_TOOLCHAIN" --component rustfmt,clippy \
     && rm /tmp/rustup.env /tmp/install-rustup.sh \
     && rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android \
     # Version-pinned like every other tool baked in here: unpinned, a rebuild months apart

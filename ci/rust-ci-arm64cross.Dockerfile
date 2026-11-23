@@ -20,10 +20,11 @@ FROM 192.168.1.58:5010/punktfunk-rust-ci:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Pin the stock sources to amd64, add ports.ubuntu.com for arm64.
+# 1. Pin the stock sources to amd64, add ports.ubuntu.com for arm64 (through ci-core's mirror,
+#    like the sources rust-ci already rewrote).
 RUN sed -i 's|^Types: deb$|Types: deb\nArchitectures: amd64|' /etc/apt/sources.list.d/ubuntu.sources \
     && . /etc/os-release \
-    && printf 'Types: deb\nArchitectures: arm64\nURIs: http://ports.ubuntu.com/ubuntu-ports/\nSuites: %s %s-updates %s-backports %s-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
+    && printf 'Types: deb\nArchitectures: arm64\nURIs: http://192.168.1.58:8090/ports.ubuntu.com/ubuntu-ports/\nSuites: %s %s-updates %s-backports %s-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
         "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" \
         > /etc/apt/sources.list.d/ubuntu-ports-arm64.sources \
     && dpkg --add-architecture arm64

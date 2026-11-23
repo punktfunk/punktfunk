@@ -434,7 +434,7 @@ else
 fi
 
 # --- 6. summary ------------------------------------------------------------
-IP="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1 || true)"
+IP="$(ip -4 route get 192.0.2.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1 || true)"
 echo
 log "Done — punktfunk host is running on this Steam Deck"
 echo "  • Host status:   systemctl --user status punktfunk-host"

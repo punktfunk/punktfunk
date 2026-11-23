@@ -134,7 +134,7 @@ jobs:
       PUNKTFUNK_SETUP_BIN: /usr/local/bin/punktfunk-setup
     steps:
       - name: Prepare the container
-        run: pacman -Syu --noconfirm --needed curl git nodejs && (pacman-key --init >/dev/null 2>&1 || true)
+        run: echo 'Server = http://192.168.1.58:8090/fastly.mirror.pkgbuild.com/$repo/os/$arch' > /etc/pacman.d/mirrorlist && pacman -Syu --noconfirm --needed curl git nodejs && (pacman-key --init >/dev/null 2>&1 || true)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -164,7 +164,7 @@ jobs:
           # script's own prerequisite (it says so and stops without it).
           - family: debian-13
             image: debian:trixie
-            prep: apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl git nodejs zstd
+            prep: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl git nodejs zstd
             rmweb: apt-get purge -y punktfunk-web
             oncanary: grep -q ' canary main' /etc/apt/sources.list.d/punktfunk.list
             onstable: grep -q ' stable main' /etc/apt/sources.list.d/punktfunk.list
@@ -175,14 +175,14 @@ jobs:
           # smoke nothing. This is the debian row's --no-install-recommends, aimed at one repo.
           - family: fedora-44
             image: fedora:44
-            prep: rm -f /etc/yum.repos.d/fedora-cisco-openh264*.repo && dnf install -y -q curl git nodejs zstd
+            prep: rm -f /etc/yum.repos.d/fedora-cisco-openh264*.repo && sed -i -E -e 's/^metalink=/#metalink=/' -e 's|^#?baseurl=https?://download\.example/pub/fedora/linux|baseurl=http://192.168.1.58:8090/ftp.fau.de/fedora/linux|' /etc/yum.repos.d/fedora*.repo && dnf install -y -q curl git nodejs zstd
             rmweb: dnf remove -y punktfunk-web
             haveclient: rpm -q punktfunk-client
             oncanary: grep -q 'fedora-44-canary' /etc/yum.repos.d/punktfunk.repo
             onstable: grep -q 'rpm/fedora-44$' /etc/yum.repos.d/punktfunk.repo
           - family: arch
             image: archlinux:base
-            prep: pacman -Syu --noconfirm --needed curl git nodejs && (pacman-key --init >/dev/null 2>&1 || true)
+            prep: echo 'Server = http://192.168.1.58:8090/fastly.mirror.pkgbuild.com/$repo/os/$arch' > /etc/pacman.d/mirrorlist && pacman -Syu --noconfirm --needed curl git nodejs && (pacman-key --init >/dev/null 2>&1 || true)
             rmweb: pacman -Rns --noconfirm punktfunk-web
             haveclient: pacman -Q punktfunk-client
             # The published STABLE host and client each ship /usr/share/icons/.../

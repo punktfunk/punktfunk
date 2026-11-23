@@ -140,7 +140,7 @@ jobs:
     steps:
       # nodejs runs actions/checkout below; debian:trixie ships no node.
       - name: Prepare the container
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl git nodejs
+        run: sed -i 's|http://deb.debian.org/|http://192.168.1.58:8090/deb.debian.org/|' /etc/apt/sources.list.d/debian.sources && apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl git nodejs
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No PUNKTFUNK_SETUP_BIN: the stub downloads `latest` and verifies its checksum, exactly
       # as it does on a user's box. --dry-run so nothing is installed.

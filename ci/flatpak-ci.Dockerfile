@@ -19,6 +19,10 @@
 # --network host constraints, both of which still apply to this image.
 FROM docker.io/library/fedora:43
 
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
+
 # nss-resolve trap, baked. fedora:43's nsswitch.conf is
 # `hosts: files myhostname resolve [!UNAVAIL=return] dns`: `resolve` is nss-resolve
 # (systemd-resolved), which does not run in a CI container. glibc consumers (git, curl,

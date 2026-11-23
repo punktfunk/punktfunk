@@ -18,6 +18,10 @@
 # run after this image is added uses the image from a PRIOR docker.yml push — seed it once manually
 # (docker build -f ci/rust-ci-noble.Dockerfile -t … ci && docker push) before the host job can run.
 FROM ubuntu:24.04
+
+# Distro packages come through ci-core's LAN mirror, at build time and in every job.
+COPY pkg-mirror.sh /tmp/
+RUN sh /tmp/pkg-mirror.sh && rm /tmp/pkg-mirror.sh
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -42,8 +46,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 COPY rustup.env install-rustup.sh /tmp/
+# docker.yml passes rust-toolchain.toml's channel, so jobs find the pinned toolchain baked in.
+ARG RUST_TOOLCHAIN=stable
 RUN sh /tmp/install-rustup.sh -y --no-modify-path --profile minimal \
-        --component rustfmt,clippy \
+        --default-toolchain "$RUST_TOOLCHAIN" --component rustfmt,clippy \
     && rm /tmp/rustup.env /tmp/install-rustup.sh \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME" \
     && rustc --version && cargo clippy --version && cargo fmt --version
