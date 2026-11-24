@@ -10,10 +10,13 @@
 //! friends out of a 1024-entry ring in seconds.
 //!
 //! Idle unless a console is attached — with the page closed [`PadFeed::publish`] only
-//! reads the channel's receiver count, and nothing is built.
+//! reads the channel's receiver count, and nothing is built. The [`PadFeed::roster`] beside it
+//! is always kept: an emulator's players are written from it.
 
+use punktfunk_core::config::GamepadPref;
+use punktfunk_core::input::MAX_PADS;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use tokio::sync::broadcast;
 use utoipa::ToSchema;
 
@@ -61,6 +64,21 @@ pub struct PadFeed {
     tx: broadcast::Sender<PadFrame>,
     /// A console just attached and wants every live pad re-published.
     resync: AtomicBool,
+    /// Per wire pad: its device kind + 1 in the low byte (0 = no pad), its OS slot + 1 in the
+    /// high byte (0 = not built yet). One word, so a reader never pairs one pad's kind with
+    /// another moment's slot.
+    roster: [AtomicU16; MAX_PADS],
+}
+
+/// One pad of [`PadFeed::roster`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RosterPad {
+    /// Wire index.
+    pub pad: u8,
+    /// The device the host built, or will build: a declared kind as this host resolves it.
+    pub kind: GamepadPref,
+    /// Host-wide OS slot, once the first frame built the device.
+    pub slot: Option<u8>,
 }
 
 impl Default for PadFeed {
@@ -74,7 +92,34 @@ impl PadFeed {
         PadFeed {
             tx: broadcast::channel(FEED_CAPACITY).0,
             resync: AtomicBool::new(false),
+            roster: std::array::from_fn(|_| AtomicU16::new(0)),
         }
+    }
+
+    /// Wire pad `pad` is now `kind` at `slot`, or gone with `None`.
+    pub fn note_pad(&self, pad: usize, entry: Option<(GamepadPref, Option<u8>)>) {
+        let word = entry.map_or(0, |(kind, slot)| {
+            let slot = slot.map_or(0, |s| u16::from(s) + 1);
+            (u16::from(kind.to_u8()) + 1) | (slot << 8)
+        });
+        if let Some(cell) = self.roster.get(pad) {
+            cell.store(word, Ordering::Relaxed);
+        }
+    }
+
+    /// The session's pads in wire order: declared at arrival, or built by a first frame.
+    pub fn roster(&self) -> Vec<RosterPad> {
+        (0..MAX_PADS)
+            .filter_map(|pad| {
+                let word = self.roster[pad].load(Ordering::Relaxed);
+                let kind = (word & 0xff).checked_sub(1)?;
+                Some(RosterPad {
+                    pad: pad as u8,
+                    kind: GamepadPref::from_u8(kind as u8),
+                    slot: (word >> 8).checked_sub(1).map(|s| s as u8),
+                })
+            })
+            .collect()
     }
 
     /// Attach a console, and ask the input thread for a full picture: a held button
@@ -171,6 +216,27 @@ mod tests {
             matches!(rx.recv().await, Err(broadcast::error::RecvError::Lagged(_))),
             "an overrun consumer must lag, not be buffered"
         );
+    }
+
+    /// The roster keeps each pad's kind and slot in wire order, a pad not built yet without a
+    /// slot, and drops a pad that left.
+    #[test]
+    fn the_roster_holds_each_pad_until_it_leaves() {
+        let feed = PadFeed::new();
+        assert!(feed.roster().is_empty());
+        feed.note_pad(3, Some((GamepadPref::SwitchPro, None)));
+        feed.note_pad(0, Some((GamepadPref::SteamDeck, Some(2))));
+        let pad = |pad, kind, slot| RosterPad { pad, kind, slot };
+        assert_eq!(
+            feed.roster(),
+            [
+                pad(0, GamepadPref::SteamDeck, Some(2)),
+                pad(3, GamepadPref::SwitchPro, None)
+            ]
+        );
+        feed.note_pad(0, None);
+        feed.note_pad(MAX_PADS, Some((GamepadPref::DualSense, Some(0))));
+        assert_eq!(feed.roster(), [pad(3, GamepadPref::SwitchPro, None)]);
     }
 
     /// Two sessions hold two feeds, so a stream on one id cannot see the other's pads.

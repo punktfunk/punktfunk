@@ -35,12 +35,12 @@ impl LaunchOwner {
 
 /// Whose pads an emulator's players are.
 pub(crate) enum Pads {
-    /// A stream's: the kind its pads start as, which an emulator's bindings name before they
-    /// exist, and the OS slots its input thread claimed, one bit per pad. `slots` is `None` on
-    /// GameStream, whose pads have no slot map.
+    /// A stream's: the kind an undeclared pad starts as, and the pads its input thread knows
+    /// ([`crate::pad_feed::PadFeed::roster`]). `roster` is `None` on GameStream, which declares
+    /// no pads.
     Session {
         kind: punktfunk_core::config::GamepadPref,
-        slots: Option<std::sync::Arc<std::sync::atomic::AtomicU16>>,
+        roster: Option<std::sync::Arc<crate::pad_feed::PadFeed>>,
     },
     /// The pads at the desk, in seat order, each named as SDL names it. Empty binds no players.
     Desk(Vec<hermir::PadRef>),
@@ -465,7 +465,7 @@ mod tests {
             profile: None,
             pads: Pads::Session {
                 kind: punktfunk_core::config::GamepadPref::default(),
-                slots: None,
+                roster: None,
             },
         }
     }

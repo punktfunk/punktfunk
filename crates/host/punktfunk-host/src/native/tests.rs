@@ -2420,7 +2420,7 @@ fn a_refused_launch_runs_none_of_its_prep() {
         profile: None,
         pads: crate::session_launch::Pads::Session {
             kind: punktfunk_core::config::GamepadPref::Xbox360,
-            slots: None,
+            roster: None,
         },
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
