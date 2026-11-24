@@ -1697,7 +1697,9 @@ impl AccessStore {
     }
 
     /// The operator's answer. `allow` needs a matching pending row and applies the platform
-    /// ACL before anything is stored, so a failed grant never lands in the file.
+    /// ACL before anything is stored, so a failed grant never lands in the file. A row answers
+    /// to `path` as sent or as it resolves now: an emulator's row is stored before its install
+    /// makes the folder, and a home behind a link (`/home` → `/var/home`) then resolves anew.
     pub fn decide(
         &self,
         id: &str,
@@ -1711,9 +1713,11 @@ impl AccessStore {
                 "the path must be absolute with no '..' component",
             )
         })?;
+        let asked =
+            |p: &PendingRequest| same_path(&p.path, &stored_path) || same_path(&p.path, path);
         match decision {
-            Decision::Allow => self.allow(id, &stored_path, by),
-            Decision::Deny => self.deny(id, &stored_path),
+            Decision::Allow => self.allow(id, &stored_path, &asked, by),
+            Decision::Deny => self.deny(id, &stored_path, &asked),
             Decision::Forget => self.forget(id, &stored_path),
         }
     }
@@ -1722,6 +1726,7 @@ impl AccessStore {
         &self,
         id: &str,
         stored_path: &str,
+        asked: &dyn Fn(&PendingRequest) -> bool,
         by: &str,
     ) -> io::Result<Mutation<PluginAccessSnapshot>> {
         let no_row = || io::Error::new(io::ErrorKind::NotFound, "no pending request for that path");
@@ -1730,12 +1735,13 @@ impl AccessStore {
         let row = {
             let _guard = self.exclusive()?;
             let access = self.load_access()?;
-            let row = self.load_pending().get(id).and_then(|rows| {
-                rows.iter()
-                    .find(|p| same_path(&p.path, stored_path))
-                    .cloned()
-            });
-            let row = row.ok_or_else(no_row)?;
+            let row = self
+                .load_pending()
+                .get(id)
+                .and_then(|rows| rows.iter().find(|p| asked(p)).cloned());
+            let mut row = row.ok_or_else(no_row)?;
+            // The grant takes the spelling the sandbox checks against.
+            row.path = stored_path.to_string();
             let grants = access.get(id).map_or(&[][..], |e| &e.grants);
             if !grants.iter().any(|g| same_path(&g.path, &row.path)) && grants.len() >= MAX_GRANTS {
                 return Err(io::Error::new(
@@ -1754,7 +1760,7 @@ impl AccessStore {
         let mut pending_all = self.load_pending();
         let answered = pending_all.get_mut(id).is_some_and(|rows| {
             let before = rows.len();
-            rows.retain(|p| !same_path(&p.path, stored_path));
+            rows.retain(|p| !asked(p));
             rows.len() != before
         });
         // A no that landed during the walk stands, and the ACE comes back off.
@@ -1797,13 +1803,18 @@ impl AccessStore {
     }
 
     /// Every row on the folder goes, as an allow takes them all: RetroArch's cores share one.
-    fn deny(&self, id: &str, stored_path: &str) -> io::Result<Mutation<PluginAccessSnapshot>> {
+    fn deny(
+        &self,
+        id: &str,
+        stored_path: &str,
+        asked: &dyn Fn(&PendingRequest) -> bool,
+    ) -> io::Result<Mutation<PluginAccessSnapshot>> {
         let _guard = self.exclusive()?;
         let mut access = self.load_access()?;
         let mut pending_all = self.load_pending();
         let found = pending_all.get_mut(id).is_some_and(|rows| {
             let before = rows.len();
-            rows.retain(|p| !same_path(&p.path, stored_path));
+            rows.retain(|p| !asked(p));
             rows.len() != before
         });
         if !found {
@@ -2426,6 +2437,30 @@ mod tests {
         assert_eq!(ask(&real), "refused:broad_root");
         assert_eq!(ask(&real.join(".ssh")), "refused:protected_path");
         assert_eq!(ask(&real.join("Games")), "pending");
+    }
+
+    /// An emulator row is stored before its install makes the folder. Behind a linked home the
+    /// folder then resolves to the other spelling; the yes still finds the row and grants that.
+    #[cfg(unix)]
+    #[test]
+    fn an_install_row_answers_once_its_folder_resolves_behind_a_link() {
+        let f = fixture();
+        let root = f.policy.home.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(root.join("var/home/u/.local/share")).unwrap();
+        std::os::unix::fs::symlink(root.join("var/home"), root.join("linkhome")).unwrap();
+        let app = root.join("linkhome/u/.local/share/punktfunk/emulators/azahar/app");
+        let store = f.store();
+        store
+            .request_emulator("demo", "azahar", &app, None)
+            .unwrap();
+        std::fs::create_dir_all(&app).unwrap();
+        let snap = store
+            .decide("demo", &app.to_string_lossy(), Decision::Allow, "console")
+            .unwrap()
+            .value;
+        assert!(snap.pending.is_empty());
+        let real = app.canonicalize().unwrap();
+        assert_eq!(snap.grants[0].path, real.to_string_lossy());
     }
 
     #[test]
