@@ -1,10 +1,10 @@
 // The Steam Controller 2 read OUTSIDE a session. `Sc2Capture` cannot cover it: that one is built
 // from a live `PunktfunkConnection` at stream start.
 //
-// iOS and visionOS surface nothing for an SC2, so there it drives the gamepad UI, over BLE, for
-// the app's lifetime. On macOS (a GameController twin without grips or trackpads) and tvOS it runs
-// only while the console's input test is up. A Mac reads USB when a pad is attached and Input
-// Monitoring already allows it (a test never prompts), else BLE — `Sc2Capture`'s pick.
+// iOS, visionOS and tvOS surface nothing for an SC2, so there it drives the gamepad UI, over BLE,
+// for the app's lifetime. macOS shows it to GameController as a twin without grips or trackpads,
+// so there it runs only while the console's input test is up: over USB when a pad is attached and
+// Input Monitoring already allows it (a test never prompts), else BLE — `Sc2Capture`'s pick.
 //
 // One pad, no wire: state reports are parsed to `Sc2Device.State` and kept in `snapshot` for
 // `GamepadMenuInput`'s 60 Hz poll and the input test. Nothing here claims a wire slot, forwards
@@ -84,12 +84,12 @@ final class Sc2MenuPad {
         #endif
     }
 
-    /// Begin acquisition. On iOS and visionOS also follow the app's foreground: the radio is
-    /// released while inactive (a CoreBluetooth central's recommended backgrounding) and
-    /// re-acquired on return. A macOS or tvOS reader lives only as long as the input test.
+    /// Begin acquisition. On iOS, visionOS and tvOS also follow the app's foreground: the radio
+    /// is released while inactive (a CoreBluetooth central's recommended backgrounding) and
+    /// re-acquired on return. A macOS reader lives only as long as the input test.
     @MainActor
     func start() {
-        #if os(macOS) || os(tvOS)
+        #if os(macOS)
         listen()
         #else
         guard observers.isEmpty else { return }

@@ -106,7 +106,7 @@ public final class GamepadManager: ObservableObject {
     /// already observe this object for `active`.
     @Published public private(set) var lastKnownKind: PunktfunkConnection.GamepadType
 
-    /// A Steam Controller 2 is delivering state reports to `Sc2MenuPad` — iOS and visionOS only,
+    /// A Steam Controller 2 is delivering state reports to `Sc2MenuPad` — iOS, visionOS and tvOS,
     /// where GameController surfaces no such device and `active` therefore stays nil with the pad
     /// in the user's hands. Published because it is half of `uiPadConnected`; the pad's BUTTONS are
     /// deliberately not published (`sc2MenuState` is polled instead — a 66 Hz @Published would
@@ -160,7 +160,7 @@ public final class GamepadManager: ObservableObject {
         })
         for c in GCController.controllers() { connectOrder.append(ObjectIdentifier(c)) }
         rebuild()
-        #if os(iOS) || os(visionOS)
+        #if !os(macOS)
         // Both switches behind the menu pad live in UserDefaults and only this app writes them,
         // so one notification covers a Settings toggle of either without a call site to forget.
         observers.append(NotificationCenter.default.addObserver(
@@ -395,13 +395,13 @@ public final class GamepadManager: ObservableObject {
 
     // MARK: - Steam Controller 2 (menu)
 
-    /// The SC2 reader — see `Sc2MenuPad`. On iOS and visionOS it lives as long as the switches
-    /// below say something could use it; on macOS and tvOS only while the input test is up. Nil
+    /// The SC2 reader — see `Sc2MenuPad`. On iOS, visionOS and tvOS it lives as long as the
+    /// switches below say something could use it; on macOS only while the input test is up. Nil
     /// otherwise, so the radio and its permission prompt cost nothing by default.
     private var sc2Menu: Sc2MenuPad?
     /// A streaming `Sc2Capture` holds the physical pad (`holdSc2Hardware`).
     private var sc2HardwareHeld = false
-    #if os(macOS) || os(tvOS)
+    #if os(macOS)
     /// The console's input test is up (`readSc2ForTest`).
     private var sc2TestWanted = false
     #endif
@@ -416,11 +416,11 @@ public final class GamepadManager: ObservableObject {
         active.map { Self.isSteamController2($0.controller) } ?? false
     }
 
-    /// The console's input test is up (`true`) or gone. On macOS and tvOS that is the reader's
-    /// whole life, and only with the SC2 passthrough switch on, the opt-in that pays for its
-    /// prompts. iOS and visionOS already run theirs for the menus.
+    /// The console's input test is up (`true`) or gone. On macOS that is the reader's whole life,
+    /// and only with the SC2 passthrough switch on, the opt-in that pays for its prompts. iOS,
+    /// visionOS and tvOS already run theirs for the menus.
     public func readSc2ForTest(_ on: Bool) {
-        #if os(macOS) || os(tvOS)
+        #if os(macOS)
         sc2TestWanted = on
         syncSc2Menu()
         #endif
@@ -432,11 +432,11 @@ public final class GamepadManager: ObservableObject {
         return pad.isClassic ? .steamController : .steamController2
     }
 
-    /// The menu pad's kind for the console's Controllers card — a 2015 pad or an SC2 — nil off
-    /// iOS and visionOS, and while no pad delivers. GameController never lists this device, so
-    /// the card and the legend's glyph family come from here alone.
+    /// The menu pad's kind for the console's Controllers card — a 2015 pad or an SC2 — nil on
+    /// macOS, and while no pad delivers. GameController never lists this device, so the card and
+    /// the legend's glyph family come from here alone.
     public var sc2MenuKind: PunktfunkConnection.GamepadType? {
-        #if os(iOS) || os(visionOS)
+        #if !os(macOS)
         guard sc2MenuAttached, let pad = sc2Menu else { return nil }
         return pad.isClassic ? .steamController : .steamController2
         #else
@@ -455,11 +455,11 @@ public final class GamepadManager: ObservableObject {
 
     /// Start or stop the reader from what decides whether anything could use it: the SC2
     /// passthrough opt-in, which is what pays for its prompts, then the gamepad UI switch (iOS,
-    /// visionOS) or the input test (macOS, tvOS), and `holdSc2Hardware`. Runs on every defaults
+    /// visionOS, tvOS) or the input test (macOS), and `holdSc2Hardware`. Runs on every defaults
     /// write, so it stays an idempotent compare.
     private func syncSc2Menu() {
         let defaults = UserDefaults.standard
-        #if os(macOS) || os(tvOS)
+        #if os(macOS)
         let user = sc2TestWanted
         #else
         // `gamepadUIEnabled` defaults to ON, which `bool(forKey:)` alone cannot express.
@@ -475,7 +475,7 @@ public final class GamepadManager: ObservableObject {
         }
         let pad = Sc2MenuPad()
         // A test reader is not a menu pad: it drives no menu.
-        #if os(iOS) || os(visionOS)
+        #if !os(macOS)
         pad.onAttachChange = { [weak self] attached in self?.sc2MenuAttached = attached }
         #endif
         pad.start()
