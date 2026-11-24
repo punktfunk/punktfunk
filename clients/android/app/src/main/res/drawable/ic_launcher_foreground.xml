@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Punktfunk mark: two overlapping violet circles (two "Punkte") with a lighter lens, from the
-  shared brand logo (clients/apple/.../punktfunk_Logo.icon). The source art lives in a 1001x1000
-  space; the group scales + centers it into the adaptive-icon 108dp safe zone (inner ~66dp circle).
+  The brand's Punktfunk_Logo_Symbol_Bright export, paths, fills and leaf gradient verbatim: the
+  light disc behind, the violet disc in front, and the leaf lit toward the front disc's centre. The
+  group scales the export's 1001-unit art and centres the mark in the 108 dp adaptive-icon canvas.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
@@ -13,15 +14,25 @@
         android:scaleX="0.073"
         android:scaleY="0.073"
         android:translateX="17.47"
-        android:translateY="17.50">
+        android:translateY="15.61">
         <path
             android:fillColor="#A79FF8"
-            android:pathData="M403.037,791.672c107.586,0 194.41,-86.824 194.41,-194.41c0,-107.586 -86.824,-194.41 -194.41,-194.41c-107.586,0 -194.41,86.824 -194.41,194.41c0,107.586 86.824,194.41 194.41,194.41Z" />
+            android:pathData="M403.24,817.492c107.586,0 194.41,-86.824 194.41,-194.41c0,-107.586 -86.824,-194.41 -194.41,-194.41c-107.586,0 -194.41,86.824 -194.41,194.41c0,107.586 86.824,194.41 194.41,194.41Z" />
         <path
             android:fillColor="#6C5BF3"
-            android:pathData="M735.276,540.321c76.075,-76.075 76.075,-198.862 0,-274.937c-76.075,-76.075 -198.862,-76.075 -274.937,0c-76.075,76.075 -76.075,198.862 0,274.937c76.075,76.075 198.862,76.075 274.937,0Z" />
+            android:pathData="M735.119,566.141c76.075,-76.075 76.075,-198.862 0,-274.937c-76.075,-76.075 -198.862,-76.075 -274.937,0c-76.075,76.075 -76.075,198.862 0,274.937c76.075,76.075 198.862,76.075 274.937,0Z" />
         <path
-            android:fillColor="#D2C9FB"
-            android:pathData="M647.84,590.737c-64.853,17.403 -136.871,0.597 -187.885,-50.416c-51.013,-51.013 -67.819,-123.032 -50.416,-187.885c64.853,-17.403 136.871,-0.597 187.885,50.416c51.013,51.013 67.819,123.032 50.416,187.885Z" />
+            android:pathData="M648.067,616.557c-64.853,17.403 -136.871,0.597 -187.885,-50.416c-51.013,-51.013 -67.819,-123.032 -50.416,-187.885c64.853,-17.403 136.871,-0.597 187.885,50.416c51.013,51.013 67.819,123.032 50.416,187.885Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="460.182"
+                    android:startY="566.141"
+                    android:endX="597.650"
+                    android:endY="428.672"
+                    android:startColor="#00CEC9FB"
+                    android:endColor="#FFFCFCFF" />
+            </aapt:attr>
+        </path>
     </group>
 </vector>
