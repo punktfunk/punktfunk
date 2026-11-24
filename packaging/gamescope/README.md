@@ -61,6 +61,8 @@ The patches here add the missing half, and nothing else. See
 | `0048-punktfunk-stamp-pfhdr40.patch` | Stamp `+pfhdr40`, so the host knows the planar formats list tiled modifiers | **No** — ours only, as `0005` |
 | `0049-pipewire-let-an-HDR-P010-capture-write-full-range.patch` | The HDR P010 format offers full range beside limited, and a consumer that names full gets the BT.2100 full-range matrix. It pinned limited, so a host that encodes HDR at full range fell back to packed 10-bit and converted every frame itself. A consumer that names no range still gets limited | **Yes** — any consumer that encodes HDR at full range |
 | `0050-punktfunk-stamp-pfhdr41.patch` | Stamp `+pfhdr41`, so a banner shows whether the box has `0049` | **No** — ours only, as `0005` |
+| `0051-layer-let-Proton-s-fullscreen-hack-scale-a-game-in-i.patch` | Proton's fullscreen hack scales a DPI-scaled window with a compute pass that views every game image as BGRA8 sRGB and writes an 8-bit BGRA swapchain. The layer offers more formats, so an HDR10 game came out as noise and an RGBA8 game with red and blue swapped. From that swapchain to its last view the layer corrects what Proton creates on the thread: an HDR colorspace gets the layer's own format, each view gets the game image's format, and where that has no sRGB view the pass stores what it samples. A 10-bit SDR game is still stored in Proton's 8 bits | **Yes** — upstream's layer gives Proton the same formats |
+| `0052-punktfunk-stamp-pfhdr42.patch` | Stamp `+pfhdr42`, so a banner shows whether the box has `0051` | **No** — ours only, as `0005` |
 
 ### Why the headless patch matters
 
@@ -178,10 +180,11 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr39` | …and on Intel a planar capture's chroma starts on a 16-row boundary; `+pfhdr38` streams 1080 rows with the colour 16 rows too high through Intel's encoder (no new capability) |
 | `+pfhdr40` | …and on Intel a planar capture dmabuf takes a tiled modifier its consumer accepts; the host offers them from this level |
 | `+pfhdr41` | …and an HDR P010 capture writes full range when its consumer names it; `+pfhdr40` hands an HDR session packed 10-bit (no new capability) |
+| `+pfhdr42` | …and the WSI layer corrects Proton's fullscreen hack for a game that is not BGRA8; `+pfhdr41` shows such a game in a DPI-scaled prefix with wrong colours (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.17.0.pfhdr41-1`; its build checks the complete upstream version and capability level.
+`3.17.0.pfhdr42-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 
