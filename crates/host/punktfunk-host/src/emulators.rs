@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::session_launch::Pads;
-use hermir::progress::Quiet;
 use hermir::{Hermir, Installed, Options};
 use pf_seats::ipc::{Command, CommandResult};
 use punktfunk_core::config::GamepadPref;
@@ -128,14 +127,15 @@ pub fn offered(id: &str) -> hermir::Result<bool> {
 /// directory to land on even when the copy itself is a Flatpak. On a Linux box with seats a
 /// Flatpak goes in box-wide ([`install_box_wide`]); an AppImage or archive stays this account's.
 /// Players may write in [`home_of`] only, set before hermir writes its manifests beside it.
-pub fn install(id: &str) -> hermir::Result<Installed> {
+/// `progress` hears a download; a box-wide Flatpak reports none.
+pub fn install(id: &str, progress: &dyn hermir::progress::Progress) -> hermir::Result<Installed> {
     let h = open()?;
     let emulator = h.emulator(id)?;
     let home = home_of(id);
     crate::plugins::open_for_players(&home);
     let row = match box_flatpak(emulator.entry()).filter(|_| box_wide()) {
         Some(app) => install_box_wide(&h, id, app)?,
-        None => emulator.install(&Quiet)?,
+        None => emulator.install(progress)?,
     };
     std::fs::create_dir_all(&home).map_err(|e| hermir::Error::Io {
         op: "create",
@@ -228,9 +228,12 @@ pub fn cores_dir() -> hermir::Result<Option<PathBuf>> {
         .map(|root| root.join("cores")))
 }
 
-/// A libretro core from the buildbot into that folder.
-pub fn install_core(core: &str) -> hermir::Result<PathBuf> {
-    open()?.install_core(core, &Quiet)
+/// A libretro core from the buildbot into that folder; `progress` hears its download.
+pub fn install_core(
+    core: &str,
+    progress: &dyn hermir::progress::Progress,
+) -> hermir::Result<PathBuf> {
+    open()?.install_core(core, progress)
 }
 
 /// Whether RetroArch's cores folder `dir` already holds `core`, under the name hermir gives it.
@@ -1254,7 +1257,7 @@ pub(crate) fn prepare_launch(library_id: &str, pads: &Pads) -> Option<u64> {
         && let Some(dir) = cores_dir().ok().flatten()
     {
         if !has_core(&dir, core) {
-            match install_core(core) {
+            match install_core(core, &hermir::progress::Quiet) {
                 Ok(path) => {
                     tracing::info!(core, path = %path.display(), "core installed for the launch")
                 }

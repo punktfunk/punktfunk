@@ -11588,6 +11588,23 @@
   },
   "components": {
     "schemas": {
+      "AccessFailure": {
+        "type": "object",
+        "description": "An install a row asked for that did not land, until the row's next try.",
+        "required": [
+          "path",
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, as the installer said it."
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
       "AccessPathOutcome": {
         "type": "object",
         "description": "One path's answer: `granted`, `pending`, `denied`, or `refused:<rule>`.",
@@ -11678,8 +11695,21 @@
           "seconds"
         ],
         "properties": {
+          "installing": {
+            "type": "boolean",
+            "description": "The emulator or cores the row asks for are installing; the grant follows."
+          },
           "path": {
             "type": "string"
+          },
+          "percent": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How much of the install's download is in, once its size is known.",
+            "minimum": 0
           },
           "removing": {
             "type": "boolean",
@@ -18443,6 +18473,13 @@
               "minimum": 0
             },
             "description": "Denied ports on this computer."
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessFailure"
+            },
+            "description": "Pending rows whose install failed, each until its next try."
           },
           "grants": {
             "type": "array",

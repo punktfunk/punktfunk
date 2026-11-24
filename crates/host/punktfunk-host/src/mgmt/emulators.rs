@@ -102,11 +102,6 @@ pub(crate) fn hermir_err(e: &hermir::Error, (code, what): (&str, &str)) -> Respo
     api_error_logged(hermir_status(e), code, what, e)
 }
 
-/// [`hermir_err`] for a sentence with no host message: the error rides along.
-pub(crate) fn hermir_plain(e: &hermir::Error, what: &str) -> Response {
-    api_error(hermir_status(e), &format!("{what} — {e}"))
-}
-
 fn hermir_status(e: &hermir::Error) -> StatusCode {
     match e {
         hermir::Error::NotInCatalog(_) => StatusCode::NOT_FOUND,
@@ -211,7 +206,7 @@ pub(crate) async fn get_emulators() -> Response {
 pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
     let target = id.clone();
     match blocking("emulator_manager", move || {
-        crate::emulators::install(&target)
+        crate::emulators::install(&target, &hermir::progress::Quiet)
     })
     .await
     {
