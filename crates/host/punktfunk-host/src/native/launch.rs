@@ -197,6 +197,7 @@ pub(super) async fn launch_session(
         pads: crate::session_launch::Pads::Session {
             kind: n.welcome.gamepad,
             roster: Some(controls.pads.clone()),
+            device: controls.fingerprint.clone(),
         },
     };
     #[cfg(test)]

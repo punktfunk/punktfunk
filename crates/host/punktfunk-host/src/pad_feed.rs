@@ -16,7 +16,7 @@
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::MAX_PADS;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
 use tokio::sync::broadcast;
 use utoipa::ToSchema;
 
@@ -68,6 +68,9 @@ pub struct PadFeed {
     /// high byte (0 = not built yet). One word, so a reader never pairs one pad's kind with
     /// another moment's slot.
     roster: [AtomicU16; MAX_PADS],
+    /// Per wire pad: the last kind + 1 it was this session (0 = never). A removal keeps it: a
+    /// client may unplug every pad as it quits.
+    seen: [AtomicU8; MAX_PADS],
 }
 
 /// One pad of [`PadFeed::roster`].
@@ -93,6 +96,7 @@ impl PadFeed {
             tx: broadcast::channel(FEED_CAPACITY).0,
             resync: AtomicBool::new(false),
             roster: std::array::from_fn(|_| AtomicU16::new(0)),
+            seen: std::array::from_fn(|_| AtomicU8::new(0)),
         }
     }
 
@@ -102,9 +106,21 @@ impl PadFeed {
             let slot = slot.map_or(0, |s| u16::from(s) + 1);
             (u16::from(kind.to_u8()) + 1) | (slot << 8)
         });
-        if let Some(cell) = self.roster.get(pad) {
+        if let (Some(cell), Some(seen)) = (self.roster.get(pad), self.seen.get(pad)) {
             cell.store(word, Ordering::Relaxed);
+            if let Some((kind, _)) = entry {
+                seen.store(kind.to_u8().saturating_add(1), Ordering::Relaxed);
+            }
         }
+    }
+
+    /// The kinds this session's pads were, in wire order, the ones that left included.
+    pub fn seen(&self) -> Vec<GamepadPref> {
+        self.seen
+            .iter()
+            .filter_map(|k| k.load(Ordering::Relaxed).checked_sub(1))
+            .map(GamepadPref::from_u8)
+            .collect()
     }
 
     /// The session's pads in wire order: declared at arrival, or built by a first frame.
@@ -237,6 +253,11 @@ mod tests {
         feed.note_pad(0, None);
         feed.note_pad(MAX_PADS, Some((GamepadPref::DualSense, Some(0))));
         assert_eq!(feed.roster(), [pad(3, GamepadPref::SwitchPro, None)]);
+        assert_eq!(
+            feed.seen(),
+            [GamepadPref::SteamDeck, GamepadPref::SwitchPro],
+            "a pad that left was still this session's"
+        );
     }
 
     /// Two sessions hold two feeds, so a stream on one id cannot see the other's pads.

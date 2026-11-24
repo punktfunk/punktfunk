@@ -2017,6 +2017,7 @@ async fn stream_session(
         input_tx,
     } = wired;
     let (hello, welcome) = (&n.terms.hello, &n.welcome);
+    let pads_of = (controls.pads.clone(), controls.fingerprint.clone());
     let clear = n
         .features
         .has(punktfunk_core::quic::v2::registry::FEATURE_CLEAR_PLACEMENT);
@@ -2105,17 +2106,22 @@ async fn stream_session(
     // `stop` is advisory: a stuck syscall inside an iteration never sees it, and teardown
     // waits on this join. Bound the wait: after `STREAM_STOP_GRACE`, abandon the thread
     // (cannot cancel a blocking thread) so the slot and admission entry come back.
-    tokio::select! {
-        joined = done => joined.context("stream thread")??,
+    let joined = tokio::select! {
+        joined = done => joined.context("stream thread"),
         () = stop_overdue(scope.life().stop_flag()) => {
             tracing::error!(
                 grace_s = STREAM_STOP_GRACE.as_secs(),
                 "stream thread wedged after stop: abandoned to free the session slot, its capture \
                  and encoder held until the stuck call returns — report this with the log above"
             );
-            anyhow::bail!("stream thread wedged after stop");
+            Err(anyhow!("stream thread wedged after stop"))
         }
+    };
+    // The device's pads, for its next emulator launch ([`crate::emulators::remember_pads`]).
+    if let (feed, Some(device)) = pads_of {
+        tokio::task::spawn_blocking(move || crate::emulators::remember_pads(&device, &feed.seen()));
     }
+    joined??;
     drain(scope.life().stop_flag(), || conn.close_reason().is_some()).await;
     Ok(())
 }

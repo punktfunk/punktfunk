@@ -355,6 +355,7 @@ fn run(
             pads: crate::session_launch::Pads::Session {
                 kind: punktfunk_core::config::GamepadPref::Xbox360,
                 roster: None,
+                device: None,
             },
         };
         // The entry's own `apps.json` prep, then its library entry's when that entry is what

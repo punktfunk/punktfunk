@@ -271,11 +271,13 @@ const SETTLE_QUIET: Duration = Duration::from_millis(150);
 const SETTLE_ALL: Duration = Duration::from_millis(1500);
 
 /// A stream's players: the pads its `roster` holds, in wire order, each as the device its kind
-/// builds, so the bindings name a pad before its first frame builds it. A session that declares
-/// none seats one pad of `kind`, its default.
+/// builds, so the bindings name a pad before its first frame builds it. A session that has
+/// declared none by then seats the pads its `device` brought last time ([`remember_pads`]): a
+/// controller switched on after the launch is most often that one. Else one pad of `kind`.
 pub fn session_players(
     kind: GamepadPref,
     roster: Option<&crate::pad_feed::PadFeed>,
+    device: Option<&str>,
 ) -> Vec<hermir::Player> {
     let read = || {
         roster
@@ -299,10 +301,14 @@ pub fn session_players(
             (pads, quiet) = (now, Instant::now());
         }
     }
-    let kinds = match pads.is_empty() {
-        true => vec![(kind, None)],
-        false => pads.iter().map(|p| (p.kind, p.slot)).collect(),
-    };
+    let mut kinds: Vec<_> = pads.iter().map(|p| (p.kind, p.slot)).collect();
+    if kinds.is_empty() {
+        let last = device.map(remembered_pads).unwrap_or_default();
+        kinds = last.into_iter().map(|k| (k, None)).collect();
+    }
+    if kinds.is_empty() {
+        kinds.push((kind, None));
+    }
     kinds
         .into_iter()
         .zip(0u8..)
@@ -316,6 +322,69 @@ pub fn session_players(
             },
         })
         .collect()
+}
+
+/// Each device's last pads, most recent device first, under the config dir.
+const PAD_MEMORY: &str = "pad-kinds.json";
+/// Devices kept; the least recent drops.
+const PAD_MEMORY_DEVICES: usize = 64;
+
+/// One device's row of [`PAD_MEMORY`]: its pairing fingerprint and its pads' kinds, in wire order.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DevicePads {
+    device: String,
+    kinds: Vec<String>,
+}
+
+/// Keep the kinds `device`'s pads were this session, for a launch whose pad is still off. A
+/// session with no pad keeps the last.
+pub fn remember_pads(device: &str, kinds: &[GamepadPref]) {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = WRITE.lock();
+    let path = pf_paths::config_dir().join(PAD_MEMORY);
+    if let Err(error) = remember_pads_in(&path, device, kinds) {
+        tracing::debug!(%error, "pad memory not written");
+    }
+}
+
+fn remember_pads_in(path: &Path, device: &str, kinds: &[GamepadPref]) -> std::io::Result<()> {
+    if kinds.is_empty() {
+        return Ok(());
+    }
+    let mut all = pad_memory(path);
+    all.retain(|d| d.device != device);
+    let kinds = kinds.iter().map(|k| k.as_str().to_string()).collect();
+    all.insert(
+        0,
+        DevicePads {
+            device: device.into(),
+            kinds,
+        },
+    );
+    all.truncate(PAD_MEMORY_DEVICES);
+    pf_paths::replace_file(path, &serde_json::to_vec(&all)?)
+}
+
+fn pad_memory(path: &Path) -> Vec<DevicePads> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// The kinds [`remember_pads`] kept for `device`.
+fn remembered_pads(device: &str) -> Vec<GamepadPref> {
+    remembered_pads_in(&pf_paths::config_dir().join(PAD_MEMORY), device)
+}
+
+fn remembered_pads_in(path: &Path, device: &str) -> Vec<GamepadPref> {
+    let row = pad_memory(path).into_iter().find(|d| d.device == device);
+    row.map_or_else(Vec::new, |d| {
+        d.kinds
+            .iter()
+            .filter_map(|k| GamepadPref::from_name(k))
+            .collect()
+    })
 }
 
 /// Microsoft, Sony and Nintendo: the identities the host's uinput, uhid and usbip pads carry.
@@ -910,6 +979,7 @@ pub fn prepare(
     let pads = Pads::Session {
         kind: pad,
         roster: None,
+        device: None,
     };
     prepare_as(None, &mut None, id, platform, firmware_dir, Some(&pads))
 }
@@ -958,8 +1028,12 @@ fn prepare_as(
     #[cfg(windows)]
     let_player_read(&firmware);
     let players = match pads {
-        Some(Pads::Session { kind, roster }) => hermir::Patch {
-            players: Some(session_players(*kind, roster.as_deref())),
+        Some(Pads::Session {
+            kind,
+            roster,
+            device,
+        }) => hermir::Patch {
+            players: Some(session_players(*kind, roster.as_deref(), device.as_deref())),
             ..Default::default()
         },
         Some(Pads::Desk(pads)) => desk_patch(pads),
@@ -2208,7 +2282,7 @@ mod tests {
         let feed = crate::pad_feed::PadFeed::new();
         feed.note_pad(2, Some((GamepadPref::SwitchPro, None)));
         feed.note_pad(0, Some((GamepadPref::DualSense, Some(1))));
-        let seats = session_players(GamepadPref::Xbox360, Some(&feed));
+        let seats = session_players(GamepadPref::Xbox360, Some(&feed), None);
         let got: Vec<_> = seats
             .iter()
             .map(|p| (p.seat, p.pad.index, p.pad.vendor, p.pad.product))
@@ -2220,12 +2294,48 @@ mod tests {
 
     #[test]
     fn a_session_that_declares_no_pad_seats_one_of_its_default_kind() {
-        let seats = session_players(GamepadPref::DualSense, None);
+        let seats = session_players(GamepadPref::DualSense, None, None);
         assert_eq!(seats.len(), 1);
         assert_eq!((seats[0].seat, seats[0].pad.product), (1, 0x0ce6));
         let quiet = crate::pad_feed::PadFeed::new();
-        let seats = session_players(GamepadPref::SwitchPro, Some(&quiet));
+        let seats = session_players(GamepadPref::SwitchPro, Some(&quiet), None);
         assert_eq!((seats.len(), seats[0].pad.product), (1, 0x2009));
+    }
+
+    /// A device's pads are kept per device, most recent first: a session without one keeps the
+    /// last, and only the most recent devices stay.
+    #[test]
+    fn each_device_keeps_the_pads_it_brought_last() {
+        use GamepadPref::*;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(PAD_MEMORY);
+        assert!(remembered_pads_in(&path, "deck").is_empty());
+        remember_pads_in(&path, "deck", &[SteamDeck]).unwrap();
+        remember_pads_in(&path, "laptop", &[SwitchPro, DualSense]).unwrap();
+        remember_pads_in(&path, "deck", &[]).unwrap();
+        assert_eq!(remembered_pads_in(&path, "deck"), [SteamDeck]);
+        assert_eq!(remembered_pads_in(&path, "laptop"), [SwitchPro, DualSense]);
+        for n in 0..PAD_MEMORY_DEVICES {
+            remember_pads_in(&path, &format!("other{n}"), &[Xbox360]).unwrap();
+        }
+        assert!(
+            remembered_pads_in(&path, "deck").is_empty(),
+            "the oldest dropped"
+        );
+        assert_eq!(pad_memory(&path).len(), PAD_MEMORY_DEVICES);
+    }
+
+    /// Every kind a host builds survives the memory's spelling of it.
+    #[test]
+    fn every_kind_reads_back_as_itself() {
+        for n in 0..=u8::MAX {
+            let kind = GamepadPref::from_u8(n);
+            assert_eq!(
+                GamepadPref::from_name(kind.as_str()),
+                Some(kind),
+                "{kind:?}"
+            );
+        }
     }
 
     /// Each kind's GUID is the one Lichii's SDL 3 logged for the pad the host built, on Bazzite
