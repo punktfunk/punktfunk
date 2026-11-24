@@ -373,18 +373,22 @@ fn recv_frame(sock: &impl AsFd, buf: &mut [u8]) -> Result<(usize, Option<OwnedFd
 // ---- the seat's side ----
 
 /// Whether this host makes a pad on `node` (`/dev/uinput`, `/dev/uhid`, vhci's `attach`)
-/// through the broker: a seat host that can't write it, or finds the supervisor's uinput proxy
-/// there, which is the seat's Steam's. The owner's own host at the desk holds seat0's ACL and
-/// opens the node itself, as the box's host does.
+/// through the broker, which stamps it for the seat's fence. The owner's own host at the desk
+/// holds seat0's ACL and opens a node it can write itself, as the box's host does, unless it
+/// finds the supervisor's uinput proxy there, the seat's Steam's.
 pub fn brokered(node: &Path) -> bool {
+    let role = pf_paths::seat::role();
     asks_broker(
-        pf_paths::seat::role().is_seat_host(),
+        role.is_seat_host(),
+        role.is_owner_seat(),
         writable(node) && !proxied(node),
     )
 }
 
-fn asks_broker(seat_host: bool, writable: bool) -> bool {
-    seat_host && !writable
+/// Every other seat always asks: a node it can write is a distro's world-writable one, and a
+/// pad it made there would be no seat's.
+fn asks_broker(seat_host: bool, owner: bool, writable: bool) -> bool {
+    seat_host && !(owner && writable)
 }
 
 /// The misc major, where the kernel's own `/dev/uinput` and `/dev/uhid` live.
@@ -850,12 +854,23 @@ fn relay_uinput(mut dev: UinputDevice, seat: UnixDatagram) {
 mod tests {
     use super::*;
 
-    /// Only a seat host that can't write the node asks the broker.
+    /// Only the owner's host that can write the node opens it itself; every other seat asks.
     #[test]
     fn a_host_that_can_write_the_node_opens_it_itself() {
-        assert!(asks_broker(true, false));
-        assert!(!asks_broker(true, true), "the owner's host at the desk");
-        assert!(!asks_broker(false, false), "the box's host");
+        assert!(asks_broker(true, false, false));
+        assert!(
+            asks_broker(true, false, true),
+            "a seat on a world-writable /dev/uhid"
+        );
+        assert!(
+            asks_broker(true, true, false),
+            "the owner without seat0's ACL"
+        );
+        assert!(
+            !asks_broker(true, true, true),
+            "the owner's host at the desk"
+        );
+        assert!(!asks_broker(false, false, false), "the box's host");
         let node = std::env::temp_dir().join(format!("pf-pad-node-{}", std::process::id()));
         assert!(!writable(&node), "no node");
         std::fs::write(&node, b"").unwrap();
