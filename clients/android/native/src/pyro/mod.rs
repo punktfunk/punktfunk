@@ -36,6 +36,7 @@ mod imp {
     use punktfunk_core::au::AuMemory;
     use punktfunk_core::client::NativeClient;
     use punktfunk_core::error::PunktfunkError;
+    use punktfunk_core::quic::VideoFormat;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{mpsc, Arc};
     use std::time::{Duration, Instant};
@@ -193,22 +194,23 @@ mod imp {
         client: &NativeClient,
         dev: &PyroDevice,
         mode: punktfunk_core::config::Mode,
+        format: &VideoFormat,
     ) -> Result<PyroWaveDecoder> {
-        // The wavelet bitstream carries no VUI, so the colour contract is the handshake's.
+        // The wavelet bitstream carries no VUI, so the colour contract is the format's.
         let color = ColorDesc {
-            primaries: client.color.primaries,
-            transfer: client.color.transfer,
-            matrix: client.color.matrix,
-            full_range: client.color.full_range != 0,
+            primaries: format.color.primaries,
+            transfer: format.color.transfer,
+            matrix: format.color.matrix,
+            full_range: format.color.full_range != 0,
         };
         PyroWaveDecoder::new(
             &dev.vkd,
             mode.width,
             mode.height,
             client.shard_payload as usize,
-            client.chroma_format == punktfunk_core::quic::CHROMA_IDC_444,
+            format.chroma_format == punktfunk_core::quic::CHROMA_IDC_444,
             color,
-            client.bit_depth >= 10,
+            format.bit_depth >= 10,
         )
     }
 
@@ -308,18 +310,17 @@ mod imp {
         let mut present = Present::new(&dev, smooth, asc)?;
 
         let mut mode = client.mode();
-        let mut decoder = open_decoder(client, &dev, mode)?;
+        let mut format = client.video_format();
+        let mut decoder = open_decoder(client, &dev, mode, &format)?;
         let mut lent = read_in_place(client, &mut decoder, &dev, None);
         // Declared after the decoder, so it is joined first on every exit.
         let retire = Retire::spawn(stats.clone())?;
-        let depth = if client.bit_depth >= 10 { 10 } else { 8 };
-        let msb_packed = client.bit_depth >= 10;
         log::info!(
             "pyro: {}x{} {}-bit {}, shard payload {} — decoding",
             mode.width,
             mode.height,
-            depth,
-            if client.chroma_format == punktfunk_core::quic::CHROMA_IDC_444 {
+            format.bit_depth,
+            if format.chroma_format == punktfunk_core::quic::CHROMA_IDC_444 {
                 "4:4:4"
             } else {
                 "4:2:0"
@@ -362,7 +363,7 @@ mod imp {
                 // allocates, which matters on a 4 GB TV box at 4K.
                 drop(decoder);
                 mode = now_mode;
-                decoder = open_decoder(client, &dev, mode)?;
+                decoder = open_decoder(client, &dev, mode, &format)?;
                 lent = read_in_place(client, &mut decoder, &dev, lent);
                 split = SplitWindow::default();
             }
@@ -383,6 +384,16 @@ mod imp {
                 Err(_) => break, // session closed
             };
             received += 1;
+            // A decoder keeps the colour it opened with: a new format (the game turned HDR on
+            // or off) opens a new one. This AU is copied into the new decoder's ring.
+            if let Some(next) = frame.new_format.filter(|f| *f != format) {
+                log::info!("pyro: new format {next:?}, rebuilding the decoder");
+                drop(decoder);
+                format = next;
+                decoder = open_decoder(client, &dev, mode, &format)?;
+                lent = read_in_place(client, &mut decoder, &dev, lent);
+                split = SplitWindow::default();
+            }
             let _ = client.note_frame_index(frame.frame_index);
             let work_started = (Instant::now(), crate::sys::now_monotonic_ns());
 
@@ -430,6 +441,8 @@ mod imp {
             );
             present.follow(opts.surface_size.load(Ordering::Relaxed))?;
             let size = (picture.width, picture.height);
+            let msb_packed = format.bit_depth >= 10;
+            let depth = if msb_packed { 10 } else { 8 };
             let shown =
                 present.show(picture.views, crop, picture.color, depth, msb_packed, size)?;
             if !shown {
