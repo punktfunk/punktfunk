@@ -196,7 +196,7 @@ pub(super) async fn launch_session(
         profile: Some(who.profile_ref.clone()),
         pads: crate::session_launch::Pads::Session {
             kind: n.welcome.gamepad,
-            slots: Some(controls.pad_slots.clone()),
+            roster: Some(controls.pads.clone()),
         },
     };
     #[cfg(test)]

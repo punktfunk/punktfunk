@@ -335,10 +335,21 @@ impl Pads {
         }
     }
 
-    /// Apply wire pad `idx`'s frame, and show it on the Controllers feed.
+    /// Apply wire pad `idx`'s frame, and show it on the Controllers feed and its roster.
     fn apply_wire(&mut self, wire: &WirePads, idx: usize, feed: &crate::pad_feed::PadFeed) {
         self.handle(&punktfunk_core::input::GamepadEvent::State(wire.frame(idx)));
         feed.publish(|| self.feed_frame(idx, wire));
+        let present = wire.mask & (1 << idx) != 0;
+        self.note(idx, present, feed);
+    }
+
+    /// Pad `idx` on the feed's roster: its device and slot while `present`, else gone.
+    fn note(&self, idx: usize, present: bool, feed: &crate::pad_feed::PadFeed) {
+        let entry = present
+            .then(|| self.device_kind(idx))
+            .flatten()
+            .map(|kind| (kind, self.slots.slot_of(idx)));
+        feed.note_pad(idx, entry);
     }
 
     /// An unchanged refresh of built wire pad `idx`: no frame goes out, but a state that reads
@@ -1584,13 +1595,17 @@ impl InputLoop {
             InputKind::GamepadState => self.on_snapshot(&ev),
             InputKind::GamepadRemove => self.on_remove(&ev),
             // A buddy's pad has no device of its own to stream audio to.
-            InputKind::GamepadArrival => declare_pad(
-                &mut self.pads,
-                &mut self.pad_streams,
-                &self.conn,
-                &ev,
-                self.pad_audio_on && self.joined.is_none(),
-            ),
+            InputKind::GamepadArrival => {
+                declare_pad(
+                    &mut self.pads,
+                    &mut self.pad_streams,
+                    &self.conn,
+                    &ev,
+                    self.pad_audio_on && self.joined.is_none(),
+                );
+                let (pad, _) = punktfunk_core::input::decode_gamepad_arrival(ev.flags);
+                self.pads.note(usize::from(pad), true, &self.pad_feed);
+            }
             _ => self.inject(ev),
         }
     }
@@ -1645,6 +1660,7 @@ impl InputLoop {
             tracing::info!(pad = idx, "gamepad unplugged (native detach)");
         } else {
             self.pads.release_unbuilt(idx);
+            self.pads.note(idx, false, &self.pad_feed);
         }
         self.rumble.clear(idx);
         self.pad_streams.stop(idx);

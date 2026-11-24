@@ -1877,7 +1877,7 @@ mod tests {
                 profile: None,
                 pads: crate::session_launch::Pads::Session {
                     kind: punktfunk_core::config::GamepadPref::Auto,
-                    slots: None,
+                    roster: None,
                 },
             },
             launch_outcome: unbounded_channel().0,
