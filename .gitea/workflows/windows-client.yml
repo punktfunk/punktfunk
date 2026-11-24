@@ -511,9 +511,11 @@ jobs:
           $in = Join-Path $env:RUNNER_TEMP 'winget-in'
           New-Item -ItemType Directory -Force -Path $in | Out-Null
           $setup = @{}
+          # From a variable, so the pipe walks the assets: piped straight on, the response is one array.
+          $assets = Invoke-RestMethod -Uri $api -Headers $h
           foreach ($arch in 'x64', 'arm64') {
             # `*_<arch>.exe` skips the `.sha256` sidecar next to each asset.
-            $asset = @(Invoke-RestMethod -Uri $api -Headers $h | Where-Object { $_.name -like "punktfunk-client-setup-*_$arch.exe" })
+            $asset = @($assets | Where-Object { $_.name -like "punktfunk-client-setup-*_$arch.exe" })
             if ($asset.Count -ne 1) { throw "expected one $arch client installer on $tag, found $($asset.Count)" }
             $setup[$arch] = Join-Path $in $asset[0].name
             Invoke-WebRequest -Uri $asset[0].browser_download_url -Headers $h -OutFile $setup[$arch]
