@@ -62,6 +62,8 @@ struct Args {
     pad_soak: Option<u64>,
     /// `--pad-hz N` — `--pad-soak` send rate, default 125.
     pad_hz: u32,
+    /// `--pad-kind NAME` — `--pad-soak` declares pad 0 this kind first, as a client's arrival does.
+    pad_kind: Option<GamepadPref>,
     /// `--quit` — close the connection with the deliberate-quit code (`QUIT_CLOSE_CODE`) at end of
     /// stream, so the host tears its virtual display down immediately (skips keep-alive linger). A
     /// bare exit closes with code 0 → the host lingers for a reconnect.
@@ -339,6 +341,12 @@ fn parse_argv(argv: Vec<String>) -> Args {
             .and_then(|s| s.parse().ok())
             .unwrap_or(125)
             .clamp(1, 1000),
+        pad_kind: get("--pad-kind").map(|s| {
+            GamepadPref::from_name(s).unwrap_or_else(|| {
+                eprintln!("--pad-kind takes a --gamepad name");
+                std::process::exit(2);
+            })
+        }),
         quit: argv.iter().any(|a| a == "--quit"),
         seconds: get("--seconds").and_then(|s| s.parse().ok()),
         pin,
@@ -738,7 +746,7 @@ async fn session(mut args: Args) -> Result<()> {
         spawn_pad_audio_test(&conn, args.pads);
     }
     if let Some(secs) = args.pad_soak {
-        spawn_pad_soak(&conn, secs, args.pad_hz);
+        spawn_pad_soak(&conn, secs, args.pad_hz, args.pad_kind);
     }
     // Closed-flag for the blocking receive loop.
     {
@@ -1739,11 +1747,26 @@ fn spawn_touch_test(conn: &Wire, mode: Mode) {
 
 /// Pad 0 as a player holds it: every stick and trigger moves each frame and A taps once a
 /// second, as `GamepadState` snapshots. RT counts frames, so a reader can tell lost from late.
-fn spawn_pad_soak(conn: &Wire, secs: u64, hz: u32) {
+fn spawn_pad_soak(conn: &Wire, secs: u64, hz: u32, kind: Option<GamepadPref>) {
     let conn2 = conn.clone();
     tokio::spawn(async move {
-        use punktfunk_core::input::{gamepad::BTN_A, GamepadSnapshot};
+        use punktfunk_core::input::{encode_gamepad_arrival, gamepad::BTN_A, GamepadSnapshot};
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // A client's arrival leads its first frame, and repeats.
+        for _ in 0..3 {
+            if let Some(kind) = kind {
+                let arrival = InputEvent {
+                    kind: InputKind::GamepadArrival,
+                    _pad: [0; 3],
+                    code: u32::from(kind.to_u8()),
+                    x: 0,
+                    y: 0,
+                    flags: encode_gamepad_arrival(0, 0),
+                };
+                let _ = conn2.send_datagram(arrival.encode().to_vec());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
         tracing::info!(secs, hz, "pad-soak: driving pad 0");
         let mut tick =
             tokio::time::interval(std::time::Duration::from_micros(1_000_000 / u64::from(hz)));
