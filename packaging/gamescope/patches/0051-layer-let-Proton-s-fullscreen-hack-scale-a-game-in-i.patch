@@ -1,0 +1,319 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Tue, 24 Nov 2026 12:57:01 +0100
+Subject: [PATCH 51/52] layer: let Proton's fullscreen hack scale a game in its
+ own format
+
+Proton's fullscreen hack scales a DPI-scaled window in the game's
+process. The game draws into images of its own format, and a compute
+pass writes them to a storage-only BGRA8 swapchain. The pass views every
+game image as BGRA8 sRGB, all an X11 surface offers, and encodes what it
+samples to sRGB.
+
+This layer offers more formats. A 10-bit HDR10 image was read as 8-bit
+BGRA and came out as noise, an RGBA8 image had red and blue swapped, and
+any HDR picture was cut to an 8-bit swapchain.
+
+From such a swapchain to its last view, the layer corrects what Proton
+creates on that thread. An HDR colorspace gets the format the layer
+offers with it. Each view of a game image gets that image's format, sRGB
+where it has one. Where it has none, the two sRGB constants in Proton's
+pass are replaced so that it stores what it samples. A BGRA8 game gets
+the calls it got before.
+---
+ layer/VkLayer_FROG_gamescope_wsi.cpp | 216 ++++++++++++++++++++++++++-
+ 1 file changed, 215 insertions(+), 1 deletion(-)
+
+diff --git a/layer/VkLayer_FROG_gamescope_wsi.cpp b/layer/VkLayer_FROG_gamescope_wsi.cpp
+index f85dac0..ddde2c7 100644
+--- a/layer/VkLayer_FROG_gamescope_wsi.cpp
++++ b/layer/VkLayer_FROG_gamescope_wsi.cpp
+@@ -12,6 +12,7 @@
+ #include "../src/Utils/Defer.h"
+ 
+ #include <atomic>
++#include <bit>
+ #include <cerrno>
+ #include <charconv>
+ #include <cstdio>
+@@ -24,7 +25,10 @@
+ #include <functional>
+ #include <unordered_map>
+ #include <optional>
++#include <limits>
++#include <string_view>
+ 
++#include <link.h>
+ #include <poll.h>
+ #include <sys/stat.h>
+ // For limiter file.
+@@ -279,6 +283,97 @@ namespace GamescopeWSILayer {
+     caps.maxImageExtent = extent;
+   }
+ 
++  // Proton's fullscreen hack scales a DPI-scaled window itself. The game draws into images
++  // of its own format, and a compute pass writes them to a storage-only BGRA8 swapchain.
++  // The pass views every game image as BGRA8 sRGB, all an X11 surface offers. This layer
++  // offers more, so from the swapchain to its last view it corrects what Proton creates.
++  struct ProtonScaler {
++    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
++    // The swapchain's format where the layer raised it, else UNDEFINED.
++    VkFormat format = VK_FORMAT_UNDEFINED;
++    std::vector<VkImage> targets;
++    std::vector<std::pair<VkImage, VkFormat>> sources;
++    size_t sourceViews = 0;
++    size_t targetViews = 0;
++    // A game image has no sRGB view, so the pass must store what it samples.
++    bool copies = false;
++  };
++  // Proton creates all of it on the thread that created the swapchain.
++  static thread_local std::unique_ptr<ProtonScaler> t_protonScaler;
++
++  // Wine's ntdll.so is in every Wine process and in no other.
++  static bool isWineProcess() {
++    static const bool s_wine = dl_iterate_phdr([](dl_phdr_info *info, size_t, void *) -> int {
++      return std::string_view(info->dlpi_name).ends_with("/ntdll.so");
++    }, nullptr) != 0;
++    return s_wine;
++  }
++
++  // Exactly what Proton's fullscreen hack asks for. A layer above that draws on the
++  // swapchain adds a usage, and then the format is not this layer's to change.
++  static bool isProtonScaler(const VkSwapchainCreateInfoKHR &info) {
++    return info.imageUsage == VK_IMAGE_USAGE_STORAGE_BIT &&
++           info.imageFormat == VK_FORMAT_B8G8R8A8_UNORM &&
++           isWineProcess();
++  }
++
++  // The sRGB view of a format that has one, else UNDEFINED. Proton's pass encodes what
++  // it samples to sRGB, so through this view it stores the image's own values.
++  static VkFormat srgbView(VkFormat format) {
++    switch (format) {
++      case VK_FORMAT_B8G8R8A8_UNORM:
++      case VK_FORMAT_B8G8R8A8_SRGB:
++        return VK_FORMAT_B8G8R8A8_SRGB;
++      case VK_FORMAT_R8G8B8A8_UNORM:
++      case VK_FORMAT_R8G8B8A8_SRGB:
++        return VK_FORMAT_R8G8B8A8_SRGB;
++      case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
++      case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
++        return VK_FORMAT_A8B8G8R8_SRGB_PACK32;
++      case VK_FORMAT_B8G8R8_UNORM:
++      case VK_FORMAT_B8G8R8_SRGB:
++        return VK_FORMAT_B8G8R8_SRGB;
++      case VK_FORMAT_R8G8B8_UNORM:
++      case VK_FORMAT_R8G8B8_SRGB:
++        return VK_FORMAT_R8G8B8_SRGB;
++      default:
++        return VK_FORMAT_UNDEFINED;
++    }
++  }
++
++  // Proton's pass encodes linear to sRGB: c <= 0.0031308 ? c * 12.92 : a power curve.
++  // With the threshold at the largest float and the slope at 1 it stores what it sampled.
++  // False, and the code untouched, unless the module holds each constant exactly once.
++  static bool makeBlitCopy(std::vector<uint32_t> &code) {
++    static constexpr uint32_t s_floatConstant = (4u << 16) | 43u; // OpConstant, 32 bits
++    static constexpr uint32_t s_threshold = std::bit_cast<uint32_t>(0.0031308f);
++    static constexpr uint32_t s_slope = std::bit_cast<uint32_t>(12.92f);
++
++    uint32_t *threshold = nullptr;
++    uint32_t *slope = nullptr;
++    uint32_t matches = 0;
++    for (size_t i = 5; i < code.size();) {
++      const size_t words = code[i] >> 16;
++      if (!words || i + words > code.size())
++        return false;
++
++      if (code[i] == s_floatConstant && code[i + 3] == s_threshold) {
++        threshold = &code[i + 3];
++        matches++;
++      } else if (code[i] == s_floatConstant && code[i + 3] == s_slope) {
++        slope = &code[i + 3];
++        matches++;
++      }
++      i += words;
++    }
++    if (!threshold || !slope || matches != 2)
++      return false;
++
++    *threshold = std::bit_cast<uint32_t>(std::numeric_limits<float>::max());
++    *slope = std::bit_cast<uint32_t>(1.0f);
++    return true;
++  }
++
+   static uint32_t getMinImageCount() {
+     static uint32_t s_minImageCount = []() -> uint32_t {
+       if (auto minCount = parseEnv<uint32_t>("GAMESCOPE_WSI_MIN_IMAGE_COUNT")) {
+@@ -1514,6 +1609,9 @@ namespace GamescopeWSILayer {
+             VkDevice                   device,
+             VkSwapchainKHR             swapchain,
+       const VkAllocationCallbacks*     pAllocator) {
++      if (t_protonScaler && t_protonScaler->swapchain == swapchain)
++        t_protonScaler.reset();
++
+       if (auto state = gamescopeSwapchains.find(swapchain)) {
+         gamescope_swapchain_destroy(state->object);
+         wl_event_queue_destroy(state->eventQueue);
+@@ -1530,6 +1628,8 @@ namespace GamescopeWSILayer {
+       const VkSwapchainCreateInfoKHR*  pCreateInfo,
+       const VkAllocationCallbacks*     pAllocator,
+             VkSwapchainKHR*            pSwapchain) {
++      t_protonScaler.reset();
++
+       auto gamescopeSurface = gamescopeSurfaces.find(pCreateInfo->surface);
+ 
+       if (!gamescopeSurface) {
+@@ -1553,6 +1653,7 @@ namespace GamescopeWSILayer {
+       const bool hdrColorspace = pCreateInfo->imageColorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT ||
+                                   pCreateInfo->imageColorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
+       const bool canBypass = gamescopeSurface->canBypassXWayland(hdrColorspace);
++      const bool protonScaler = !gamescopeSurface->isWayland() && isProtonScaler(*pCreateInfo);
+ 
+       VkSwapchainCreateInfoKHR swapchainInfo = *pCreateInfo;
+       swapchainInfo.flags &= ~VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT;
+@@ -1625,6 +1726,24 @@ namespace GamescopeWSILayer {
+           pDispatch.PhysicalDevice,
+           swapchainInfo.surface);
+ 
++        // Proton's scaler asks for BGRA8 whatever the game draws, which holds neither 10
++        // bits nor scRGB. An HDR colorspace gets the format this layer offers with it.
++        for (const VkSurfaceFormatKHR &offer : VkInstanceOverrides::s_ExtraHDRSurfaceFormats) {
++          if (!protonScaler || offer.colorSpace != pCreateInfo->imageColorSpace)
++            continue;
++
++          VkFormatProperties properties = {};
++          pDispatch.pPhysicalDeviceDispatch->GetPhysicalDeviceFormatProperties(pDispatch.PhysicalDevice, offer.format, &properties);
++          const bool onSurface = std::ranges::any_of(
++            supportedSurfaceFormats,
++            std::bind_front(std::equal_to{}, offer.format),
++            &VkSurfaceFormatKHR::format);
++          if (onSurface && (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
++            swapchainInfo.imageFormat = offer.format;
++            break;
++          }
++        }
++
+         bool supportedSwapchainFormat = std::ranges::any_of(
+           supportedSurfaceFormats,
+           std::bind_front(std::equal_to{}, swapchainInfo.imageFormat),
+@@ -1641,6 +1760,13 @@ namespace GamescopeWSILayer {
+         }
+       }
+ 
++      // The game's view formats are for its own images. Proton views a raised swapchain
++      // in one format, the raised one.
++      const bool raised = swapchainInfo.imageFormat != pCreateInfo->imageFormat;
++      ChainRemoval<VkImageFormatListCreateInfo> viewFormats(&swapchainInfo, raised);
++      if (raised)
++        swapchainInfo.flags &= ~VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
++
+       uint32_t serverId = ~0u;
+       if (!gamescopeSurface->isWayland()) {
+         auto oServerId = xcb::getPropertyValue<uint32_t>(gamescopeSurface->connection, "GAMESCOPE_XWAYLAND_SERVER_ID"sv);
+@@ -1722,16 +1848,104 @@ namespace GamescopeWSILayer {
+       gamescope_swapchain_swapchain_feedback(
+         gamescopeSwapchainObject,
+         imageCount,
+-        uint32_t(pCreateInfo->imageFormat),
++        uint32_t(swapchainInfo.imageFormat),
+         uint32_t(pCreateInfo->imageColorSpace),
+         uint32_t(pCreateInfo->compositeAlpha),
+         uint32_t(pCreateInfo->preTransform),
+         uint32_t(pCreateInfo->clipped),
+         gamescopeInstance->engineName.c_str());
+ 
++      if (protonScaler) {
++        auto scaler = std::make_unique<ProtonScaler>();
++        scaler->swapchain = *pSwapchain;
++        scaler->format = raised ? swapchainInfo.imageFormat : VK_FORMAT_UNDEFINED;
++        scaler->targets.resize(imageCount);
++        pDispatch.GetSwapchainImagesKHR(device, *pSwapchain, &imageCount, scaler->targets.data());
++        scaler->targets.resize(imageCount);
++        t_protonScaler = std::move(scaler);
++
++        fprintf(stderr, "[Gamescope WSI] Proton scales xid: 0x%0x itself - swapchain format: %s\n",
++          gamescopeSurface->window,
++          vkroots::helpers::enumString(swapchainInfo.imageFormat));
++      }
++
+       return VK_SUCCESS;
+     }
+ 
++    static VkResult CreateImage(
++      const vkroots::VkDeviceDispatch & pDispatch,
++            VkDevice                   device,
++      const VkImageCreateInfo*         pCreateInfo,
++      const VkAllocationCallbacks*     pAllocator,
++            VkImage*                   pImage) {
++      VkResult result = pDispatch.CreateImage(device, pCreateInfo, pAllocator, pImage);
++      ProtonScaler *scaler = t_protonScaler.get();
++      if (!scaler || result != VK_SUCCESS)
++        return result;
++
++      // Proton creates one image per swapchain image. More is some other sequence.
++      if (scaler->sources.size() == scaler->targets.size()) {
++        t_protonScaler.reset();
++        return result;
++      }
++
++      scaler->sources.emplace_back(*pImage, pCreateInfo->format);
++      if (srgbView(pCreateInfo->format) == VK_FORMAT_UNDEFINED)
++        scaler->copies = true;
++      return result;
++    }
++
++    static VkResult CreateImageView(
++      const vkroots::VkDeviceDispatch & pDispatch,
++            VkDevice                   device,
++      const VkImageViewCreateInfo*     pCreateInfo,
++      const VkAllocationCallbacks*     pAllocator,
++            VkImageView*               pView) {
++      ProtonScaler *scaler = t_protonScaler.get();
++      if (!scaler)
++        return pDispatch.CreateImageView(device, pCreateInfo, pAllocator, pView);
++
++      VkImageViewCreateInfo viewInfo = *pCreateInfo;
++      const auto source = std::ranges::find(scaler->sources, viewInfo.image, &std::pair<VkImage, VkFormat>::first);
++      if (source != scaler->sources.end()) {
++        scaler->sourceViews++;
++        if (viewInfo.format == VK_FORMAT_B8G8R8A8_SRGB) {
++          const VkFormat srgb = srgbView(source->second);
++          viewInfo.format = srgb != VK_FORMAT_UNDEFINED ? srgb : source->second;
++        }
++      } else if (std::ranges::find(scaler->targets, viewInfo.image) != scaler->targets.end()) {
++        scaler->targetViews++;
++        if (scaler->format != VK_FORMAT_UNDEFINED && viewInfo.format == VK_FORMAT_B8G8R8A8_UNORM)
++          viewInfo.format = scaler->format;
++      }
++
++      // One view of each image, and Proton's sequence is over.
++      if (scaler->sourceViews == scaler->targets.size() && scaler->targetViews == scaler->targets.size())
++        t_protonScaler.reset();
++
++      return pDispatch.CreateImageView(device, &viewInfo, pAllocator, pView);
++    }
++
++    static VkResult CreateShaderModule(
++      const vkroots::VkDeviceDispatch & pDispatch,
++            VkDevice                   device,
++      const VkShaderModuleCreateInfo*  pCreateInfo,
++      const VkAllocationCallbacks*     pAllocator,
++            VkShaderModule*            pShaderModule) {
++      if (t_protonScaler && t_protonScaler->copies) {
++        std::vector<uint32_t> code(pCreateInfo->pCode, pCreateInfo->pCode + pCreateInfo->codeSize / sizeof(uint32_t));
++        if (makeBlitCopy(code)) {
++          VkShaderModuleCreateInfo moduleInfo = *pCreateInfo;
++          moduleInfo.pCode = code.data();
++          return pDispatch.CreateShaderModule(device, &moduleInfo, pAllocator, pShaderModule);
++        }
++
++        fprintf(stderr, "[Gamescope WSI] Proton's scaler has a blit this layer does not know. Its colors stay wrong.\n");
++      }
++
++      return pDispatch.CreateShaderModule(device, pCreateInfo, pAllocator, pShaderModule);
++    }
++
+     static VkResult AcquireNextImageKHR(
+       const vkroots::VkDeviceDispatch & pDispatch,
+             VkDevice                   device,
