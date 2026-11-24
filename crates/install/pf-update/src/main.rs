@@ -225,7 +225,8 @@ mod linux_main {
                     "rpm -qa",
                 )?;
                 let mut upgrade = Command::new("dnf");
-                upgrade.args(["-y", "upgrade"]).args(&pkgs);
+                // A cached repo list can predate the release the update check saw.
+                upgrade.args(["-y", "upgrade", "--refresh"]).args(&pkgs);
                 run(&mut upgrade, "dnf upgrade")?;
                 Ok(false)
             }

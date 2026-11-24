@@ -276,8 +276,9 @@ pub fn parse_marker(text: &str, ostree_booted: bool) -> Option<(InstallKind, Cha
 
 /// One-line, copy-pastable "how to update" hint. No placeholders.
 ///
-/// The apt and dnf hints upgrade every installed `punktfunk*` package, the set pf-update's
-/// one-click apply upgrades, so the console and plugin runner move with the host.
+/// The apt and dnf hints refresh the repo metadata, then upgrade every installed `punktfunk*`
+/// package, the set pf-update's one-click apply upgrades, so the console and plugin runner move
+/// with the host. A cached repo list can predate the release the check saw.
 pub fn update_command(kind: InstallKind, product: Product) -> String {
     let bin = product.binary();
     match (kind, product) {
@@ -307,7 +308,7 @@ pub fn update_command(kind: InstallKind, product: Product) -> String {
         (InstallKind::Apt, _) => {
             r"sudo apt update && sudo apt install --only-upgrade $(dpkg-query -W -f='${Package}\n' 'punktfunk*')".into()
         }
-        (InstallKind::Dnf, _) => "sudo dnf upgrade 'punktfunk*'".into(),
+        (InstallKind::Dnf, _) => "sudo dnf upgrade --refresh 'punktfunk*'".into(),
         (InstallKind::Pacman, _) => "sudo pacman -Syu".into(),
         (InstallKind::SteamosSource, _) => {
             "bash ~/punktfunk/scripts/steamdeck/update.sh --pull".into()
@@ -555,7 +556,7 @@ mod tests {
             );
             assert_eq!(
                 update_command(InstallKind::Dnf, product),
-                "sudo dnf upgrade 'punktfunk*'"
+                "sudo dnf upgrade --refresh 'punktfunk*'"
             );
         }
         assert!(update_command(InstallKind::Flatpak, Product::Client).contains("flatpak update"));
