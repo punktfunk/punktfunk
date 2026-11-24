@@ -684,6 +684,12 @@ pub fn offload_pinned() -> bool {
     std::env::var_os("PUNKTFUNK_GSO").is_some_and(|v| v != "0")
 }
 
+/// Windows refuses a send its queue has no room for with `WSAENOBUFS`, which has no
+/// `ErrorKind`. The packets of that one send are lost; the next send may be taken.
+fn queue_full(e: &std::io::Error) -> bool {
+    cfg!(windows) && e.raw_os_error() == Some(10055)
+}
+
 /// `PUNKTFUNK_GSO=0`: the operator's off switch; GSO is on wherever the path has it.
 fn gso_allowed() -> bool {
     static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -708,6 +714,8 @@ pub struct MediaSender {
     /// Send offload for this session; the host's loss guard clears it for good
     /// ([`Self::set_offload_switch`]).
     offload: Arc<AtomicBool>,
+    /// Sends the OS refused for a reason other than a full buffer or queue.
+    failures: Failures,
 }
 
 /// Where media goes, and the move it is waiting out.
@@ -782,6 +790,7 @@ impl MediaSender {
             v6_socket,
             staging: Mutex::new(Vec::new()),
             offload: Arc::new(AtomicBool::new(true)),
+            failures: Failures::default(),
         })
     }
 
@@ -829,6 +838,8 @@ impl MediaSender {
     /// One send of the packets in `run`, cut at `segment`, marked as video as [`send_marked`]
     /// marks. Where the mark applies the kernel gathers the run from the packets themselves.
     /// quinn-udp's send takes one buffer, so a run of more than one is copied into `staging`.
+    /// `Err` is `WouldBlock` or a full queue ([`queue_full`]); any other refusal is logged and
+    /// the run counts as sent, lost on the way.
     fn transmit(
         &self,
         to: SocketAddr,
@@ -873,7 +884,15 @@ impl MediaSender {
             segment_size: segment,
             src_ip: from,
         };
-        let quinn = || self.state.send((&self.socket).into(), &t);
+        // quinn-udp's own `send` reports every refusal but `WouldBlock` as sent, so a full
+        // queue would never be counted.
+        let quinn = || match self.state.try_send((&self.socket).into(), &t) {
+            Err(e) if e.kind() != std::io::ErrorKind::WouldBlock && !queue_full(&e) => {
+                self.failures.note("send", &e);
+                Ok(())
+            }
+            r => r,
+        };
         match marked {
             // Refused marked, the run leaves through quinn-udp as `send_marked` falls back.
             Some(_) => quinn(),
@@ -895,30 +914,34 @@ impl Transport for MediaSender {
         };
         match self.transmit(to, from, &[packet], None) {
             Ok(()) => Ok(true),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || queue_full(&e) => Ok(false),
             Err(e) => Err(e),
         }
     }
 
+    /// A full buffer stops the batch; a full queue costs the one packet it refused.
     fn send_batch(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         let Some((to, from)) = self.path() else {
             return Ok(packets.len());
         };
+        let mut refused = 0;
         for (i, p) in packets.iter().enumerate() {
             match self.transmit(to, from, std::slice::from_ref(p), None) {
                 Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(i),
+                Err(e) if queue_full(&e) => refused += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(i - refused),
                 Err(e) => return Err(e),
             }
         }
-        Ok(packets.len())
+        Ok(packets.len() - refused)
     }
 
     /// Runs of equal-size packets leave as one offloaded send ([`Self::transmit`]), each run
     /// within the platform's segment limit and under the UDP payload bound of either IP family;
-    /// the last packet of a run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp
-    /// reports as sent. With `PUNKTFUNK_GSO=0`, or once the session's loss guard cleared the
-    /// switch, packets leave one by one.
+    /// the last packet of a run may be shorter. An oversize run is `EMSGSIZE`: logged, and it
+    /// counts as sent. A full queue costs the run it refused, a full buffer the rest. With
+    /// `PUNKTFUNK_GSO=0`, or once the session's loss guard cleared the switch, packets leave
+    /// one by one.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         const GSO_MAX_PAYLOAD: usize = 65535 - 40 - 8;
         let max = self.state.max_gso_segments();
@@ -928,7 +951,7 @@ impl Transport for MediaSender {
         let Some((to, from)) = self.path() else {
             return Ok(packets.len());
         };
-        let mut sent = 0;
+        let (mut sent, mut refused) = (0, 0);
         while sent < packets.len() {
             let size = packets[sent].len();
             let cap = (GSO_MAX_PAYLOAD / size.max(1)).clamp(1, max);
@@ -942,12 +965,14 @@ impl Transport for MediaSender {
             }
             let segment = (end - sent > 1).then_some(size);
             match self.transmit(to, from, &packets[sent..end], segment) {
-                Ok(()) => sent = end,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(sent),
+                Ok(()) => {}
+                Err(e) if queue_full(&e) => refused += end - sent,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) => return Err(e),
             }
+            sent = end;
         }
-        Ok(sent)
+        Ok(sent - refused)
     }
 
     fn recv(&self) -> std::io::Result<Option<Vec<u8>>> {
@@ -969,6 +994,14 @@ mod tests {
         assert_eq!(f.total(), 3);
         let logged = f.logged.lock().unwrap().map(|(_, n)| n);
         assert_eq!(logged, Some(1), "only the first refusal went out");
+    }
+
+    /// Only Windows' `WSAENOBUFS` is a full queue; elsewhere that number is another error.
+    #[test]
+    fn a_full_queue_is_windows_own_code() {
+        let e = std::io::Error::from_raw_os_error(10055);
+        assert_eq!(queue_full(&e), cfg!(windows));
+        assert!(!queue_full(&std::io::ErrorKind::WouldBlock.into()));
     }
 
     #[test]
