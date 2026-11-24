@@ -579,10 +579,10 @@ impl SendLoop {
         // report window. A counter published on a 2 s clock gives that window
         // nothing twice and then 2 s of bytes, which reads as a path refusing
         // everything it was offered ([`crate::session_status::share_for`]).
-        self.stats
-            .counters
-            .link
-            .publish_egress_bytes(self.session.stats().bytes_sent);
+        let sent = self.session.stats();
+        let link = &self.stats.counters.link;
+        link.publish_egress_bytes(sent.bytes_sent);
+        link.publish_send_dropped(sent.packets_send_dropped);
         apply_fec_target(&mut self.session, &self.fec_target);
         if self.streamed.is_none() {
             let mut want_shard = None;

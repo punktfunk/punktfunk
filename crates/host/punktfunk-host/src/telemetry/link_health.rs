@@ -170,6 +170,8 @@ pub struct LinkCounters {
     /// Session-cumulative sealed wire bytes, republished by the send thread after every turn.
     /// The control task keeps the previous read and diffs; nothing here resets.
     egress_bytes: AtomicU64,
+    /// Session-cumulative packets the host's own send path refused, republished alongside.
+    send_dropped: AtomicU64,
     /// The minute `GET /status` reports for this session. `None` until the first one closes.
     last: Mutex<Option<LinkMinute>>,
 }
@@ -229,6 +231,16 @@ impl LinkCounters {
     /// Cumulative sealed bytes as last published. The control task diffs it across the window.
     pub fn egress_bytes(&self) -> u64 {
         self.egress_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Packets the host's own send path refused so far, from the same housekeeping.
+    pub fn publish_send_dropped(&self, total: u64) {
+        self.send_dropped.store(total, Ordering::Relaxed);
+    }
+
+    /// Refused packets as last published. They never reached the path.
+    pub fn send_dropped(&self) -> u64 {
+        self.send_dropped.load(Ordering::Relaxed)
     }
 
     /// Drain the cross-thread counters into `m` and publish it as this session's last minute.

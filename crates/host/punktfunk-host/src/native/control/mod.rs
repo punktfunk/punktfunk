@@ -546,6 +546,7 @@ impl ControlTask {
             (!punktfunk_core::transport::shared::offload_pinned()).then(|| OffloadGuard {
                 switch: task.shared.offload_switch.clone(),
                 over: 0,
+                send_dropped: 0,
             });
         let mut link_tick = tokio::time::interval(std::time::Duration::from_secs(60));
         link_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -674,7 +675,7 @@ impl ControlTask {
     async fn on_report_window(&mut self, fb: &Feedback) -> Step {
         // Before FEC: the send mode is not FEC's business, pinned or adaptive.
         if let Some(g) = self.offload_guard.as_mut() {
-            g.on_report(fb.loss_ppm);
+            g.on_report(fb.loss_ppm, self.task.counters.link.send_dropped());
         }
         let unrecovered_run = self.unrecovered.report(std::time::Instant::now());
         let shared = &self.task.shared;
@@ -1103,17 +1104,22 @@ const OFFLOAD_LOSS_WINDOWS: u8 = 2;
 /// super-buffers that leave at NIC line rate; where the path's bottleneck sits below that,
 /// the train overruns a queue the one-packet sends did not. Nothing on the host predicts that
 /// path, so the client's own loss reports decide, and the verdict is sticky for the session:
-/// the send mode never oscillates mid-stream.
+/// the send mode never oscillates mid-stream. Packets the host's own send path refused never
+/// reached the path, so a window that lost those is no verdict on it.
 struct OffloadGuard {
     /// Cleared to downshift; the media sender reads it per send.
     switch: std::sync::Arc<std::sync::atomic::AtomicBool>,
     over: u8,
+    /// The host's refused packets as of the last window.
+    send_dropped: u64,
 }
 
 impl OffloadGuard {
-    /// One report window. Built only when the offload is not pinned by `PUNKTFUNK_GSO`.
-    fn on_report(&mut self, loss_ppm: u32) {
-        if loss_ppm < OFFLOAD_LOSS_PPM {
+    /// One report window, with the host's cumulative refused packets. Built only when the
+    /// offload is not pinned by `PUNKTFUNK_GSO`.
+    fn on_report(&mut self, loss_ppm: u32, send_dropped: u64) {
+        let refused = std::mem::replace(&mut self.send_dropped, send_dropped) != send_dropped;
+        if loss_ppm < OFFLOAD_LOSS_PPM || refused {
             self.over = 0;
             return;
         }
@@ -1167,6 +1173,7 @@ pub(crate) mod tests {
                 OffloadGuard {
                     switch: switch.clone(),
                     over: 0,
+                    send_dropped: 0,
                 },
                 switch,
             )
@@ -1174,22 +1181,32 @@ pub(crate) mod tests {
         // Loss under the threshold never downshifts, however long it runs.
         let (mut g, sw) = mk();
         for _ in 0..100 {
-            g.on_report(OFFLOAD_LOSS_PPM - 1);
+            g.on_report(OFFLOAD_LOSS_PPM - 1, 0);
         }
         assert!(sw.load(Ordering::Relaxed));
         // One window over is not enough; the second takes the offload away.
         let (mut g, sw) = mk();
-        g.on_report(OFFLOAD_LOSS_PPM);
+        g.on_report(OFFLOAD_LOSS_PPM, 0);
         assert!(sw.load(Ordering::Relaxed));
-        g.on_report(OFFLOAD_LOSS_PPM);
+        g.on_report(OFFLOAD_LOSS_PPM, 0);
         assert!(!sw.load(Ordering::Relaxed));
         // A clean window between two bad ones resets the run: an isolated burst is no verdict.
         let (mut g, sw) = mk();
-        g.on_report(OFFLOAD_LOSS_PPM);
-        g.on_report(0);
-        g.on_report(OFFLOAD_LOSS_PPM);
+        g.on_report(OFFLOAD_LOSS_PPM, 0);
+        g.on_report(0, 0);
+        g.on_report(OFFLOAD_LOSS_PPM, 0);
         assert!(sw.load(Ordering::Relaxed));
-        g.on_report(OFFLOAD_LOSS_PPM);
+        g.on_report(OFFLOAD_LOSS_PPM, 0);
+        assert!(!sw.load(Ordering::Relaxed));
+        // Loss the host's own send path produced is no verdict, however long it runs; once
+        // the refusals stop, the same loss is the path's again.
+        let (mut g, sw) = mk();
+        for refused in 1..=100 {
+            g.on_report(1_000_000, refused);
+        }
+        assert!(sw.load(Ordering::Relaxed));
+        g.on_report(OFFLOAD_LOSS_PPM, 100);
+        g.on_report(OFFLOAD_LOSS_PPM, 100);
         assert!(!sw.load(Ordering::Relaxed));
     }
     use punktfunk_core::quic::{
