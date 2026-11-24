@@ -362,8 +362,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         }
         var pads = m.controllers.map(pad)
         var active = m.active.map(pad)
-        // A Bluetooth Steam Controller on iOS never reaches GameController: `Sc2MenuPad` reads
-        // it, so its card and, with no other pad, the legend's glyphs come from here.
+        // A Bluetooth Steam Controller on iOS or tvOS never reaches GameController: `Sc2MenuPad`
+        // reads it, so its card and, with no other pad, the legend's glyphs come from here.
         if let kind = m.sc2MenuKind {
             let sc2 = ConsoleJSON.Pad(
                 name: kind.padName, key: "sc2-ble", pref: kind.rawValue, detail: "Bluetooth",
@@ -384,10 +384,12 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     }
 
     /// The console's input test is up (`true`) or gone. While up, the pad's every button and
-    /// axis goes to the console at 30 Hz, and the pad moves no menu.
+    /// axis goes to the console at 30 Hz, and the pad moves no menu. A Mac reads an SC2 for as
+    /// long, which GameController shows without grips and trackpads.
     func padTest(_ on: Bool) {
         padTestTimer?.invalidate()
         padTestTimer = nil
+        GamepadManager.shared.readSc2ForTest(on)
         guard on else {
             if systemEntry == nil { pads.start() }
             return
@@ -402,10 +404,12 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
 
     private func pushPadTest() {
         let m = GamepadManager.shared
-        guard let g = m.active?.controller.extendedGamepad else {
-            if let json = ConsoleJSON.padTest(sc2: m) { bridge.push(.padTest, json) }
+        let sc2 = m.active == nil || m.activeIsSteamController2 ? ConsoleJSON.padTest(sc2: m) : nil
+        if let sc2 {
+            bridge.push(.padTest, sc2)
             return
         }
+        guard let g = m.active?.controller.extendedGamepad else { return }
         let buttons: [(String, GCControllerButtonInput?)] = [
             ("A", g.buttonA), ("B", g.buttonB), ("X", g.buttonX), ("Y", g.buttonY),
             ("LB", g.leftShoulder), ("RB", g.rightShoulder),

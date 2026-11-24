@@ -377,14 +377,20 @@ pub enum ProfilesAnswer {
 }
 
 /// One reading of the controller under test. `held` names buttons by Xbox position: `A` `B`
-/// `X` `Y` `LB` `RB` `LT` `RT` `Back` `Start` `Guide` `LS` `RS` `Up` `Down` `Left` `Right`.
-/// `axes` are `LX` `LY` `RX` `RY` (−1…1, +y down) and `LT` `RT` (0…1).
+/// `X` `Y` `LB` `RB` `LT` `RT` `Back` `Start` `Guide` `LS` `RS` `Up` `Down` `Left` `Right`,
+/// then `Misc`, the rear `L4` `R4` `L5` `R5`, and trackpad clicks: `Touchpad` (a Valve pad's
+/// right pad) and `LPad` (its left). `axes` are `LX` `LY` `RX` `RY` (−1…1, +y down) and `LT`
+/// `RT` (0…1); a touched trackpad adds `<pad>X` `<pad>Y` (−1…1, +y down), absent untouched.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PadTestState {
     #[serde(default)]
     pub held: Vec<String>,
     #[serde(default)]
     pub axes: Vec<(String, f32)>,
+    /// The pad read, as its wire byte, when the pads push shows it as another kind (a Mac's
+    /// GameController twin of a Steam Controller 2) or not at all. Absent: the driving pad.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u8>,
 }
 
 /// An input device that is not a controller: `kind` is `keyboard`, `mouse` or `other`.

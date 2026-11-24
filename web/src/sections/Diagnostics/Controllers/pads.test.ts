@@ -147,15 +147,17 @@ describe("drawings", () => {
 		expect(Object.keys(PAD_ART).sort()).toEqual([...kinds].sort());
 	});
 
-	// A misspelt id would draw a control that never lights.
+	// A misspelt id would draw a control that never lights. The wire has no bit for a left
+	// trackpad's click, so `LPad` lights only in a client's own input test.
 	test("every control lights from a wire bit or an axis", () => {
 		const axes = ["LT", "RT", "LS", "RS"];
+		const clientOnly = ["LPad"];
 		for (const [kind, art] of Object.entries(PAD_ART)) {
 			const ids = art.parts.flatMap((p) => ("id" in p && p.id ? [p.id] : []));
 			for (const id of ids) {
-				expect(`${kind} ${id} ${id in ART_BITS || axes.includes(id)}`).toBe(
-					`${kind} ${id} true`,
-				);
+				const lit =
+					id in ART_BITS || axes.includes(id) || clientOnly.includes(id);
+				expect(`${kind} ${id} ${lit}`).toBe(`${kind} ${id} true`);
 			}
 			for (const id of [
 				"A",

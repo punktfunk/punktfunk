@@ -1033,6 +1033,7 @@ fn a_recording_shortcut_takes_the_pad_and_saves_its_chord() {
         console.set_pad_test(PadTestState {
             held: held.iter().map(|h| h.to_string()).collect(),
             axes: Vec::new(),
+            ..PadTestState::default()
         });
         frame(&mut s);
     }
@@ -1069,6 +1070,7 @@ fn the_input_test_turns_the_hosts_test_mode_on_and_off() {
         console.set_pad_test(PadTestState {
             held: vec!["B".into()],
             axes: vec![("LX".into(), 0.5)],
+            ..PadTestState::default()
         });
         frame(&mut s);
     }

@@ -102,6 +102,17 @@ class Sc2Capture(
     var onUiKey: ((keyCode: Int, down: Boolean) -> Unit)? = null
 
     /**
+     * UI-mode sink for the input test, which draws every control: the menu pad's parsed state
+     * each time it changes, and whether it is a 2015 pad. A copy the sink may keep, handed over
+     * on the LINK thread.
+     */
+    @Volatile
+    var onUiState: ((state: Sc2Device.State, classic: Boolean) -> Unit)? = null
+
+    /** The state [onUiState] last saw; null re-arms it after the menu pad changes or drops. */
+    private var uiLast: Sc2Device.State? = null
+
+    /**
      * Fired (link thread) when the capture engages or drops — lets the app surface "SC2
      * connected" in the console-UI gate and the Controllers screen.
      */
@@ -257,7 +268,15 @@ class Sc2Capture(
         }
         if (router == null) {
             if (uiIface == NO_IFACE) uiIface = iface
-            if (iface == uiIface) mirrorUi(pad.state)
+            if (iface == uiIface) {
+                mirrorUi(pad.state)
+                val sink = onUiState
+                if (sink != null && pad.state != uiLast) {
+                    val seen = pad.state.copy()
+                    uiLast = seen
+                    sink(seen.copy(), classic)
+                }
+            }
             return
         }
         val wire = pad.wire ?: return claim(router, pad)
@@ -392,6 +411,7 @@ class Sc2Capture(
         uiHeld = HashSet()
         uiStickDir = 0
         uiIface = NO_IFACE
+        uiLast = null
     }
 
     private fun onLinkClosed() {

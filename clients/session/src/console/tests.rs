@@ -659,9 +659,29 @@ fn a_pad_reading_names_what_the_input_test_draws() {
     let r = PadReading {
         buttons: wire::BTN_B | wire::BTN_BACK | wire::BTN_PADDLE2,
         axes: [0.0, -1.0, 0.0, 0.0, 0.8, 0.3],
+        ..PadReading::default()
     };
     let s = pad_test_state(r);
     assert_eq!(s.held, ["B", "Back", "L4", "LT"]);
     assert_eq!(s.axes[1], ("LY".to_string(), -1.0));
     assert_eq!(s.axes[5], ("RT".to_string(), 0.3));
+    assert_eq!(s.axes.len(), 6, "no finger, no pad axes");
+}
+
+/// A Steam Controller 2's trackpads: both clicks by their drawn names, a finger as its pad's
+/// axes, and an untouched pad sends none.
+#[test]
+fn a_two_pad_reading_names_both_trackpads() {
+    let r = PadReading {
+        buttons: wire::BTN_TOUCHPAD,
+        left_pad: true,
+        fingers: [None, Some((-0.5, 0.25))],
+        ..PadReading::default()
+    };
+    let s = pad_test_state(r);
+    assert_eq!(s.held, ["Touchpad", "LPad"]);
+    assert_eq!(
+        s.axes[6..],
+        [("LPadX".to_string(), -0.5), ("LPadY".to_string(), 0.25)]
+    );
 }

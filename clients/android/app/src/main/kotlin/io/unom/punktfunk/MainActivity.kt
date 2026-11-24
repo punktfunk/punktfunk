@@ -298,6 +298,12 @@ class MainActivity : FragmentActivity() {
     var sc2MenuActive by mutableStateOf(false)
         private set
 
+    /**
+     * The touch Controllers screen's input test, while it is on: the menu SC2's whole reading
+     * goes here ([sc2TestState]) and its menu keys stay out ([sc2NavKey]).
+     */
+    internal var sc2TestSink: ((io.unom.punktfunk.console.ConsoleJson.PadTest) -> Unit)? = null
+
     /** A wired SC2 or Puck is plugged in — the console lists it before the capture grant lands. */
     var sc2UsbAttached by mutableStateOf(false)
         private set
@@ -523,6 +529,7 @@ class MainActivity : FragmentActivity() {
         if (sc2Menu?.isActive == true) return
         val cap = sc2Menu ?: io.unom.punktfunk.kit.Sc2Capture(this).also { c ->
             c.onUiKey = { key, down -> runOnUiThread { sc2NavKey(key, down) } }
+            c.onUiState = { state, classic -> runOnUiThread { sc2TestState(state, classic) } }
             c.onActiveChanged = { on -> runOnUiThread { sc2MenuActive = on } }
             sc2Menu = c
         }
@@ -631,8 +638,17 @@ class MainActivity : FragmentActivity() {
      * A activates the focused element, everything else (D-pad, shoulders, Start/Select) goes to
      * the framework's focus navigation. Also claims the console-UI glyphs for the pad.
      */
+    /** The menu SC2's reading, to the input test that is on: the console's, else the touch one. */
+    private fun sc2TestState(state: Sc2Device.State, classic: Boolean) {
+        if (streamHandle != 0L) return
+        val test = io.unom.punktfunk.console.ConsoleJson.sc2PadTest(state, classic)
+        if (!io.unom.punktfunk.console.SkiaConsole.padTestSc2(test)) sc2TestSink?.invoke(test)
+    }
+
     private fun sc2NavKey(keyCode: Int, down: Boolean) {
         if (streamHandle != 0L) return // raced a stream start — the wire path owns input now
+        // An input test reads the pad whole (sc2TestState); its menu keys would fight that.
+        if (sc2TestSink != null || io.unom.punktfunk.console.SkiaConsole.padTesting()) return
         val action = if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP
         // The console UI navigates through padKeyProbe, not the focus system, so a synthesized
         // key has to reach it exactly like a real one. The Skia probe asks the event's source,

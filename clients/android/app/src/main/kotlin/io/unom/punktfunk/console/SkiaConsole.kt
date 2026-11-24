@@ -616,6 +616,13 @@ object SkiaConsole {
         true
     }
 
+    /** A captured Steam Controller's whole reading for the input test; false when none is on. */
+    internal fun padTestSc2(test: ConsoleJson.PadTest): Boolean = state.now {
+        if (padTest == null) return@now false
+        if (handle != 0L) NativeBridge.nativeConsoleSetPadTest(handle, test.json())
+        true
+    }
+
     private fun pushPadTest(test: PadTestReading) {
         if (handle != 0L) NativeBridge.nativeConsoleSetPadTest(handle, test.json())
     }

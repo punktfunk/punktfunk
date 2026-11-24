@@ -153,6 +153,24 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertFalse(Sc2Device.parseState(short, into: &out))
     }
 
+    /// Trackpads sit after the sticks: left x/y @18/@20, right x/y @24/@26 — two bytes later on
+    /// `0x47`, whose trackpad timestamp comes first (SDL `TritonMTUNoQuat32TS_t`).
+    func testParseStateReadsBothTrackpads() {
+        for (id, at) in [(Sc2Device.idStateBLE, 18), (Sc2Device.idState, 18),
+                         (Sc2Device.idStateTimestamp, 20)] {
+            var r = stateReport(id: id)
+            for (o, v) in [(at, Int16(-300)), (at + 2, 400), (at + 6, 500), (at + 8, -600)] {
+                let u = UInt16(bitPattern: v)
+                r[o] = UInt8(u & 0xFF)
+                r[o + 1] = UInt8(u >> 8)
+            }
+            var out = Sc2Device.State()
+            XCTAssertTrue(Sc2Device.parseState(r, into: &out))
+            XCTAssertEqual([out.lpadX, out.lpadY, out.rpadX, out.rpadY], [-300, 400, 500, -600],
+                           "id \(id)")
+        }
+    }
+
     /// `clients/shared/sc2-vectors.json` `buttons`: Kotlin's `WIRE_MAP` and the host's typed
     /// fallback replay the same rows.
     func testWireMapMatchesTheSharedVectors() throws {

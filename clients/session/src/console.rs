@@ -2089,8 +2089,8 @@ fn to_model(games: &[library::GameEntry]) -> Vec<LibraryGame> {
         .collect()
 }
 
-/// The input test's names for a pad reading: Xbox positions, the drawn pads' paddle names,
-/// and a trigger past half travel as held.
+/// The input test's names for a pad reading: Xbox positions, the drawn pads' paddle and
+/// trackpad names, a trigger past half travel as held, and a finger as its pad's axes.
 fn pad_test_state(r: PadReading) -> PadTestState {
     const NAMES: [(u32, &str); 21] = [
         (wire::BTN_A, "A"),
@@ -2121,17 +2121,30 @@ fn pad_test_state(r: PadReading) -> PadTestState {
         .filter(|(bit, _)| r.buttons & bit != 0)
         .map(|(_, name)| (*name).to_string())
         .collect();
+    if r.left_pad {
+        held.push("LPad".to_string());
+    }
     for (name, v) in [("LT", r.axes[4]), ("RT", r.axes[5])] {
         if v > 0.5 {
             held.push(name.to_string());
         }
     }
-    let axes = AXES
+    let mut axes: Vec<(String, f32)> = AXES
         .iter()
         .zip(r.axes)
         .map(|(n, v)| ((*n).to_string(), v))
         .collect();
-    PadTestState { held, axes }
+    for (pad, finger) in ["Touchpad", "LPad"].into_iter().zip(r.fingers) {
+        if let Some((x, y)) = finger {
+            axes.push((format!("{pad}X"), x));
+            axes.push((format!("{pad}Y"), y));
+        }
+    }
+    PadTestState {
+        held,
+        axes,
+        ..PadTestState::default()
+    }
 }
 
 /// Dev hook: entries from a JSON file; portrait paths starting with `/` load from disk.

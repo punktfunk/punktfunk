@@ -178,7 +178,10 @@ object Sc2Device {
     const val L4 = 0x00020000
     const val L5 = 0x00040000
     const val LB = 0x00080000
+    const val RPAD_TOUCH = 0x00200000
     const val RPAD_CLICK = 0x00400000
+    const val LPAD_TOUCH = 0x02000000
+    const val LPAD_CLICK = 0x04000000
 
     /**
      * The feature report that turns lizard mode (built-in keyboard/mouse emulation) off:
@@ -264,17 +267,25 @@ object Sc2Device {
         return out
     }
 
-    /** The typed-mirror fields of one state report (buttons/sticks/triggers only). */
-    class State {
-        var buttons = 0 // SC2 bit layout
-        var lsX = 0; var lsY = 0 // i16, +y = up (device convention = wire convention)
-        var rsX = 0; var rsY = 0
-        var lt = 0; var rt = 0 // 0..255 (device 0..32767 scaled down)
-    }
+    /**
+     * The fields of one state report the client reads: the typed mirror's buttons, sticks and
+     * triggers, and the trackpads the input test draws. A pad's x/y holds a finger only while
+     * its `*PAD_TOUCH` bit is set.
+     */
+    data class State(
+        var buttons: Int = 0, // SC2 bit layout
+        var lsX: Int = 0, var lsY: Int = 0, // i16, +y = up (device convention = wire convention)
+        var rsX: Int = 0, var rsY: Int = 0,
+        var lt: Int = 0, var rt: Int = 0, // 0..255 (device 0..32767 scaled down)
+        var lpadX: Int = 0, var lpadY: Int = 0, // i16, +y = up
+        var rpadX: Int = 0, var rpadY: Int = 0,
+    )
 
     /**
-     * Parse the client-consumed fields out of a state report (`0x42`/`0x45`/`0x47` — identical
-     * offsets for everything read here) into [out]. Returns false for non-state / short reports.
+     * Parse the client-consumed fields out of a state report (`0x42`/`0x45`/`0x47`) into [out].
+     * Returns false for non-state / short reports. Buttons u32 @2, triggers @6/@8, sticks
+     * @10…@16, then the left pad's x/y and the right pad's x/y 6 bytes on, from @18 — @20 on
+     * `0x47`, whose trackpad timestamp comes first (SDL `TritonMTUNoQuat32TS_t`).
      */
     fun parseState(report: ByteArray, len: Int, out: State): Boolean {
         if (len < 18) return false
@@ -291,6 +302,11 @@ object Sc2Device {
         out.rt = (i16(8).coerceIn(0, 32767)) shr 7
         out.lsX = i16(10); out.lsY = i16(12)
         out.rsX = i16(14); out.rsY = i16(16)
+        val pads = if (report[0].toInt() and 0xFF == ID_STATE_TIMESTAMP) 20 else 18
+        if (len >= pads + 10) {
+            out.lpadX = i16(pads); out.lpadY = i16(pads + 2)
+            out.rpadX = i16(pads + 6); out.rpadY = i16(pads + 8)
+        }
         return true
     }
 }

@@ -163,6 +163,29 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertEqual(axes[1][0] as? String, "LY")
         XCTAssertEqual(axes[1][1] as? Double, -1)
         XCTAssertEqual(axes[5][1] as? Double, 1)
+        XCTAssertEqual(axes.count, 6, "no touch, no trackpad axes")
+    }
+
+    /// The SC2's grips, ⋯ and trackpads by the drawing's names; a finger only on a touched pad.
+    func testSc2PadTestCarriesGripsAndTrackpads() throws {
+        var s = Sc2Device.State()
+        s.buttons = Sc2Device.btnL4 | Sc2Device.btnR5 | Sc2Device.btnQAM
+            | Sc2Device.btnLPadClick | Sc2Device.btnLPadTouch
+        s.lpadX = -16384
+        s.lpadY = 16384
+        s.rpadX = 9000 // untouched: no finger
+        let data = try XCTUnwrap(
+            ConsoleJSON.padTest(sc2: s, kind: .steamController2).data(using: .utf8))
+        let doc = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(doc["held"] as? [String], ["Misc", "L4", "R5", "LPad"])
+        XCTAssertEqual(
+            doc["pref"] as? Int, Int(PunktfunkConnection.GamepadType.steamController2.rawValue))
+        let axes = try XCTUnwrap(doc["axes"] as? [[Any]])
+        XCTAssertEqual(axes.count, 8)
+        XCTAssertEqual(axes[6][0] as? String, "LPadX")
+        XCTAssertEqual(axes[6][1] as? Double, -0.5)
+        XCTAssertEqual(axes[7][0] as? String, "LPadY")
+        XCTAssertEqual(axes[7][1] as? Double, -0.5, "device +y up, the test's down")
     }
 
     /// The Recent and Most played sorts read `stats`; a title the host never launched has none.

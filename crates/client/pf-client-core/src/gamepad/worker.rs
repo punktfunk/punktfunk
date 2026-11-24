@@ -352,12 +352,18 @@ fn pad_reading(pads: &[(u32, &sdl3::gamepad::Gamepad)]) -> PadReading {
     let mut reading = PadReading::default();
     let mut furthest = -1.0;
     for (_, pad) in pads {
-        for bit in BUTTONS
-            .into_iter()
-            .filter(|&b| pad.button(b))
-            .filter_map(button_bit)
-        {
-            reading.buttons |= bit;
+        let two_pads = pad.touchpads_count() >= 2;
+        for b in BUTTONS.into_iter().filter(|&b| pad.button(b)) {
+            press(&mut reading, two_pads, b);
+        }
+        // SDL numbers a Valve pad's trackpads left, right; a lone touchpad is 0.
+        let order: &[(u16, usize)] = if two_pads {
+            &[(1, 0), (0, 1)]
+        } else {
+            &[(0, 0)]
+        };
+        for &(touchpad, i) in order {
+            reading.fingers[i] = reading.fingers[i].or_else(|| finger(pad, touchpad));
         }
         let axes = AXES.map(|a| (f32::from(pad.axis(a)) / 32767.0).clamp(-1.0, 1.0));
         let reach: f32 = axes.iter().map(|v| v * v).sum();
@@ -367,6 +373,35 @@ fn pad_reading(pads: &[(u32, &sdl3::gamepad::Gamepad)]) -> PadReading {
         }
     }
     reading
+}
+
+/// One held button into the input test's reading. A two-trackpad pad clicks its left pad as
+/// `touchpad` and its right as `misc2` (SDL's Deck and Triton mappings).
+fn press(reading: &mut PadReading, two_pads: bool, b: sdl3::gamepad::Button) {
+    use sdl3::gamepad::Button;
+    match (two_pads, b) {
+        (true, Button::Touchpad) => reading.left_pad = true,
+        (true, Button::Misc2) => reading.buttons |= wire::BTN_TOUCHPAD,
+        _ => reading.buttons |= button_bit(b).unwrap_or(0),
+    }
+}
+
+/// Finger 0 on `touchpad`, −1…1 each, +y down; `None` while it is up.
+fn finger(pad: &sdl3::gamepad::Gamepad, touchpad: u16) -> Option<(f32, f32)> {
+    let (mut down, mut x, mut y, mut pressure) = (false, 0.0f32, 0.0f32, 0.0f32);
+    // SAFETY: `pad` keeps the handle open for this call; SDL only writes the four out-params.
+    let ok = unsafe {
+        sdl3::sys::gamepad::SDL_GetGamepadTouchpadFinger(
+            pad.raw(),
+            touchpad.into(),
+            0,
+            &mut down,
+            &mut x,
+            &mut y,
+            &mut pressure,
+        )
+    };
+    (ok && down).then_some((x * 2.0 - 1.0, y * 2.0 - 1.0))
 }
 
 /// SDL sticks are +y = down; the wire (XInput) is +y = up. Triggers 0..32767 → 0..255.
@@ -1995,6 +2030,24 @@ mod slot_tests {
         assert_eq!(button_bit(Button::RightPaddle1), Some(wire::BTN_PADDLE1));
         assert_eq!(button_bit(Button::LeftPaddle1), Some(wire::BTN_PADDLE2));
         assert_eq!(button_bit(Button::Misc2), Some(wire::BTN_MISC2));
+    }
+
+    /// The input test reads a two-trackpad pad's clicks as its pads: left as `left_pad`, right
+    /// as the touchpad bit. A one-touchpad pad keeps SDL's meaning.
+    #[test]
+    fn a_two_pad_click_names_its_side() {
+        use sdl3::gamepad::Button;
+        let mut two = PadReading::default();
+        press(&mut two, true, Button::Touchpad);
+        assert!(two.left_pad);
+        assert_eq!(two.buttons, 0);
+        press(&mut two, true, Button::Misc2);
+        assert_eq!(two.buttons, wire::BTN_TOUCHPAD);
+        let mut one = PadReading::default();
+        press(&mut one, false, Button::Touchpad);
+        press(&mut one, false, Button::Misc2);
+        assert!(!one.left_pad);
+        assert_eq!(one.buttons, wire::BTN_TOUCHPAD | wire::BTN_MISC2);
     }
 
     #[test]
