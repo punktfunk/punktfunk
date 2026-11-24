@@ -1,24 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Themed-icon (Android 13+/Material You) layer: the Punktfunk silhouette in a single tone — the two
-  overlapping circles as one shape. The launcher recolors this to match the wallpaper, so the fill
-  colour here only needs to be opaque. Same geometry/centering as the foreground.
+  Themed-icon layer (Android 13+): the three shapes and the leaf gradient of the brand's
+  Punktfunk_Logo_Symbol_Mono_Dark export, paths verbatim, at the foreground's scale. The launcher
+  tints this layer one colour and keeps only its alpha: the back disc is full, the front disc 0.6
+  (the step from #f2f1fe to #8c7df5), and the leaf fades from full to clear over the front disc.
+  The back disc is cut where the front disc covers it, as the export's opaque fill hides it.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.105"
-        android:scaleY="0.105"
-        android:translateX="3.57"
-        android:translateY="-0.62">
+        android:scaleX="0.073"
+        android:scaleY="0.073"
+        android:translateX="17.47"
+        android:translateY="15.64">
+        <group>
+            <clip-path
+                android:pathData="M404.177,814.271c106.55,0 192.538,-85.988 192.538,-192.538c0,-106.55 -85.988,-192.538 -192.538,-192.538c-106.55,0 -192.538,85.988 -192.538,192.538c0,106.55 85.988,192.538 192.538,192.538Z" />
+            <path
+                android:fillColor="#FF000000"
+                android:fillType="evenOdd"
+                android:pathData="M404.177,814.271c106.55,0 192.538,-85.988 192.538,-192.538c0,-106.55 -85.988,-192.538 -192.538,-192.538c-106.55,0 -192.538,85.988 -192.538,192.538c0,106.55 85.988,192.538 192.538,192.538Z M732.86,565.34c75.342,-75.342 75.342,-196.948 0,-272.29c-75.342,-75.342 -196.948,-75.342 -272.29,-0c-75.342,75.342 -75.342,196.948 0,272.29c75.342,75.342 196.948,75.342 272.29,-0Z" />
+        </group>
         <path
-            android:fillColor="#1B1B1F"
-            android:pathData="M403.037,791.672c107.586,0 194.41,-86.824 194.41,-194.41c0,-107.586 -86.824,-194.41 -194.41,-194.41c-107.586,0 -194.41,86.824 -194.41,194.41c0,107.586 86.824,194.41 194.41,194.41Z" />
+            android:fillColor="#99000000"
+            android:pathData="M732.86,565.34c75.342,-75.342 75.342,-196.948 0,-272.29c-75.342,-75.342 -196.948,-75.342 -272.29,-0c-75.342,75.342 -75.342,196.948 0,272.29c75.342,75.342 196.948,75.342 272.29,-0Z" />
         <path
-            android:fillColor="#1B1B1F"
-            android:pathData="M735.276,540.321c76.075,-76.075 76.075,-198.862 0,-274.937c-76.075,-76.075 -198.862,-76.075 -274.937,0c-76.075,76.075 -76.075,198.862 0,274.937c76.075,76.075 198.862,76.075 274.937,0Z" />
+            android:pathData="M646.646,615.271c-64.228,17.235 -135.553,0.592 -186.076,-49.931c-50.522,-50.522 -67.166,-121.847 -49.931,-186.076c64.228,-17.235 135.553,-0.592 186.076,49.931c50.522,50.522 67.166,121.847 49.931,186.076Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="460.570"
+                    android:startY="565.340"
+                    android:endX="596.715"
+                    android:endY="429.195"
+                    android:startColor="#00000000"
+                    android:endColor="#FF000000" />
+            </aapt:attr>
+        </path>
     </group>
 </vector>
