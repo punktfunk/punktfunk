@@ -77,6 +77,11 @@ impl InputTestScreen {
         self.tick(t);
     }
 
+    /// The kind the latest reading names itself ([`PadTestState::pref`]), over the driving pad's.
+    pub(crate) fn own_pref(&self) -> Option<GamepadPref> {
+        self.state.pref.map(GamepadPref::from_u8)
+    }
+
     /// Finishes once B has been down [`HOLD_TO_LEAVE`]. Runs every frame: a held button with
     /// still sticks sends no new reading.
     pub(crate) fn tick(&mut self, t: f64) {
@@ -179,6 +184,20 @@ impl PadTestState {
 
     fn held(&self, name: &str) -> bool {
         self.held.iter().any(|b| b == name)
+    }
+
+    /// Where a finger rests on trackpad `id` (axes `<id>X`, `<id>Y`), −1…1 each, +y down.
+    /// `None` while nothing touches it: a client sends those axes only during a touch.
+    fn finger(&self, id: &str) -> Option<(f32, f32)> {
+        if id.is_empty() {
+            return None;
+        }
+        let at = |axis: &str| {
+            (self.axes.iter())
+                .find(|(n, _)| n.strip_prefix(id) == Some(axis))
+                .map(|(_, v)| v.clamp(-1.0, 1.0))
+        };
+        Some((at("X")?, at("Y")?))
     }
 
     /// A stick's deflection, −1…1 each, +y down.
@@ -302,6 +321,23 @@ pub(crate) fn draw_pad(
                 }
                 canvas.draw_path(path, &fill(if on { ui.accent(1.0) } else { tone(0.14) }));
                 canvas.draw_path(path, &rim(if on { ui.accent(1.0) } else { tone(0.3) }, 1.0));
+                // The box ignores a pad's tilt (the SC2's ~10°); the clip keeps the dot inside.
+                if let Some((fx, fy)) = state.finger(id) {
+                    let b = path.bounds();
+                    let r = b.width().min(b.height()) * 0.12;
+                    let at = Point::new(
+                        b.center_x() + fx * (b.width() / 2.0 - r),
+                        b.center_y() + fy * (b.height() / 2.0 - r),
+                    );
+                    canvas.save();
+                    canvas.clip_path(path, None, true);
+                    canvas.draw_circle(
+                        at,
+                        r,
+                        &fill(if on { ui.on_accent() } else { ui.accent(1.0) }),
+                    );
+                    canvas.restore();
+                }
             }
             (Part::Trigger(id, _), Some(path)) => {
                 let pull = if state.held(id) {
@@ -394,6 +430,7 @@ mod tests {
         PadTestState {
             held: held.iter().map(|b| (*b).to_string()).collect(),
             axes: axes.iter().map(|(n, v)| ((*n).to_string(), *v)).collect(),
+            ..PadTestState::default()
         }
     }
 
@@ -432,6 +469,33 @@ mod tests {
         assert!(!s.done);
         s.tick(1.0);
         assert!(s.done);
+    }
+
+    /// A reading that names its pad draws as that pad; one that names none follows the driving
+    /// pad.
+    #[test]
+    fn a_reading_can_name_its_pad() {
+        let mut s = InputTestScreen::new();
+        assert_eq!(s.own_pref(), None);
+        let sc2 = GamepadPref::SteamController2;
+        let mut named = state(&["LPad"], &[]);
+        named.pref = Some(sc2.to_u8());
+        s.set_state(named, 0.0);
+        assert_eq!(s.own_pref(), Some(sc2));
+        s.set_state(state(&[], &[]), 0.1);
+        assert_eq!(s.own_pref(), None);
+    }
+
+    /// A trackpad's dot needs both of its axes; the sticks' axes never place one.
+    #[test]
+    fn a_finger_needs_both_axes() {
+        let s = state(&[], &[("LX", 0.5), ("LPadX", -2.0), ("LPadY", 0.25)]);
+        assert_eq!(s.finger("LPad"), Some((-1.0, 0.25)));
+        assert_eq!(s.finger("Touchpad"), None);
+        assert_eq!(s.finger("L"), None, "LX is a stick, not a pad named L");
+        assert_eq!(s.finger(""), None);
+        let half = state(&[], &[("TouchpadX", 0.3)]);
+        assert_eq!(half.finger("Touchpad"), None);
     }
 
     /// Every pad kind has its own drawing; only Auto borrows one.
@@ -515,6 +579,10 @@ mod tests {
                 ("RX", 0.9),
                 ("LT", 0.4),
                 ("RT", 1.0),
+                ("LPadX", -0.5),
+                ("LPadY", 0.6),
+                ("TouchpadX", 0.4),
+                ("TouchpadY", -0.3),
             ],
         );
         for v in 1..=18 {

@@ -13,6 +13,7 @@ import io.unom.punktfunk.StatsVerbosity
 import io.unom.punktfunk.StreamPreset
 import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.Sc2Device
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.library.DEFAULT_MGMT_PORT
 import io.unom.punktfunk.kit.library.Download
@@ -458,6 +459,56 @@ internal object ConsoleJson {
         val forwarded: Boolean,
         /** Its own transport can buzz it — without this the console's row reads "No rumble". */
         val rumble: Boolean,
+    )
+
+    /** One input-test reading in `PadTestState`'s names, and the pad it is drawn as. */
+    class PadTest(val held: List<String>, val axes: List<Pair<String, Float>>, val pref: Int) {
+        fun json(): String {
+            val h = JSONArray()
+            held.forEach { h.put(it) }
+            val a = JSONArray()
+            axes.forEach { (name, v) -> a.put(JSONArray().put(name).put(v.toDouble())) }
+            return JSONObject().put("held", h).put("axes", a).put("pref", pref).toString()
+        }
+    }
+
+    /**
+     * A captured Steam Controller's state as the input test reads it: Xbox positions, the grips,
+     * ⋯ as `Misc`, the trackpad clicks (`Touchpad` right, `LPad` left), a trigger past half as
+     * held, and a touched pad's finger as `<pad>X`/`<pad>Y` (+y down). Apple's
+     * `ConsoleJSON.padTest(sc2:)` writes the same.
+     */
+    fun sc2PadTest(s: Sc2Device.State, classic: Boolean): PadTest {
+        val held = SC2_TEST_NAMES.filter { (bit, _) -> s.buttons and bit != 0 }
+            .mapTo(mutableListOf()) { it.second }
+        if (s.lt > 127) held += "LT"
+        if (s.rt > 127) held += "RT"
+        val axes = mutableListOf(
+            "LX" to s.lsX / 32767f, "LY" to -s.lsY / 32767f,
+            "RX" to s.rsX / 32767f, "RY" to -s.rsY / 32767f,
+            "LT" to s.lt / 255f, "RT" to s.rt / 255f,
+        )
+        if (s.buttons and Sc2Device.RPAD_TOUCH != 0) {
+            axes += "TouchpadX" to s.rpadX / 32768f
+            axes += "TouchpadY" to -s.rpadY / 32768f
+        }
+        if (s.buttons and Sc2Device.LPAD_TOUCH != 0) {
+            axes += "LPadX" to s.lpadX / 32768f
+            axes += "LPadY" to -s.lpadY / 32768f
+        }
+        val pref = if (classic) Gamepad.PREF_STEAMCONTROLLER else Gamepad.PREF_STEAMCONTROLLER2
+        return PadTest(held, axes, pref)
+    }
+
+    /** SC2 button bit → the input test's name, in Apple's order. ⧉ is Back, ☰ is Start. */
+    private val SC2_TEST_NAMES = listOf(
+        Sc2Device.A to "A", Sc2Device.B to "B", Sc2Device.X to "X", Sc2Device.Y to "Y",
+        Sc2Device.LB to "LB", Sc2Device.RB to "RB", Sc2Device.VIEW to "Back",
+        Sc2Device.MENU to "Start", Sc2Device.STEAM to "Guide", Sc2Device.L3 to "LS",
+        Sc2Device.R3 to "RS", Sc2Device.DPAD_UP to "Up", Sc2Device.DPAD_DOWN to "Down",
+        Sc2Device.DPAD_LEFT to "Left", Sc2Device.DPAD_RIGHT to "Right", Sc2Device.QAM to "Misc",
+        Sc2Device.L4 to "L4", Sc2Device.R4 to "R4", Sc2Device.L5 to "L5", Sc2Device.R5 to "R5",
+        Sc2Device.RPAD_CLICK to "Touchpad", Sc2Device.LPAD_CLICK to "LPad",
     )
 
     /**

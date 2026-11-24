@@ -32,6 +32,8 @@ engraving, so a Switch's south button is `id="A"` with the label `B`.
 
 `Up` `Down` `Left` `Right` `LB` `RB` `LT` `RT` `LS` `RS` `Back` `Start` `Guide` `Misc`
 `Touchpad` `C`, and the rear buttons by the Deck's names: `L4` `R4` upper, `L5` `R5` lower.
+A Valve pad's right trackpad is `Touchpad` and its left one `LPad`. While the input test
+sends axes `<id>X` and `<id>Y` (−1…1, +y down), a dot shows the finger on that button.
 
 ## References
 

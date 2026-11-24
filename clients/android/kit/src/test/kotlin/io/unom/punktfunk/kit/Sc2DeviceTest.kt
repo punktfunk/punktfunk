@@ -107,6 +107,22 @@ class Sc2DeviceTest {
         assertFalse(Sc2Device.parseState(short, 17, out))
     }
 
+    /** Trackpads follow the sticks: left x/y @18/@20, right @24/@26 — two bytes later on `0x47`,
+     *  whose trackpad timestamp comes first (SDL `TritonMTUNoQuat32TS_t`). */
+    @Test
+    fun `both trackpads parse, two bytes later on the timestamped report`() {
+        for ((id, at) in listOf(Sc2Device.ID_STATE_BLE to 18, Sc2Device.ID_STATE to 18, Sc2Device.ID_STATE_TIMESTAMP to 20)) {
+            val r = stateReport(id = id)
+            for ((o, v) in listOf(at to -300, at + 2 to 400, at + 6 to 500, at + 8 to -600)) {
+                r[o] = v.toByte()
+                r[o + 1] = (v shr 8).toByte()
+            }
+            val out = Sc2Device.State()
+            assertTrue(Sc2Device.parseState(r, r.size, out))
+            assertEquals("id $id", listOf(-300, 400, 500, -600), listOf(out.lpadX, out.lpadY, out.rpadX, out.rpadY))
+        }
+    }
+
     /**
      * Every feature report the capture writes, byte for byte: the two it opens with and the
      * lizard restore it closes with. The Apple client sends the identical 64-byte zero-padded

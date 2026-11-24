@@ -33,12 +33,16 @@ use worker::{run, Worker};
 pub type ShortcutFired = (u8, Action, Phase);
 
 /// The menu pads while the console's input test runs: wire bits held on any of them, and the
-/// axes of the one pushed furthest.
+/// axes of the one pushed furthest. On a two-trackpad pad `BTN_TOUCHPAD` is the right pad.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PadReading {
     pub buttons: u32,
     /// LX LY RX RY (−1…1, +y down), then LT RT (0…1).
     pub axes: [f32; 6],
+    /// A two-trackpad pad's left pad is clicked; the wire has no bit for it.
+    pub left_pad: bool,
+    /// A finger on the touchpad (a Valve pad's right one), then on the left pad: −1…1, +y down.
+    pub fingers: [Option<(f32, f32)>; 2],
 }
 
 pub type PadTestSink = Box<dyn Fn(PadReading) + Send>;

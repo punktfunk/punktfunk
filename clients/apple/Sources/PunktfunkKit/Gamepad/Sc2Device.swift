@@ -189,7 +189,10 @@ enum Sc2Device {
     static let btnL4: UInt32 = 0x0002_0000
     static let btnL5: UInt32 = 0x0004_0000
     static let btnLB: UInt32 = 0x0008_0000
+    static let btnRPadTouch: UInt32 = 0x0020_0000
     static let btnRPadClick: UInt32 = 0x0040_0000
+    static let btnLPadTouch: UInt32 = 0x0200_0000
+    static let btnLPadClick: UInt32 = 0x0400_0000
 
     /// Wire mapping: SC2 button bit → punktfunk `GamepadWire` bit, the inverse of the host's
     /// typed-fallback mapping (`triton_proto::from_gamepad`): paddles R4/L4/R5/L5 =
@@ -230,7 +233,8 @@ enum Sc2Device {
 
     // MARK: - State parser (typed mirror + exit chord only; the raw report is the product)
 
-    /// The typed-mirror fields of one state report (buttons/sticks/triggers only).
+    /// The fields of one state report the client reads: the typed mirror's buttons, sticks and
+    /// triggers, and the trackpads the input test draws.
     struct State: Equatable {
         var buttons: UInt32 = 0 // SC2 bit layout
         var lsX: Int32 = 0 // i16, +y = up (device convention = wire convention)
@@ -239,12 +243,17 @@ enum Sc2Device {
         var rsY: Int32 = 0
         var lt: Int32 = 0 // 0...255 (device 0...32767 scaled down)
         var rt: Int32 = 0
+        var lpadX: Int32 = 0 // i16, +y = up; a finger only while `btnLPadTouch` is held
+        var lpadY: Int32 = 0
+        var rpadX: Int32 = 0 // i16, +y = up; a finger only while `btnRPadTouch` is held
+        var rpadY: Int32 = 0
     }
 
-    /// Parse the client-consumed fields out of a state report (`0x42`/`0x45`/`0x47` — identical
-    /// offsets for everything read here) into `out`. Returns false for non-state/short reports.
-    /// Offsets are id-first wire offsets: buttons u32 @2, triggers i16 @6/@8 (`>>7` → 0...255),
-    /// sticks i16 @10/@12/@14/@16 — Android's `parseState`, byte for byte.
+    /// Parse the client-consumed fields out of a state report (`0x42`/`0x45`/`0x47`) into `out`.
+    /// Returns false for non-state/short reports. Id-first wire offsets: buttons u32 @2,
+    /// triggers i16 @6/@8 (`>>7` → 0...255), sticks i16 @10…@16, then the left pad's x/y and
+    /// the right pad's x/y 6 bytes on, from @18 — @20 on `0x47`, which puts a trackpad
+    /// timestamp first (SDL `TritonMTUNoQuat32TS_t`). Android's `parseState`, byte for byte.
     static func parseState(_ report: [UInt8], into out: inout State) -> Bool {
         guard report.count >= 18 else { return false }
         switch report[0] {
@@ -262,6 +271,13 @@ enum Sc2Device {
         out.lsY = i16(12)
         out.rsX = i16(14)
         out.rsY = i16(16)
+        let pads = report[0] == idStateTimestamp ? 20 : 18
+        if report.count >= pads + 10 {
+            out.lpadX = i16(pads)
+            out.lpadY = i16(pads + 2)
+            out.rpadX = i16(pads + 6)
+            out.rpadY = i16(pads + 8)
+        }
         return true
     }
 

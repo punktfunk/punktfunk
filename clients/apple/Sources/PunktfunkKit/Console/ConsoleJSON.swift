@@ -281,14 +281,18 @@ public enum ConsoleJSON {
         return string(doc)
     }
 
-    /// The input test's push for the iOS SC2 menu pad, nil while none delivers. Same names and
-    /// signs as `ConsoleModel.pushPadTest`'s GameController path: +y is down, a trigger counts
-    /// as held past half travel, ⧉ is Back and ☰ is Start.
+    /// The input test's push for the raw-read SC2, nil while none delivers. Same names and signs
+    /// as `ConsoleModel.pushPadTest`'s GameController path: +y is down, a trigger counts as held
+    /// past half travel, ⧉ is Back and ☰ is Start. The rear grips, ⋯ and both trackpads go too:
+    /// a click lights the pad, a touch adds its finger as `<pad>X`/`<pad>Y`. `pref` names the
+    /// pad, which the pads push shows as a twin or not at all.
     @MainActor public static func padTest(sc2 manager: GamepadManager) -> String? {
-        manager.sc2MenuState.map { padTest(sc2: $0) }
+        manager.sc2MenuState.map { padTest(sc2: $0, kind: manager.sc2ReaderKind) }
     }
 
-    static func padTest(sc2 s: Sc2Device.State) -> String {
+    static func padTest(
+        sc2 s: Sc2Device.State, kind: PunktfunkConnection.GamepadType? = nil
+    ) -> String {
         let buttons: [(String, UInt32)] = [
             ("A", Sc2Device.btnA), ("B", Sc2Device.btnB), ("X", Sc2Device.btnX),
             ("Y", Sc2Device.btnY), ("LB", Sc2Device.btnLB), ("RB", Sc2Device.btnRB),
@@ -296,16 +300,29 @@ public enum ConsoleJSON {
             ("Guide", Sc2Device.btnSteam), ("LS", Sc2Device.btnL3), ("RS", Sc2Device.btnR3),
             ("Up", Sc2Device.btnDpadUp), ("Down", Sc2Device.btnDpadDown),
             ("Left", Sc2Device.btnDpadLeft), ("Right", Sc2Device.btnDpadRight),
+            ("Misc", Sc2Device.btnQAM), ("L4", Sc2Device.btnL4), ("R4", Sc2Device.btnR4),
+            ("L5", Sc2Device.btnL5), ("R5", Sc2Device.btnR5),
+            ("Touchpad", Sc2Device.btnRPadClick), ("LPad", Sc2Device.btnLPadClick),
         ]
         var held = buttons.filter { s.buttons & $0.1 != 0 }.map(\.0)
         if s.lt > 127 { held.append("LT") }
         if s.rt > 127 { held.append("RT") }
-        let axes: [[Any]] = [
+        var axes: [[Any]] = [
             ["LX", Float(s.lsX) / 32767], ["LY", -Float(s.lsY) / 32767],
             ["RX", Float(s.rsX) / 32767], ["RY", -Float(s.rsY) / 32767],
             ["LT", Float(s.lt) / 255], ["RT", Float(s.rt) / 255],
         ]
-        return string(["held": held, "axes": axes])
+        let pads: [(String, UInt32, Int32, Int32)] = [
+            ("Touchpad", Sc2Device.btnRPadTouch, s.rpadX, s.rpadY),
+            ("LPad", Sc2Device.btnLPadTouch, s.lpadX, s.lpadY),
+        ]
+        for (name, touch, x, y) in pads where s.buttons & touch != 0 {
+            axes.append(["\(name)X", Float(x) / 32768])
+            axes.append(["\(name)Y", -Float(y) / 32768])
+        }
+        var doc: [String: Any] = ["held": held, "axes": axes]
+        if let kind { doc["pref"] = kind.rawValue }
+        return string(doc)
     }
 
     /// The catalog with each preset's overrides, so a settings row can say when a host's bound

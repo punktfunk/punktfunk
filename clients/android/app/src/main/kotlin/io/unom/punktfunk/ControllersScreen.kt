@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.CombinedVibration
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
@@ -53,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.console.ConsoleJson
 import io.unom.punktfunk.kit.DsDevice
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.R
@@ -209,6 +211,7 @@ internal fun ControllersScreen(
             if (testing) {
                 ButtonGrid(test.held)
                 AXIS_LABELS.forEach { label -> AxisBar(label, test.axes[label] ?: 0f) }
+                PAD_AXIS_LABELS.forEach { label -> test.axes[label]?.let { AxisBar(label, it) } }
             }
             test.lastInput?.let {
                 Text(
@@ -331,6 +334,30 @@ private fun rememberInputTest(
         val probes = MainActivity.PadProbes(keyProbe, motionProbe)
         activity?.pushPadProbes(probes)
         onDispose { activity?.removePadProbes(probes) }
+    }
+    // A captured Steam Controller owns no InputDevice, so the probes never hear it: while the
+    // test is on, MainActivity hands its whole reading here. B ends the test on the release, as
+    // in the key probe, so that release never reaches the menu.
+    DisposableEffect(testing) {
+        if (!testing) return@DisposableEffect onDispose {}
+        var bSince = 0L
+        activity?.sc2TestSink = { r ->
+            applySc2Reading(test, r)
+            val b = "B" in r.held
+            if (b && !test.bHeld) {
+                test.bHeld = true
+                bSince = SystemClock.uptimeMillis()
+            } else if (!b && test.bHeld) {
+                test.bHeld = false
+                if (SystemClock.uptimeMillis() - bSince >= HOLD_TO_FINISH_MS) {
+                    onTestingChange(false)
+                    test.held.clear()
+                } else {
+                    haptics.boundary()
+                }
+            }
+        }
+        onDispose { activity?.sc2TestSink = null }
     }
     // Hold-B-to-exit: with events consumed, the pad can't reach the Switch — holding B for
     // HOLD_TO_FINISH_MS ends the test instead (touch still works). This half only ANSWERS the hold
@@ -956,6 +983,11 @@ private val TEST_BUTTONS = listOf(
     // A handheld's back buttons, as the grips [Gamepad.buttonBit] sends them.
     "L4" to KeyEvent.KEYCODE_BUTTON_C,
     "R4" to KeyEvent.KEYCODE_BUTTON_Z,
+    // A Steam Controller's controls Android has no keycode for, on codes no key event carries.
+    "L5" to CHIP_L5,
+    "R5" to CHIP_R5,
+    "QAM" to CHIP_QAM,
+    "LPad" to CHIP_LPAD,
     // The two buttons Android has no keycode for, on the keycodes [Gamepad.buttonBit] borrows for
     // them. Only a driverless Sony pad reaches these; every other controller leaves them dark.
     "Touch" to KeyEvent.KEYCODE_BUTTON_15,
@@ -968,6 +1000,45 @@ private val TEST_BUTTONS = listOf(
 
 /** Axis bars shown in the test view, in display order. */
 private val AXIS_LABELS = listOf("LX", "LY", "RX", "RY", "LT", "RT", "HX", "HY")
+
+/** A Steam Controller's trackpad bars, from the first touch on: left pad, then right. */
+private val PAD_AXIS_LABELS = listOf("LPX", "LPY", "RPX", "RPY")
+
+private const val CHIP_L5 = -1
+private const val CHIP_R5 = -2
+private const val CHIP_QAM = -3
+private const val CHIP_LPAD = -4
+
+/** The input test's names for a Steam Controller ([ConsoleJson.sc2PadTest]) → chip codes. */
+private val SC2_CHIPS = mapOf(
+    "A" to KeyEvent.KEYCODE_BUTTON_A, "B" to KeyEvent.KEYCODE_BUTTON_B,
+    "X" to KeyEvent.KEYCODE_BUTTON_X, "Y" to KeyEvent.KEYCODE_BUTTON_Y,
+    "LB" to KeyEvent.KEYCODE_BUTTON_L1, "RB" to KeyEvent.KEYCODE_BUTTON_R1,
+    "LT" to KeyEvent.KEYCODE_BUTTON_L2, "RT" to KeyEvent.KEYCODE_BUTTON_R2,
+    "LS" to KeyEvent.KEYCODE_BUTTON_THUMBL, "RS" to KeyEvent.KEYCODE_BUTTON_THUMBR,
+    "Back" to KeyEvent.KEYCODE_BUTTON_SELECT, "Start" to KeyEvent.KEYCODE_BUTTON_START,
+    "Guide" to KeyEvent.KEYCODE_BUTTON_MODE, "L4" to KeyEvent.KEYCODE_BUTTON_C,
+    "R4" to KeyEvent.KEYCODE_BUTTON_Z, "L5" to CHIP_L5, "R5" to CHIP_R5, "Misc" to CHIP_QAM,
+    "Touchpad" to KeyEvent.KEYCODE_BUTTON_15, "LPad" to CHIP_LPAD,
+    "Up" to KeyEvent.KEYCODE_DPAD_UP, "Down" to KeyEvent.KEYCODE_DPAD_DOWN,
+    "Left" to KeyEvent.KEYCODE_DPAD_LEFT, "Right" to KeyEvent.KEYCODE_DPAD_RIGHT,
+)
+
+/** Its axes → this screen's bars; the trackpads' short names fit the bar's label column. */
+private val SC2_AXES = mapOf(
+    "LX" to "LX", "LY" to "LY", "RX" to "RX", "RY" to "RY", "LT" to "LT", "RT" to "RT",
+    "LPadX" to "LPX", "LPadY" to "LPY", "TouchpadX" to "RPX", "TouchpadY" to "RPY",
+)
+
+/** One Steam Controller reading onto [test]. A trackpad bar appears on its first touch and rests
+ *  at 0 between touches. */
+private fun applySc2Reading(test: InputTest, r: ConsoleJson.PadTest) {
+    for ((name, code) in SC2_CHIPS) test.held[code] = name in r.held
+    val axes = r.axes.mapNotNull { (n, v) -> SC2_AXES[n]?.let { it to v } }.toMap()
+    for (label in SC2_AXES.values) {
+        if (label in axes || label in test.axes) test.axes[label] = axes[label] ?: 0f
+    }
+}
 
 /**
  * How long B must be held to end the input test — and, below that, how long a press still counts as

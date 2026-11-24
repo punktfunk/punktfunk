@@ -161,6 +161,7 @@ fn a_recorded_button_saves_as_a_hold() {
         let state = PadTestState {
             held: held.iter().map(|h| h.to_string()).collect(),
             axes: Vec::new(),
+            ..PadTestState::default()
         };
         with(&device, &store, |ctx| row.pad_test(&state, ctx, &mut fx));
     }

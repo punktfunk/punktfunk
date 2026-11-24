@@ -384,10 +384,12 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     }
 
     /// The console's input test is up (`true`) or gone. While up, the pad's every button and
-    /// axis goes to the console at 30 Hz, and the pad moves no menu.
+    /// axis goes to the console at 30 Hz, and the pad moves no menu. A Mac or Apple TV reads an
+    /// SC2 for as long, which GameController shows without grips and trackpads, or not at all.
     func padTest(_ on: Bool) {
         padTestTimer?.invalidate()
         padTestTimer = nil
+        GamepadManager.shared.readSc2ForTest(on)
         guard on else {
             if systemEntry == nil { pads.start() }
             return
@@ -402,10 +404,12 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
 
     private func pushPadTest() {
         let m = GamepadManager.shared
-        guard let g = m.active?.controller.extendedGamepad else {
-            if let json = ConsoleJSON.padTest(sc2: m) { bridge.push(.padTest, json) }
+        let sc2 = m.active == nil || m.activeIsSteamController2 ? ConsoleJSON.padTest(sc2: m) : nil
+        if let sc2 {
+            bridge.push(.padTest, sc2)
             return
         }
+        guard let g = m.active?.controller.extendedGamepad else { return }
         let buttons: [(String, GCControllerButtonInput?)] = [
             ("A", g.buttonA), ("B", g.buttonB), ("X", g.buttonX), ("Y", g.buttonY),
             ("LB", g.leftShoulder), ("RB", g.rightShoulder),

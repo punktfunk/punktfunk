@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import io.unom.punktfunk.console.ConsoleJson
 import io.unom.punktfunk.kit.Gamepad
+import io.unom.punktfunk.kit.Sc2Device
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -84,5 +85,27 @@ class ConsolePadsTest {
         assertTrue(j.isNull("label"))
         assertTrue(j.isNull("pref"))
         assertEquals(0, j.getJSONArray("pads").length())
+    }
+
+    /** The input test reads a captured SC2 whole: grips, ⋯, both pads, a finger only where one
+     *  touches, and the pad it is drawn as. */
+    @Test
+    fun aCapturedSc2ReadsWholeInTheInputTest() {
+        val s = Sc2Device.State(
+            buttons = Sc2Device.L4 or Sc2Device.R5 or Sc2Device.QAM or Sc2Device.LPAD_CLICK or
+                Sc2Device.LPAD_TOUCH,
+            lsY = 32767, lpadX = -16384, lpadY = 16384, rpadX = 9000,
+        )
+        val j = JSONObject(ConsoleJson.sc2PadTest(s, classic = false).json())
+        val held = j.getJSONArray("held")
+        assertEquals(listOf("Misc", "L4", "R5", "LPad"), (0 until held.length()).map { held.getString(it) })
+        val axes = j.getJSONArray("axes")
+        assertEquals(8, axes.length())
+        assertEquals(-1.0, axes.getJSONArray(1).getDouble(1), 1e-6) // LY: device +y up, test down
+        assertEquals("LPadX", axes.getJSONArray(6).getString(0))
+        assertEquals(-0.5, axes.getJSONArray(6).getDouble(1), 1e-6)
+        assertEquals(-0.5, axes.getJSONArray(7).getDouble(1), 1e-6)
+        assertEquals(Gamepad.PREF_STEAMCONTROLLER2, j.getInt("pref"))
+        assertEquals(Gamepad.PREF_STEAMCONTROLLER, ConsoleJson.sc2PadTest(s, classic = true).pref)
     }
 }
