@@ -318,6 +318,9 @@ press its power button.` + `Docs ↗`
 - Platform differences go in a table or `<Tabs>`, not a paragraph per platform.
 - A troubleshooting entry is `### <symptom as the reader sees it>`, one line of cause, the fix.
 - `<Callout>` only for a step that breaks something when missed. Two per page at most.
+- A flow, a handshake or who-talks-to-whom is a diagram: a `mermaid` fence whose info string
+  is its caption (`docs-site/README.md`). One direction a graph, five boxes across at most,
+  short labels. The diagram shows the shape; the facts stay in the table or steps beside it.
 - A Guide page past 200 lines is two tasks, or it holds reference detail. Split or move it.
 - Every command, flag, env var, path, default and label matches the code at HEAD.
 - Headings are anchors. The console, setup and host logs link them — `check-docs-links.sh`

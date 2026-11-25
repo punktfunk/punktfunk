@@ -46,6 +46,24 @@ is this directory alone), and the same `docs-drift` job fails unless it matches:
 cp data/platforms.json docs-site/src/data/platforms.json   # from the repo root, after editing the canonical file
 ```
 
+## Diagrams
+
+A `mermaid` fence becomes an inline SVG at build time (`source.config.ts`, rendered by
+`beautiful-mermaid`), so a page ships no diagram library and the picture follows light and dark.
+The fence's info string is the caption and the accessible name; a fence without one, or one that
+does not parse, fails the build.
+
+````md
+```mermaid A frame, from the host's GPU to the client's screen
+graph LR
+  CAP[Capture] --> ENC[Encode] --> TX[Send]
+```
+````
+
+Flowcharts (`graph LR` / `graph TD`, with `subgraph`) and `sequenceDiagram` lay out well. Keep a
+graph to one direction and about 780 px: five short boxes across, or go top-down. A wider one
+scrolls. A sequence label longer than the gap between two participants is clipped.
+
 ## Develop
 
 ```sh
