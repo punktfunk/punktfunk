@@ -59,6 +59,12 @@ install -Dm0644 scripts/punktfunk-scripting-seat@.service \
 install -Dm0644 packaging/linux/apparmor/punktfunk-scripting "$STAGE/etc/apparmor.d/punktfunk-scripting"
 install -Dm0755 packaging/linux/punktfunk-scripting-apparmor.generator \
   "$STAGE/usr/lib/systemd/user-generators/punktfunk-scripting-apparmor"
+# The generator starts each runner through one of these. A profile attaches by path, so each
+# profile has a file of its own.
+install -Dm0755 packaging/linux/punktfunk-scripting-apparmor-confined \
+  "$STAGE/usr/lib/punktfunk-scripting/apparmor-confined"
+install -Dm0755 packaging/linux/punktfunk-scripting-apparmor-confined \
+  "$STAGE/usr/lib/punktfunk-scripting/apparmor-confined-seat"
 install -Dm0644 LICENSE-MIT    "$DOCDIR/LICENSE-MIT"
 install -Dm0644 LICENSE-APACHE "$DOCDIR/LICENSE-APACHE"
 install -Dm0644 sdk/README.md  "$DOCDIR/README.md"

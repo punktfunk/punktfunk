@@ -1,0 +1,10 @@
+#!/bin/sh
+# AppArmor attaches the profile named in $1 to this file's path. Runs the rest of the line under
+# that profile, or not at all: without it the runner would run with no sandbox of its own.
+# Exit 78 leaves the unit stopped (RestartPreventExitStatus).
+want=$1
+shift
+read -r label _ < /proc/self/attr/current 2>/dev/null || label=
+[ "$label" = "$want" ] && exec "$@"
+echo "punktfunk-scripting: AppArmor profile $want is not attached to $0" >&2
+exit 78

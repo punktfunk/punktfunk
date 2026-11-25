@@ -530,6 +530,12 @@ package_punktfunk-scripting() {
   install -Dm0644 "$R/packaging/linux/apparmor/punktfunk-scripting" "$pkgdir/etc/apparmor.d/punktfunk-scripting"
   install -Dm0755 "$R/packaging/linux/punktfunk-scripting-apparmor.generator" \
     "$pkgdir/usr/lib/systemd/user-generators/punktfunk-scripting-apparmor"
+  # The generator starts each runner through one of these. A profile attaches by path, so each
+  # profile has a file of its own.
+  install -Dm0755 "$R/packaging/linux/punktfunk-scripting-apparmor-confined" \
+    "$pkgdir/usr/lib/punktfunk-scripting/apparmor-confined"
+  install -Dm0755 "$R/packaging/linux/punktfunk-scripting-apparmor-confined" \
+    "$pkgdir/usr/lib/punktfunk-scripting/apparmor-confined-seat"
   install -Dm0644 "$R/LICENSE-MIT"    "$pkgdir/usr/share/licenses/punktfunk-scripting/LICENSE-MIT"
   install -Dm0644 "$R/LICENSE-APACHE" "$pkgdir/usr/share/licenses/punktfunk-scripting/LICENSE-APACHE"
 }
