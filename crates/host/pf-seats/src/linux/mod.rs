@@ -104,6 +104,9 @@ pub fn check_owner(account: &str, on: bool) -> Result<(), BackendError> {
 const START_TIMEOUT: Duration = Duration::from_secs(90);
 /// How often a running seat's trust copy is compared with the box's.
 const TRUST_TICK: Duration = Duration::from_secs(2);
+/// How long an ask to level the box's library now waits for the copy writers. The door gives up
+/// on its ask after two seconds (`socket.rs`), and a longer wait holds a socket connection.
+const LEVEL_WAIT: Duration = Duration::from_millis(1500);
 /// How often the games folder's ACL mask is repaired while a seat runs.
 const ACL_EVERY: Duration = Duration::from_secs(600);
 /// How often a made seat's Steam log is read for library folders Steam couldn't open.
@@ -1377,6 +1380,16 @@ impl PlatformBackend for LinuxBackend {
 
     fn settle_pads(&self, ledger: &Ledger, keys: &[String]) -> Result<(), BackendError> {
         self.inner.lent.settle(ledger, keys)
+    }
+
+    fn level_library(&self) -> Result<bool, BackendError> {
+        let Some(_level) = self.inner.locks.level_within(LEVEL_WAIT) else {
+            return Err(err(
+                "busy",
+                "another change holds the copies; the next tick levels the library",
+            ));
+        };
+        refresh_box_library(&self.inner)
     }
 }
 

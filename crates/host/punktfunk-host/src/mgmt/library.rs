@@ -1893,6 +1893,10 @@ pub(crate) async fn set_source_overrides(
 /// request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
 /// covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
 /// the art as that profile sees it: its own picks first.
+///
+/// `v` is the version `GET /library` listed the cover under. A host that lists another for the
+/// slot answers `Cache-Control: no-store`: the door's library copy trails the owner's, and its
+/// cover kept under the owner's newer URL would show for a day.
 #[utoipa::path(
     get,
     path = "/library/art/{id}/{kind}",
@@ -1902,6 +1906,7 @@ pub(crate) async fn set_source_overrides(
         ("id" = String, Path, description = "The store-qualified library id, e.g. `steam:570`"),
         ("kind" = String, Path, description = "`portrait` | `hero` | `logo` | `header`"),
         ("as" = Option<String>, Query, description = "Profile id: the art as that profile sees it"),
+        ("v" = Option<String>, Query, description = "The cover's version, as `GET /library` listed it"),
         ("If-None-Match" = Option<String>, Header, description = "An `ETag` from an earlier response"),
     ),
     responses(
@@ -1914,6 +1919,7 @@ pub(crate) async fn set_source_overrides(
 pub(crate) async fn get_library_art(
     State(st): State<Arc<MgmtState>>,
     Path((id, kind)): Path<(String, String)>,
+    Query(asked): Query<ArtVersion>,
     who: AsProfile,
     headers: axum::http::HeaderMap,
 ) -> Response {
@@ -1924,47 +1930,83 @@ pub(crate) async fn get_library_art(
     // Any catalog id (manual, provider, claimed-store) serves its local file from here.
     // The proxy does not know which store the id belongs to.
     let stored = tokio::task::spawn_blocking(move || {
-        crate::library::library_art_bytes(&view, &id, kind).or_else(|| owner_art(&id, kind))
+        let value = crate::library::library_art_value(&view, &id, kind);
+        let version = value.as_deref().map(crate::library::art_version);
+        let own = || value.as_deref().and_then(crate::library::resolve_art_bytes);
+        let listed = lists_asked_version(asked.v.as_deref(), version.as_deref());
+        let theirs = || owner_art(&id, kind, view.layer());
+        let art = if listed {
+            own().or_else(theirs)
+        } else {
+            // The host that listed the URL has the cover it names.
+            theirs().or_else(own)
+        };
+        art.map(|art| (art, listed))
     })
     .await;
-    if let Ok(Some((bytes, ctype))) = stored {
-        // The tag is the bytes' hash: a replaced cover misses, an unchanged one revalidates
-        // for free. A day of freshness keeps a shelf revisit off the network entirely.
-        let etag = format!("\"{}\"", hex::encode(&Sha256::digest(&bytes)[..16]));
-        let cache = [
-            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
-            (header::ETAG, etag.clone()),
-        ];
-        let sent = headers
-            .get(header::IF_NONE_MATCH)
-            .and_then(|v| v.to_str().ok());
-        if not_modified(sent, &etag) {
-            return (StatusCode::NOT_MODIFIED, cache).into_response();
-        }
-        let [cc, et] = cache;
-        return ([cc, et, (header::CONTENT_TYPE, ctype)], bytes).into_response();
+    let Ok(Some(((bytes, ctype), listed))) = stored else {
+        return api_error(StatusCode::NOT_FOUND, "no art of that kind for this title");
+    };
+    if !listed {
+        let uncached = (header::CACHE_CONTROL, "no-store".to_string());
+        return ([uncached, (header::CONTENT_TYPE, ctype)], bytes).into_response();
     }
-    api_error(StatusCode::NOT_FOUND, "no art of that kind for this title")
+    // The tag is the bytes' hash: a replaced cover misses, an unchanged one revalidates
+    // for free. A day of freshness keeps a shelf revisit off the network entirely.
+    let etag = format!("\"{}\"", hex::encode(&Sha256::digest(&bytes)[..16]));
+    let cache = [
+        (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+        (header::ETAG, etag.clone()),
+    ];
+    let sent = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok());
+    if not_modified(sent, &etag) {
+        return (StatusCode::NOT_MODIFIED, cache).into_response();
+    }
+    let [cc, et] = cache;
+    ([cc, et, (header::CONTENT_TYPE, ctype)], bytes).into_response()
+}
+
+/// `?v=` of an art request.
+#[derive(Deserialize)]
+pub(crate) struct ArtVersion {
+    v: Option<String>,
+}
+
+/// Whether this host lists the version an art request asked for; one that names none asks for
+/// whatever is listed. `listed` is [`crate::library::art_version`] of the slot here.
+pub(super) fn lists_asked_version(asked: Option<&str>, listed: Option<&str>) -> bool {
+    asked.is_none_or(|v| listed == Some(v))
 }
 
 /// The door's library is a copy of the owner's, whose covers sit in the owner's home where the
-/// door can't read: the owner's host serves them. `None` off a door, for a title the door doesn't
-/// list, and while that host is down; a cover never starts the owner's session. Blocking.
-fn owner_art(id: &str, kind: crate::library::ArtKind) -> Option<(Vec<u8>, String)> {
+/// door can't read: the owner's host serves them, as `profile` sees them when it knows that
+/// profile, else the box's. `None` off a door, for a title the door doesn't list, and while
+/// that host is down; a cover never starts the owner's session. Blocking.
+fn owner_art(
+    id: &str,
+    kind: crate::library::ArtKind,
+    profile: Option<&str>,
+) -> Option<(Vec<u8>, String)> {
     if !pf_paths::seat::role().is_door() {
         return None;
     }
     crate::library::entry_for_library_id(id)?;
     // The shared snapshot: a page asks for every cover at once.
     let seats = crate::seats::snapshot();
-    let path = format!("library/art/{}/{}", path_segment(id), kind.name());
     let owner = seats.owner().ok().flatten()?;
-    match crate::seats::forward(owner, super::owner::Forwarded::get(path))? {
+    let path = format!("library/art/{}/{}", path_segment(id), kind.name());
+    let ask = |path: String| match crate::seats::forward(owner, super::owner::Forwarded::get(path))?
+    {
         super::owner::Answer::Reply(200, Some(ctype), bytes) if ctype.starts_with("image/") => {
             Some((bytes, ctype))
         }
         _ => None,
-    }
+    };
+    profile
+        .and_then(|p| ask(format!("{path}?as={}", path_segment(p))))
+        .or_else(|| ask(path))
 }
 
 /// `s` as one path segment: unreserved characters, `:` and `@` stay, every other byte is
@@ -1991,7 +2033,16 @@ pub(super) fn not_modified(if_none_match: Option<&str>, etag: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{not_modified, path_segment};
+    use super::{lists_asked_version, not_modified, path_segment};
+
+    /// A cover is cached only under the version this host lists it at.
+    #[test]
+    fn only_the_listed_version_is_cached() {
+        assert!(lists_asked_version(None, Some("aa")), "no version asked");
+        assert!(lists_asked_version(Some("aa"), Some("aa")));
+        assert!(!lists_asked_version(Some("bb"), Some("aa")), "a newer URL");
+        assert!(!lists_asked_version(Some("bb"), None), "no cover here");
+    }
 
     /// A library id reaches the owner's host as the one segment it is on the door.
     #[test]

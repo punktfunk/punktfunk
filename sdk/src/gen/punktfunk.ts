@@ -1064,8 +1064,8 @@ export type GetLibrary401 = ApiError
 export const GetLibrary401 = ApiError
 export type GetLibrary404 = ApiError
 export const GetLibrary404 = ApiError
-export type GetLibraryArtParams = { readonly "as"?: string, readonly "If-None-Match"?: string }
-export const GetLibraryArtParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String), "If-None-Match": Schema.optionalKey(Schema.String) })
+export type GetLibraryArtParams = { readonly "as"?: string, readonly "v"?: string, readonly "If-None-Match"?: string }
+export const GetLibraryArtParams = Schema.Struct({ "as": Schema.optionalKey(Schema.String), "v": Schema.optionalKey(Schema.String), "If-None-Match": Schema.optionalKey(Schema.String) })
 export type GetLibraryArt401 = ApiError
 export const GetLibraryArt401 = ApiError
 export type GetLibraryArt404 = ApiError
@@ -2898,7 +2898,7 @@ export const make = (
     ),
     "getLibraryArt": (id, kind, options: Parameters<Punktfunk["getLibraryArt"]>[2]) => __makePathRequest(HttpClientRequest.get, [id, kind], () => "/api/v1/library/art/" + __encodePathParam(id) + "/" + __encodePathParam(kind) + "").pipe(
     Effect.flatMap((request) => request.pipe(
-      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any, "v": options?.params?.["v"] as any }),
       HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "200": decodeBinary,
@@ -2911,7 +2911,7 @@ export const make = (
   ),
     "getLibraryArtStream": (id, kind, options) => Stream.unwrap(__makePathRequest(HttpClientRequest.get, [id, kind], () => "/api/v1/library/art/" + __encodePathParam(id) + "/" + __encodePathParam(kind) + "").pipe(
     Effect.map((request) => request.pipe(
-      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any }),
+      HttpClientRequest.setUrlParams({ "as": options?.params?.["as"] as any, "v": options?.params?.["v"] as any }),
       HttpClientRequest.setHeaders({ "If-None-Match": options?.params?.["If-None-Match"] ?? undefined }),
       binaryRequest
     ))
@@ -4823,6 +4823,10 @@ readonly "getLibrary": {
 * request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
 * covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
 * the art as that profile sees it: its own picks first.
+* 
+* `v` is the version `GET /library` listed the cover under. A host that lists another for the
+* slot answers `Cache-Control: no-store`: the door's library copy trails the owner's, and its
+* cover kept under the owner's newer URL would show for a day.
 */
 readonly "getLibraryArt": {
     <Config extends OperationConfig | undefined = undefined>(id: string, kind: string, options: { readonly params?: typeof GetLibraryArtParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<Uint8Array | void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLibraryArt401", typeof GetLibraryArt401.Type> | PunktfunkError<"GetLibraryArt404", typeof GetLibraryArt404.Type>>;
@@ -4837,6 +4841,10 @@ readonly "getLibraryArt": {
 * request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
 * covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
 * the art as that profile sees it: its own picks first.
+* 
+* `v` is the version `GET /library` listed the cover under. A host that lists another for the
+* slot answers `Cache-Control: no-store`: the door's library copy trails the owner's, and its
+* cover kept under the owner's newer URL would show for a day.
 */
 readonly "getLibraryArtStream": (id: string, kind: string, options: { readonly params?: typeof GetLibraryArtParams.Encoded | undefined } | undefined) => Stream.Stream<Uint8Array, HttpClientError.HttpClientError>
   /**

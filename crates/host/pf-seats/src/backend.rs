@@ -165,6 +165,12 @@ pub trait PlatformBackend: Send + Sync + 'static {
     fn settle_pads(&self, _ledger: &Ledger, _keys: &[String]) -> Result<(), BackendError> {
         Err(no_lending())
     }
+
+    /// Bring the box's copy of the owner's library level with it now; `true` when the copy
+    /// changed. A platform whose box host lists the library it writes keeps no copy.
+    fn level_library(&self) -> Result<bool, BackendError> {
+        Ok(false)
+    }
 }
 
 /// A game controller plugged into the box, as the backend reads it now.

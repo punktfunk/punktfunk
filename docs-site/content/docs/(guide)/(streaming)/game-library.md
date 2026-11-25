@@ -95,9 +95,11 @@ appear under **Library** → **Sources** → **Art & Metadata**.
   arrows.
 - **Use for every game** lets that source's art replace a game's own covers too. Details still
   only fill gaps.
-- On a game's page, **Media** says where each image came from. **Choose…** shows every source's
-  images for that slot, a **Wrong game?** search when a source matched the wrong title, and a
-  field for your own URL. **Reset** goes back to the automatic image.
+- On a game's page, **Media** says where each image came from. Select a slot to see every
+  source's images for it and pick one, or paste your own URL. **Reset** goes back to the
+  automatic image.
+- **Game match** on that tab names the game each source took the title for. **Wrong game?**
+  searches the source for another, and every slot then offers that game's images.
 - **Information** marks a field a source filled. On your own entries it shows as a hint until you
   type your own.
 

@@ -94,7 +94,8 @@ export default plugin.def;
 | Pins | The operator's **Wrong game?** stores a `key` from your `search`; it reaches `match` as `pin`. |
 | Art | An `http(s)` URL. The host fetches and keeps it; anything else is dropped. |
 | Failures | Fail with `SourceRateLimited` to stop the round and retry later, or `SourceUnauthorized` to stop it and show the reason in the console. Any other failure skips that game until the next round. |
-| Choosing by hand | **Choose…** on a game's Media tab lists `images(match, kind)` from every source, or the one image `fetch` found. `lookup <id>` on the plugin's CLI prints what it finds for one game. |
+| Choosing by hand | A game's Media tab lists `images(match, kind)` from every source for the slot in hand, or the one image `fetch` found. `lookup <id>` on the plugin's CLI prints what it finds for one game. |
+| Search covers | A `search` candidate you return without a `thumb` gets one: its first portrait from `images`, or from `fetch`. Send your own `thumb` to save that lookup. |
 
 Add `"network": true` to the manifest. Register in the store's `metadata` category so the console
 offers it under **Library** → **Sources** → **Art & Metadata**.

@@ -3647,7 +3647,7 @@
           "library"
         ],
         "summary": "Stream one cover-art image for a library entry.",
-        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs. With `as`,\nthe art as that profile sees it: its own picks first.",
+        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs. With `as`,\nthe art as that profile sees it: its own picks first.\n\n`v` is the version `GET /library` listed the cover under. A host that lists another for the\nslot answers `Cache-Control: no-store`: the door's library copy trails the owner's, and its\ncover kept under the owner's newer URL would show for a day.",
         "operationId": "getLibraryArt",
         "parameters": [
           {
@@ -3672,6 +3672,15 @@
             "name": "as",
             "in": "query",
             "description": "Profile id: the art as that profile sees it",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "description": "The cover's version, as `GET /library` listed it",
             "required": false,
             "schema": {
               "type": "string"

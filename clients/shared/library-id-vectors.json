@@ -1,5 +1,5 @@
 {
-  "$comment": "Library entry ids and art URLs the host accepts (crates/host/punktfunk-host/src/library/metadata.rs `valid_entry_id`, `valid_remote_url`). The console BFF, the console and the plugin kit reject early with the same rule; each suite runs every case. `value` is the string, or its prefix when `fill` is repeated `count` times after it. Lengths are UTF-8 bytes. Read by: metadata.rs tests, web/server/util/pluginProxy.test.ts, web/src/api/metadata.test.ts, plugin-kit/test/library-ids.test.ts.",
+  "$comment": "Library entry ids and art URLs the host accepts (crates/host/punktfunk-host/src/library/metadata.rs `valid_entry_id`, `valid_remote_url`). The console BFF, the console and the plugin kit reject early with the same rule; each suite runs every case. `value` is the string, or its prefix when `fill` is repeated `count` times after it. Lengths are UTF-8 bytes. `art_versions`: the `?v=` the host's art proxy gives a URL (art.rs `proxy_art`), which the console computes to tell which offered image a slot shows. Read by: metadata.rs and art.rs tests, web/server/util/pluginProxy.test.ts, web/src/api/metadata.test.ts, plugin-kit/test/library-ids.test.ts.",
   "entry_ids": [
     {
       "value": "steam:570",
@@ -116,6 +116,16 @@
       "fill": "é",
       "count": 1100,
       "valid": false
+    }
+  ],
+  "art_versions": [
+    {
+      "url": "https://cdn.example/p.png",
+      "v": "3acaa079f428f881"
+    },
+    {
+      "url": "https://cdn2.steamgriddb.com/grid/121b81f7d167ca2c24fdab4f044048f8.png",
+      "v": "a563c635590c207c"
     }
   ]
 }

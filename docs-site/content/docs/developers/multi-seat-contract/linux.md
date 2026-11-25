@@ -80,6 +80,9 @@ plugins' tokens and sign-ins live there. A link, a file with a second link or on
 not copied. Play stats stay with each host. A config folder it can't open, as in a home not
 mounted yet, leaves the copy as it was. Deleting the owner's row deletes `library/`.
 
+`level_library` makes that copy at once and answers `leveled` with whether it changed. It waits
+1.5 seconds for a change that holds the copies, such as a seat's removal, then answers the error `busy`.
+
 ## Games
 
 `games/steamapps/` is one library every seat writes (group `punktfunk-games`, setgid,
