@@ -1382,6 +1382,7 @@ fn spawn_launch_and_lease(
             nested_spawn,
             seat: seat.as_deref(),
             place: crate::library::Place::Stream,
+            compositor_pid: cur_display_gen.and_then(crate::vdisplay::registry::compositor_pid_for),
         },
         #[cfg(windows)]
         &crate::library::View::here(),

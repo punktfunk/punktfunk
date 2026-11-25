@@ -744,6 +744,7 @@ fn run(n: u64, target: LaunchTarget, owner: LaunchOwner, at: At, cancel: &Atomic
             nested_spawn: false,
             seat: None,
             place: crate::library::Place::Desk,
+            compositor_pid: None,
         },
         #[cfg(windows)]
         &at,

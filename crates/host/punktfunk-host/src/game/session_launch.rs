@@ -219,6 +219,9 @@ pub(crate) struct SpawnAt<'a> {
     /// This session's compositor seat; `None` is the box's own.
     pub seat: Option<&'a str>,
     pub place: crate::library::Place,
+    /// The compositor process this session spawned. The launch goes down with it. `None`
+    /// where the session spawned none.
+    pub compositor_pid: Option<u32>,
 }
 
 /// What [`spawn`] started.
@@ -238,8 +241,8 @@ pub(crate) struct Spawned {
 }
 
 /// Once capture is live: end this client's other games, start the title unless the claim
-/// adopted a running copy, then settle the claim. Once per launch; a rebuild never re-spawns.
-/// Windows looks a library title up again in `view`.
+/// adopted a running copy, then settle the claim with the compositor the launch runs in. Once
+/// per launch; a rebuild never re-spawns. Windows looks a library title up again in `view`.
 pub(crate) fn spawn(
     target: Option<&LaunchTarget>,
     owner: &LaunchOwner,
@@ -347,6 +350,10 @@ pub(crate) fn spawn(
     }
     if let Some(c) = claim {
         if out.now {
+            #[cfg(target_os = "linux")]
+            if let Some(p) = at.compositor_pid.and_then(crate::procscan::resolve) {
+                c.nested_in(p);
+            }
             c.launched();
             if let Some(id) = c.credits() {
                 crate::library::record_launch(id, owner.profile.as_ref().map(|p| p.id.as_str()));

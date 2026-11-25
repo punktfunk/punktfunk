@@ -403,6 +403,8 @@ fn run(
             #[cfg(target_os = "linux")]
             seat,
             #[cfg(target_os = "linux")]
+            compositor_pid,
+            #[cfg(target_os = "linux")]
             lease,
         } = open_gs_virtual_source(&cfg, app, target.as_ref(), life, true, device)?;
         // Only Linux `launch_is_nested` reads them; gamescope does not exist on Windows.
@@ -455,6 +457,7 @@ fn run(
                 ) && nested_launch_started,
                 seat: seat.as_deref(),
                 place: crate::library::Place::Stream,
+                compositor_pid,
             },
             #[cfg(windows)]
             &crate::library::View::here(),
@@ -837,6 +840,9 @@ struct GsSource {
     /// The gamescope seat a launch that did not nest goes to. `None` off a gamescope spawn.
     #[cfg(target_os = "linux")]
     seat: Option<String>,
+    /// That gamescope's process. `None` off a gamescope spawn.
+    #[cfg(target_os = "linux")]
+    compositor_pid: Option<u32>,
     /// The output, for a re-attach after a capture loss that leaves it up. `None` for a portal fd.
     #[cfg(target_os = "linux")]
     lease: Option<crate::capture::OutputLease>,
@@ -922,6 +928,10 @@ fn open_gs_virtual_source(
     #[cfg(target_os = "linux")]
     let seat = vout.seat.clone();
     #[cfg(target_os = "linux")]
+    let compositor_pid = vout
+        .pool_gen
+        .and_then(crate::vdisplay::registry::compositor_pid_for);
+    #[cfg(target_os = "linux")]
     let lease = crate::capture::OutputLease::of(&vout);
     let capturer = gs_capture_output(vout, cfg, compositor, gamescope_route.as_ref())?;
     Ok(GsSource {
@@ -931,6 +941,8 @@ fn open_gs_virtual_source(
         nested_launch_started,
         #[cfg(target_os = "linux")]
         seat,
+        #[cfg(target_os = "linux")]
+        compositor_pid,
         #[cfg(target_os = "linux")]
         lease,
     })

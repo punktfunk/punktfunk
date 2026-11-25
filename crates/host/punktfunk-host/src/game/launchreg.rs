@@ -112,6 +112,9 @@ struct Record {
     about: Option<(crate::gamelease::GameRef, crate::events::Plane)>,
     /// The emulator bindings this launch's prepare wrote ([`Claim::bind`]).
     bindings: Option<u64>,
+    /// The compositor the session spawned for this launch ([`Claim::nested_in`]). The game
+    /// goes down with it.
+    compositor: Option<crate::procscan::ProcRef>,
 }
 
 impl Record {
@@ -130,6 +133,7 @@ impl Record {
             workspace: None,
             about: None,
             bindings: None,
+            compositor: None,
         }
     }
 }
@@ -154,6 +158,16 @@ fn covers(rec: &Record, live: Liveness, now: Instant, window: Duration) -> bool 
                     .released_at
                     .is_some_and(|t| now.saturating_duration_since(t) <= window)
         }
+    }
+}
+
+/// [`liveness`] as a claim reads it: a launch whose compositor is gone is [`Liveness::Gone`],
+/// whatever its processes say, because a new gamescope runs the launch command itself. Exit
+/// detection and the end paths never read the compositor.
+fn claim_liveness(rec: &Record) -> Liveness {
+    match rec.compositor {
+        Some(c) if alive_count(&[c]) == Some(0) => Liveness::Gone,
+        _ => liveness(rec),
     }
 }
 
@@ -420,7 +434,7 @@ pub fn claim(
     sweep(&mut recs, now);
 
     let procs = if let Some(i) = recs.iter().position(|r| r.key == key) {
-        let live = liveness(&recs[i]);
+        let live = claim_liveness(&recs[i]);
         let rec = &mut recs[i];
         if covers(rec, live, now, IN_FLIGHT_WINDOW) {
             rec.holders += 1;
@@ -452,9 +466,10 @@ pub fn claim(
         rec.procs = Arc::new(Mutex::new(Vec::new()));
         rec.launched = false;
         rec.ending = false;
-        // New launch, new placement and bindings: the old ones are the dead copy's.
+        // New launch, new placement, bindings and compositor: the old ones are the dead copy's.
         rec.workspace = None;
         rec.bindings = None;
+        rec.compositor = None;
         rec.holders += 1;
         rec.released_at = None;
         rec.claim = id;
@@ -590,6 +605,16 @@ impl Claim {
         });
     }
 
+    /// Record the compositor this launch runs in. Same claim check as [`Claim::launched`].
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux nests"))]
+    pub fn nested_in(&self, compositor: crate::procscan::ProcRef) {
+        self.with_record(|r| {
+            if r.claim == self.id {
+                r.compositor = Some(compositor);
+            }
+        });
+    }
+
     /// Spawn failed or this platform has no launch path. Drop the record
     /// so a retry starts the title rather than inheriting a never-launch.
     pub fn abandon(&self) {
@@ -657,6 +682,7 @@ mod tests {
             workspace: None,
             about: None,
             bindings: None,
+            compositor: None,
         }
     }
 
@@ -815,6 +841,33 @@ mod tests {
             covers(&seeing, liveness(&seeing), outside, window),
             "a launch whose game is still up must resume, not start a second copy"
         );
+    }
+
+    /// A launch with nothing adopted lives as long as its compositor: kept for a reconnect it
+    /// is adopted, gone it starts again with the full prepare, inside the window too.
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
+    #[test]
+    fn a_nested_launch_whose_compositor_is_gone_starts_again() {
+        let me = crate::procscan::resolve(std::process::id())
+            .expect("this process must be resolvable by the scanner");
+        // Same pid, another start: a compositor that exited.
+        let gone = crate::procscan::ProcRef {
+            start: me.start + 1,
+            ..me
+        };
+        let fp = Some("fp-nested");
+        for (app, compositor, spawns) in [
+            (Some("custom:nested-kept"), me, false),
+            (Some("custom:nested-gone"), gone, true),
+        ] {
+            let first = claim(fp, app, false, Some(100.0));
+            first.nested_in(compositor);
+            first.launched();
+            drop(first);
+            let back = claim(fp, app, false, Some(900.0));
+            assert_eq!(back.must_spawn(), spawns, "{app:?}");
+            back.abandon();
+        }
     }
 
     #[test]
