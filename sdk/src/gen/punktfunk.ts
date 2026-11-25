@@ -5321,7 +5321,8 @@ readonly "attachPluginUi": {
     <Config extends OperationConfig | undefined = undefined>(id: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<void, Config | undefined>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AttachPluginUi400", typeof AttachPluginUi400.Type> | PunktfunkError<"AttachPluginUi401", typeof AttachPluginUi401.Type> | PunktfunkError<"AttachPluginUi403", typeof AttachPluginUi403.Type>>;
   }
   /**
-* On the plugin lane each row is `id`, `display_name` and `avatar` alone.
+* On the plugin lane each row is `id`, `display_name`, `avatar`, `owner` (the box's own
+* session) and `shared` (plays on the owner's desktop, with no seat of its own) alone.
 */
 readonly "listProfiles": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListProfiles200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListProfiles401", typeof ListProfiles401.Type> | PunktfunkError<"ListProfiles404", typeof ListProfiles404.Type>>;

@@ -7471,7 +7471,7 @@
           "profiles"
         ],
         "summary": "List the profiles with what the console manages",
-        "description": "On the plugin lane each row is `id`, `display_name` and `avatar` alone.",
+        "description": "On the plugin lane each row is `id`, `display_name`, `avatar`, `owner` (the box's own\nsession) and `shared` (plays on the owner's desktop, with no seat of its own) alone.",
         "operationId": "listProfiles",
         "responses": {
           "200": {
