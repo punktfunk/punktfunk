@@ -37,6 +37,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 /// A Flatpak install downloads hundreds of megabytes.
 const FLATPAK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// The supervisor levels the box's library on its own every two seconds (`linux/mod.rs`), so an
+/// ask for it now is worth no longer a wait.
+const LEVEL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Root, or the `punktfunk` user when it exists. With no such user only root is let in.
 pub fn peer_allowed(peer_uid: u32, punktfunk_uid: Option<u32>) -> bool {
@@ -276,6 +279,7 @@ fn answer_within(command: &Command) -> Duration {
     match command {
         Command::InstallFlatpak { .. } | Command::RemoveFlatpak { .. } => FLATPAK_TIMEOUT,
         Command::Unlock { .. } => super::pam::CHECK_TIMEOUT + ANSWER_TIMEOUT,
+        Command::LevelLibrary => LEVEL_TIMEOUT,
         _ => ANSWER_TIMEOUT,
     }
 }

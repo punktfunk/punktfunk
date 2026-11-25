@@ -9,6 +9,10 @@
 //! released on the seat once those plugins are done. An event that already names a seat is one a
 //! host relayed and is never taken back. A seat's own titles go to the library's writer when its
 //! tail starts and on each `library.changed` it sends ([`publish_own_titles`]).
+//!
+//! The door lists the box's copy of the owner's library, which the supervisor writes on a tick.
+//! The owner's `library.changed` goes out once that copy is level ([`level_library`]), so a
+//! client that re-reads on it reads the change.
 
 use crate::events::{EventKind, HostEvent};
 use std::collections::{BTreeSet, HashMap};
@@ -145,6 +149,9 @@ fn tail(
         if what == Take::Skip {
             continue;
         }
+        if cfg!(target_os = "linux") && levels(&ev, seat.kind.is_owner()) {
+            level_library();
+        }
         let ev = crate::events::bus().emit_from(ev.kind, Some(profile.clone()));
         if let (Take::HandOn, Some(games)) = (what, &games)
             && games.try_send(ev).is_err()
@@ -181,6 +188,20 @@ fn take(ev: &HostEvent, from_owner: bool, packaged: bool) -> Take {
 /// change, never one relayed there, and never the owner's row, which writes the box's.
 fn publishes(ev: &HostEvent, from_owner: bool) -> bool {
     !from_owner && ev.seat.is_none() && matches!(ev.kind, EventKind::LibraryChanged { .. })
+}
+
+/// Whether `ev` off a seat's stream changes the library the door lists: the owner's row's own
+/// change, which writes the library the box copies.
+fn levels(ev: &HostEvent, from_owner: bool) -> bool {
+    from_owner && ev.seat.is_none() && matches!(ev.kind, EventKind::LibraryChanged { .. })
+}
+
+/// Has the supervisor copy the owner's library to the box now. One that doesn't answer in time
+/// copies it on its next tick, and the change goes out ahead of it.
+fn level_library() {
+    if let Err(error) = super::call(pf_seats::ipc::Command::LevelLibrary) {
+        tracing::debug!(code = ?error.code, error = %error.message, "box library not leveled ahead of its change");
+    }
 }
 
 /// What `seat`'s host lists of its own, to the library's writer as `profile`'s: this host on
@@ -599,6 +620,25 @@ mod tests {
         );
         assert!(!publishes(&ev(library, Some("9a3f")), false), "relayed");
         assert!(!publishes(&ev(host, None), false));
+    }
+
+    /// The owner's own library change waits for the box's copy; a seat's own, a relayed one and
+    /// any other kind change nothing the door lists.
+    #[test]
+    fn only_the_owner_s_library_change_levels_the_box_s_copy() {
+        let ev = |kind: serde_json::Value, seat: Option<&str>| {
+            let mut ev: HostEvent = serde_json::from_value(kind).unwrap();
+            ev.seat = seat.map(str::to_string);
+            ev
+        };
+        let library = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
+            "kind": "library.changed", "source": "manual"});
+        let host = serde_json::json!({"seq": 1, "ts_ms": 1, "schema": 1,
+            "kind": "host.started", "version": "0.47.0", "gamestream": false});
+        assert!(levels(&ev(library.clone(), None), true));
+        assert!(!levels(&ev(library.clone(), None), false), "a seat's own");
+        assert!(!levels(&ev(library, Some("9a3f")), true), "relayed");
+        assert!(!levels(&ev(host, None), true));
     }
 
     /// Eight knocks are relayed at once, one per fingerprint; the rest are dropped until a

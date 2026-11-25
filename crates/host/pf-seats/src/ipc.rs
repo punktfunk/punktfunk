@@ -134,6 +134,9 @@ pub enum Command {
     TakeBack {
         key: String,
     },
+    /// Linux: bring the box's copy of the owner's library level with it now, ahead of the
+    /// supervisor's own tick. Answers `leveled` once the copy is written.
+    LevelLibrary,
 }
 
 /// Who has a desk pad now.
@@ -330,6 +333,10 @@ pub enum CommandResult {
     },
     Pads {
         pads: Vec<DeskPad>,
+    },
+    /// The box's library is level with the owner's; `changed` when the copy moved for it.
+    Leveled {
+        changed: bool,
     },
 }
 
@@ -954,6 +961,21 @@ mod tests {
                 version: None
             }
         );
+    }
+
+    /// The door's ask for a level library and its answer, as both ends spell them.
+    #[test]
+    fn the_level_library_frames_round_trip() {
+        let wire = r#"{"type":"level_library"}"#;
+        assert_eq!(serde_json::to_string(&Command::LevelLibrary).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_str::<Command>(wire).unwrap(),
+            Command::LevelLibrary
+        );
+        let done = CommandResult::Leveled { changed: true };
+        let wire = r#"{"kind":"leveled","changed":true}"#;
+        assert_eq!(serde_json::to_string(&done).unwrap(), wire);
+        assert_eq!(serde_json::from_str::<CommandResult>(wire).unwrap(), done);
     }
 
     /// Only a reverse-DNS name reaches `flatpak`: nothing it reads as an option, a path, a

@@ -131,6 +131,12 @@ impl<B: PlatformBackend> SeatService<B> {
             Command::Pads => self.pads(),
             Command::Lend { id, key } => self.lend(&id, &key),
             Command::TakeBack { key } => self.take_back(&key),
+            // Neither the ledger nor `ops`: a seat's start never holds a library change back.
+            Command::LevelLibrary => self
+                .backend
+                .level_library()
+                .map(|changed| CommandResult::Leveled { changed })
+                .map_err(ApiError::from),
         }
     }
 

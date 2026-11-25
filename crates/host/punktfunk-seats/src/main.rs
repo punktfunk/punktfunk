@@ -284,6 +284,7 @@ mod linux {
                 }
             }
             CommandResult::Deleted { id } => println!("{id} deleted"),
+            CommandResult::Leveled { changed } => println!("changed={changed}"),
             CommandResult::Flatpak { id, version } => {
                 println!("{id} {}", version.as_deref().unwrap_or("-"));
             }
