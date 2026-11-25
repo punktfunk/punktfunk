@@ -272,8 +272,13 @@ describe("defineMetadataPlugin", () => {
 			).json()) as {
 				candidates: { key: string; label: string; thumb: string | null }[];
 			};
+			// A thumb that is no http(s) URL is dropped, and the candidate's own portrait stands in.
 			expect(search.candidates).toEqual([
-				{ key: "m-other", label: "Hades!", thumb: null },
+				{
+					key: "m-other",
+					label: "Hades!",
+					thumb: "https://cdn/m-other/p.png",
+				},
 			]);
 
 			const pinned = (await (

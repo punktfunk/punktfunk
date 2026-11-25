@@ -111,6 +111,9 @@ interface RoundReport {
 	readonly failed: number;
 }
 
+/** How long a search waits for its candidates' covers before it answers without them. */
+const COVER_BUDGET_MS = 4_000;
+
 const Verdicts = Schema.Record(Schema.String, Verdict);
 const Pins = Schema.Record(Schema.String, Schema.String);
 
@@ -355,6 +358,36 @@ export const defineMetadataPlugin = <S extends Schema.Top>(
 				return { entry, cfg, pin, verdict, match };
 			});
 
+		/**
+		 * A cover for each search candidate that came without one, in order: the first
+		 * image the source offers for it, as `images` lists them or `fetch` finds it.
+		 */
+		const coversOf = (
+			list: ReadonlyArray<Candidate>,
+			entry: LibraryEntry,
+			cfg: S["Type"],
+		) => {
+			const offered = def.offers.art ?? [];
+			const kind = (["portrait", "header"] as const).find((k) =>
+				offered.includes(k),
+			);
+			return Effect.forEach(
+				list,
+				(c) => {
+					if (!kind || isHttpUrl(c.thumb)) return Effect.succeed(undefined);
+					const first = def.images
+						? def
+								.images(c, kind, cfg)
+								.pipe(Effect.map((all) => all[0]?.thumb ?? all[0]?.url))
+						: def
+								.fetch(c, entry, cfg)
+								.pipe(Effect.map((got) => got.art?.[kind]));
+					return first.pipe(Effect.orElseSucceed(() => undefined));
+				},
+				{ concurrency },
+			);
+		};
+
 		const handler = async (req: Request): Promise<Response> => {
 			const url = new URL(req.url);
 			const route = url.pathname.slice("/__metadata/".length);
@@ -409,12 +442,21 @@ export const defineMetadataPlugin = <S extends Schema.Top>(
 						return json({ error: "term must be 1–200 characters" }, 400);
 					}
 					const out = await run(def.search(term.trim(), ownView(entry), cfg));
+					const found = out.slice(0, 20);
+					// A slow or broken cover lookup still answers the search without them.
+					const covers = await Promise.race([
+						run(coversOf(found, ownView(entry), cfg)).catch(() => undefined),
+						new Promise<undefined>((done) => setTimeout(done, COVER_BUDGET_MS)),
+					]);
 					return json({
-						candidates: out.slice(0, 20).map((c) => ({
-							key: c.key,
-							label: c.label,
-							thumb: isHttpUrl(c.thumb) ? c.thumb : null,
-						})),
+						candidates: found.map((c, i) => {
+							const thumb = isHttpUrl(c.thumb) ? c.thumb : covers?.[i];
+							return {
+								key: c.key,
+								label: c.label,
+								thumb: isHttpUrl(thumb) ? thumb : null,
+							};
+						}),
 					});
 				}
 				if (route === "images" && req.method === "GET") {
