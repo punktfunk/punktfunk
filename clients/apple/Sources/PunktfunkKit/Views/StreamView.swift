@@ -172,6 +172,22 @@ public struct StreamView: NSViewRepresentable {
     }
 }
 
+/// A screen as a session's mode follows it: its display, its panel and top rate, and its
+/// Native. The panel tells two screens apart, since a shown or hidden menu bar moves Native.
+private struct FollowedScreen {
+    let display: CGDirectDisplayID?
+    let panel: (width: Int, height: Int, hz: Int)
+    let native: (width: Int, height: Int, hz: Int)
+
+    @MainActor
+    init(_ screen: NSScreen) {
+        display = screen.displayID
+        let size = screen.panelPixelSize
+        panel = (size.width, size.height, screen.maximumFramesPerSecond)
+        native = NativeDisplay.mode(on: screen)
+    }
+}
+
 public final class StreamLayerView: NSView {
     private let displayLayer = AVSampleBufferDisplayLayer()
     /// Capture→on-glass for the A/V sync loop while the stage-2 presenter runs. Read at start().
@@ -197,6 +213,11 @@ public final class StreamLayerView: NSView {
     private var screenValuesStale = true
     /// The view's screen in panel pixels per point (`NSScreen.panelScale`). Main-thread only.
     private var panelScale: Double = 1
+    /// The screen the session's mode was last taken from, when its display was first seen gone
+    /// (`systemUptime`), and the ask a screen change queued. Main-thread only.
+    private var followed: FollowedScreen?
+    private var screenLostAt: TimeInterval?
+    private var screenModeWork: DispatchWorkItem?
     /// Whether the window is fullscreen, as last told to the presenter. Main-thread only.
     private var directPossible: Bool?
     private let cursorCapture = CursorCapture()
@@ -405,14 +426,15 @@ public final class StreamLayerView: NSView {
         ) { [weak self] _ in
             self?.attemptPendingCapture()
         })
-        // A move between screens can change the link's available refresh range; re-layout so
-        // the stream-rate hint is re-applied to the display link that follows this view.
+        // A move between screens can change the link's refresh range: re-layout re-applies the
+        // stream-rate hint to the display link, and a Native session takes the new screen's mode.
         windowObservers.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeScreenNotification, object: window, queue: .main
         ) { [weak self] _ in
             self?.screenValuesStale = true
             self?.layoutPresenter()
             MainActor.assumeIsolated { self?.presenter.screenChanged() }
+            self?.noteScreen()
         })
         // The same screen with a new mode, or a housing that came or went with it.
         windowObservers.append(NotificationCenter.default.addObserver(
@@ -421,6 +443,7 @@ public final class StreamLayerView: NSView {
         ) { [weak self] _ in
             self?.screenValuesStale = true
             self?.layoutPresenter()
+            self?.noteScreen()
         })
         attemptPendingCapture()
     }
@@ -1196,6 +1219,7 @@ public final class StreamLayerView: NSView {
             maxDimension: RenderScale.maxDimension(codec: connection.settings.codec))
         follower.onResizeTarget = onResizeTarget // resize overlay START signal (instant, on the follower)
         matchFollower = follower
+        followed = NSScreen.main.map { FollowedScreen($0) } // where the connect read Native
         layoutPresenter()
         if connection.showsScreens { startScreenWindows(connection) }
         requestAutoCapture() // entering a session is the deliberate "capture me" moment
@@ -1260,6 +1284,47 @@ public final class StreamLayerView: NSView {
         }
     }
 
+    /// The window's screen or its mode changed: queue `followScreen`, or drop a queued one when
+    /// the window is back on what the session follows. A display that went away may only be
+    /// changing its mode, so nothing is asked until `NativeDisplay.lossHold` after it left.
+    /// Otherwise 1 s, which also keeps two asks past the 500 ms the host refuses a second in.
+    private func noteScreen() {
+        screenModeWork?.cancel()
+        screenModeWork = nil
+        guard let followed, let screen = window?.screen else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if NSScreen.screens.contains(where: { $0.displayID == followed.display }) {
+            screenLostAt = nil
+        } else if screenLostAt == nil {
+            screenLostAt = now
+        }
+        guard FollowedScreen(screen).panel != followed.panel else { return }
+        let held = screenLostAt.map { $0 + NativeDisplay.lossHold - now } ?? 0
+        let work = DispatchWorkItem { [weak self] in self?.followScreen() }
+        screenModeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(1, held), execute: work)
+    }
+
+    /// A session that runs its old screen's Native takes the new screen's, at that screen's
+    /// exact rate (`EffectiveSettings.followedMode`). Match window follows the window itself,
+    /// and an All monitors session lays its other screens out from this mode: neither follows.
+    private func followScreen() {
+        guard let connection, let from = followed, let screen = window?.screen,
+              !connection.settings.matchWindow, !connection.showsScreens else { return }
+        let to = FollowedScreen(screen)
+        followed = to
+        screenLostAt = nil
+        let settings = connection.settings
+        let live = connection.currentMode()
+        guard let mode = settings.followedMode(
+            from: from.native, to: to.native, live: (live.width, live.height, live.refreshHz))
+        else { return }
+        connection.requestMode(
+            width: mode.width, height: mode.height, refreshHz: mode.hz,
+            view: settings.streamView(native: to.native, mode: mode),
+            exactMilliHz: settings.streamRefreshMilliHz(nativeMilliHz: screen.refreshMilliHz))
+    }
+
     /// A variable-refresh screen reports a range of valid frame intervals; a fixed screen's
     /// minimum and maximum are equal. nil is not adaptive.
     public static func isAdaptiveSync(_ screen: NSScreen?) -> Bool {
@@ -1311,6 +1376,8 @@ public final class StreamLayerView: NSView {
         screenWindows = nil
         presenter.stop()
         matchFollower = nil
+        screenModeWork?.cancel()
+        (screenModeWork, followed, screenLostAt) = (nil, nil, nil)
         lastDecodedContentSize = nil // the next session re-derives it from its first frame
         connection = nil
         // Cursor-channel state is per-session: a next session against a host WITHOUT the cap

@@ -1641,13 +1641,14 @@ public final class PunktfunkConnection: @unchecked Sendable {
 
     /// `requestMode` shown at `view`, the size the picture is shown at when smaller
     /// (`RenderScale.view`). nil asks for the mode itself and clears a view the host keeps.
+    /// `exactMilliHz` is `refreshHz` to the millihertz, for a screen whose rate is a fraction.
     public func requestMode(
         width: UInt32, height: UInt32, refreshHz: UInt32,
-        view: (width: UInt32, height: UInt32)?
+        view: (width: UInt32, height: UInt32)?, exactMilliHz: UInt32? = nil
     ) {
         withLiveHandle(or: ()) { h in
             _ = punktfunk_connection_request_mode_exact(
-                h, width, height, exactRate(refreshHz, live: h), false,
+                h, width, height, exactMilliHz ?? exactRate(refreshHz, live: h), false,
                 view?.width ?? 0, view?.height ?? 0)
         }
     }
