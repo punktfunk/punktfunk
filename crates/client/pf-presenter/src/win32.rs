@@ -11,8 +11,8 @@
 //! pin, so they are left alone.
 //!
 //! [`window_monitor`] names the monitor the window is on, the key the HDR volume
-//! lookup matches DXGI outputs against. [`window_refresh_mhz`] reads that monitor's
-//! exact rate.
+//! lookup matches DXGI outputs against. [`window_edid`] reads that monitor's EDID and
+//! [`window_refresh_mhz`] its exact rate.
 
 use windows_sys::core::w;
 use windows_sys::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, HWND, LPARAM, WPARAM};
@@ -67,6 +67,102 @@ pub(crate) fn window_monitor(window: &sdl3::video::Window) -> Option<isize> {
 /// path. SDL reads whole hertz here and guesses the fraction, so 59.80 Hz reads 59.94.
 /// `None` when Windows names no path for the monitor.
 pub(crate) fn window_refresh_mhz(window: &sdl3::video::Window) -> Option<u32> {
+    let rate = window_path(window)?.targetInfo.refreshRate;
+    let den = u64::from(rate.Denominator);
+    (den > 0).then(|| ((u64::from(rate.Numerator) * 1000 + den / 2) / den) as u32)
+}
+
+/// The EDID of the monitor the window is on, as the registry holds it beside the monitor's
+/// device. `None` when Windows names no path or monitor device, or stores no EDID.
+pub(crate) fn window_edid(window: &sdl3::video::Window) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        SetupDiCreateDeviceInfoList, SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo,
+        SetupDiOpenDevRegKey, SetupDiOpenDeviceInterfaceW, DICS_FLAG_GLOBAL, DIREG_DEV,
+        SP_DEVICE_INTERFACE_DATA, SP_DEVINFO_DATA,
+    };
+    use windows_sys::Win32::Devices::Display::{
+        DisplayConfigGetDeviceInfo, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+        DISPLAYCONFIG_TARGET_DEVICE_NAME,
+    };
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Registry::{RegCloseKey, RegQueryValueExW, KEY_READ};
+    let path = window_path(window)?;
+    let mut target = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+    target.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+    target.header.size = std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
+    target.header.adapterId = path.targetInfo.adapterId;
+    target.header.id = path.targetInfo.id;
+    // SAFETY: the header states the packet's own type and size, and `target` outlives the call.
+    if unsafe { DisplayConfigGetDeviceInfo(&mut target.header) } != 0 {
+        return None;
+    }
+    let mut iface = SP_DEVICE_INTERFACE_DATA {
+        cbSize: std::mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
+        ..Default::default()
+    };
+    let mut dev = SP_DEVINFO_DATA {
+        cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: the set starts empty and is destroyed on every path. `monitorDevicePath` is a
+    // NUL-terminated array the call only reads; `iface` and `dev` are locals whose `cbSize`
+    // names their own size, so the set's one device is the monitor the path opened.
+    let key = unsafe {
+        let set = SetupDiCreateDeviceInfoList(std::ptr::null(), std::ptr::null_mut());
+        if set == INVALID_HANDLE_VALUE as isize {
+            return None;
+        }
+        let opened =
+            SetupDiOpenDeviceInterfaceW(set, target.monitorDevicePath.as_ptr(), 0, &mut iface) != 0
+                && SetupDiEnumDeviceInfo(set, 0, &mut dev) != 0;
+        let key = if opened {
+            SetupDiOpenDevRegKey(set, &dev, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ)
+        } else {
+            INVALID_HANDLE_VALUE
+        };
+        SetupDiDestroyDeviceInfoList(set);
+        key
+    };
+    if key == INVALID_HANDLE_VALUE || key.is_null() {
+        return None;
+    }
+    let value = w!("EDID");
+    let mut len = 0u32;
+    let mut edid = Vec::new();
+    // SAFETY: `key` is open until the close below. The first call only writes the size into
+    // `len`; the second writes at most `len` bytes into `edid`, which holds that many.
+    let rc = unsafe {
+        let mut rc = RegQueryValueExW(
+            key,
+            value,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut len,
+        );
+        if rc == 0 {
+            edid.resize(len as usize, 0);
+            rc = RegQueryValueExW(
+                key,
+                value,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                edid.as_mut_ptr(),
+                &mut len,
+            );
+        }
+        RegCloseKey(key);
+        rc
+    };
+    edid.truncate(len as usize);
+    (rc == 0).then_some(edid)
+}
+
+/// The active display path whose source is the monitor the window is on. `None` when Windows
+/// names none.
+fn window_path(
+    window: &sdl3::video::Window,
+) -> Option<windows_sys::Win32::Devices::Display::DISPLAYCONFIG_PATH_INFO> {
     use windows_sys::Win32::Devices::Display::{
         DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
         DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
@@ -114,7 +210,7 @@ pub(crate) fn window_refresh_mhz(window: &sdl3::video::Window) -> Option<u32> {
         return None;
     }
     paths.truncate(np as usize);
-    paths.iter().find_map(|p| {
+    paths.into_iter().find(|p| {
         // SAFETY: the request packet is integers and a name array; all-zero is a valid value.
         let mut name: DISPLAYCONFIG_SOURCE_DEVICE_NAME = unsafe { std::mem::zeroed() };
         name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
@@ -123,11 +219,7 @@ pub(crate) fn window_refresh_mhz(window: &sdl3::video::Window) -> Option<u32> {
         name.header.id = p.sourceInfo.id;
         // SAFETY: the header states the packet's own type and size, and `name` outlives the call.
         let found = unsafe { DisplayConfigGetDeviceInfo(&mut name.header) } == 0;
-        let rate = p.targetInfo.refreshRate;
-        (found && name.viewGdiDeviceName == info.szDevice && rate.Denominator > 0).then(|| {
-            let den = u64::from(rate.Denominator);
-            ((u64::from(rate.Numerator) * 1000 + den / 2) / den) as u32
-        })
+        found && name.viewGdiDeviceName == info.szDevice
     })
 }
 

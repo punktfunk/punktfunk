@@ -549,12 +549,12 @@ fn run_inner(opts: SessionOpts, mut mode: ModeCtl) -> Result<Outcome> {
                 force_software.clone(),
                 sh.presenter.vulkan_decode(),
             );
-            sh.size_to_stream(
+            let asked = sh.size_to_stream(
                 params
                     .view
                     .unwrap_or((params.mode.width, params.mode.height)),
             );
-            Some(sh.start_stream(params, force_software))
+            Some(sh.start_stream(params, force_software, asked))
         }
         ModeCtl::Browse(_) => None,
     };
@@ -678,6 +678,18 @@ fn window_display_hdr(window: &sdl3::video::Window) -> Option<HdrMeta> {
     {
         let _ = window;
         None
+    }
+}
+
+/// The size in millimetres of the panel the window is on, from its EDID. `None` when the panel
+/// states none, or no single connector is the window's.
+fn window_panel_mm(window: &sdl3::video::Window) -> Option<(u32, u32)> {
+    #[cfg(windows)]
+    return crate::display_size::edid_size_mm(&crate::win32::window_edid(window)?);
+    #[cfg(target_os = "linux")]
+    {
+        let display = window.get_display().and_then(|d| d.get_name()).ok()?;
+        crate::display_size::panel_mm(&display, &crate::display_size::connected_edids())
     }
 }
 

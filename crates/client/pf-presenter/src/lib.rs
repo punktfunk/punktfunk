@@ -38,6 +38,9 @@ mod cursor_model;
 mod d3d;
 #[cfg(windows)]
 pub(crate) mod d3d11;
+// The picture size a connect sends: built (and tested) on every platform, used by `run`.
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+mod display_size;
 // The D3D11 glass clock; its statistics rules are built (and tested) on every platform.
 #[cfg_attr(not(windows), allow(dead_code))]
 #[path = "d3d/glass.rs"]

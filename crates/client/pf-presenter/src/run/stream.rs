@@ -579,7 +579,7 @@ impl Shell {
         let force_software = Arc::new(AtomicBool::new(false));
         params.force_software = force_software.clone();
         self.end_stream(stream, SessionPhase::Reconnecting(r.phase));
-        let mut next = self.start_stream(params, force_software);
+        let mut next = self.start_stream(params, force_software, None);
         next.redials = redials;
         // The player's mute rides along: its uplink reads the flag once it runs.
         if r.keep_mic_muted {
@@ -748,11 +748,14 @@ impl Shell {
         }
     }
 
-    /// A new stream on `params`, sized to the window under Match-window.
+    /// A new stream on `params`, sized to the window under Match-window, with the size its
+    /// picture has on the glass. `asked` is a window size requested just before, which the
+    /// window may not have yet.
     pub(super) fn start_stream(
         &self,
         mut params: SessionParams,
         force_software: Arc<AtomicBool>,
+        asked: Option<(u32, u32)>,
     ) -> StreamState {
         if self.opts.match_window {
             apply_match_window(
@@ -762,6 +765,7 @@ impl Shell {
                 self.opts.render_scale_max_dim,
             );
         }
+        params.display_mm = self.display_mm(&params, asked);
         let mut screens = screens::ScreenWindows::default();
         params.screens = self.plan_screens(&mut screens, params.shows_screens, params.mode);
         let mut st = StreamState::new(
@@ -774,6 +778,33 @@ impl Shell {
         );
         st.screens = screens;
         st
+    }
+
+    /// The size `p.mode` has on the window's panel, as `p.video_fit` places it over the size
+    /// the client asked for ([`crate::display_size::shown_px`]); the whole panel under
+    /// Match-window. The host keeps it for the session: a later resize or move sends none.
+    fn display_mm(&self, p: &SessionParams, asked: Option<(u32, u32)>) -> Option<(u16, u16)> {
+        let panel = window_panel_mm(&self.window);
+        let desktop = super::shell::native_mode_of(&self.window).unwrap_or(self.native);
+        let desktop = (desktop.width, desktop.height);
+        let shown = crate::display_size::shown_px(
+            self.fullscreen,
+            desktop,
+            asked,
+            self.window.size_in_pixels(),
+        );
+        let mm = panel.and_then(|panel| {
+            crate::display_size::picture_mm(
+                (p.mode.width, p.mode.height),
+                shown,
+                desktop,
+                panel,
+                p.video_fit,
+                self.opts.match_window,
+            )
+        });
+        tracing::info!(?panel, ?mm, "picture size for the host's display");
+        mm
     }
 
     /// Take the settings this console launch resolved: the console outlives every stream, and
@@ -902,7 +933,7 @@ impl Shell {
                                 prev.shutdown(&mut self.presenter);
                             }
                             self.adopt_launch(&params);
-                            *stream = Some(self.start_stream(*params, force_software));
+                            *stream = Some(self.start_stream(*params, force_software, None));
                             if let Some(o) = self.overlay.as_mut() {
                                 o.session_phase(SessionPhase::Connecting);
                             }
