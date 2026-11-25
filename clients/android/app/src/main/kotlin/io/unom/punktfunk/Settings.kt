@@ -1,16 +1,21 @@
 package io.unom.punktfunk
 
+import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.os.Build
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Display
 import android.view.WindowInsets
 import android.view.WindowManager
 import androidx.annotation.StringRes
 import androidx.core.content.ContextCompat
+import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.Shortcuts
+import io.unom.punktfunk.kit.VideoFit
 import kotlin.math.roundToInt
 
 /**
@@ -690,6 +695,67 @@ fun displayHdr(context: Context): DisplayHdr {
     val verdict = displayHdr(hdr10, headroom)
     Log.i("punktfunk", "display HDR types=$types headroom=${headroom ?: "n/a"} → $verdict")
     return verdict
+}
+
+/** The DPI Android reports for a panel that states no size: its default, TV and XHIGH densities. */
+private val STAND_IN_DPI = setOf(160f, 213f, 320f)
+
+/**
+ * The size a [mode] has on the glass in millimetres, width then height, as [fit] places it in a
+ * [view] on a [xdpi]×[ydpi] panel. Null on a TV or headset, whose DPI is not where the picture is
+ * seen, and where the DPI is not the panel's own: outside 40–1000, a stand-in or [densityDpi] on
+ * both axes, or axes more than 10 % apart. Phone and tablet pixels are square, so the axes' mean
+ * stands for both and the panel's rotation drops out.
+ */
+internal fun pictureSizeMm(
+    xdpi: Float,
+    ydpi: Float,
+    densityDpi: Int,
+    view: Pair<Int, Int>,
+    mode: Pair<Int, Int>,
+    fit: VideoFit,
+    tvOrHeadset: Boolean,
+): Pair<Int, Int>? {
+    if (tvOrHeadset || xdpi !in 40f..1000f || ydpi !in 40f..1000f) return null
+    if (xdpi == ydpi && (xdpi == densityDpi.toFloat() || xdpi in STAND_IN_DPI)) return null
+    if (maxOf(xdpi, ydpi) > 1.1f * minOf(xdpi, ydpi)) return null
+    val place = VideoFit.place(fit, view.first, view.second, mode.first, mode.second)
+    if (place.isEmpty) return null
+    val ppi = (xdpi + ydpi) / 2.0
+    // The hello carries each side as a u16.
+    fun side(px: Int, scale: Double) = (px * scale * 25.4 / ppi).roundToInt().coerceIn(1, 65_535)
+    return side(mode.first, place.scaleX) to side(mode.second, place.scaleY)
+}
+
+/**
+ * [pictureSizeMm] for the session about to dial: the picture's display, and the window it shows in.
+ * That is the activity's window while it shares the screen, else the whole display, held
+ * landscape on a phone. Null for a picture spanning two panels, or a shared window below API 30.
+ */
+fun pictureSizeMm(context: Context, mode: Pair<Int, Int>, fit: String, secondScreen: Boolean): Pair<Int, Int>? {
+    if (secondScreen && pictureSpanned(context)) return null
+    val display = probeDisplay(context, secondScreen) ?: return null
+    val m = DisplayMetrics().also { @Suppress("DEPRECATION") display.getRealMetrics(it) }
+    val own = display.displayId == ContextCompat.getDisplayOrDefault(context).displayId
+    val window = (context as? Activity)?.takeIf { own && it.isInMultiWindowMode }
+    val (w, h) = m.widthPixels to m.heightPixels
+    val view = when {
+        window == null && own && context.resources.configuration.smallestScreenWidthDp < PHONE_SW_DP ->
+            maxOf(w, h) to minOf(w, h)
+        window == null -> w to h
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+            window.windowManager.currentWindowMetrics.bounds.let { it.width() to it.height() }
+        else -> return null
+    }
+    val pm = context.packageManager
+    val tvOrHeadset = isTvDevice(context) || pm.hasSystemFeature(PackageManager.FEATURE_VR_HEADTRACKING) ||
+        pm.hasSystemFeature("android.software.xr.api.spatial")
+    val mm = pictureSizeMm(m.xdpi, m.ydpi, m.densityDpi, view, mode, VideoFit.fromName(fit), tvOrHeadset)
+    val line = "picture mm xdpi=${m.xdpi} ydpi=${m.ydpi} density=${m.densityDpi} view=$view mode=$mode " +
+        "tvOrHeadset=$tvOrHeadset → ${mm ?: "none"}"
+    Log.i("punktfunk", line)
+    runCatching { NativeBridge.nativeLogDisplay(line) }
+    return mm
 }
 
 /**

@@ -6,7 +6,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 
 /** Under this smallest width a window is a phone's. Android's own large-screen line. */
-private const val PHONE_SW_DP = 600
+internal const val PHONE_SW_DP = 600
 
 /**
  * Holds a phone's window in landscape while [hold]: the stream's picture and the console are
