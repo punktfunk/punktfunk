@@ -1,5 +1,6 @@
 package io.unom.punktfunk.kit
 
+import android.os.Build
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -171,6 +172,11 @@ object Gamepad {
     // Pads whose face buttons hid-nintendo reports by position (BTN_SOUTH is the engraved B):
     // Joy-Con L/R, the combined pair, the Pro Controller, the charging grip.
     private val PID_HID_NINTENDO = setOf(0x2006, 0x2007, 0x2008, 0x2009, 0x200E)
+
+    // AYN's built-in pad in its Nintendo controller style ("Odin Controller"). Its Xbox style
+    // re-enumerates as 0x0112 and already reports by position.
+    private const val VID_AYN = 0x2020
+    private const val PID_AYN_NINTENDO_STYLE = 0x0111
 
     // Valve: Steam Deck built-in controller (0x1205); classic Steam Controller wired (0x1102) /
     // dongle (0x1142). The host builds the virtual hid-steam pad. Sc2Capture claims the classic
@@ -781,8 +787,9 @@ object Gamepad {
     /**
      * The keycode [event] should have carried, given the controller it came from — [event]'s own
      * keycode for every pad Android has a key layout for, and the scancode's true button for one
-     * it does not (see the block comment above [PadButtons]). A hid-nintendo pad's face buttons
-     * always come from the scancode ([nintendoFace]).
+     * it does not (see the block comment above [PadButtons]). A hid-nintendo pad's face buttons,
+     * and an AYN Thor's in its Nintendo style, always come from the scancode ([nintendoFace],
+     * [aynThorFace]).
      *
      * A drop-in for `event.keyCode` at every gamepad reader: the console UI's navigation, the
      * Controllers screen's tester, and the streaming branch all route through it, so a mis-mapped
@@ -794,7 +801,25 @@ object Gamepad {
         val dev = event.device ?: return event.keyCode
         if (event.scanCode == 0 || !isPad(dev)) return event.keyCode
         nintendoFace(dev.vendorId, dev.productId, event.scanCode)?.let { return it }
+        aynThorFace(Build.MODEL, dev.vendorId, dev.productId, event.scanCode)?.let { return it }
         return padMap(dev).buttons.correct(event.scanCode, event.keyCode)
+    }
+
+    /**
+     * The positional keycode for a face scancode on an AYN Thor's built-in pad in its Nintendo
+     * controller style, or null for any other key, pad or device. That style names the faces by
+     * the Thor's print (A east, B south, X north, Y west), as Switchroot's Joy-Con layout does.
+     * Only the Thor is measured: an Odin's print is Xbox-style, so by print is by position there.
+     */
+    fun aynThorFace(model: String?, vid: Int, pid: Int, scan: Int): Int? {
+        if (model != "AYN Thor" || vid != VID_AYN || pid != PID_AYN_NINTENDO_STYLE) return null
+        return when (scan) {
+            0x130 -> KeyEvent.KEYCODE_BUTTON_B // printed A, east
+            0x131 -> KeyEvent.KEYCODE_BUTTON_A // printed B, south
+            0x133 -> KeyEvent.KEYCODE_BUTTON_Y // printed X, north
+            0x134 -> KeyEvent.KEYCODE_BUTTON_X // printed Y, west
+            else -> null
+        }
     }
 
     /**

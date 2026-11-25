@@ -336,6 +336,25 @@ class PadButtonsTest {
         assertEquals(null, Gamepad.nintendoFace(0x057E, 0x2069, 0x131))
     }
 
+    /**
+     * An AYN Thor's own pad, measured with `getevent` on the device: in the Nintendo controller
+     * style (`2020:0111`) each face scancode follows the print, in the Xbox style (`2020:0112`) the
+     * position. Only the Nintendo style on a Thor is corrected.
+     */
+    @Test
+    fun `an AYN Thor's Nintendo style reads its faces by position`() {
+        val thor = "AYN Thor"
+        assertEquals(KeyEvent.KEYCODE_BUTTON_B, Gamepad.aynThorFace(thor, 0x2020, 0x0111, 0x130)) // printed A, east
+        assertEquals(KeyEvent.KEYCODE_BUTTON_A, Gamepad.aynThorFace(thor, 0x2020, 0x0111, 0x131)) // printed B, south
+        assertEquals(KeyEvent.KEYCODE_BUTTON_Y, Gamepad.aynThorFace(thor, 0x2020, 0x0111, 0x133)) // printed X, north
+        assertEquals(KeyEvent.KEYCODE_BUTTON_X, Gamepad.aynThorFace(thor, 0x2020, 0x0111, 0x134)) // printed Y, west
+        // D-pad and shoulders keep their layout; the Xbox style, other AYN models and other pads are untouched.
+        for (scan in listOf(0x220, 0x136, 0x13c)) assertEquals(null, Gamepad.aynThorFace(thor, 0x2020, 0x0111, scan))
+        assertEquals(null, Gamepad.aynThorFace(thor, 0x2020, 0x0112, 0x130))
+        assertEquals(null, Gamepad.aynThorFace("AYN Odin2", 0x2020, 0x0111, 0x130))
+        assertEquals(null, Gamepad.aynThorFace(thor, 0x045E, 0x0111, 0x130))
+    }
+
     /** Nintendo pads declare the kind the SDL clients' `pref_for_ids` and `pref_for_type` give. */
     @Test
     fun `a Nintendo pad declares its own kind`() {
