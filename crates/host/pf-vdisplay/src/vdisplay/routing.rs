@@ -639,8 +639,9 @@ pub fn managed_session_available() -> bool {
 /// Schedule a debounced TV restore after a managed takeover session ends.
 /// A reconnect inside the window reuses the warm session (no per-connect
 /// gamescope stop/relaunch). No-op when nothing was taken. Needs
-/// [`start_restore_worker`] running to fire. A box already on its desktop gets
-/// back what our session held at once, whatever the keep-alive. `quit` says the
+/// [`start_restore_worker`] running to fire. A box that left our session for its
+/// desktop gets back what the session held at once, whatever the keep-alive; a
+/// session started beside that desktop is kept like any other. `quit` says the
 /// last session was stopped on purpose, `slept` how long the box slept under it.
 #[cfg(target_os = "linux")]
 pub fn restore_managed_session(quit: bool, slept: std::time::Duration) {

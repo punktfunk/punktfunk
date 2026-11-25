@@ -97,10 +97,12 @@ pub(super) fn shut_steam_down(pid: u32, wait: Duration) -> bool {
 }
 
 /// Desktop Steam holds the single instance; autologin stop cannot see it. Ours (host tree /
-/// SESSION_UNIT) are exempt. Timeout is an actionable error, not a no-frames retry loop.
-pub(super) fn free_desktop_steam() -> Result<()> {
+/// SESSION_UNIT) are exempt. `true` when one was asked to quit and did: whoever asked starts it
+/// again ([`restart_swallowed_desktop_steam`]). Timeout is an actionable error, not a no-frames
+/// retry loop.
+pub(super) fn free_desktop_steam() -> Result<bool> {
     let Some(pid) = desktop_steam_pid() else {
-        return Ok(());
+        return Ok(false);
     };
     tracing::info!(
         pid,
@@ -108,7 +110,7 @@ pub(super) fn free_desktop_steam() -> Result<()> {
     );
     if shut_steam_down(pid, STEAM_SHUTDOWN_WAIT) {
         tracing::info!(pid, "desktop Steam exited — single instance free");
-        return Ok(());
+        return Ok(true);
     }
     bail!(
         "Steam is already running in the host's desktop session (pid {pid}) and did not exit \
@@ -132,10 +134,10 @@ pub(super) fn home_steam_pid(home: &std::path::Path) -> Option<u32> {
 /// `/etc/xdg/autostart/steam.desktop` and Steam's own login entry both become this unit.
 const DESKTOP_STEAM_AUTOSTART: &str = "app-steam@autostart.service";
 
-/// The desktop starts Steam a few seconds in, while our Steam may still hold the single
-/// instance: that Steam hands its launch over and exits. Call once ours, which was running,
-/// is gone; starts the autostart again when it ran and no Steam runs. A desktop without the
-/// unit is left alone.
+/// The desktop's Steam made way for ours: [`free_desktop_steam`] asked it to quit, or it started
+/// a few seconds into the desktop while ours held the single instance, handed its launch over
+/// and exited. Call once ours, which was running, is gone; starts the autostart again when it
+/// ran and no Steam runs. A desktop without the unit is left alone.
 pub(super) fn restart_swallowed_desktop_steam() {
     let Some(home) = std::env::var_os("HOME") else {
         return;
@@ -165,12 +167,20 @@ pub(super) fn restart_swallowed_desktop_steam() {
     systemctl_user(&["start", "--no-block", DESKTOP_STEAM_AUTOSTART]);
     tracing::info!(
         unit = DESKTOP_STEAM_AUTOSTART,
-        "gamescope: started the desktop's Steam again — its autostart had handed its launch to our \
-         Steam and exited"
+        "gamescope: started the desktop's Steam again — it had made way for ours"
     );
 }
 
-/// A `systemctl show` body of a unit that is loaded, inactive, and has run a main process.
+/// [`restart_swallowed_desktop_steam`] for a dedicated launch that freed it, while the box shows
+/// a desktop: under a Game Mode the autostart would take the instance from the box's Steam.
+pub(super) fn give_desktop_steam_back() {
+    if crate::session::is_desktop_kind(crate::detect_active_session().kind) {
+        restart_swallowed_desktop_steam();
+    }
+}
+
+/// A `systemctl show` body of a unit that is loaded, has run a main process, and runs none
+/// now. `failed` counts: a Steam that hands its launch to the one holding the instance exits 1.
 fn ran_and_exited(show: &str) -> bool {
     let prop = |key: &str| {
         show.lines()
@@ -178,7 +188,7 @@ fn ran_and_exited(show: &str) -> bool {
             .unwrap_or("")
     };
     prop("LoadState") == "loaded"
-        && prop("ActiveState") == "inactive"
+        && matches!(prop("ActiveState"), "inactive" | "failed")
         && !matches!(prop("ExecMainStartTimestampMonotonic"), "" | "0")
 }
 
@@ -395,8 +405,9 @@ pub(super) fn hand_launch_to_steam_when_up(uri: String, gamescope: u32) {
 mod tests {
     use super::*;
 
-    /// Only an autostart that ran and is gone is started again: one still running is the
-    /// desktop's Steam, one that never ran is the desktop's to start, a missing one was disabled.
+    /// Only an autostart that ran and is gone is started again, however it exited: one still
+    /// running is the desktop's Steam, one that never ran is the desktop's to start, a missing
+    /// one was disabled.
     #[test]
     fn only_an_autostart_that_ran_and_exited_is_started_again() {
         let show = |load: &str, active: &str, started: &str| {
@@ -408,7 +419,8 @@ mod tests {
         assert!(!ran_and_exited(&show("loaded", "active", "1234567")));
         assert!(!ran_and_exited(&show("loaded", "inactive", "0")));
         assert!(!ran_and_exited(&show("not-found", "inactive", "0")));
-        assert!(!ran_and_exited(&show("loaded", "failed", "1234567")));
+        assert!(ran_and_exited(&show("loaded", "failed", "1234567")));
+        assert!(!ran_and_exited(&show("loaded", "failed", "0")));
         assert!(!ran_and_exited(""));
     }
 

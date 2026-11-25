@@ -37,8 +37,8 @@ pub enum Undo {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TakeoverStep {
-    /// The box's autologin Game Mode units, killed and, where a display manager relogins,
-    /// idled behind a drop-in. Undo restarts them.
+    /// The box's live autologin Game Mode units: idled behind a drop-in where a display manager
+    /// waits on them, else killed. Undo restarts them.
     RestartAutologin { units: Vec<String> },
     /// Our managed `gamescope-session-plus` unit. Undo stops it.
     StopSession,
