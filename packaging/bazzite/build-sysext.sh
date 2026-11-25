@@ -81,7 +81,9 @@ for rpm in "${RPMS[@]}"; do
     PF_VR="$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$rpm" 2>/dev/null)"
     PF_VR="${PF_VR%.fc*}"
   fi
-  rpm2cpio "$rpm" | ( cd "$STAGE" && cpio -idmu --quiet )
+  # cpio stops at the archive's trailer. `cat` reads what rpm2cpio writes after it, or rpm2cpio
+  # dies on SIGPIPE now and then and pipefail fails the build.
+  rpm2cpio "$rpm" | ( cd "$STAGE" && cpio -idmu --quiet && cat >/dev/null )
 done
 [ -n "$PF_VR" ] || { echo "the punktfunk (host) RPM must be among the inputs" >&2; exit 1; }
 # An image resolves no dependencies, and both launchers exec punktfunk-bun's bun.
