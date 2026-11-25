@@ -226,33 +226,29 @@ jobs:
       - name: curl with retries (skia-bindings' prebuilt fetch has none)
         run: sh scripts/ci/install-retrying-curl.sh
 
-      # Same key namespace as ci.yml/deb.yml ON PURPOSE: identical Cargo.lock, identical
-      # CARGO_HOME layout (/usr/local/cargo), so the registry/git downloads dedupe with
-      # the rest of the fleet in the central cache. target/ is deliberately NOT cached —
-      # sccache covers recompilation without shipping multi-GB tars per run.
-      # A pull request saves into `-ci-`, never the pool the signed tag build restores (ci.yml).
-      - name: Cache (cargo registry)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # deb.yml's cargo keys and android-screenshots.yml's gradle keys: release builds restore
+      # both prefixes, and the cache server ignores the ref. So a pull request only restores;
+      # the saves follow the release build. sccache covers target/.
+      - name: Restore cargo registry
+        id: cargo-home
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             /usr/local/cargo/registry
             /usr/local/cargo/git
-          key: cargo-home-${{ github.event_name == 'pull_request' && 'ci-' || '' }}${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-home-${{ github.event_name == 'pull_request' && 'ci-' || '' }}
+          key: cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-
 
-      - name: Cache (gradle)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore gradle
+        id: gradle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          # gradle-wrapper.properties is in the key on purpose: `~/.gradle/wrapper` caches the
-          # Gradle DISTRIBUTION, so a wrapper bump with no .gradle.kts change would otherwise
-          # restore a key that can never hold the new one. Namespace shared with
-          # android-screenshots.yml — same content, one copy in the central store. A pull
-          # request saves into `gradle-ci-`, never the pool the signed tag build restores.
-          key: gradle-${{ github.event_name == 'pull_request' && 'ci-' || '' }}${{ hashFiles('clients/android/**/*.gradle.kts', 'clients/android/**/gradle.lockfile', 'clients/android/gradle/verification-metadata.xml', 'clients/android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: gradle-${{ github.event_name == 'pull_request' && 'ci-' || '' }}
+          # `~/.gradle/wrapper` holds the Gradle distribution, so its properties file is in the key.
+          key: gradle-${{ hashFiles('clients/android/**/*.gradle.kts', 'clients/android/**/gradle.lockfile', 'clients/android/gradle/verification-metadata.xml', 'clients/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
 
       # Clippy for the ANDROID target. ci.yml lints `--workspace` on the host, where
       # `clients/android/native` and every `#[cfg(target_os = "android")]` module elsewhere
@@ -372,6 +368,24 @@ jobs:
           set -e
           sh scripts/ci/check-android-strip.sh clients/android/app/build/outputs/apk/release/app-release.apk stripped
           sh scripts/ci/check-android-strip.sh clients/android/app/build/outputs/bundle/release/app-release.aab stripped
+
+      # A pull request never saves: release builds restore these keys.
+      - name: Save cargo registry
+        if: github.event_name != 'pull_request' && steps.cargo-home.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+          key: ${{ steps.cargo-home.outputs.cache-primary-key }}
+      - name: Save gradle
+        if: github.event_name != 'pull_request' && steps.gradle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ steps.gradle.outputs.cache-primary-key }}
 
       # Attach the built APK to the workflow run so it's a one-click sideload download straight from the
       # run page (no need to know the generic-registry URL) — on EVERY trigger of this job, incl. a

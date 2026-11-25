@@ -203,8 +203,8 @@ jobs:
           path: |
             /usr/local/cargo/registry
             /usr/local/cargo/git
-          # `-ci-`, never the release builds' `cargo-home-` pool: extracted crate sources compile
-          # without a re-checksum, so an entry here must never reach a signed build.
+          # deb.yml's `cargo-home-` prefix restores this key into a release build too, so only a
+          # push saves it. Cargo never re-checksums extracted crate sources.
           key: cargo-home-ci-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-ci-
       - name: Restore target
@@ -486,8 +486,8 @@ jobs:
           path: |
             /usr/local/cargo/registry
             /usr/local/cargo/git
-          # `-ci-`, never the release builds' `cargo-home-` pool: extracted crate sources compile
-          # without a re-checksum, so an entry here must never reach a signed build.
+          # deb.yml's `cargo-home-` prefix restores this key into a release build too, so only a
+          # push saves it. Cargo never re-checksums extracted crate sources.
           key: cargo-home-ci-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-ci-
       - name: Restore target
