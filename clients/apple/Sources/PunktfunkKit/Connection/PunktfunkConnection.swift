@@ -1237,11 +1237,14 @@ public final class PunktfunkConnection: @unchecked Sendable {
     ///
     /// `view` is the size the picture is shown at when smaller than the mode
     /// (`EffectiveSettings.streamView`): a host that reads it encodes that size instead.
+    /// `displayMM` is the size the picture has on the glass in millimetres, `0` on a side
+    /// unknown: the host declares a display that size.
     public init(
         host: String, port: UInt16 = 9777,
         width: UInt32, height: UInt32, refreshHz: UInt32,
         refreshMilliHz: UInt32 = 0,
         view: (width: UInt32, height: UInt32)? = nil,
+        displayMM: (width: UInt16, height: UInt16) = (0, 0),
         pinSHA256: Data? = nil,
         identity: ClientIdentity? = nil,
         compositor: Compositor = .auto,
@@ -1308,6 +1311,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         opts.refresh_mhz = refreshMilliHz
         opts.view_width = view?.width ?? 0
         opts.view_height = view?.height ?? 0
+        opts.display_width_mm = displayMM.width
+        opts.display_height_mm = displayMM.height
         opts.compositor = compositor.rawValue
         opts.gamepad = gamepad.rawValue
         opts.bitrate_kbps = bitrateKbps

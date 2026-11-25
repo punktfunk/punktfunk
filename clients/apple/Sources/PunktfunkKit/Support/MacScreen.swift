@@ -134,5 +134,57 @@ extension NSScreen {
             nativeWidth: panel.width, nativeHeight: panel.height,
             topInsetPoints: top, scale: panelScale)
     }
+
+    /// `NSScreen.pictureSizeMM` for a stream of `mode` on this screen. In `fullscreen` the
+    /// picture covers the area `FullscreenController` takes: the whole panel when it shows
+    /// bigger there, else the part below the housing. Otherwise it covers `window`'s content;
+    /// none is unknown. Under `matchWindow` the window's size never counts.
+    public func pictureSizeMM(
+        mode: (width: UInt32, height: UInt32), fit: VideoFit, fullscreen: Bool, matchWindow: Bool,
+        window: NSWindow?
+    ) -> (width: UInt16, height: UInt16) {
+        guard let id = displayID else { return (0, 0) }
+        let (panel, safe) = (panelPixelSize, notchSafePixelSize)
+        let covered: (width: Int, height: Int)
+        if matchWindow {
+            covered = panel
+        } else if fullscreen {
+            let content = (Int(mode.width), Int(mode.height))
+            covered = SafeDisplay.coversHousing(content: content, panel: panel, safe: safe) ? panel : safe
+        } else if let size = window?.contentView?.bounds.size {
+            covered = (Int(size.width * panelScale), Int(size.height * panelScale))
+        } else {
+            return (0, 0)
+        }
+        return Self.pictureSizeMM(
+            mode: mode, covered: covered, fit: fit, panel: panel,
+            mm: CGDisplayScreenSize(id), points: CGDisplayBounds(id).size, matchWindow: matchWindow)
+    }
+
+    /// The size `mode` has on the glass in millimetres once `fit` shows it over `covered`
+    /// pixels of a panel `panel` pixels and `mm` across. Under `matchWindow` the mode follows
+    /// the window while the host keeps one size, so it is the whole panel. `(0, 0)` is
+    /// unknown: a display with no real size (0 mm, the 72-DPI guess macOS makes from `points`
+    /// for a display without EDID, or exactly 160×90 mm, the aspect ratio many TVs write as
+    /// their size), or a panel outside 40…1000 PPI.
+    static func pictureSizeMM(
+        mode: (width: UInt32, height: UInt32), covered: (width: Int, height: Int), fit: VideoFit,
+        panel: (width: Int, height: Int), mm: CGSize, points: CGSize, matchWindow: Bool
+    ) -> (width: UInt16, height: UInt16) {
+        let guessed = abs(mm.width - points.width * 25.4 / 72) < 0.5
+            && abs(mm.height - points.height * 25.4 / 72) < 0.5
+        let sides = (min(mm.width, mm.height), max(mm.width, mm.height))
+        let aspectOnly = abs(sides.0 - 90) < 0.5 && abs(sides.1 - 160) < 0.5
+        let ppi = (Double(panel.width) * 25.4 / mm.width, Double(panel.height) * 25.4 / mm.height)
+        guard !guessed, !aspectOnly, (40...1000).contains(ppi.0), (40...1000).contains(ppi.1)
+        else { return (0, 0) }
+        let side = { (mm: Double) in UInt16(clamping: Int(mm.rounded())) }
+        if matchWindow { return (side(mm.width), side(mm.height)) }
+        let shown = fit.place(view: covered, frame: (Int(mode.width), Int(mode.height)))
+        guard !shown.isEmpty else { return (0, 0) }
+        return (
+            side(Double(mode.width) * shown.scaleX * mm.width / Double(panel.width)),
+            side(Double(mode.height) * shown.scaleY * mm.height / Double(panel.height)))
+    }
 }
 #endif
