@@ -1,5 +1,5 @@
 // The prompt of a profile on a person's own account or of a locked one (rules:
-// docs-site/content/docs/developers/multi-seat-contract.md): a masked field for its password,
+// docs-site/content/docs/developers/multi-seat-contract/): a masked field for its password,
 // which autofill can fill, or its PIN on a number pad; one switch; the host's sentence when it
 // refused. A sheet; on tvOS the system keyboard, or the PIN's own pad.
 // What was typed lives in the view's state only while it is up, and leaves as an UnlockSecret.

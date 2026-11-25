@@ -1,10 +1,20 @@
 ---
 title: Releasing
-description: For maintainers — how canary and stable builds ship, how to cut a stable release, and how the release notes are written.
+description: For maintainers — how canary and stable builds ship, the steps to cut a stable release, and how the release notes are written.
 ---
 
-How builds reach users, and the steps a maintainer takes to cut a stable release. Subscribing a box
-to a channel is [Release channels](/docs/channels).
+See how a build reaches users, and follow the steps a maintainer takes to cut a stable release.
+Subscribing a box to a channel is [Release channels](/docs/channels).
+
+```mermaid Two ways a build ships: a push makes a canary, a tag makes a release
+graph TD
+  PUSH[Push to main] --> CANARY[Canary build of each touched platform]
+  CANARY --> CCH[Canary channels]
+  TAG[Tag vX.Y.Z] --> STABLE[Stable build of every platform]
+  STABLE --> REL[Stable channels and one Gitea release]
+  REL --> ANN[The announce workflow]
+  ANN --> FEED[Update manifest, stable branch, Discord]
+```
 
 ## Canary and stable
 
@@ -70,19 +80,14 @@ reports; the Windows packer stamps it into the finished binary.
    use the Play Console or `android-promote.yml` (a dry run unless you turn `dry_run` off). Apple:
    submit the TestFlight build for review in App Store Connect.
 
-   **While Google still reviews the last release**, a new production release replaces it and the
-   review starts over. Set the repo variable `PLAY_HOLD_PRODUCTION` to `true` before the tag: the
-   build lands on Play's `internal` track instead. Once the review is done, run
-   `android-promote.yml` with the tag run's versionCode, `to_track` `production`, `from_track`
-   blank and `notes_tag` the tag, then clear the variable.
+### Special cases
 
-**An `-rc` tag publishes too.** It builds like a stable tag, Android to Play production included,
-and needs its own `docs/releases/whatsnew/<tag>.txt`. `announce` refuses it unless
-`allow_prerelease` is set, and never puts it in the update feed.
-
-To fix a tag after pushing it, land the fix on `main`, then move the tag with
-`git tag -f -a vX.Y.Z <commit>` and `git push -f origin refs/tags/vX.Y.Z`. The new tag runs cancel
-the old ones.
+| Case | Do |
+|---|---|
+| Google still reviews the last release | A new production release would replace it and restart the review. Set the repo variable `PLAY_HOLD_PRODUCTION` to `true` before the tag: the build lands on Play's `internal` track. Once the review is done, run `android-promote.yml` with the tag run's versionCode, `to_track` `production`, `from_track` blank and `notes_tag` the tag, then clear the variable. |
+| An `-rc` tag | It builds like a stable tag, Android to Play production included, and needs its own `docs/releases/whatsnew/<tag>.txt`. `announce` refuses it unless `allow_prerelease` is set, and never puts it in the update feed. |
+| A tag needs fixing after the push | Land the fix on `main`, then move the tag with `git tag -f -a vX.Y.Z <commit>` and `git push -f origin refs/tags/vX.Y.Z`. The new tag runs cancel the old ones. |
+| A platform's run is missing | Two merges seconds apart can leave the older commit with no run, and re-running a pull-request run can't publish. Dispatch the workflow on that ref instead: `android.yml` and `windows-host.yml` publish only with `publish=true`; a plain dispatch just builds. |
 
 ## Release notes
 
@@ -102,9 +107,3 @@ Ordinary pull requests don't touch `CHANGELOG.md`. A change the reader must act 
 the tag, change the file on `main` and dispatch `announce` again (it posts to Discord again), or
 patch the release body through the Gitea API. Flow and voice in full:
 [docs/releases/README.md](https://git.unom.io/unom/punktfunk/src/branch/main/docs/releases/README.md).
-
-## A platform's run is missing
-
-Two merges seconds apart can leave the older commit with no run, and re-running a pull-request run
-can't publish. Dispatch the workflow on that ref instead: `android.yml` and `windows-host.yml`
-publish only with `publish=true`; a plain dispatch just builds.
