@@ -2396,7 +2396,8 @@ mod tests {
         let channel = |id: &str| box_flatpak(catalog.get(id).unwrap());
         assert_eq!(channel("pcsx2"), Some("net.pcsx2.PCSX2"));
         assert_eq!(channel("retroarch"), Some("org.libretro.RetroArch"));
-        for own in ["rpcs3", "shadps4", "supermodel", "vita3k", "xenia-canary"] {
+        assert_eq!(channel("supermodel"), Some("com.supermodel3.Supermodel"));
+        for own in ["rpcs3", "shadps4", "vita3k", "xenia-canary"] {
             assert_eq!(channel(own), None, "{own}");
         }
     }
