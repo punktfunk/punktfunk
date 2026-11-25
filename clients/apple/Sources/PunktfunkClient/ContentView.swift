@@ -760,7 +760,7 @@ struct ContentView: View {
         DeepLinkRouter.SessionState(
             isIdle: LinkIdle.isIdle(
                 phase: model.phase, redialPending: model.redial != nil,
-                waking: wakeToConnect != nil, preDialFetch: flowLife.fetching),
+                waking: wakeToConnect != nil, preDialFetch: flowLife.asking != nil),
             activeHostID: model.activeHost?.id ?? model.redial?.host.id ?? wakeToConnect?.hostID,
             activeHostName: model.activeHost?.displayName)
     }
@@ -874,23 +874,18 @@ struct ContentView: View {
                     ConnectOverlay(
                         connectingHostName: connectingOverlayName,
                         waker: waker,
-                        onCancelConnect: { model.disconnect() })
+                        onCancelConnect: { flow.cancelConnect() })
                 }
             }
     }
 
-    /// The host label for the connect takeover's "Connecting…" phase — a plain dial in flight. Nil
-    /// during the delegated-approval wait (that has its own "Waiting for approval" prompt, so the
-    /// takeover must not stack over it) and, of course, when idle or streaming.
+    /// The host label for the connect takeover's "Connecting…" phase (`ConnectPlan.takeover`).
     private var connectingOverlayName: String? {
-        // A lost session waiting out its redial keeps the takeover between its dials.
-        if model.phase == .idle, let redial = model.redial { return redial.host.displayName }
-        // A launch dial has the launch hold instead — that says which GAME is coming, and stacking
-        // "Connecting to <host>" on top of it would be two takeovers for one act.
-        guard awaitingApproval == nil, model.launchHold == nil,
-              model.phase == .connecting, let host = model.activeHost
-        else { return nil }
-        return host.displayName
+        ConnectPlan.takeover(
+            phase: model.phase, dialing: model.activeHost?.displayName,
+            asking: flowLife.asking.flatMap { $0.late ? $0.hostName : nil },
+            redialing: model.redial?.host.displayName,
+            approvalWait: awaitingApproval != nil, launchHold: model.launchHold != nil)
     }
 
     @ViewBuilder private var homeBase: some View {

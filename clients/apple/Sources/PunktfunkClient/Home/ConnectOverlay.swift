@@ -3,8 +3,8 @@
 // out to be asleep. The Apple mirror of the Android client's `ConnectOverlay` and the shared console
 // UI's connect/wake takeover.
 //
-//   - Connecting (`connectingHostName` non-nil): the dial is in flight. Shown immediately on activate
-//     so a host that takes a beat to answer still shows something happened.
+//   - Connecting (`connectingHostName` non-nil): the dial, or a slow profile ask before it, is in
+//     flight, so a host that takes a beat to answer still shows something happened.
 //   - Waking (`waker.waking` non-nil): a failed dial on a sleeping host, or an explicit Wake Host,
 //     is firing Wake-on-LAN and waiting for the host to answer, escalating to a retry/cancel prompt
 //     on timeout.
@@ -20,12 +20,12 @@ import PunktfunkKit
 import SwiftUI
 
 struct ConnectOverlay: View {
-    /// Non-nil while a plain dial is in flight (the delegated-approval wait has its own prompt, so it
-    /// passes nil here). Drives the "Connecting…" phase.
+    /// Non-nil while a plain dial, or a slow profile ask before it, is in flight (the
+    /// delegated-approval wait has its own prompt, so it passes nil here). Drives "Connecting…".
     let connectingHostName: String?
     @ObservedObject var waker: HostWaker
-    /// Cancel a dial in flight — tears down the (uncancelable) connect and returns the UI; the late
-    /// result is discarded by SessionModel's connect guard.
+    /// Cancel what "Connecting…" covers and return the UI. A late answer, the dial's or the
+    /// profile list's, is dropped.
     var onCancelConnect: () -> Void
 
     private enum Phase {

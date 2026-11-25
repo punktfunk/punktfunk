@@ -39,12 +39,20 @@ struct ConnectFlow {
     @Binding var unlockAsk: UnlockAsk?
 
     /// What this window's flow keeps between taps, since a `ConnectFlow` lives for one use.
-    @MainActor
+    @MainActor @Observable
     final class Life {
+        /// A tap's profile ask. `late`: unanswered past the grace, so the takeover names its host.
+        struct Asking {
+            let id = UUID()
+            let hostName: String
+            var late = false
+        }
+
         /// False while the window is gone: work begun before then never dials for its model.
         private(set) var isOpen = true
-        /// A tap's profile fetch is running: another tap does nothing until it answers.
-        var fetching = false
+        /// A tap's profile ask is running: another tap does nothing until it answers. Cancel
+        /// clears it, and its answer then dials nothing.
+        var asking: Asking?
 
         func close() { isOpen = false }
         /// The root view is back with the same state: its taps must work again.
@@ -90,7 +98,7 @@ struct ConnectFlow {
         preset: PresetSelection = .inherit, allowTofu: Bool? = nil,
         fromLibrary: Bool = false, profile: ProfileChoice = .ask(), fromLink: Bool = false
     ) {
-        guard life.isOpen, !life.fetching else { return }
+        guard life.isOpen, life.asking == nil else { return }
         let door = ConnectPlan.door(
             pinned: host.pinnedSHA256 != nil, allowTofu: allowTofu,
             advertsTofu: discovery.hosts.contains { host.matches($0) && $0.allowsTofu },
@@ -128,15 +136,24 @@ struct ConnectFlow {
     }
 
     /// Ask the host who is playing, then run `go` with the profile to dial as and what opens it.
+    /// An ask slower than the grace raises the connect takeover; its Cancel drops the answer.
     /// `ConnectPlan.afterProfiles` decides what follows the list.
     private func askProfile(
         _ host: StoredHost, link: String?, go: @escaping @MainActor (ProfileDial) -> Void
     ) {
         let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
-        life.fetching = true
+        let ask = Life.Asking(hostName: host.displayName)
+        life.asking = ask
+        Task { @MainActor in
+            // The console's grace: a list faster than this opens its sheet without a flash.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if life.asking?.id == ask.id { life.asking?.late = true }
+        }
         Task { @MainActor in
             let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
-            life.fetching = false
+            guard life.asking?.id == ask.id else { return }
+            // Down in the same turn as any sheet below, so none opens over the takeover.
+            life.asking = nil
             guard life.isOpen else { return }
             let rows = answer.rows
             let unlocked: @MainActor (String?) -> Void = { id in
@@ -543,6 +560,11 @@ struct ConnectFlow {
         model.disconnect()
     }
 
+    /// Cancel on the connect takeover: drops the profile ask it covers, else ends the dial.
+    func cancelConnect() {
+        if life.asking != nil { life.asking = nil } else { model.disconnect() }
+    }
+
     /// Explicit wake-only (a host card's or the library's "Wake Host"): fire the packet and wait
     /// for the host to come online, then run `onOnline`, but don't connect.
     func wakeOnly(_ host: StoredHost, onOnline: @escaping () -> Void = {}) {
@@ -560,7 +582,7 @@ struct ConnectFlow {
     /// (request access / pair with PIN). (A pinned discovered host connects silently inside
     /// `connect`.)
     func connectDiscovered(_ d: DiscoveredHost) {
-        guard !model.isBusy, !life.fetching else { return }
+        guard !model.isBusy, life.asking == nil else { return }
         let host = save(d)
         if d.allowsTofu {
             connect(host, allowTofu: true)

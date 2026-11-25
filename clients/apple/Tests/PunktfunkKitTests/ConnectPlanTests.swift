@@ -113,6 +113,33 @@ final class ConnectPlanTests: XCTestCase {
             .pick([anna, ben], saved: "anna", gone: nil))
     }
 
+    private func takeover(
+        _ phase: SessionPhase = .idle, dialing: String? = nil, asking: String? = nil,
+        redialing: String? = nil, approvalWait: Bool = false, launchHold: Bool = false
+    ) -> String? {
+        ConnectPlan.takeover(
+            phase: phase, dialing: dialing, asking: asking, redialing: redialing,
+            approvalWait: approvalWait, launchHold: launchHold)
+    }
+
+    /// A profile ask past its grace raises the takeover before the dial, under the same rules.
+    func testALateProfileAskRaisesTheTakeover() {
+        XCTAssertEqual(takeover(asking: "Desk"), "Desk")
+        XCTAssertNil(takeover())
+        XCTAssertNil(takeover(asking: "Desk", launchHold: true))
+        XCTAssertNil(takeover(asking: "Desk", approvalWait: true))
+    }
+
+    /// A dial names its host unless the approval wait or a launch hold covers it; a redial
+    /// keeps the takeover between its dials.
+    func testADialOrARedialRaisesTheTakeover() {
+        XCTAssertEqual(takeover(.connecting, dialing: "Desk"), "Desk")
+        XCTAssertNil(takeover(.connecting, dialing: "Desk", approvalWait: true))
+        XCTAssertNil(takeover(.connecting, dialing: "Desk", launchHold: true))
+        XCTAssertNil(takeover(.streaming, dialing: "Desk"))
+        XCTAssertEqual(takeover(redialing: "Den", launchHold: true), "Den")
+    }
+
     private func seated(_ state: SeatState, detail: String? = nil) -> [ListedProfile] {
         [ben, ListedProfile(
             id: "anna", displayName: "Anna", seat: ProfileSeat(state: state, detail: detail))]

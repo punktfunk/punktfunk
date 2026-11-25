@@ -55,6 +55,22 @@ public enum ConnectPlan {
         return .pick(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone)
     }
 
+    /// The host the connect takeover names, nil while it is down: the dial in flight, the profile
+    /// ask before it once past its grace (`asking`), or a lost session's redial between dials.
+    /// The approval wait and a launch hold are takeovers of their own.
+    public static func takeover(
+        phase: SessionPhase, dialing: String?, asking: String?, redialing: String?,
+        approvalWait: Bool, launchHold: Bool
+    ) -> String? {
+        if phase == .idle, let redialing { return redialing }
+        guard !approvalWait, !launchHold else { return nil }
+        switch phase {
+        case .connecting: return dialing
+        case .idle: return asking
+        case .awaitingTrust, .streaming: return nil
+        }
+    }
+
     /// One read of the list while a picked profile's seat comes up.
     public enum SeatStep: Equatable {
         /// The seat is up, or the list dropped the profile and the host refuses it: dial.
