@@ -177,7 +177,7 @@ Handlers live in `crates/host/punktfunk-host/src/mgmt/`. Annotate a new handler 
    `every_route_is_classified_for_the_plugin_and_cert_lanes` (`mgmt/tests/routes.rs`), and to
    `plugin_may_access` in `mgmt/auth.rs` or `paired_may_access` in `punktfunk-core`'s
    `mgmt_routes.rs` if that lane may call it. The browser client's page server relays by the
-   second. Then give it a side on a [door](/docs/developers/multi-seat-contract#the-owners-row-and-the-door):
+   second. Then give it a side on a [door](/docs/developers/multi-seat-contract/door):
    a row in `every_route_has_a_side_on_the_door` in the same file, and an entry in `DOOR`
    (`mgmt/owner.rs`) if the door answers it itself. An unclassified route fails either test.
 2. Regenerate the spec and every copy of it:

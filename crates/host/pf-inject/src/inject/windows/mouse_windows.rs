@@ -56,7 +56,7 @@ const DOORBELL_RETRY: Duration = Duration::from_secs(1);
 const HID_INPUT_ENV: &str = "PUNKTFUNK_HID_INPUT";
 
 /// The reserved display connector a seat host owns; unset on the console.
-/// `docs-site/content/docs/developers/multi-seat-contract.md` is the contract of record.
+/// `docs-site/content/docs/developers/multi-seat-contract/` is the contract of record.
 const SEAT_SLOT_ENV: &str = "PUNKTFUNK_SEAT_DISPLAY_SLOT";
 const FIRST_SEAT_SLOT: u8 = 12;
 const LAST_SEAT_SLOT: u8 = 15;

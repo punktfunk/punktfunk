@@ -1,0 +1,14 @@
+{
+  "title": "Multi-seat",
+  "defaultOpen": false,
+  "pages": [
+    "index",
+    "supervisor",
+    "seat-host",
+    "profile-locks",
+    "windows",
+    "linux",
+    "door",
+    "own-account"
+  ]
+}
