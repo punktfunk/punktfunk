@@ -281,6 +281,28 @@ fn is_other_running(rec: &Record, fp: &str, keep_game_id: Option<&str>, live: Li
         && live == Liveness::Running
 }
 
+/// Workspace of this client's newest launch that a claim would adopt ([`covers`]), for a connect
+/// that names no title. `None` for an anonymous client, or with nothing of its up and placed.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
+pub fn running_workspace(fingerprint: Option<&str>) -> Option<i64> {
+    let fp = fingerprint?;
+    let now = Instant::now();
+    let recs = reg().records.lock().unwrap_or_else(|e| e.into_inner());
+    newest_placed(&recs, fp, |r| {
+        covers(r, claim_liveness(r), now, IN_FLIGHT_WINDOW)
+    })
+}
+
+/// Pure half of [`running_workspace`]: `up` is [`covers`] with liveness supplied.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code, reason = "Linux places it"))]
+fn newest_placed(recs: &[Record], fp: &str, up: impl Fn(&Record) -> bool) -> Option<i64> {
+    recs.iter()
+        .filter(|r| r.key.fingerprint == fp && up(r))
+        .filter_map(|r| Some((r.claim, r.workspace?)))
+        .max_by_key(|&(claim, _)| claim)
+        .map(|(_, ws)| ws)
+}
+
 /// The host is ending this launch's game ([`crate::gamelease::terminate`]).
 /// Until [`ended`], a claim on the record spawns instead of adopting a
 /// process on its way out. The record is found by its proc slot, which a
@@ -767,6 +789,33 @@ mod tests {
             Some("steam:2"),
             Liveness::Unknown
         ));
+    }
+
+    /// A connect that names no title opens on this client's newest live, placed launch.
+    #[test]
+    fn a_bare_connect_finds_only_this_clients_live_placed_launch() {
+        let placed = |claim, ws| {
+            let mut r = rec(true, 0, None);
+            (r.claim, r.workspace) = (claim, ws);
+            r
+        };
+        let now = Instant::now();
+        // Claim 3's game is gone; every other one is up.
+        let up = |r: &Record| {
+            let live = if r.claim == 3 {
+                Liveness::Gone
+            } else {
+                Liveness::Running
+            };
+            covers(r, live, now, IN_FLIGHT_WINDOW)
+        };
+        assert_eq!(newest_placed(&[placed(1, Some(4))], "fp", up), Some(4));
+        assert_eq!(newest_placed(&[placed(1, Some(4))], "other-fp", up), None);
+        assert_eq!(newest_placed(&[placed(3, Some(4))], "fp", up), None);
+        assert_eq!(newest_placed(&[placed(1, None)], "fp", up), None);
+        let all = [placed(2, Some(6)), placed(1, Some(4)), placed(3, Some(8))];
+        assert_eq!(newest_placed(&all, "fp", up), Some(6), "newest live claim");
+        assert_eq!(running_workspace(None), None);
     }
 
     #[test]
