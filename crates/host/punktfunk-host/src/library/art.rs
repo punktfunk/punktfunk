@@ -767,7 +767,7 @@ pub fn proxy_art(id: &str, art: &mut Artwork) {
         let proxied = field
             .as_deref()
             .filter(|v| is_local_art_path(v) || (is_remote_art_url(v) && !remote_art_refused(v)))
-            .map(|v| format!("/api/v1/library/art/{id}/{kind}?v={}", &art_key(v)[..16]));
+            .map(|v| format!("/api/v1/library/art/{id}/{kind}?v={}", art_version(v)));
         if let Some(path) = proxied {
             *field = Some(path);
         }
@@ -776,6 +776,11 @@ pub fn proxy_art(id: &str, art: &mut Artwork) {
     rw(&mut art.hero, "hero");
     rw(&mut art.logo, "logo");
     rw(&mut art.header, "header");
+}
+
+/// The `?v=` [`proxy_art`] gives the art value `v`: the head of its hash.
+pub(crate) fn art_version(v: &str) -> String {
+    art_key(v)[..16].to_owned()
 }
 
 /// Best box-art for a library id, for GameStream `/appasset` (Moonlight fetches covers from the
@@ -907,6 +912,27 @@ mod tests {
             art.header.as_deref(),
             Some("/api/v1/library/art/custom:x/header")
         );
+    }
+
+    /// The console computes the same `?v=` to mark which offered image a slot shows.
+    #[test]
+    fn shared_art_version_vectors_hold() {
+        let store = tempfile::tempdir().expect("temp store");
+        let _env = store_in(store.path());
+        let raw = include_str!("../../../../../clients/shared/library-id-vectors.json");
+        let v: serde_json::Value = serde_json::from_str(raw).expect("vectors parse");
+        for c in v["art_versions"].as_array().expect("case list") {
+            let mut art = Artwork {
+                portrait: c["url"].as_str().map(str::to_owned),
+                ..Artwork::default()
+            };
+            proxy_art("steam:570", &mut art);
+            let want = format!(
+                "/api/v1/library/art/steam:570/portrait?v={}",
+                c["v"].as_str().expect("version")
+            );
+            assert_eq!(art.portrait.as_deref(), Some(want.as_str()));
+        }
     }
 
     /// The whole point of the version tag: point the entry at a different cover and every cache

@@ -435,16 +435,10 @@ pub(crate) fn merged_art(view: &View, library_id: &str) -> Option<Artwork> {
     Some(g.art)
 }
 
-/// Art bytes for one [`ArtKind`] in `view`, or `None` — no row, no such field, or art the proxy
-/// may not serve. A remote URL comes from the host's store, which fetches it on the first miss.
-/// Blocking IO — call off the async runtime.
-pub fn library_art_bytes(
-    view: &View,
-    library_id: &str,
-    kind: ArtKind,
-) -> Option<(Vec<u8>, String)> {
-    let field = art_field(&merged_art(view, library_id)?, kind)?;
-    resolve_art_bytes(&field)
+/// One [`ArtKind`] of an entry as `view` lists it: the art value [`proxy_art`] versions and
+/// [`resolve_art_bytes`] reads. `None` without the row or the field. Blocking IO.
+pub fn library_art_value(view: &View, library_id: &str, kind: ArtKind) -> Option<String> {
+    art_field(&merged_art(view, library_id)?, kind)
 }
 
 pub(crate) fn art_field(art: &Artwork, kind: ArtKind) -> Option<String> {
