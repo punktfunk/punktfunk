@@ -73,6 +73,7 @@ on:
       - 'packaging/linux/*.generator'
       - 'packaging/linux/*.pam'
       - 'packaging/linux/apparmor/**'
+      - 'packaging/linux/punktfunk-scripting-apparmor-confined'
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
       - 'packaging/linux/*.sh'
