@@ -225,7 +225,8 @@ pub struct OwnTitle {
     #[schema(example = "own:3f9a0c1b2d4e")]
     pub id: String,
     pub title: String,
-    /// `http(s)` URLs alone: a cover on the seat's disk stays there.
+    /// An `http(s)` URL, or for a cover on the seat's disk the seat's own art path: the box asks
+    /// the seat's host for that one.
     #[serde(default)]
     pub art: Artwork,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -234,11 +235,17 @@ pub struct OwnTitle {
 }
 
 impl OwnTitle {
-    /// `e` as the box may see it.
+    /// `e` as the box may see it: no path on the seat's disk, only the seat's art path for it.
     pub(crate) fn of(e: &CustomEntry) -> Self {
         let mut art = Artwork::default();
         for kind in ArtKind::ALL {
-            *art_slot(&mut art, kind) = art_field(&e.art, kind).filter(|u| valid_remote_url(u));
+            *art_slot(&mut art, kind) = art_field(&e.art, kind).and_then(|u| {
+                if valid_remote_url(&u) {
+                    return Some(u);
+                }
+                let held = is_local_art_path(&u) || u.starts_with("data:");
+                held.then(|| seat_art_path(&e.id, kind, &art_version(&u)))
+            });
         }
         Self {
             id: e.id.clone(),
@@ -277,6 +284,23 @@ impl From<OwnTitle> for CustomEntry {
     }
 }
 
+/// Where the seat's host serves slot `kind` of its own title `id`, at the cover's `version`.
+fn seat_art_path(id: &str, kind: ArtKind, version: &str) -> String {
+    format!("/api/v1/library/art/{id}/{}?v={version}", kind.name())
+}
+
+/// The version in `v` when it is the seat's art path for slot `kind` of own title `id`.
+pub(crate) fn seat_art_version<'a>(id: &str, kind: ArtKind, v: &'a str) -> Option<&'a str> {
+    let version = v
+        .strip_prefix("/api/v1/library/art/")?
+        .strip_prefix(id)?
+        .strip_prefix('/')?
+        .strip_prefix(kind.name())?
+        .strip_prefix("?v=")?;
+    let hex = |b: u8| matches!(b, b'0'..=b'9' | b'a'..=b'f');
+    (version.len() == 16 && version.bytes().all(hex)).then_some(version)
+}
+
 /// `own-titles.json`.
 #[derive(Default, Serialize, Deserialize)]
 struct OwnTitles {
@@ -307,9 +331,10 @@ pub fn published_own_titles() -> Vec<OwnTitle> {
 }
 
 /// A seat host's `GET /library/own` answer, `body`, as the box keeps it for `profile`, checked as
-/// an Art & Metadata source's push is: a row with a bad id or title, a cover that isn't `http(s)`
-/// and a bad platform are dropped. An answer that isn't a list of titles, is too large, lists
-/// more than [`OWN_TITLES_MAX`] or names an id twice is refused, and logged.
+/// an Art & Metadata source's push is: a row with a bad id or title, a cover that is neither
+/// `http(s)` nor the seat's art path for that slot, and a bad platform are dropped. An answer that
+/// isn't a list of titles, is too large, lists more than [`OWN_TITLES_MAX`] or names an id twice
+/// is refused, and logged.
 pub fn checked_own_titles(
     profile: &str,
     body: &[u8],
@@ -343,8 +368,9 @@ fn check_own_titles(body: &[u8]) -> std::result::Result<Vec<OwnTitle>, String> {
             continue;
         }
         for kind in ArtKind::ALL {
+            let kept = |u: &str| valid_remote_url(u) || seat_art_version(&t.id, kind, u).is_some();
             let slot = art_slot(&mut t.art, kind);
-            if slot.as_deref().is_some_and(|u| !valid_remote_url(u)) {
+            if slot.as_deref().is_some_and(|u| !kept(u)) {
                 *slot = None;
             }
         }
@@ -459,7 +485,8 @@ mod tests {
         }
     }
 
-    /// An entry with every field set leaves the seat as its id, title, platform and remote art.
+    /// An entry with every field set leaves the seat as its id, title, platform and art: a remote
+    /// URL as it is, a cover on the seat's disk as the seat's art path for it.
     #[test]
     fn an_own_title_is_a_name_and_a_picture_alone() {
         let full = serde_json::json!({
@@ -489,15 +516,28 @@ mod tests {
         };
         assert_eq!(keys(&stored), keys(&full), "every field is set");
         let published = serde_json::to_value(OwnTitle::of(&entry)).unwrap();
+        let on_seat = |kind: &str, cover: &str| {
+            format!(
+                "/api/v1/library/art/own:0123456789ab/{kind}?v={}",
+                art_version(cover)
+            )
+        };
         let want = serde_json::json!({
             "id": "own:0123456789ab", "title": "Doom", "platform": "PC",
-            "art": {"hero": "https://cdn.example/h.jpg", "logo": "https://cdn.example/l.png"},
+            "art": {"portrait": on_seat("portrait", "/home/anna/covers/doom.png"),
+                    "hero": "https://cdn.example/h.jpg", "logo": "https://cdn.example/l.png",
+                    "header": on_seat("header", "C:\\covers\\doom.jpg")},
         });
         assert_eq!(published, want);
+        assert!(
+            !published.to_string().contains("covers"),
+            "no seat path leaves"
+        );
     }
 
     /// What the box keeps of a seat's answer: a garbage answer is refused whole, a bad row or
-    /// value is dropped, and nothing but the four fields survives.
+    /// value is dropped, and nothing but the four fields survives. A cover keeps the seat's art
+    /// path only for its own title and slot.
     #[test]
     fn the_box_checks_a_seat_s_answer_as_a_source_s() {
         let check = |v: serde_json::Value| check_own_titles(v.to_string().as_bytes());
@@ -518,20 +558,28 @@ mod tests {
         let big = vec![b' '; OWN_TITLES_BYTES + 1];
         assert!(check_own_titles(&big).is_err());
 
+        let doom_logo = "/api/v1/library/art/own:0123456789ab/logo?v=0123456789abcdef";
         let answer = serde_json::json!([
             {"id": "own:0123456789ab", "title": "Doom", "platform": "x".repeat(OWN_TEXT_MAX + 1),
-             "art": {"portrait": "/home/anna/p.png", "hero": "https://cdn.example/h.jpg"},
+             "art": {"portrait": "/home/anna/p.png", "hero": "https://cdn.example/h.jpg",
+                     "logo": doom_logo,
+                     "header": "/api/v1/library/art/own:00000000000c/header?v=0123456789abcdef"},
              "launch": {"kind": "command", "value": "rm -rf ~"}, "prep": [{"do": "true"}],
              "profile": "0f0f0f0f0f0f"},
             {"id": "steam:570", "title": "Dota"},
             {"id": "custom:0123456789ab", "title": "Theirs"},
             {"id": "own:00000000000a", "title": " "},
             {"id": "own:00000000000b", "title": "Bad\u{0}title"},
-            {"id": "own:00000000000c", "title": "Quake", "platform": "PC"},
+            {"id": "own:00000000000c", "title": "Quake", "platform": "PC",
+             "art": {"portrait": "/api/v1/library/art/own:00000000000c/hero?v=0123456789abcdef",
+                     "hero": "/api/v1/library/art/own:00000000000c/hero?v=0123",
+                     "logo": "/api/v1/library/art/own:00000000000c/logo?v=0123456789ABCDEF",
+                     "header": "/api/v1/library/art/own:00000000000c/header?v=0123456789abcdef&x"}},
         ]);
         let kept = serde_json::to_value(check(answer).unwrap()).unwrap();
         let want = serde_json::json!([
-            {"id": "own:0123456789ab", "title": "Doom", "art": {"hero": "https://cdn.example/h.jpg"}},
+            {"id": "own:0123456789ab", "title": "Doom",
+             "art": {"hero": "https://cdn.example/h.jpg", "logo": doom_logo}},
             {"id": "own:00000000000c", "title": "Quake", "art": {}, "platform": "PC"},
         ]);
         assert_eq!(kept, want);

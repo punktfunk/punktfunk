@@ -3647,7 +3647,7 @@
           "library"
         ],
         "summary": "Stream one cover-art image for a library entry.",
-        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs. With `as`,\nthe art as that profile sees it: its own picks first.\n\n`v` is the version `GET /library` listed the cover under. A host that lists another for the\nslot answers `Cache-Control: no-store`: the door's library copy trails the owner's, and its\ncover kept under the owner's newer URL would show for a day.",
+        "description": "Resolves `kind` (`portrait` | `hero` | `logo` | `header`) for a catalog id and returns the\nbytes: a launcher's cover cache on the host disk, or a remote URL the host fetches once on\nthe first miss and then serves from its own store. Unknown id or kind is 404 so the client\ncan try the next candidate, and so is a URL the fetch refused — `GET /library` advertises\nthat one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a\nrequest whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the\ncovers are in the owner's home, and the owner's host serves them while it runs. A cover of a\nprofile's own title on its seat's disk comes from that seat's host while it runs. With `as`,\nthe art as that profile sees it: its own picks first.\n\n`v` is the version `GET /library` listed the cover under. A host that lists another for the\nslot answers `Cache-Control: no-store`: the door's library copy trails the owner's, and its\ncover kept under the owner's newer URL would show for a day.",
         "operationId": "getLibraryArt",
         "parameters": [
           {
@@ -5222,7 +5222,7 @@
           "library"
         ],
         "summary": "A seat host's own titles, as the box may see them",
-        "description": "The custom entries this seat host keeps in its own config folder, each by its `own:` id,\ntitle, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box\nasks when the seat's library changes and when the seat comes up, and lists them for the seat's\nprofile. A host that keeps none answers an empty list.",
+        "description": "The custom entries this seat host keeps in its own config folder, each by its `own:` id,\ntitle, platform and art: never how it starts. A cover on its disk goes as this host's art path\nfor it, never the file's. The box asks when the seat's library changes and when the seat comes\nup, and lists them for the seat's profile. A host that keeps none answers an empty list.",
         "operationId": "listOwnTitles",
         "responses": {
           "200": {
@@ -5256,7 +5256,7 @@
           "library"
         ],
         "summary": "Store a seat's own titles for its profile",
-        "description": "What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that\nwrites the library: the door hands it here, and a Windows box stores its seats' itself. Rows\nare checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't\n`http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or\nnames an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.",
+        "description": "What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that\nwrites the library: the door hands it here, and a Windows box stores its seats' itself. Rows\nare checked as an Art & Metadata source's are: a row with a bad id or title, a cover that is\nneither `http(s)` nor the seat's art path for that slot, and a bad platform are dropped. An\nanswer that isn't a list, lists more than 500 or names an id twice is refused, and the stored\ntitles stay. Emits `library.changed` on a change.",
         "operationId": "storeOwnTitles",
         "parameters": [
           {
@@ -17926,7 +17926,7 @@
         "properties": {
           "art": {
             "$ref": "#/components/schemas/Artwork",
-            "description": "`http(s)` URLs alone: a cover on the seat's disk stays there."
+            "description": "An `http(s)` URL, or for a cover on the seat's disk the seat's own art path: the box asks\nthe seat's host for that one."
           },
           "id": {
             "type": "string",

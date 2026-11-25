@@ -459,6 +459,13 @@ pub fn local_art_bytes(path: &str) -> Option<(Vec<u8>, String)> {
         .take(MAX_ART_BYTES + 1)
         .read_to_end(&mut bytes)
         .ok()?;
+    checked_art(bytes)
+}
+
+/// `bytes` as a cover this host may serve, typed by what they are: what another account's host
+/// answered is held to the same check as a file here. `None` for no image or past
+/// [`MAX_ART_BYTES`].
+pub(crate) fn checked_art(bytes: Vec<u8>) -> Option<(Vec<u8>, String)> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_ART_BYTES {
         return None;
     }

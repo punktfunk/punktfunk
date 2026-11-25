@@ -448,7 +448,7 @@ export const HostInfo = Schema.StructWithRest(Schema.Struct({ "abi_version": Sch
 export type SettingState = { readonly "advanced": boolean, readonly "apply": SettingApply, readonly "default": Schema.Json, readonly "docs": string, readonly "env": string, readonly "group": SettingGroup, readonly "id": string, readonly "kind": SettingKind, readonly "max"?: number | null, readonly "max_len"?: number | null, readonly "min"?: number | null, readonly "options"?: ReadonlyArray<string> | null, readonly "origin"?: string | null, readonly "restart_pending": boolean, readonly "source": SettingSource, readonly "stored"?: Schema.Json, readonly "title": string, readonly "unit"?: string | null, readonly "value": Schema.Json } & { readonly [x: string]: Schema.Json }
 export const SettingState = Schema.StructWithRest(Schema.Struct({ "advanced": Schema.Boolean, "apply": SettingApply, "default": Schema.Json.annotate({ "expected": "JSON value" }), "docs": Schema.String.annotate({ "description": "docs-site page slug under `/docs/`." }), "env": Schema.String.annotate({ "description": "The name to set in `host.env` to pin this setting." }), "group": SettingGroup, "id": Schema.String.annotate({ "description": "Store key; the console's copy key is `setting_<id>`." }), "kind": SettingKind, "max": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "double" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), Schema.Null]).annotate({ "description": "`int` and `decimal` only." })), "max_len": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "description": "`text` only." })), "min": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "double" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), Schema.Null]).annotate({ "description": "`int` and `decimal` only." })), "options": Schema.optionalKey(Schema.Union([Schema.Array(Schema.String), Schema.Null]).annotate({ "description": "`enum` only, canonical spellings in display order." })), "origin": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The env var or CLI flag that set `value` (`source` `env` or `flag`)." })), "restart_pending": Schema.Boolean.annotate({ "description": "Changed since the host started, and applies only after a restart." }), "source": SettingSource, "stored": Schema.optionalKey(Schema.Json.annotate({ "expected": "JSON value", "description": "The console's value, even while an env var or flag overrides it." })), "title": Schema.String.annotate({ "description": "English label, for a setting the console has no copy for." }), "unit": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`int` and `decimal` only, e.g. `fps`." })), "value": Schema.Json.annotate({ "expected": "JSON value", "description": "The value in force." }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One setting as the console renders it.", "identifier": "SettingState" })
 export type OwnTitle = { readonly "art"?: Artwork, readonly "id": string, readonly "platform"?: string | null, readonly "title": string } & { readonly [x: string]: Schema.Json }
-export const OwnTitle = Schema.StructWithRest(Schema.Struct({ "art": Schema.optionalKey(Schema.suspend((): Schema.Codec<Artwork> => Artwork).annotate({ "description": "`http(s)` URLs alone: a cover on the seat's disk stays there." })), "id": Schema.String.annotate({ "description": "`own:` and 12 lowercase hex, minted by the seat host.", "examples": ["own:3f9a0c1b2d4e"] }), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "examples": ["PC"] })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One of a profile's own titles as its seat host publishes it to the box: what a shelf shows,\nnever what starts it. Built field by field, so a field added to [`CustomEntry`] stays on the\nseat until it is added here.", "identifier": "OwnTitle" })
+export const OwnTitle = Schema.StructWithRest(Schema.Struct({ "art": Schema.optionalKey(Schema.suspend((): Schema.Codec<Artwork> => Artwork).annotate({ "description": "An `http(s)` URL, or for a cover on the seat's disk the seat's own art path: the box asks\nthe seat's host for that one." })), "id": Schema.String.annotate({ "description": "`own:` and 12 lowercase hex, minted by the seat host.", "examples": ["own:3f9a0c1b2d4e"] }), "platform": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "examples": ["PC"] })), "title": Schema.String }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One of a profile's own titles as its seat host publishes it to the box: what a shelf shows,\nnever what starts it. Built field by field, so a field added to [`CustomEntry`] stays on the\nseat until it is added here.", "identifier": "OwnTitle" })
 export type Install = { readonly "free_bytes"?: number, readonly "size_bytes"?: number, readonly "state": InstallState, readonly "target"?: string | null } & { readonly [x: string]: Schema.Json }
 export const Install = Schema.StructWithRest(Schema.Struct({ "free_bytes": Schema.optionalKey(Schema.Number.annotate({ "description": "Free space under `target`, filled in by the host when it serves the entry.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "size_bytes": Schema.optionalKey(Schema.Number.annotate({ "description": "Download size while `missing`, size on disk once `installed`.", "format": "int64" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" }))), "state": InstallState, "target": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The folder the files go into. Must lie under one of the plugin's write grants; the\noperator's lane only." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Whether a title's files are on this host, as the plugin that lists it reports.", "identifier": "Install" })
 export type LaunchSpec = { readonly "args"?: ReadonlyArray<LaunchArg> | null, readonly "kind": string, readonly "value": string } & { readonly [x: string]: Schema.Json }
@@ -4821,7 +4821,8 @@ readonly "getLibrary": {
 * can try the next candidate, and so is a URL the fetch refused — `GET /library` advertises
 * that one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a
 * request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
-* covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
+* covers are in the owner's home, and the owner's host serves them while it runs. A cover of a
+* profile's own title on its seat's disk comes from that seat's host while it runs. With `as`,
 * the art as that profile sees it: its own picks first.
 * 
 * `v` is the version `GET /library` listed the cover under. A host that lists another for the
@@ -4839,7 +4840,8 @@ readonly "getLibraryArt": {
 * can try the next candidate, and so is a URL the fetch refused — `GET /library` advertises
 * that one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a
 * request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
-* covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
+* covers are in the owner's home, and the owner's host serves them while it runs. A cover of a
+* profile's own title on its seat's disk comes from that seat's host while it runs. With `as`,
 * the art as that profile sees it: its own picks first.
 * 
 * `v` is the version `GET /library` listed the cover under. A host that lists another for the
@@ -5018,9 +5020,9 @@ readonly "setSourceOverrides": {
   }
   /**
 * The custom entries this seat host keeps in its own config folder, each by its `own:` id,
-* title, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box
-* asks when the seat's library changes and when the seat comes up, and lists them for the seat's
-* profile. A host that keeps none answers an empty list.
+* title, platform and art: never how it starts. A cover on its disk goes as this host's art path
+* for it, never the file's. The box asks when the seat's library changes and when the seat comes
+* up, and lists them for the seat's profile. A host that keeps none answers an empty list.
 */
 readonly "listOwnTitles": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListOwnTitles200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListOwnTitles401", typeof ListOwnTitles401.Type>>;
@@ -5029,9 +5031,10 @@ readonly "listOwnTitles": {
   /**
 * What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that
 * writes the library: the door hands it here, and a Windows box stores its seats' itself. Rows
-* are checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't
-* `http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or
-* names an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.
+* are checked as an Art & Metadata source's are: a row with a bad id or title, a cover that is
+* neither `http(s)` nor the seat's art path for that slot, and a bad platform are dropped. An
+* answer that isn't a list, lists more than 500 or names an id twice is refused, and the stored
+* titles stay. Emits `library.changed` on a change.
 */
 readonly "storeOwnTitles": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof StoreOwnTitlesParams.Encoded; readonly payload: typeof StoreOwnTitlesRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"StoreOwnTitles400", typeof StoreOwnTitles400.Type> | PunktfunkError<"StoreOwnTitles401", typeof StoreOwnTitles401.Type> | PunktfunkError<"StoreOwnTitles403", typeof StoreOwnTitles403.Type> | PunktfunkError<"StoreOwnTitles404", typeof StoreOwnTitles404.Type> | PunktfunkError<"StoreOwnTitles409", typeof StoreOwnTitles409.Type> | PunktfunkError<"StoreOwnTitles500", typeof StoreOwnTitles500.Type>>;
