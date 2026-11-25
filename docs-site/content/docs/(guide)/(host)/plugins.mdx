@@ -154,7 +154,8 @@ less, like Steam, land at once.
 
 On Linux and macOS a plugin that uses the network reaches other machines, but not this computer's
 own `localhost`. On Linux this computer's address on your network doesn't lead back to it from
-inside a plugin either. A plugin that needs a server you run beside the host, such as RomM in Docker, asks for
+inside a plugin either. Its other addresses do, such as a Docker bridge's or a VPN's: a server that
+listens on every address answers a plugin there. A plugin that needs a server you run beside the host, such as RomM in Docker, asks for
 that server's port. The console shows the request with the port number and, on Linux, the
 program that listens there now. Choose **Allow** or **Don't allow**; allowing restarts the plugin, which then
 reaches the server at `127.0.0.1:<port>`.
