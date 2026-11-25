@@ -752,9 +752,12 @@ impl StreamState {
         let (session_tx, session_rx) = std::sync::mpsc::channel::<SessionSwitch>();
         self.ends.session_rx = session_rx;
         let stop = self.facts.life.stop_flag().clone();
+        // A switch while this session was starting went by unheard.
+        let left_game_mode = self.display.compositor == crate::vdisplay::Compositor::Gamescope
+            && crate::vdisplay::box_left_game_mode();
         self._watcher = std::thread::Builder::new()
             .name("punktfunk1-watcher".into())
-            .spawn(move || session_watcher_loop(session_tx, stop))
+            .spawn(move || session_watcher_loop(session_tx, stop, left_game_mode))
             .ok();
     }
 
@@ -1402,10 +1405,16 @@ fn spawn_launch_and_lease(
     #[cfg(not(target_os = "linux"))]
     let steam_exit_appid: Option<u32> = None;
 
+    // The box session the game lands in; one in its own gamescope spawn has none.
+    #[cfg(target_os = "linux")]
+    let box_session = (!crate::vdisplay::launch_is_nested(compositor, gamescope_route))
+        .then(crate::vdisplay::mark_session);
+    #[cfg(not(target_os = "linux"))]
+    let box_session = None;
     let end_on_game_exit = {
         let conn = conn.clone();
         let life = life.clone();
-        crate::session_launch::end_on_game_exit(move || {
+        crate::session_launch::end_on_game_exit(box_session, move || {
             tracing::info!("the launched game exited — ending the session cleanly (APP_EXITED)");
             life.end(crate::events::SessionEndReason::GameExited);
             conn.close(punktfunk_core::quic::APP_EXITED_CLOSE_CODE, b"game exited");

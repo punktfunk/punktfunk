@@ -51,8 +51,8 @@ pub(crate) use heads::list_monitors;
 pub(crate) use splash::run as splash_run;
 pub(crate) use steam_launch::{is_steam_launch, launch_into_session};
 pub(crate) use takeover::{
-    cancel_pending_restore, held_takeover, preflight_takeover_privilege, release_autologin_mask,
-    release_takeover, restore_takeover_now, restore_takeover_on_startup,
+    box_left_idled_session, cancel_pending_restore, held_takeover, preflight_takeover_privilege,
+    release_autologin_mask, release_takeover, restore_takeover_now, restore_takeover_on_startup,
     schedule_restore_tv_session, start_restore_worker, takeover_privilege_verdict, HeldTakeover,
 };
 use {argv::*, bind::*, discovery::*, dropins::*, spawn::*, steam_launch::*, takeover::*, wsi::*};

@@ -740,6 +740,17 @@ fn runs_idle_placeholder(unit: &str) -> bool {
             || crate::proc::pid_stopped(pid))
 }
 
+/// The box ended the Game Mode login this takeover idled: nothing runs the placeholder any
+/// more, with the drop-in still armed. Its display manager is logging into another session,
+/// and our session goes with the switch once the watcher sees that one.
+pub(crate) fn box_left_idled_session() -> bool {
+    let (armed, units) = {
+        let t = takeover();
+        (t.idle_dropin_armed, t.units())
+    };
+    armed && !units.is_empty() && !units.iter().any(|u| runs_idle_placeholder(u))
+}
+
 fn display_manager_unit() -> Option<String> {
     display_manager_unit_under(std::path::Path::new("/etc/systemd/system"))
 }

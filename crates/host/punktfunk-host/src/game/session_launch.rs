@@ -417,7 +417,13 @@ pub(crate) fn lease(
 
 /// `end`, unless the operator turned off ending the session when the game exits. Read at
 /// fire time so a mid-session flip takes effect; the lease keeps running either way.
-pub(crate) fn end_on_game_exit<F>(end: F) -> impl Fn() + Clone + Send + Sync + 'static
+/// `box_session` is the box session the game was launched into, `None` for a game in its own
+/// gamescope: a game that goes down with that session, on a Game Mode ↔ desktop switch, is not
+/// the player quitting, and the stream follows the switch.
+pub(crate) fn end_on_game_exit<F>(
+    box_session: Option<crate::vdisplay::SessionMark>,
+    end: F,
+) -> impl Fn() + Clone + Send + Sync + 'static
 where
     F: Fn() + Clone + Send + Sync + 'static,
 {
@@ -426,6 +432,13 @@ where
             tracing::info!(
                 "the launched game exited, but ending the session on game exit is off — \
                  leaving the stream up"
+            );
+            return;
+        }
+        if box_session.is_some_and(crate::vdisplay::session_left) {
+            tracing::info!(
+                "the launched game went down with the session it ran in — the stream follows \
+                 the switch"
             );
             return;
         }
