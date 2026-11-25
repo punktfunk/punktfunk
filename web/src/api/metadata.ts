@@ -91,3 +91,23 @@ export const isHttpUrl = (v: string): boolean =>
 		const n = c.charCodeAt(0);
 		return n < 0x20 || (n >= 0x7f && n <= 0x9f) || /\s/.test(c);
 	});
+
+/**
+ * The `?v=` the host's art proxy gives `url`: the first 16 hex digits of its SHA-256.
+ * clients/shared/library-id-vectors.json pins it. Rejects outside a secure context.
+ */
+export async function artVersion(url: string): Promise<string> {
+	const hash = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(url),
+	);
+	return [...new Uint8Array(hash).subarray(0, 8)]
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+}
+
+/** The `v` of an art-proxy path; `null` for any other art value. */
+export const versionOf = (art: string | null | undefined): string | null =>
+	art?.startsWith("/api/v1/library/art/")
+		? new URLSearchParams(art.split("?")[1] ?? "").get("v")
+		: null;
