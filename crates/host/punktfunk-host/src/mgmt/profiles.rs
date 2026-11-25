@@ -1246,7 +1246,8 @@ pub(crate) fn may_wake(
 
 /// List the profiles with what the console manages
 ///
-/// On the plugin lane each row is `id`, `display_name` and `avatar` alone.
+/// On the plugin lane each row is `id`, `display_name`, `avatar`, `owner` (the box's own
+/// session) and `shared` (plays on the owner's desktop, with no seat of its own) alone.
 #[utoipa::path(
     get,
     path = "/profiles",
@@ -1270,7 +1271,12 @@ pub(crate) async fn list_profiles(
             .list()
             .iter()
             .map(|p| {
-                let mut row = serde_json::json!({ "id": p.id, "display_name": p.display_name });
+                let mut row = serde_json::json!({
+                    "id": p.id,
+                    "display_name": p.display_name,
+                    "owner": p.os_account == OsAccount::Operator,
+                    "shared": p.os_account == OsAccount::Seat { seat: None },
+                });
                 if let Some(avatar) = &p.avatar {
                     row["avatar"] = avatar.as_str().into();
                 }
