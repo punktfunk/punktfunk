@@ -407,7 +407,7 @@ fn same_path(a: &str, b: &str) -> bool {
 
 /// `path` with its nearest folder that exists resolved: a folder an install has yet to make
 /// keeps one spelling through a linked home (`/home` → `/var/home` on Fedora Atomic).
-fn resolve_unmade(path: &Path) -> PathBuf {
+pub(crate) fn resolve_unmade(path: &Path) -> PathBuf {
     path.ancestors()
         .find_map(|a| Some((a.canonicalize().ok()?, path.strip_prefix(a).ok()?)))
         .map_or_else(

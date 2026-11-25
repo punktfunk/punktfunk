@@ -920,7 +920,8 @@ fn wire<T: Serialize>(v: T) -> String {
         .unwrap_or_default()
 }
 
-/// Who may move saves: the operator, or a plugin holding the save grant.
+/// Who may move saves: the operator, or a plugin holding the save grant. A grant is stored
+/// resolved, so the host's own spelling of the folder is resolved before they meet.
 fn may_move_saves(
     st: &MgmtState,
     lane: AuthLane,
@@ -929,12 +930,13 @@ fn may_move_saves(
     if lane.is_operator() {
         return Ok(());
     }
-    let grant = crate::emulators::saves_grant();
+    let resolved = crate::plugins::access::resolve_unmade;
+    let grant = resolved(&crate::emulators::saves_grant());
     let held = plugin.is_some_and(|id| {
         st.access
             .grants_for(id)
             .iter()
-            .any(|g| std::path::Path::new(&g.path) == grant)
+            .any(|g| resolved(std::path::Path::new(&g.path)) == grant)
     });
     if held {
         Ok(())
