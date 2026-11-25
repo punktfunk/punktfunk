@@ -1,8 +1,9 @@
 // One control per setting kind.
 //
 // Every control writes one value and nothing else: the page saves on change, the host answers with
-// the new state, and that answer is what renders next. Text and numbers keep a local draft and
-// commit on blur or Enter, so typing a name does not send one request per keystroke.
+// the new state, and that answer is what renders next. Text keeps a local draft and commits on
+// blur or Enter. A number does the same and also saves once it has been still for a moment, so
+// stepping it or typing in it needs no click elsewhere. Neither sends a request per keystroke.
 import { Plus, X } from "lucide-react";
 import { type FC, useEffect, useState } from "react";
 import type { SettingState } from "@/api/gen/model";
@@ -19,6 +20,7 @@ import {
 import { isImeEvent } from "@/lib/ime";
 import { m } from "@/paraglide/messages";
 import { SETTING_COPY } from "./copy";
+import { saveOnPause } from "./saveOnPause";
 
 export type ControlProps = {
 	row: SettingState;
@@ -104,10 +106,23 @@ const EnumControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 	);
 };
 
+// Longer than the gap between two keystrokes or spinner clicks, short enough to save before a reload.
+const SAVE_AFTER_MS = 600;
+
+// `InputNumber` hands `onChange` only finite in-range numbers, and a blur clamps through it too.
+// Blur, Enter and unmount save a waiting edit at once; the host's answer never replaces one.
 const NumberControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 	const committed = Number(row.value);
 	const [draft, setDraft] = useState(committed);
-	useEffect(() => setDraft(committed), [committed]);
+	const [saver] = useState(() => saveOnPause<number>(SAVE_AFTER_MS, committed));
+	useEffect(() => {
+		if (saver.follow(committed)) setDraft(committed);
+	}, [saver, committed]);
+	// A refused write leaves the host's value as it was: show it again once the row is free.
+	useEffect(() => {
+		if (!disabled && saver.follow(committed)) setDraft(committed);
+	}, [saver, committed, disabled]);
+	useEffect(() => saver.flush, [saver]);
 	const decimal = row.kind === "decimal";
 	return (
 		<div className="flex items-center gap-2">
@@ -120,8 +135,11 @@ const NumberControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 				step={decimal ? 0.1 : 1}
 				inputMode={decimal ? "decimal" : "numeric"}
 				disabled={disabled}
-				onChange={setDraft}
-				onBlur={() => draft !== committed && onSet(draft)}
+				onChange={(n) => {
+					setDraft(n);
+					saver.change(n, onSet);
+				}}
+				onBlur={saver.flush}
 				onKeyDown={(e) =>
 					e.key === "Enter" && !isImeEvent(e) && e.currentTarget.blur()
 				}
