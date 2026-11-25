@@ -212,6 +212,8 @@ pub struct SessionParams {
     pub client_fp: Option<[u8; 32]>,
     /// [`VirtualDisplay::set_client_hdr`].
     pub client_hdr: Option<pf_frame::HdrMeta>,
+    /// [`VirtualDisplay::set_display_mm`].
+    pub display_mm: Option<(u16, u16)>,
     /// [`VirtualDisplay::set_hdr`]: the session's HDR verdict, not its depth.
     pub hdr: bool,
     /// [`VirtualDisplay::set_hw_cursor`].
@@ -235,6 +237,7 @@ impl SessionParams {
         vd.set_topology(self.topology);
         vd.set_join_live(self.join_live);
         vd.set_client_hdr(self.client_hdr);
+        vd.set_display_mm(self.display_mm);
         vd.set_hdr(self.hdr);
         vd.set_hw_cursor(self.hw_cursor);
         vd.set_quit_flag(self.quit.clone());
@@ -331,6 +334,11 @@ pub trait VirtualDisplay: Send {
     /// EDID. Default no-op: Windows pf-vdisplay mints per-monitor EDIDs from it and Hyprland
     /// writes it into its HDR monitor rule.
     fn set_client_hdr(&mut self, _hdr: Option<pf_frame::HdrMeta>) {}
+    /// The size the picture has on the client's glass, in millimetres: the next
+    /// [`create`](Self::create) declares that panel, so the OS scales the desktop as it would
+    /// on it. `None` keeps the backend's own size. Default no-op: Windows pf-vdisplay and macOS
+    /// read it.
+    fn set_display_mm(&mut self, _mm: Option<(u16, u16)>) {}
     /// Stream negotiated HDR (10-bit BT.2020/PQ, `bit_depth >= 10` in Welcome). Distinct from
     /// [`set_client_hdr`](Self::set_client_hdr) (panel volume for EDID). Default no-op; gamescope
     /// adds `--hdr-enabled --hdr-debug-force-support` so nested WSI surfaces are HDR and capture

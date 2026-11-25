@@ -35,6 +35,7 @@ pub(crate) enum Call {
     SetJoinLive(bool),
     SetQuitFlag,
     SetClientHdr(Option<pf_frame::HdrMeta>),
+    SetDisplayMm(Option<(u16, u16)>),
     SetHdr(bool),
     SetHwCursor(bool),
     ApplyPosition(i32, i32),
@@ -313,6 +314,10 @@ impl VirtualDisplay for FakeDisplay {
         self.log(Call::SetClientHdr(hdr));
     }
 
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.log(Call::SetDisplayMm(mm));
+    }
+
     fn set_hdr(&mut self, on: bool) {
         self.log(Call::SetHdr(on));
     }
@@ -551,6 +556,7 @@ mod tests {
             topology: Some(crate::policy::Topology::Extend),
             client_fp: Some([7; 32]),
             client_hdr: Some(pf_frame::HdrMeta::default()),
+            display_mm: Some((598, 336)),
             hdr: true,
             hw_cursor: true,
             join_live: true,
@@ -567,6 +573,7 @@ mod tests {
             Call::SetTopology(Some(crate::policy::Topology::Extend)),
             Call::SetJoinLive(true),
             Call::SetClientHdr(Some(pf_frame::HdrMeta::default())),
+            Call::SetDisplayMm(Some((598, 336))),
             Call::SetHdr(true),
             Call::SetHwCursor(true),
             Call::SetQuitFlag,

@@ -43,9 +43,10 @@ pub(crate) trait VdisplayDriver: Send + Sync {
     fn open(&self, reap_orphans: bool) -> Result<(ControlDevice, u32, u32)>;
     /// Pins the IDD render GPU to `render_luid` when `Some`.
     /// `preferred_monitor_id` `0` = auto. `client_hdr` `None` = the driver's
-    /// EDID CTA HDR defaults. Reply LUID is
+    /// EDID CTA HDR defaults; `display_mm` `None` = its 96-DPI panel size. Reply LUID is
     /// `IDARG_OUT_MONITORARRIVAL.OsAdapterLuid` — the IddCx DISPLAY adapter,
     /// not the render GPU.
+    #[allow(clippy::too_many_arguments)]
     fn add_monitor(
         &self,
         dev: &ControlDevice,
@@ -53,6 +54,7 @@ pub(crate) trait VdisplayDriver: Send + Sync {
         render_luid: Option<LUID>,
         preferred_monitor_id: u32,
         client_hdr: Option<pf_frame::HdrMeta>,
+        display_mm: Option<(u16, u16)>,
         hw_cursor: bool,
     ) -> Result<AddedMonitor>;
     /// In-place resize (`IOCTL_UPDATE_MODES`, protocol v4). The monitor is not
@@ -95,6 +97,7 @@ pub(crate) mod fake {
             _render_luid: Option<LUID>,
             _preferred_monitor_id: u32,
             _client_hdr: Option<pf_frame::HdrMeta>,
+            _display_mm: Option<(u16, u16)>,
             _hw_cursor: bool,
         ) -> Result<AddedMonitor> {
             anyhow::bail!("fake driver adds no monitors")
