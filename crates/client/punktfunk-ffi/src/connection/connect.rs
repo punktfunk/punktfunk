@@ -841,8 +841,12 @@ pub struct PunktfunkConnectOpts {
     /// round to `refresh_hz`, asks for the whole rate.
     /// [`punktfunk_connection_refresh_mhz`] reads what the host delivers.
     pub refresh_mhz: u32,
-    /// Always `0`. Fills what would otherwise be padding.
-    pub reserved7: u32,
+    /// The size the picture has on this caller's glass, in millimetres: the panel when it
+    /// fills the screen, less in a window. The host declares a display that size. `0` on
+    /// either side, which callers that zeroed `reserved7` send, is unknown.
+    pub display_width_mm: u16,
+    /// See `display_width_mm`.
+    pub display_height_mm: u16,
 }
 
 /// [`PunktfunkProfileUnlock::kind`]: the account password as typed.
@@ -1023,7 +1027,8 @@ pub const PUNKTFUNK_REFORMAT_VIDEO: u8 = 1;
 pub const PUNKTFUNK_REFORMAT_AUDIO: u8 = 2;
 
 // No tail padding (append contract). On grow: freeze `CONNECT_OPTS_MIN_SIZE`, update these sizes.
-// `video_fit` sits in the byte v35–v40 callers zeroed as `reserved0`.
+// `video_fit` sits in the byte v35–v40 callers zeroed as `reserved0`, `display_*_mm` in the
+// v73–v75 `reserved7`.
 #[cfg(feature = "quic")]
 const _: () = {
     use core::mem::{offset_of, size_of};
@@ -1044,6 +1049,7 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, screen_views) == 200
             && offset_of!(PunktfunkConnectOpts, host_screen) == 208
             && offset_of!(PunktfunkConnectOpts, refresh_mhz) == 216
+            && offset_of!(PunktfunkConnectOpts, display_width_mm) == 220
             && size_of::<PunktfunkProfileUnlock>() == 40
     );
     #[cfg(target_pointer_width = "32")]
@@ -1063,6 +1069,7 @@ const _: () = {
             && offset_of!(PunktfunkConnectOpts, screen_views) == 144
             && offset_of!(PunktfunkConnectOpts, host_screen) == 148
             && offset_of!(PunktfunkConnectOpts, refresh_mhz) == 152
+            && offset_of!(PunktfunkConnectOpts, display_width_mm) == 156
             && size_of::<PunktfunkProfileUnlock>() == 24
     );
 };
@@ -1120,7 +1127,8 @@ impl Default for PunktfunkConnectOpts {
             screen_views: ptr::null(),
             host_screen: ptr::null(),
             refresh_mhz: 0,
-            reserved7: 0,
+            display_width_mm: 0,
+            display_height_mm: 0,
         }
     }
 }
@@ -1430,6 +1438,8 @@ unsafe fn connect_params(
     let unlock = unsafe { unlock_of(o.unlock) }?;
     Ok(punktfunk_core::client::ConnectParams {
         view: (o.view_width > 0 && o.view_height > 0).then_some((o.view_width, o.view_height)),
+        display_mm: (o.display_width_mm > 0 && o.display_height_mm > 0)
+            .then_some((o.display_width_mm, o.display_height_mm)),
         prompts_unlock: o.prompts_unlock != 0,
         unlock,
         compositor,
@@ -1828,6 +1838,23 @@ mod tests {
         o.view_height = 0;
         // SAFETY: as above.
         assert_eq!(unsafe { connect_params(&o) }.unwrap().view, None);
+    }
+
+    /// The picture's size reaches the dial; a zero side is unknown.
+    #[test]
+    fn connect_opts_carry_the_display_size() {
+        let mut o = PunktfunkConnectOpts {
+            host: c"127.0.0.1".as_ptr(),
+            display_width_mm: 600,
+            display_height_mm: 340,
+            ..Default::default()
+        };
+        // SAFETY: every pointer field is null or a live C-string literal.
+        let params = unsafe { connect_params(&o) }.unwrap();
+        assert_eq!(params.display_mm, Some((600, 340)));
+        o.display_height_mm = 0;
+        // SAFETY: as above.
+        assert_eq!(unsafe { connect_params(&o) }.unwrap().display_mm, None);
     }
 
     /// `host_screen` reaches the dial as a wish; null, empty or another spelling is none, and

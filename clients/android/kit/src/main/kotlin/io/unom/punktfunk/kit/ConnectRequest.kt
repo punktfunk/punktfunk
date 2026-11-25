@@ -109,6 +109,10 @@ data class ConnectRequest(
     /** A preset's screen wish, as `host_screen` spells it (`second`, `monitor:HDMI-A-1`); empty
      *  asks for none. Rides the Hello; the host may not grant it. */
     val hostScreen: String = "",
+    /** The size the picture has on the glass, in millimetres. `0` on either side is unknown
+     *  and writes neither key: the host keeps its own sizing. */
+    val displayWidthMm: Int = 0,
+    val displayHeightMm: Int = 0,
 ) {
     fun toJson(): String = JSONObject()
         .put("host", host)
@@ -149,5 +153,10 @@ data class ConnectRequest(
         .put("view_width", viewWidth)
         .put("view_height", viewHeight)
         .put("host_screen", hostScreen)
+        .apply {
+            if (displayWidthMm > 0 && displayHeightMm > 0) {
+                put("display_width_mm", displayWidthMm).put("display_height_mm", displayHeightMm)
+            }
+        }
         .toString()
 }

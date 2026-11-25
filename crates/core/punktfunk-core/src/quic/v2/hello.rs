@@ -76,6 +76,10 @@ pub struct ClientHello {
     pub view: Option<(u32, u32)>,
     /// The screen a preset asks for; `None` leaves it to the host card's pick.
     pub screen_wish: Option<ScreenWish>,
+    /// The size the picture has on the client's glass, in millimetres, width then height: the
+    /// panel when it fills the screen, less in a window. The host declares a display that size,
+    /// at every mode. `None` is unknown and rides as no tag; a zero side reads as `None`.
+    pub display_mm: Option<(u16, u16)>,
 }
 
 impl ClientHello {
@@ -167,7 +171,11 @@ impl V2Message for ClientHello {
                 let wish = self.screen_wish.as_ref().map(ScreenWish::wire);
                 f.bytes(32, &wish.unwrap_or_default())
             });
-        super::msg::put_exact_rate(f, 33, &h.mode)
+        let mm = self.display_mm.filter(|&(w, h)| w > 0 && h > 0);
+        super::msg::put_exact_rate(f, 33, &h.mode).when(mm.is_some(), |f| {
+            let (w, h) = mm.unwrap_or_default();
+            f.bytes(34, &[w.to_le_bytes(), h.to_le_bytes()].concat())
+        })
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -198,7 +206,7 @@ impl V2Message for ClientHello {
         let mut features = FeatureSet::default();
         let (mut profile, mut access_only) = (None, false);
         let (mut screens, mut view, mut views) = (Vec::new(), None, None);
-        let (mut screen_wish, mut exact_mhz) = (None, 0);
+        let (mut screen_wish, mut exact_mhz, mut display_mm) = (None, 0, None);
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -259,6 +267,7 @@ impl V2Message for ClientHello {
                 31 => views = Some(v),
                 32 => screen_wish = ScreenWish::of_wire(v),
                 33 => exact_mhz = super::msg::exact_rate_of(v),
+                34 => display_mm = mm_of(v),
                 _ => {}
             }
         }
@@ -289,8 +298,20 @@ impl V2Message for ClientHello {
             screens,
             view,
             screen_wish,
+            display_mm,
         })
     }
+}
+
+/// Tag 34: `width u16 ‖ height u16`, millimetres. Another length or a zero side is no value,
+/// never an error.
+fn mm_of(v: &[u8]) -> Option<(u16, u16)> {
+    let b: [u8; 4] = v.try_into().ok()?;
+    let mm = (
+        u16::from_le_bytes([b[0], b[1]]),
+        u16::from_le_bytes([b[2], b[3]]),
+    );
+    (mm.0 > 0 && mm.1 > 0).then_some(mm)
 }
 
 fn bad() -> crate::error::PunktfunkError {
@@ -874,7 +895,7 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![], view: None, screen_wish: None };
+            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![], view: None, screen_wish: None, display_mm: None };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -920,6 +941,37 @@ mod tests {
         assert_eq!(back.welcome.mode, exact);
         let old = whole.put(sid, 5).into_body();
         assert_eq!(ServerHello::from_body(&old).unwrap().welcome.mode, whole);
+    }
+
+    /// The picture's size rides `ClientHello` tag 34 as `width u16 ‖ height u16`, after
+    /// everything else. `None`, a zero side or a torn value is no tag and reads as `None`.
+    #[test]
+    fn a_display_size_rides_client_hello() {
+        let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
+        assert_eq!(ch.display_mm, None);
+        let plain = ch.fields().into_body();
+        ch.display_mm = Some((600, 340));
+        let body = ch.fields().into_body();
+        assert_eq!(body[..plain.len()], plain[..]);
+        assert_eq!(body[plain.len()..], [0x22, 0x04, 0x58, 0x02, 0x54, 0x01]);
+        assert_eq!(ClientHello::from_body(&body).unwrap(), ch);
+
+        ch.display_mm = Some((600, 0));
+        assert_eq!(ch.fields().into_body(), plain);
+        let read = |v: &[u8]| {
+            ClientHello::from_body(&Fields::new().bytes(34, v).into_body())
+                .unwrap()
+                .display_mm
+        };
+        assert_eq!(read(&[163, 0, 163, 0]), Some((163, 163)));
+        for torn in [
+            &[][..],
+            &[163, 0, 163],
+            &[163, 0, 0, 0],
+            &[163, 0, 163, 0, 0],
+        ] {
+            assert_eq!(read(torn), None, "{torn:02x?}");
+        }
     }
 
     /// The ask rides `ClientHello` tag 23 with the `PROFILES` bit, the echo `ServerHello` tag 27.
@@ -1093,7 +1145,7 @@ mod tests {
     /// it.
     #[test]
     fn an_unknown_tag_is_skipped() {
-        let ch = Fields::new().u8(10, 6).bytes(33, &[9, 9]).into_body();
+        let ch = Fields::new().u8(10, 6).bytes(35, &[9, 9]).into_body();
         assert_eq!(ClientHello::from_body(&ch).unwrap().hello.audio_channels, 6);
         let sh = Fields::new().bytes(1, &[0; 16]).bytes(31, &[9]).into_body();
         assert_eq!(ServerHello::from_body(&sh).unwrap().session_id, [0; 16]);
@@ -1213,6 +1265,7 @@ mod tests {
             screens: vec![],
             view: None,
             screen_wish: None,
+            display_mm: None,
         };
         // The bytes on the wire are pinned: a change here is a wire change.
         let frame: String = ch.encode_v2().iter().map(|b| format!("{b:02x}")).collect();

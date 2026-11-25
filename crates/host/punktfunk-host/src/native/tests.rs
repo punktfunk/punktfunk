@@ -1868,6 +1868,7 @@ fn plain_hello(
         screens: Vec::new(),
         view: None,
         screen_wish: None,
+        display_mm: None,
     }
 }
 

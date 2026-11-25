@@ -29,6 +29,9 @@ pub struct SessionParams {
     pub mode: Mode,
     /// The size the picture is shown at when `mode` is larger ([`ConnectParams::view`]).
     pub view: Option<(u32, u32)>,
+    /// The size the picture has on the glass, in millimetres ([`ConnectParams::display_mm`]).
+    /// `None` is unknown. [`Self::from_plan`] leaves it so; the presenter fills it from the window.
+    pub display_mm: Option<(u16, u16)>,
     pub compositor: CompositorPref,
     pub gamepad: GamepadPref,
     pub bitrate_kbps: u32,
@@ -253,6 +256,7 @@ impl SessionParams {
             port: dial.port,
             mode,
             view,
+            display_mm: None,
             compositor: CompositorPref::from_name(&settings.compositor)
                 .unwrap_or(CompositorPref::Auto),
             gamepad: probes.gamepad,
@@ -752,6 +756,7 @@ fn dial(
             })
         }),
         view: params.view,
+        display_mm: params.display_mm,
         ..ConnectParams::new(
             &params.host,
             params.port,

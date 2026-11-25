@@ -50,9 +50,10 @@ int main(void) {
         || offsetof(PunktfunkConnectOpts, screen_views) != (sizeof(void *) == 8 ? 200u : 144u)
         || offsetof(PunktfunkConnectOpts, host_screen) != (sizeof(void *) == 8 ? 208u : 148u)
         || offsetof(PunktfunkConnectOpts, refresh_mhz) != (sizeof(void *) == 8 ? 216u : 152u)
+        || offsetof(PunktfunkConnectOpts, display_width_mm) != (sizeof(void *) == 8 ? 220u : 156u)
         || sizeof(PunktfunkProfileUnlock) != (sizeof(void *) == 8 ? 40u : 24u)
         || sizeof(PunktfunkScreen) != 24u || sizeof(PunktfunkScreenView) != 8u) {
-        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu, pyrowave_bpp_x100 at %zu, on_pending at %zu, screens at %zu, unlock at %zu, view_width at %zu, screen_views at %zu, host_screen at %zu, refresh_mhz at %zu; PunktfunkScreen is %zu, PunktfunkProfileUnlock %zu\n",
+        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu, pyrowave_bpp_x100 at %zu, on_pending at %zu, screens at %zu, unlock at %zu, view_width at %zu, screen_views at %zu, host_screen at %zu, refresh_mhz at %zu, display_width_mm at %zu; PunktfunkScreen is %zu, PunktfunkProfileUnlock %zu\n",
                 sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit),
                 offsetof(PunktfunkConnectOpts, delivery_flags),
                 offsetof(PunktfunkConnectOpts, profile_id),
@@ -63,6 +64,7 @@ int main(void) {
                 offsetof(PunktfunkConnectOpts, screen_views),
                 offsetof(PunktfunkConnectOpts, host_screen),
                 offsetof(PunktfunkConnectOpts, refresh_mhz),
+                offsetof(PunktfunkConnectOpts, display_width_mm),
                 sizeof(PunktfunkScreen), sizeof(PunktfunkProfileUnlock));
         return 1;
     }

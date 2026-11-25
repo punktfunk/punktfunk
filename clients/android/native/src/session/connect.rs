@@ -475,6 +475,12 @@ struct ConnectRequest {
     /// none.
     #[serde(default)]
     host_screen: String,
+    /// The size the picture has on the glass, in millimetres
+    /// ([`ConnectParams::display_mm`]); `0` on either side is unknown.
+    #[serde(default)]
+    display_width_mm: u16,
+    #[serde(default)]
+    display_height_mm: u16,
 }
 
 /// A `w`×`h` view, or `None` when either side is not positive.
@@ -688,6 +694,8 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         view_width,
         view_height,
         host_screen,
+        display_width_mm,
+        display_height_mm,
     } = req;
     // Which shell asked, for the host's `handshake complete` line. Set before the dial: core reads
     // it once the host says it parses the block.
@@ -791,6 +799,8 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
         studio_range,
         view: view_of(view_width.into(), view_height.into()),
         screen_wish: ScreenWish::parse(&host_screen),
+        display_mm: (display_width_mm > 0 && display_height_mm > 0)
+            .then_some((display_width_mm, display_height_mm)),
         // Handshake budget from Kotlin: `CONNECT_TIMEOUT_MS`, or `REQUEST_ACCESS_TIMEOUT_MS` for
         // "request access" (the host parks the connection until the operator approves the device).
         // No `cancel`: Kotlin drops the result (`HostServices.Ticket`) rather than abort the dial;
