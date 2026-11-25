@@ -297,6 +297,11 @@ export const runSandboxed = (
  * `--block-fd` (fd 5). `fail` hears why the network did not come up. `ports` are the TCP ports
  * on this computer the plugin may connect to ({@link pastaArgv}).
  *
+ * pasta copies the host's default routes once, as it starts, each family alone. `routes` is
+ * read before and after: a namespace that got no IPv4 route is checked again every `watchMs`,
+ * and `fail` hears it once the host has a route the namespace lacks, so the restart connects a
+ * fresh one. One that has IPv4 stays as it is: a plugin's servers answer there.
+ *
  * The returned stop ends the setup or the daemon it left and only then removes `dir`, which holds
  * the daemon's pid file. A sandbox still blocked gets SIGKILL: until it reads fd 5 it has no
  * parent-death signal, and a closed pipe would let it run on unsupervised.
@@ -307,6 +312,8 @@ export const connectNetwork = (
 	dir: string,
 	fail: (why: string) => void,
 	ports: readonly number[] = [],
+	routes: () => DefaultRoutes = hostDefaultRoutes,
+	watchMs = 5000,
 ): (() => void) => {
 	const pidFile = path.join(dir, "pasta.pid");
 	const [info, block] = (child.stdio as readonly unknown[]).slice(4) as [Readable, Writable];
@@ -316,6 +323,7 @@ export const connectNetwork = (
 	let setup: ChildProcess | undefined;
 	let running = false;
 	let stopped = false;
+	let watch: ReturnType<typeof setInterval> | undefined;
 	const end = (): void => {
 		stopPasta(pidFile);
 		fs.rmSync(dir, { recursive: true, force: true });
@@ -342,6 +350,7 @@ export const connectNetwork = (
 			return;
 		}
 		blocked = pid;
+		const before = routes();
 		setup = spawn(pasta, pastaArgv(child.pid, pidFile, ports), {
 			stdio: ["ignore", "ignore", "pipe"],
 		});
@@ -358,6 +367,17 @@ export const connectNetwork = (
 			else if (code === 0) {
 				blocked = undefined;
 				block.end("1");
+				// Only a route there before pasta read the host's and after is surely copied.
+				const after = routes();
+				const got = { v4: before.v4 && after.v4, v6: before.v6 && after.v6 };
+				if (got.v4) return;
+				watch = setInterval(() => {
+					const why = stopped ? undefined : staleRoutes(got, routes());
+					if (why === undefined) return;
+					clearInterval(watch);
+					fail(why);
+				}, watchMs);
+				watch.unref();
 			} else {
 				const last = lastLines();
 				fail(`pasta exited ${signal ? `on ${signal}` : `with ${code}`}${last ? `: ${last}` : ""}`);
@@ -368,10 +388,59 @@ export const connectNetwork = (
 	return () => {
 		if (stopped) return;
 		stopped = true;
+		clearInterval(watch);
 		kill(blocked);
 		if (running) setup?.kill("SIGTERM");
 		else end();
 	};
+};
+
+/** Whether the host has a usable default route, per family. */
+export interface DefaultRoutes {
+	v4: boolean;
+	v6: boolean;
+}
+
+/**
+ * Why a namespace that copied the routes `got` must reconnect now that the host has `now`, or
+ * `undefined` to leave it. One with an IPv4 route stays whatever comes: a plugin's servers
+ * answer there, and a restart for IPv6 alone would cut its work for nothing.
+ */
+export const staleRoutes = (got: DefaultRoutes, now: DefaultRoutes): string | undefined =>
+	!got.v4 && (now.v4 || (now.v6 && !got.v6))
+		? `the host had no ${got.v6 ? "IPv4 " : ""}default route when it started`
+		: undefined;
+
+/**
+ * The families the host has a usable default route in, from procfs. The kernel's
+ * `unreachable ::/0` on `lo` is a reject route without the up flag, so it never counts.
+ */
+export const hostDefaultRoutes = (
+	read: (file: string) => string = (file) => fs.readFileSync(file, "utf8"),
+): DefaultRoutes => {
+	const rows = (file: string): string[][] => {
+		try {
+			return read(file)
+				.split("\n")
+				.map((line) => line.trim().split(/\s+/));
+		} catch {
+			return [];
+		}
+	};
+	// RTF_UP set, RTF_REJECT clear.
+	const usable = (flags = ""): boolean => {
+		const n = Number.parseInt(flags, 16);
+		return (n & 0x1) !== 0 && (n & 0x200) === 0;
+	};
+	// Iface, Destination, Gateway, Flags, …, Mask in the eighth column.
+	const v4 = rows("/proc/net/route").some(
+		(f) => f[1] === "00000000" && f[7] === "00000000" && usable(f[3]),
+	);
+	// Destination, prefix length, …, flags in the ninth column.
+	const v6 = rows("/proc/net/ipv6_route").some(
+		(f) => f[0] === "0".repeat(32) && f[1] === "00" && usable(f[8]),
+	);
+	return { v4, v6 };
 };
 
 /** The sandbox's pid in bwrap's `--info-fd` text so far. A read may end inside the number. */
