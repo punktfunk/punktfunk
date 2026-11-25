@@ -127,6 +127,16 @@ let
     services.punktfunk.scripting.enable = false;
   };
 
+  # A desktop host that opted out of the console.
+  desktopNoWeb = evalWith {
+    services.punktfunk.host = {
+      enable = true;
+      gamescopeHdr = false;
+      desktopSession = true;
+    };
+    services.punktfunk.web.enable = false;
+  };
+
   clientOnly = evalWith { services.punktfunk.client.enable = true; };
 
   # The Steam Frame adapter hook rides on NetworkManager, which `desktop` leaves off.
@@ -296,6 +306,28 @@ let
           u = appliance.systemd.user.services.punktfunk-host;
         in
         !(lib.elem "graphical-session.target" u.partOf) && lib.elem "default.target" u.wantedBy;
+    }
+    {
+      # `desktop` has no autoStart: the host starts at the desktop login by itself, so the console
+      # must too. Wanted only, never `partOf`: it holds no compositor connection.
+      name = "desktopSession starts the console with the host, and does not bind it to the session";
+      ok =
+        let
+          u = desktop.systemd.user.services.punktfunk-web;
+        in
+        lib.elem "graphical-session.target" u.wantedBy
+        && !(lib.elem "default.target" u.wantedBy)
+        && !(lib.elem "graphical-session.target" u.partOf);
+    }
+    {
+      name = "without desktopSession or autoStart the console is wanted by no target";
+      ok = nativeOnly.systemd.user.services.punktfunk-web.wantedBy == [ ];
+    }
+    {
+      name = "web.enable = false leaves a desktopSession host without a console unit";
+      ok =
+        !(desktopNoWeb.systemd.user.services ? punktfunk-web)
+        && lib.elem "graphical-session.target" desktopNoWeb.systemd.user.services.punktfunk-host.wantedBy;
     }
 
     # --- GameStream opt-out reaches both the argv and the firewall -----------------------------

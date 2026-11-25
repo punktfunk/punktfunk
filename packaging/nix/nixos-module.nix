@@ -19,9 +19,10 @@
 #   }
 #
 # The host is fundamentally a per-user, in-graphical-session service (it drives the live
-# compositor, PipeWire and the desktop portals), so it ships as a `systemd.user` unit. Enable it
-# for a session with `systemctl --user enable --now punktfunk-host` (or set `autoStart = true` for a
-# headless appliance with `users.users.<u>.linger = true`).
+# compositor, PipeWire and the desktop portals), so it ships as a `systemd.user` unit. The module
+# starts host and console together: at every desktop login with `desktopSession = true`, at every
+# login with `autoStart = true` (and `users.users.<u>.linger = true` for a headless appliance).
+# Otherwise run `systemctl --user enable --now punktfunk-host punktfunk-web`.
 self:
 {
   config,
@@ -186,6 +187,9 @@ in
 
           This is the declarative equivalent of the `scripts/punktfunk-host-desktop-session.conf`
           drop-in the deb/rpm document for the same route.
+
+          The web console starts with the host at every desktop login too (`web.enable`), but is
+          not bound to the session: it keeps running through a compositor restart.
         '';
       };
 
@@ -370,6 +374,9 @@ in
           Start the console automatically in every user's graphical session (adds it to the user
           `default.target`). Follows the host's `autoStart` by default — for a login-less appliance,
           enable lingering for the user as well.
+
+          Independent of this option, `host.desktopSession` starts the console at every desktop
+          login, so a host that starts by itself always has its console.
         '';
       };
     };
@@ -741,7 +748,11 @@ in
       systemd.user.services.punktfunk-web-init.unitConfig.ConditionUser = userScope;
       systemd.user.services.punktfunk-web = {
         unitConfig.ConditionUser = userScope;
-        wantedBy = optional cfg.web.autoStart "default.target";
+        # Wherever the module starts the host, it starts the console. Wanted only: it holds no
+        # compositor connection, so it is not `partOf` the session as the host is.
+        wantedBy =
+          optional cfg.web.autoStart "default.target"
+          ++ optional cfg.host.desktopSession "graphical-session.target";
         # Where both listeners bind (`web.bind`).
         environment.PUNKTFUNK_UI_BIND = cfg.web.bind;
         # The packaged list starts with host.env, where web-init.sh writes a PUNKTFUNK_UI_BIND that
