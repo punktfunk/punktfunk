@@ -35,12 +35,13 @@ impl LaunchOwner {
 
 /// Whose pads an emulator's players are.
 pub(crate) enum Pads {
-    /// A stream's: the kind an undeclared pad starts as, and the pads its input thread knows
-    /// ([`crate::pad_feed::PadFeed::roster`]). `roster` is `None` on GameStream, which declares
-    /// no pads.
+    /// A stream's: the kind an undeclared pad starts as, the pads its input thread knows
+    /// ([`crate::pad_feed::PadFeed::roster`]), and the device's fingerprint, which keys the pads
+    /// it brought last time. `roster` is `None` on GameStream, which declares no pads.
     Session {
         kind: punktfunk_core::config::GamepadPref,
         roster: Option<std::sync::Arc<crate::pad_feed::PadFeed>>,
+        device: Option<String>,
     },
     /// The pads at the desk, in seat order, each named as SDL names it. Empty binds no players.
     Desk(Vec<hermir::PadRef>),
@@ -466,6 +467,7 @@ mod tests {
             pads: Pads::Session {
                 kind: punktfunk_core::config::GamepadPref::default(),
                 roster: None,
+                device: None,
             },
         }
     }
