@@ -240,6 +240,13 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| stat_alive(&stat))
 }
 
+/// Whether `pid` is stopped by a signal (`stat` field 3 is `T`): alive, and running nothing
+/// until a `SIGCONT`.
+#[cfg(target_os = "linux")]
+pub(crate) fn pid_stopped(pid: u32) -> bool {
+    stat_field::<String>(pid, 3).is_some_and(|state| state == "T")
+}
+
 /// The parent of `pid` (`stat` field 4). `None` once it is gone.
 #[cfg(target_os = "linux")]
 pub(crate) fn ppid(pid: u32) -> Option<u32> {

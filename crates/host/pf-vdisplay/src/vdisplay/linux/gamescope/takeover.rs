@@ -686,9 +686,10 @@ fn stop_our_session(patient: bool) -> bool {
     steam.is_some()
 }
 
-/// `unit`'s main process is our idle drop-in's `sleep`: a takeover idled it and nothing has
-/// replaced it since. A unit the box stopped or restarted itself is its own again. An
-/// unanswered query reads as idled, the restart the hand-back always made.
+/// `unit`'s main process is a takeover's, and nothing has replaced it since: our idle drop-in's
+/// `sleep`, or the session script [`idle_unit`] paused under a host that died before its
+/// restart, which nothing else resumes. A unit the box stopped or restarted itself is its own
+/// again. An unanswered query reads as idled, the restart the hand-back always made.
 fn runs_idle_placeholder(unit: &str) -> bool {
     let Some(out) = crate::proc::output_within(
         Command::new("systemctl").args(["--user", "show", unit, "-p", "MainPID", "--value"]),
@@ -703,7 +704,8 @@ fn runs_idle_placeholder(unit: &str) -> bool {
         .parse()
         .unwrap_or(0);
     pid != 0
-        && std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "sleep")
+        && (std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "sleep")
+            || crate::proc::pid_stopped(pid))
 }
 
 fn display_manager_unit() -> Option<String> {
@@ -1205,9 +1207,10 @@ fn parse_listed_units(stdout: &str) -> Vec<(String, String)> {
 }
 
 /// Free Steam. Our `punktfunk-gamescope` unit is not a `@`-instance, so it is never matched.
-/// SIGKILL ([`kill_unit`]) avoids the NVIDIA GPU-context leak. A user manager that twice does
-/// not list its units is `Err`, and so is an idle drop-in that cannot be installed (caller
-/// degrades to attach) — never mask-only; a mask while the DM is up is the relogin storm.
+/// Behind a DM the unit is idled inside its login ([`idle_unit`]): ending that login sends the
+/// DM to its default session. Without one, [`kill_unit`]. A user manager that twice does not list
+/// its units is `Err`, and so is an idle drop-in that cannot be installed (caller degrades to
+/// attach) — never mask-only; a mask while the DM is up is the relogin storm.
 pub(super) fn stop_autologin_sessions() -> Result<()> {
     // Asked twice: the user manager is busiest right after a relogin.
     let listed = listed_autologin_units()
@@ -1237,11 +1240,10 @@ pub(super) fn stop_autologin_sessions() -> Result<()> {
     takeover().owe_units(units.clone());
     let logins_before = max_logind_session_id();
     for unit in units {
-        kill_unit(&unit);
         if plan.dm_relogins {
-            // Restart ourselves: drop-in is loaded, so what comes back runs nothing. Closes the
-            // window where the DM sees a dead session and churns.
-            systemctl_user(&["restart", &unit]);
+            idle_unit(&unit);
+        } else {
+            kill_unit(&unit);
         }
         tracing::info!(
             %unit,
@@ -2768,9 +2770,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&fake);
     }
 
-    /// The hand-back restarts only a unit still running our `sleep`: one the box stopped for a
-    /// switch, or runs for real, is the box's. No answer keeps the old restart. `systemctl` is a
-    /// fake on the child's PATH, printing the MainPID of a real child.
+    /// The hand-back restarts only a unit still running our `sleep` or a session script a host
+    /// paused: one the box stopped for a switch, or runs for real, is the box's. No answer keeps
+    /// the old restart. `systemctl` is a fake on the child's PATH, printing the MainPID of a
+    /// real child.
     #[test]
     fn only_a_unit_still_idled_is_restarted() {
         let name = "only_a_unit_still_idled_is_restarted";
@@ -2780,20 +2783,35 @@ mod tests {
             let main_pid =
                 |pid: u32| std::fs::write(home.join("systemctl-show"), format!("{pid}\n"));
             std::fs::write(home.join("systemctl-exit"), "0").unwrap();
-            let mut idle = Command::new("sleep")
-                .arg("30")
-                .spawn()
-                .expect("spawn sleep");
-            let mut real = Command::new("tail")
-                .args(["-f", "/dev/null"])
-                .spawn()
-                .expect("spawn tail");
+            // Null output: a stand-in a failed assertion leaves behind must not hold the
+            // child's pipes open, or the failure reads as a hang.
+            let quiet = |cmd: &mut Command| {
+                cmd.stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+            };
+            let mut idle = quiet(Command::new("sleep").arg("30")).expect("spawn sleep");
+            let mut real =
+                quiet(Command::new("tail").args(["-f", "/dev/null"])).expect("spawn tail");
             main_pid(idle.id()).unwrap();
             assert!(runs_idle_placeholder(UNIT));
             main_pid(real.id()).unwrap();
             assert!(
                 !runs_idle_placeholder(UNIT),
                 "the box runs this unit for real"
+            );
+            // What a host that died inside `idle_unit` leaves: the session script, paused.
+            let stop = Command::new("kill")
+                .args(["-STOP", &real.id().to_string()])
+                .status();
+            assert!(stop.is_ok_and(|s| s.success()), "pause the stand-in");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !crate::proc::pid_stopped(real.id()) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(
+                runs_idle_placeholder(UNIT),
+                "a paused session script is a dead host's"
             );
             main_pid(0).unwrap();
             assert!(!runs_idle_placeholder(UNIT), "the box stopped this unit");
@@ -2819,11 +2837,12 @@ mod tests {
             let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"));
             std::fs::write(home.join("systemctl-exit"), "0").unwrap();
             let tracker = crate::gamescope::SHORT_SESSION_TRACKERS[0];
-            let verbs: [(&str, fn()); 3] = [
+            let verbs: [(&str, fn()); 4] = [
                 ("restore_verb", || {
                     restore_verb(Site::Autologin(UNIT));
                 }),
                 ("kill_unit", || crate::gamescope::kill_unit(UNIT)),
+                ("idle_unit", || crate::gamescope::idle_unit(UNIT)),
                 ("host_session_verb", || {
                     crate::gamescope::host_session_verb("restart", UNIT)
                 }),

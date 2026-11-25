@@ -202,9 +202,10 @@ pub(super) fn install_idle_dropin() -> Result<()> {
 }
 
 /// Empty `ExecStart=` first: the directive is list-valued, so an add-only drop-in would run the
-/// real session *and* the sleep.
+/// real session *and* the sleep. SIGKILL is the stop signal of the restart that idles the unit
+/// ([`super::idle_unit`]), as in [`super::kill_unit`].
 fn idle_dropin_body(sleep_bin: &str) -> String {
-    format!("[Service]\nExecStart=\nExecStart={sleep_bin} infinity\n")
+    format!("[Service]\nKillSignal=SIGKILL\nExecStart=\nExecStart={sleep_bin} infinity\n")
 }
 
 /// Not gated on the armed flag: a drop-in that outlived a dead host still has to be swept.
@@ -282,11 +283,11 @@ mod tests {
     fn idle_dropin_replaces_exec_start_rather_than_appending() {
         let body = idle_dropin_body("/usr/bin/sleep");
         assert_eq!(
-            body, "[Service]\nExecStart=\nExecStart=/usr/bin/sleep infinity\n",
+            body, "[Service]\nKillSignal=SIGKILL\nExecStart=\nExecStart=/usr/bin/sleep infinity\n",
             "{body}"
         );
         let lines: Vec<&str> = body.lines().collect();
-        assert_eq!(lines[1], "ExecStart=", "the reset must come first: {body}");
+        assert_eq!(lines[2], "ExecStart=", "the reset must come first: {body}");
         // The path is resolved per box ([`sleep_binary`]) and must reach the unit verbatim — a
         // bare `sleep` would depend on the unit's PATH, and an ExecStart that fails to execute is
         // the failing unit the display manager relogin-loops against.

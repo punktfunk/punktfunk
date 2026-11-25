@@ -1007,21 +1007,12 @@ fn running_autologin_gamescope_unit() -> Option<String> {
         .map(|u| u.to_string())
 }
 
-/// Steam first, asked to quit: a SIGKILL mid-write loses `config.vdf` or `registry.vdf`. Then
-/// SIGKILL, not SIGTERM: on NVIDIA, gamescope's SIGTERM shutdown can leave every later
-/// `vkCreateDevice` failing until reboot, and SIGKILL does not. Then `stop` + `reset-failed` so
-/// relaunch is clean. The run it ends is the host's, so Game Mode's crash counters forget it.
+/// Steam first ([`quit_steam_in`]). Then SIGKILL, not SIGTERM: on NVIDIA, gamescope's SIGTERM
+/// shutdown can leave every later `vkCreateDevice` failing until reboot, and SIGKILL does not.
+/// Then `stop` + `reset-failed` so relaunch is clean. The run it ends is the host's, so Game
+/// Mode's crash counters forget it.
 fn kill_unit(unit: &str) {
-    if let Some(pid) = steam_pid_in_unit(unit) {
-        if !shut_steam_down(pid, STEAM_STOP_WAIT) {
-            tracing::warn!(
-                unit,
-                pid,
-                secs = STEAM_STOP_WAIT.as_secs(),
-                "gamescope: Steam did not quit when asked — killing its session anyway"
-            );
-        }
-    }
+    quit_steam_in(unit);
     // All three budgeted: this runs on disconnect restore and on shutdown, where the whole
     // sequence has `SHUTDOWN_RESTORE_GRACE` (`native.rs`) before it gives up. Three unbounded
     // `systemctl` calls against a busy user manager spend that budget on their own.
@@ -1038,6 +1029,52 @@ fn kill_unit(unit: &str) {
         UNIT_VERB_BUDGET,
     );
     forget_host_short_sessions();
+}
+
+/// Swap a display manager's Game Mode unit for the loaded idle drop-in, inside its login. The
+/// login waits on the unit with `systemctl --wait start`, which returns once the unit is down
+/// with no job queued; the display manager then logs into its default session, the desktop after
+/// a one-off Game Mode. So nothing here may stop the unit outside a job: the session script,
+/// which exits once Steam does, is paused before Steam quits, and one `restart` job (the
+/// drop-in's SIGKILL) replaces it. A host that dies in between leaves the script paused: the
+/// units are owed before this runs, and the hand-back restarts a paused one
+/// ([`takeover::runs_idle_placeholder`]).
+fn idle_unit(unit: &str) {
+    let paused = crate::proc::status_within(
+        Command::new("systemctl").args([
+            "--user",
+            "kill",
+            "--kill-who=main",
+            "--signal=SIGSTOP",
+            unit,
+        ]),
+        UNIT_VERB_BUDGET,
+    );
+    if !paused.is_ok_and(|s| s.success()) {
+        tracing::warn!(
+            unit,
+            "gamescope: the box's session script did not pause — its login ends if Steam quits \
+             before the restart"
+        );
+    }
+    quit_steam_in(unit);
+    host_session_verb("restart", unit);
+}
+
+/// Ask the Steam in `unit` to quit and wait for it: a SIGKILL mid-write loses `config.vdf` or
+/// `registry.vdf`.
+fn quit_steam_in(unit: &str) {
+    let Some(pid) = steam_pid_in_unit(unit) else {
+        return;
+    };
+    if !shut_steam_down(pid, STEAM_STOP_WAIT) {
+        tracing::warn!(
+            unit,
+            pid,
+            secs = STEAM_STOP_WAIT.as_secs(),
+            "gamescope: Steam did not quit when asked — killing its session anyway"
+        );
+    }
 }
 
 /// Point the libei injector at the EIS socket of the gamescope in `scope` (it reads the relay
@@ -1394,6 +1431,26 @@ mod tests {
             std::env::var("PATH").unwrap_or_default()
         );
         (fake, path)
+    }
+
+    /// Idling a display manager's Game Mode unit never stops it outside a job, or its login's
+    /// `systemctl --wait start` returns and the DM logs into its default session.
+    #[test]
+    fn idling_a_dm_unit_pauses_its_script_then_restarts_it_in_one_job() {
+        let name = "idling_a_dm_unit_pauses_its_script_then_restarts_it_in_one_job";
+        let (fake, path) = fake_systemctl(name);
+        crate::fake::in_child(module_path!(), name, &[("PATH", &path)], || {
+            const UNIT: &str = "gamescope-session-plus@ogui-steam.service";
+            idle_unit(UNIT);
+            assert_eq!(
+                crate::fake::home_lines("systemctl-calls"),
+                [
+                    format!("--user kill --kill-who=main --signal=SIGSTOP {UNIT}"),
+                    format!("--user restart {UNIT}"),
+                ]
+            );
+        });
+        let _ = std::fs::remove_dir_all(&fake);
     }
 
     /// A restart systemd refuses hands the box back at once with systemd's word, and no node
