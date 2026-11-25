@@ -211,6 +211,8 @@ public final class StreamViewController: StreamViewControllerBase {
     /// This screen's native mode at the last layout pass, and the request a change of it queued.
     private var lastNativeMode: (width: Int, height: Int, hz: Int)?
     private var screenModeWork: DispatchWorkItem?
+    /// The phone's mode, queued while a pulled monitor may still come back.
+    private var monitorLossWork: DispatchWorkItem?
     #endif
     private var onExternal = false
     /// The re-ask edge and its clocks; `prefersPointerLocked` mirrors `wantsPointerLock` outside
@@ -888,6 +890,8 @@ public final class StreamViewController: StreamViewControllerBase {
         fittedScene = nil
         #endif
         #if os(iOS)
+        monitorLossWork?.cancel()
+        monitorLossWork = nil
         if onExternal {
             ExternalDisplay.shared.hide(externalVideo) // the monitor mirrors the phone again
             onExternal = false
@@ -1161,7 +1165,9 @@ public final class StreamViewController: StreamViewControllerBase {
     #if os(iOS) || os(visionOS)
     #if os(iOS)
     /// Follow a monitor plugged in or pulled mid-session: move the picture onto it or back to the
-    /// phone, then ask the host for the mode that fits. Main thread.
+    /// phone at once. A plugged monitor's mode is asked for right away. A pulled one may only be
+    /// changing its mode, so its mode stays for `NativeDisplay.lossHold` before `takePhoneMode`.
+    /// Main thread.
     private func routeVideo() {
         guard connection != nil else { return }
         let external = ExternalDisplay.shared.screen != nil
@@ -1174,9 +1180,21 @@ public final class StreamViewController: StreamViewControllerBase {
         }
         presenter.move(to: videoLayer)
         layoutMetalLayer()
-        // A monitor takes its mode from `requestSurfaceMode`; back on the phone, Match-window
-        // owns it again, and a size request queued before the plug-in must not fire.
-        let follows = !external && (connection?.settings.matchWindow ?? false)
+        // Match window sits out a monitor and the hold after one: a size request queued before
+        // either must not fire.
+        matchFollower?.setEnabled(false)
+        monitorLossWork?.cancel()
+        monitorLossWork = nil
+        guard !external else { return requestSurfaceMode() }
+        let work = DispatchWorkItem { [weak self] in self?.takePhoneMode() }
+        monitorLossWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + NativeDisplay.lossHold, execute: work)
+    }
+
+    /// The monitor stayed away: Match window owns the mode again, else the phone's Native does.
+    private func takePhoneMode() {
+        guard let connection, !onExternal else { return }
+        let follows = connection.settings.matchWindow
         matchFollower?.setEnabled(follows)
         if follows { noteMatchWindowSize() } else { requestSurfaceMode() }
     }

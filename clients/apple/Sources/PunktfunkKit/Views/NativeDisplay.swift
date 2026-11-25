@@ -47,6 +47,18 @@ public enum NativeDisplay {
     }
     #endif
 
+    #if os(macOS)
+    /// `screen`'s panel below its camera housing, at its top refresh.
+    public static func mode(on screen: NSScreen) -> (width: Int, height: Int, hz: Int) {
+        let safe = screen.notchSafePixelSize
+        return (safe.width, safe.height, screen.maximumFramesPerSecond)
+    }
+    #endif
+
+    /// How long a session keeps the mode of a screen that went away, in seconds. A display that
+    /// changes its own mode leaves and comes back inside it, and the host then switches once.
+    public static let lossHold: TimeInterval = 3
+
     /// `mode`'s refresh to the millihertz: 59 940 on a display running at 59.94 Hz, which its
     /// whole hertz round to 60. Only a Mac reads a fraction: the other platforms state whole
     /// hertz.
@@ -65,8 +77,7 @@ public enum NativeDisplay {
     public static var mode: (width: Int, height: Int, hz: Int) {
         #if os(macOS)
         guard let screen = NSScreen.main else { return (1920, 1080, 60) }
-        let safe = screen.notchSafePixelSize
-        return (safe.width, safe.height, screen.maximumFramesPerSecond)
+        return mode(on: screen)
         #elseif os(visionOS)
         // No screen to read (UIScreen is unavailable, visionOS 27 SDK): a window can grow past
         // 4K's detail, and every Vision Pro runs 90 Hz. Fixed until visionOS reports a refresh

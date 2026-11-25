@@ -812,6 +812,24 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertEqual([set.width, set.height, set.hz], [1_920, 1_080, 120])
     }
 
+    /// A session on its old screen's Native takes the new screen's; a picked size, a ring pick
+    /// and a mode the new screen already gives stay. A native rate follows on its own.
+    func testANativeSessionFollowsItsScreen() {
+        let glasses = (width: 1_920, height: 1_080, hz: 120)
+        let sideBySide = (width: 3_840, height: 1_080, hz: 60)
+        var s = EffectiveSettings()
+        (s.width, s.height, s.refreshHz) = (0, 0, 0)
+        let followed = s.followedMode(from: glasses, to: sideBySide, live: (1_920, 1_080, 120))
+        XCTAssertEqual(followed.map { [$0.width, $0.height, $0.hz] }, [3_840, 1_080, 60])
+        XCTAssertNil(s.followedMode(from: glasses, to: sideBySide, live: (1_280, 720, 120)))
+        XCTAssertNil(s.followedMode(from: glasses, to: glasses, live: (1_920, 1_080, 120)))
+        (s.width, s.height, s.refreshHz) = (1_920, 1_080, 120)
+        XCTAssertNil(s.followedMode(from: glasses, to: sideBySide, live: (1_920, 1_080, 120)))
+        s.refreshHz = 0
+        let rate = s.followedMode(from: glasses, to: sideBySide, live: (1_920, 1_080, 120))
+        XCTAssertEqual(rate.map { [$0.width, $0.height, $0.hz] }, [1_920, 1_080, 60])
+    }
+
     /// Native asks for the display's exact rate; a picked rate is whole hertz as picked.
     func testNativeRefreshIsTheDisplaysExactRate() {
         var s = EffectiveSettings()

@@ -402,6 +402,19 @@ extension EffectiveSettings {
         return (mode.width, mode.height, UInt32(clamping: hz))
     }
 
+    /// The mode a session takes when its picture moves from a screen whose Native is `old` to
+    /// one whose Native is `new`. nil unless `live` is `old`'s size and `new`'s mode differs:
+    /// a size picked in the ring or lowered by a game's override stays as it is.
+    public func followedMode(
+        from old: (width: Int, height: Int, hz: Int), to new: (width: Int, height: Int, hz: Int),
+        live: (width: UInt32, height: UInt32, hz: UInt32)
+    ) -> (width: UInt32, height: UInt32, hz: UInt32)? {
+        let (before, after) = (streamMode(native: old), streamMode(native: new))
+        guard (live.width, live.height) == (before.width, before.height), after != live
+        else { return nil }
+        return after
+    }
+
     /// The exact rate behind `streamMode(native:)`'s whole hertz, in millihertz: the display's
     /// under Native (59 940 at 59.94 Hz, at least 30 000), a picked rate as picked.
     public func streamRefreshMilliHz(nativeMilliHz: Int) -> UInt32 {
