@@ -184,6 +184,8 @@ if (runUnit) {
 	};
 	process.on("SIGTERM", stopUnit);
 	process.on("SIGINT", stopUnit);
+	// A sandbox's supervisor stops it by closing stdin: bwrap forwards no signal.
+	if (process.argv.includes("--stop-on-eof")) process.stdin.on("end", stopUnit).resume();
 	const failed = await Effect.runPromise(Fiber.await(unitFiber)).then(
 		(exit) => exit._tag !== "Success",
 	);

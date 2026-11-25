@@ -608,6 +608,52 @@ describe("supervision", () => {
 		expect(active).toEqual({ one: 0, two: 0 });
 	});
 
+	test("shutdown stops every sandboxed plugin at once", async () => {
+		const d = mkdirs("stop-together");
+		const packages = ["one", "two"];
+		for (const id of packages) {
+			const pkg = path.join(d.pluginsDir, "node_modules", `punktfunk-plugin-${id}`);
+			write(
+				path.join(pkg, "package.json"),
+				JSON.stringify({ name: `punktfunk-plugin-${id}`, main: "index.js", punktfunk: { schema: 1, id } }),
+			);
+			write(path.join(pkg, "index.js"), "export default {};");
+		}
+		write(
+			path.join(d.pluginsDir, "package.json"),
+			JSON.stringify({
+				dependencies: Object.fromEntries(packages.map((id) => [`punktfunk-plugin-${id}`, "1.0.0"])),
+			}),
+		);
+		let running = 0;
+		let stopping = 0;
+		let most = 0;
+		const fiber = Effect.runFork(
+			runner({
+				...d,
+				sandbox: "on",
+				configDir: d.dir,
+				log: () => {},
+				sandboxProbe: () => ({ ok: true }),
+				// A sandbox whose plugin takes a while to stop.
+				sandboxRun: () =>
+					Effect.callback<"plugin">(() => {
+						running += 1;
+						return Effect.sync(() => {
+							stopping += 1;
+							most = Math.max(most, stopping);
+						}).pipe(
+							Effect.andThen(Effect.sleep("100 millis")),
+							Effect.andThen(Effect.sync(() => void (stopping -= 1))),
+						);
+					}),
+			}),
+		);
+		await waitFor(() => running === 2);
+		await Effect.runPromise(Fiber.interrupt(fiber));
+		expect(most).toBe(2);
+	});
+
 	test("a bare script is one-shot: runs on import, never restarts", async () => {
 		const d = mkdirs("bare");
 		const counter = path.join(d.dir, "ran.txt");

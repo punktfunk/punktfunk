@@ -1,12 +1,13 @@
-// A network plugin's sandbox: refused without unshare or pasta, and pasta's lifecycle around it.
-// Shell stand-ins play bwrap and pasta, so this runs on any POSIX box.
+// A network plugin's sandbox: refused without unshare or pasta, pasta's lifecycle around it, and
+// how a sandbox is stopped. Shell stand-ins play bwrap and pasta, so this runs on any POSIX box.
 import { afterAll, describe, expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Writable } from "node:stream";
+import { PassThrough, type Writable } from "node:stream";
 import {
 	connectNetwork,
 	type DefaultRoutes,
@@ -14,6 +15,7 @@ import {
 	infoPid,
 	runSandboxed,
 	staleRoutes,
+	stopUnitChild,
 } from "../src/runner-linux.js";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pf-runner-linux-"));
@@ -62,6 +64,41 @@ describe("runSandboxed", () => {
 		const plain = await refusal(false, []);
 		expect(plain.asked).toEqual([]);
 		expect(plain.why).toContain("No API credential exists for demo");
+	});
+});
+
+describe("stopUnitChild", () => {
+	/** A child that dies on any kill, and ends on its own once stdin closes when `honours`. */
+	const fake = (honours: boolean) => {
+		const killed: string[] = [];
+		const child = Object.assign(new EventEmitter(), {
+			pid: 4242,
+			exitCode: null,
+			signalCode: null,
+			stdin: new PassThrough(),
+			kill(signal: string) {
+				killed.push(signal);
+				queueMicrotask(() => child.emit("exit", null, signal));
+				return true;
+			},
+		});
+		if (honours) child.stdin.on("finish", () => child.emit("exit", 1, null));
+		return { child: child as unknown as ChildProcess, killed };
+	};
+
+	test("a unit that ends once its stdin closes is never killed", async () => {
+		const { child, killed } = fake(true);
+		await stopUnitChild(child, 50);
+		await Bun.sleep(100);
+		expect(killed).toEqual([]);
+	});
+
+	test("a unit that goes on running is killed once the grace is over", async () => {
+		const { child, killed } = fake(false);
+		const start = Date.now();
+		await stopUnitChild(child, 50);
+		expect(killed).toEqual(["SIGKILL"]);
+		expect(Date.now() - start).toBeGreaterThanOrEqual(45);
 	});
 });
 
