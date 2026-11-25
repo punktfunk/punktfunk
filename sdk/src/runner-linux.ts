@@ -256,10 +256,11 @@ export const runSandboxed = (
 			),
 			tools?.unshare,
 		);
-		const child = spawn(cmd, [...args, process.execPath, ...unitArgv(unit)], {
+		const child = spawn(cmd, [...args, process.execPath, ...unitArgv(unit), "--stop-on-eof"], {
 			env: sandboxEnv(os.homedir()),
-			// fd 3 is `--add-seccomp-fd 3`; a network plugin's 4 and 5 are `--info-fd` and `--block-fd`.
-			stdio: ["ignore", "inherit", "pipe", "pipe", ...(net ? (["pipe", "pipe"] as const) : [])],
+			// stdin is the stop channel (`stopUnitChild`). fd 3 is `--add-seccomp-fd 3`; a network
+			// plugin's 4 and 5 are `--info-fd` and `--block-fd`.
+			stdio: ["pipe", "inherit", "pipe", "pipe", ...(net ? (["pipe", "pipe"] as const) : [])],
 		});
 		// stderr still reaches the journal; its tail also names why the sandbox exited, since
 		// bwrap's own errors come before the plugin can ship a log line.
@@ -270,7 +271,7 @@ export const runSandboxed = (
 			const failed = (why: string): void => {
 				log(`[runner] ${id}: its network did not come up — ${why}`, "error");
 				stopNet?.();
-				child.kill("SIGTERM");
+				void stopUnitChild(child);
 			};
 			// The ports on this computer the operator granted, and no other of its loopback.
 			stopNet = connectNetwork(child, tools.pasta, net, failed, grantedPorts(config, id));
@@ -283,12 +284,9 @@ export const runSandboxed = (
 			release();
 			resume(exitOutcome("sandboxed plugin", code, signal, lastLines()));
 		});
-		return Effect.sync(() => {
-			// Interruption (shutdown): SIGTERM lets the plugin's finalizers run; `--die-with-parent`
-			// is the backstop if this runner is killed outright.
-			child.kill("SIGTERM");
-			release();
-		});
+		// Interruption (shutdown, a grant change) waits for the plugin's finalizers, its network and
+		// host proxy still up. `--die-with-parent` is the backstop if this runner is killed outright.
+		return Effect.promise(() => stopUnitChild(child).then(release));
 	});
 
 /**
@@ -485,6 +483,31 @@ export const exitOutcome = (
 		: Effect.fail(
 				new Error(`${what} exited ${signal ? `on ${signal}` : `with ${code}`}${last ? ` — ${last}` : ""}`),
 			);
+
+/**
+ * How long a stopped sandbox has to run its plugin's finalizers. Every plugin stops at once, and
+ * their leases and the log flush follow, inside the scripting unit's 30 s `TimeoutStopSec`.
+ */
+export const STOP_GRACE_MS = 10_000;
+
+/**
+ * Stop a sandbox's `--run-unit` child, spawned with a stdin pipe and `--stop-on-eof`. Closing
+ * stdin interrupts its unit as SIGTERM would, and gets through bwrap, which forwards no signal.
+ * One still running after `graceMs` gets SIGKILL. Resolves once it has exited.
+ */
+export const stopUnitChild = (child: ChildProcess, graceMs = STOP_GRACE_MS): Promise<void> =>
+	new Promise((done) => {
+		if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+			done();
+			return;
+		}
+		const kill = setTimeout(() => child.kill("SIGKILL"), graceMs);
+		child.once("exit", () => {
+			clearTimeout(kill);
+			done();
+		});
+		child.stdin?.on("error", () => {}).end();
+	});
 
 /** The runner bundle this process is running, which each sandbox re-execs. */
 export const runnerEntry = (): string =>

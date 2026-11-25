@@ -24,7 +24,7 @@ import {
 	Exit,
 	Fiber,
 	Schedule,
-	type Scope,
+	Scope,
 } from "effect";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -455,6 +455,10 @@ const sandboxRefusal = (
 	return new SandboxRefused(probe.reason);
 };
 
+/** `Effect.scoped`, with the scope's finalizers run at once rather than one after another. */
+const scopedParallel = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+	Effect.flatMap(Scope.make("parallel"), (scope) => Scope.use(self, scope));
+
 /** The process exit status for how `runner` ended. */
 export const runnerExitStatus = (exit: Exit.Exit<void, SandboxRefused>): number =>
 	Exit.isFailure(exit) && Cause.squash(exit.cause) instanceof SandboxRefused
@@ -465,7 +469,7 @@ export const runnerExitStatus = (exit: Exit.Exit<void, SandboxRefused>): number 
  * Discover and supervise every unit until interrupted. Sandboxed units are tracked separately:
  * a grants-file poll compares their effective roots and restarts only the plugin whose roots
  * changed. Every supervisor and the poller share this scope, so shutdown interrupts all of them
- * and runs their finalizers.
+ * at once and runs their finalizers: one after another, each sandbox's stop grace would add up.
  *
  * Fails with `SandboxRefused` before anything starts when a plugin is installed and this box
  * builds no sandbox. With no plugin installed there is nothing to refuse, and scripts run.
@@ -474,7 +478,7 @@ export const runner = (
 	options: RunnerOptions = {},
 ): Effect.Effect<void, SandboxRefused> => {
 	const log = options.log ?? defaultLog;
-	return Effect.scoped(
+	return scopedParallel(
 		Effect.gen(function* () {
 			// bwrap is the Linux sandbox, an AppContainer the Windows one, Seatbelt the macOS one.
 			const confines = ["linux", "win32", "darwin"].includes(process.platform);

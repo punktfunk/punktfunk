@@ -15,6 +15,7 @@ import {
 	exitOutcome,
 	proxyToHost,
 	runnerEntry,
+	stopUnitChild,
 	tailStderr,
 	unitArgv,
 	warnRefused,
@@ -100,10 +101,12 @@ export const runSeatbelt = (
 			grants,
 			manifest.network ? grantedPorts(config, id) : [],
 		);
-		const child = spawn(SANDBOX_EXEC, ["-p", profile, process.execPath, ...unitArgv(unit)], {
+		const args = ["-p", profile, process.execPath, ...unitArgv(unit), "--stop-on-eof"];
+		const child = spawn(SANDBOX_EXEC, args, {
 			env: seatbeltEnv(home, view, forward?.port),
 			cwd: stateDir,
-			stdio: ["ignore", "inherit", "pipe"],
+			// stdin is the stop channel (`stopUnitChild`).
+			stdio: ["pipe", "inherit", "pipe"],
 		});
 		// sandbox-exec's own refusal comes before the plugin can ship a log line.
 		const lastLines = tailStderr(child);
@@ -115,10 +118,7 @@ export const runSeatbelt = (
 			release();
 			resume(exitOutcome("sandboxed plugin", code, signal, lastLines()));
 		});
-		return Effect.sync(() => {
-			// Interruption (shutdown): SIGTERM lets the plugin's finalizers run. sandbox-exec execs
-			// the runner in place, so the signal reaches it.
-			child.kill("SIGTERM");
-			release();
-		});
+		// Interruption (shutdown, a grant change) waits for the plugin's finalizers, its view and
+		// host proxy still there.
+		return Effect.promise(() => stopUnitChild(child).then(release));
 	});
