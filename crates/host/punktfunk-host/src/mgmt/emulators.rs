@@ -102,11 +102,6 @@ pub(crate) fn hermir_err(e: &hermir::Error, (code, what): (&str, &str)) -> Respo
     api_error_logged(hermir_status(e), code, what, e)
 }
 
-/// [`hermir_err`] for a sentence with no host message: the error rides along.
-pub(crate) fn hermir_plain(e: &hermir::Error, what: &str) -> Response {
-    api_error(hermir_status(e), &format!("{what} — {e}"))
-}
-
 fn hermir_status(e: &hermir::Error) -> StatusCode {
     match e {
         hermir::Error::NotInCatalog(_) => StatusCode::NOT_FOUND,
@@ -211,7 +206,7 @@ pub(crate) async fn get_emulators() -> Response {
 pub(crate) async fn install_emulator(Path(id): Path<String>) -> Response {
     let target = id.clone();
     match blocking("emulator_manager", move || {
-        crate::emulators::install(&target)
+        crate::emulators::install(&target, &hermir::progress::Quiet)
     })
     .await
     {
@@ -925,7 +920,8 @@ fn wire<T: Serialize>(v: T) -> String {
         .unwrap_or_default()
 }
 
-/// Who may move saves: the operator, or a plugin holding the save grant.
+/// Who may move saves: the operator, or a plugin holding the save grant. A grant is stored
+/// resolved, so the host's own spelling of the folder is resolved before they meet.
 fn may_move_saves(
     st: &MgmtState,
     lane: AuthLane,
@@ -934,12 +930,13 @@ fn may_move_saves(
     if lane.is_operator() {
         return Ok(());
     }
-    let grant = crate::emulators::saves_grant();
+    let resolved = crate::plugins::access::resolve_unmade;
+    let grant = resolved(&crate::emulators::saves_grant());
     let held = plugin.is_some_and(|id| {
         st.access
             .grants_for(id)
             .iter()
-            .any(|g| std::path::Path::new(&g.path) == grant)
+            .any(|g| resolved(std::path::Path::new(&g.path)) == grant)
     });
     if held {
         Ok(())

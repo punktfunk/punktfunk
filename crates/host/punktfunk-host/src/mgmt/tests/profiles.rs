@@ -43,8 +43,8 @@ async fn the_cert_lane_reads_profiles_but_never_edits_them() {
     assert_eq!(send_cert(&app, create, fp).await, StatusCode::UNAUTHORIZED);
 }
 
-/// A plugin reads each profile's id, name and picture, and nothing of seats, devices or
-/// defaults the console's list carries.
+/// A plugin reads each profile's id, name and picture, and whose session it plays in, and
+/// nothing of seats, devices or defaults the console's list carries.
 #[tokio::test]
 async fn a_plugin_reads_who_is_on_the_box_and_nothing_more() {
     let app = test_app(state_with_profiles("plugin"), None);
@@ -59,7 +59,11 @@ async fn a_plugin_reads_who_is_on_the_box_and_nothing_more() {
         .keys()
         .map(|k| k.as_str())
         .collect();
-    assert_eq!(keys, ["display_name", "id"], "{list}");
+    assert_eq!(keys, ["display_name", "id", "owner", "shared"], "{list}");
+    assert_eq!(
+        (rows[0]["owner"].as_bool(), rows[0]["shared"].as_bool()),
+        (Some(true), Some(false))
+    );
 }
 
 /// `?profile=` points the save routes at that profile's seat: one with none here, the owner's

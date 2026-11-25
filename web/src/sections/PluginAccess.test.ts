@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
 import { baseLocale, overwriteGetLocale } from "@/paraglide/runtime";
+import { accessLine } from "./Library/Sources";
 import { nextAsk, PendingAccess, putOff } from "./PluginAccess";
 
 overwriteGetLocale(() => baseLocale);
@@ -56,4 +57,68 @@ test("a request through a link names the folder it opens first, the link below",
 	expect(html).toContain(`>${target}</div>`);
 	expect(html).toContain(`Asked for through the link ${link}`);
 	expect(html.indexOf(target)).toBeLessThan(html.indexOf(link));
+});
+
+const pending = (access: PluginAccessSnapshot) =>
+	renderToStaticMarkup(
+		createElement(
+			QueryClientProvider,
+			{ client: new QueryClient() },
+			createElement(PendingAccess, { access, busy: false, onDecide: () => {} }),
+		),
+	);
+
+test("an install shows its download while it runs, and its failure until the next try", () => {
+	const app = "/home/u/.local/share/punktfunk/emulators/cemu/app";
+	const asked = {
+		plugin: "rom-manager",
+		grants: [],
+		denied: [],
+		pending: [{ path: app, write: false, emulator: "cemu" }],
+	} as unknown as PluginAccessSnapshot;
+	const running = pending({
+		...asked,
+		walks: [
+			{ path: app, removing: false, seconds: 3, installing: true, percent: 40 },
+		],
+	});
+	expect(running).toContain("Downloading… 40 %");
+	expect(running).not.toContain(">Install</button>");
+	const sized = pending({
+		...asked,
+		walks: [{ path: app, removing: false, seconds: 3, installing: true }],
+	});
+	expect(sized).toContain("Installing… 3 s");
+	const failed = pending({
+		...asked,
+		failed: [{ path: app, error: "GET https://x: timed out" }],
+	});
+	expect(failed).toContain(
+		"cemu didn&#x27;t install — GET https://x: timed out",
+	);
+	expect(failed).toContain(">Install</button>");
+});
+
+test("a source counts the folders it can't read apart from what it asks to install", () => {
+	const at = (path: string, extra = {}) => ({ path, write: false, ...extra });
+	const access = (...rows: object[]) =>
+		({
+			plugin: "rom-manager",
+			grants: [],
+			denied: [],
+			pending: rows,
+		}) as unknown as PluginAccessSnapshot;
+	const cores = "/home/u/.config/retroarch/cores";
+	const installs = access(
+		at("/a/cemu/app", { emulator: "cemu" }),
+		at("/a/dolphin/app", { emulator: "dolphin" }),
+		at(cores, { core: "snes9x" }),
+		at(cores, { core: "mgba" }),
+	);
+	expect(accessLine(installs, "ROM Manager")).toBe(
+		"ROM Manager asks to install 3 emulators",
+	);
+	expect(
+		accessLine(access(at("/roms"), ...installs.pending), "ROM Manager"),
+	).toBe("ROM Manager can't read 1 of its folders");
 });

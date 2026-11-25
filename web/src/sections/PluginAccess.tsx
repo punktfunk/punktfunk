@@ -14,6 +14,7 @@ import { type FC, useId, useState } from "react";
 import { useGetEmulators } from "@/api/gen/emulators/emulators";
 import type { AccessWalk } from "@/api/gen/model/accessWalk";
 import type { DecideRequest } from "@/api/gen/model/decideRequest";
+import type { EmulatorStatus } from "@/api/gen/model/emulatorStatus";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
 import {
 	getGetPluginAccessQueryKey,
@@ -62,6 +63,19 @@ export const usePluginAccess = () => {
 		plugin: string;
 		paths: string[];
 	} | null>(null);
+	const emulators = useGetEmulators({
+		query: {
+			enabled: !!access.data?.some((row) =>
+				row.pending.some((p) => p.emulator),
+			),
+		},
+	});
+	// The emulator or cores a yes installs first, which the dialog names instead of access.
+	const install =
+		allowing &&
+		installOf(access.data, allowing.plugin, allowing.paths, (id) =>
+			emulatorName(emulators.data, id),
+		);
 	const run = async (
 		plugin: string,
 		paths: string[],
@@ -104,10 +118,22 @@ export const usePluginAccess = () => {
 		<PasswordConfirmDialog
 			open={allowing !== null}
 			id="plugin-access-password"
-			title={m.plugin_access_confirm_title()}
-			body={m.plugin_access_confirm_body()}
-			submitLabel={m.plugin_access_allow()}
-			busyLabel={m.plugin_access_allowing()}
+			title={
+				install
+					? m.plugin_access_install_confirm_title({ name: install })
+					: m.plugin_access_confirm_title()
+			}
+			body={
+				install
+					? m.plugin_access_install_confirm_body({ name: install })
+					: m.plugin_access_confirm_body()
+			}
+			submitLabel={
+				install ? m.plugin_access_install() : m.plugin_access_allow()
+			}
+			busyLabel={
+				install ? m.plugin_access_installing() : m.plugin_access_allowing()
+			}
 			failedText={
 				allowing?.paths.some(isPortPath)
 					? m.plugin_access_port_failed()
@@ -127,6 +153,26 @@ export const usePluginAccess = () => {
 		onDecide,
 		dialog,
 	};
+};
+
+/** An emulator's name from the host's list, else its catalog id. */
+const emulatorName = (list: EmulatorStatus[] | undefined, id: string) =>
+	list?.find((e) => e.id === id)?.name ?? id;
+
+/** What a yes on `plugin`'s `paths` installs first: an emulator's name, or the cores'. */
+const installOf = (
+	rows: PluginAccessSnapshot[] | undefined,
+	plugin: string,
+	paths: string[],
+	name: (id: string) => string,
+): string | undefined => {
+	const asked =
+		rows
+			?.find((row) => row.plugin === plugin)
+			?.pending.filter((row) => paths.includes(row.path)) ?? [];
+	const emulator = asked.find((row) => row.emulator)?.emulator;
+	const cores = asked.flatMap((row) => (row.core ? [row.core] : []));
+	return emulator ? name(emulator) : cores.join(", ") || undefined;
 };
 
 /** A port on this computer as the host spells it in a row and takes it in a decision. */
@@ -220,7 +266,8 @@ const Mode: FC<{ write: boolean; files?: boolean }> = ({ write, files }) => (
 	</span>
 );
 
-/** A folder whose access is still changing, which takes minutes on a large Windows folder. */
+/** A folder whose access is still changing, which takes minutes on a large Windows folder, or
+ * the install a row asked for, with its download once its size is known. */
 const WalkLine: FC<{ walk: AccessWalk; named?: boolean }> = ({
 	walk,
 	named,
@@ -229,9 +276,13 @@ const WalkLine: FC<{ walk: AccessWalk; named?: boolean }> = ({
 		<Spinner className="size-3.5 shrink-0" />
 		<span className="min-w-0 break-all">
 			{named && <span className="font-mono">{walk.path} </span>}
-			{walk.removing
-				? m.plugin_access_walk_back({ seconds: walk.seconds })
-				: m.plugin_access_walk({ seconds: walk.seconds })}
+			{walk.installing
+				? walk.percent != null
+					? m.plugin_access_walk_download({ percent: walk.percent })
+					: m.plugin_access_walk_install({ seconds: walk.seconds })
+				: walk.removing
+					? m.plugin_access_walk_back({ seconds: walk.seconds })
+					: m.plugin_access_walk({ seconds: walk.seconds })}
 		</span>
 	</div>
 );
@@ -251,8 +302,6 @@ export const PendingAccess: FC<{
 	const emulators = useGetEmulators({
 		query: { enabled: access.pending.some((row) => !!row.emulator) },
 	});
-	const emulatorName = (id: string) =>
-		emulators.data?.find((e) => e.id === id)?.name ?? id;
 	// The host answers a folder, not a row: a yes on RetroArch's cores folder installs every
 	// core asked for there, so the rows on one folder show as one.
 	const rows = [
@@ -264,6 +313,8 @@ export const PendingAccess: FC<{
 		);
 	const walkAt = (path: string) =>
 		access.walks?.find((walk) => walk.path === path);
+	const failedAt = (path: string) =>
+		access.failed?.find((failure) => failure.path === path);
 	const [asked, setAsked] = useState<string>();
 	return (
 		<div className="mt-3 space-y-2 border-t pt-3">
@@ -300,7 +351,10 @@ export const PendingAccess: FC<{
 														name: cores.join(", "),
 													})
 												: m.plugin_access_install_emulator({
-														name: emulatorName(row.emulator ?? ""),
+														name: emulatorName(
+															emulators.data,
+															row.emulator ?? "",
+														),
 													})}
 										</div>
 										<div className="break-all font-mono text-xs text-muted-foreground">
@@ -360,6 +414,16 @@ export const PendingAccess: FC<{
 								)}
 							</div>
 						</div>
+						{failedAt(row.path) && !walkAt(row.path) && (
+							<p className="mt-2 break-words text-xs text-destructive">
+								{m.plugin_access_install_failed({
+									name:
+										cores.join(", ") ||
+										emulatorName(emulators.data, row.emulator ?? ""),
+									cause: failedAt(row.path)?.error ?? "",
+								})}
+							</p>
+						)}
 						{walkAt(row.path) ? (
 							<div className="mt-2">
 								<WalkLine walk={walkAt(row.path) as AccessWalk} />

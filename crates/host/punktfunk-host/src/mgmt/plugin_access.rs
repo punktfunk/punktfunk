@@ -454,50 +454,16 @@ pub(crate) async fn decide_plugin_access(
                 let (code, why) = super::own_account::EMULATORS_YET;
                 return api_error_coded(StatusCode::FORBIDDEN, code, why);
             }
-            // An emulator request: the install lands first, so the grant has a folder and a
-            // failed download leaves the row for another try.
-            if let Some(emulator) = st.access.pending_emulator(&plugin, &req.path) {
-                let target = emulator.clone();
-                match blocking("emulator_manager", move || {
-                    crate::emulators::install(&target)
-                })
-                .await
-                {
-                    Ok(Ok(_)) => emit(EventKind::EmulatorsChanged { id: emulator }),
-                    Ok(Err(e)) => {
-                        return super::emulators::hermir_err(
-                            &e,
-                            ("emulator_not_installed", "The emulator didn't install"),
-                        );
-                    }
-                    Err(resp) => return resp,
-                }
+            let (id, path) = (plugin.clone(), req.path.clone());
+            let grant = store(Box::new(move |st| {
+                st.access.decide(&id, &path, Decision::Allow, "console")
+            }));
+            if !installs {
+                grant
+            } else {
+                let work = install_then(&st, &plugin, &req.path, grant);
+                return settle(&st, plugin, said, work).await;
             }
-            // Core rows share RetroArch's folder: one yes installs every core asked for there.
-            let cores = st.access.pending_cores(&plugin, &req.path);
-            if !cores.is_empty() {
-                let batch = cores.clone();
-                let done = blocking("emulator_manager", move || {
-                    batch
-                        .iter()
-                        .map(|c| crate::emulators::install_core(c).map(|_| ()))
-                        .collect::<Result<Vec<()>, _>>()
-                })
-                .await;
-                match done {
-                    Ok(Ok(_)) => emit(EventKind::EmulatorsChanged {
-                        id: "retroarch".into(),
-                    }),
-                    Ok(Err(e)) => {
-                        return super::emulators::hermir_plain(&e, "The core didn't install");
-                    }
-                    Err(resp) => return resp,
-                }
-            }
-            let (plugin, path) = (plugin.clone(), req.path.clone());
-            store(Box::new(move |st| {
-                st.access.decide(&plugin, &path, Decision::Allow, "console")
-            }))
         }
         (decision, _) => {
             let (plugin, path) = (plugin.clone(), req.path.clone());
@@ -507,6 +473,60 @@ pub(crate) async fn decide_plugin_access(
         }
     };
     settle(&st, plugin, said, work).await
+}
+
+/// The install `plugin`'s row on `path` asks for, then `grant`: the folder exists by then, and a
+/// failed download leaves the row for another try with its failure beside it. Listed as a walk
+/// with its download until the grant is in, so a console that got the 202 can follow it.
+fn install_then<G>(
+    st: &MgmtState,
+    plugin: &str,
+    path: &str,
+    grant: G,
+) -> impl std::future::Future<Output = G::Output> + Send + 'static
+where
+    G: std::future::Future<
+            Output = Result<std::io::Result<Mutation<PluginAccessSnapshot>>, Response>,
+        > + Send
+        + 'static,
+{
+    let emulator = st.access.pending_emulator(plugin, path);
+    // Core rows share RetroArch's folder: one yes installs every core asked for there.
+    let cores = st.access.pending_cores(plugin, path);
+    let walk = crate::plugins::walks::install(plugin, path);
+    let (plugin, path) = (plugin.to_string(), path.to_string());
+    async move {
+        let meter = walk.meter();
+        let done = blocking("emulator_manager", move || {
+            if let Some(id) = &emulator {
+                crate::emulators::install(id, &meter)?;
+            }
+            for core in &cores {
+                crate::emulators::install_core(core, &meter)?;
+            }
+            Ok::<_, hermir::Error>((emulator, !cores.is_empty()))
+        })
+        .await?;
+        match done {
+            Ok((emulator, cores)) => {
+                if let Some(id) = emulator {
+                    emit(EventKind::EmulatorsChanged { id });
+                }
+                if cores {
+                    let id = "retroarch".into();
+                    emit(EventKind::EmulatorsChanged { id });
+                }
+            }
+            Err(e) => {
+                crate::plugins::walks::failed(&plugin, &path, e.to_string());
+                let said = ("emulator_not_installed", "The emulator didn't install");
+                return Err(super::emulators::hermir_err(&e, said));
+            }
+        }
+        let granted = grant.await;
+        drop(walk);
+        granted
+    }
 }
 
 /// Answer with `work`'s outcome, or with a 202 listing the walk once [`DECISION_WAIT`] is up.

@@ -484,6 +484,22 @@
 	"library_source_stopped": "Stopped",
 	"library_source_access_pending": "{title} can't read {count} of its folders",
 	"library_source_port_pending": "{title} asks to reach a server on this computer",
+	"library_source_install_pending": [
+		{
+			"declarations": [
+				"input count",
+				"input title",
+				"local n = count: plural"
+			],
+			"selectors": [
+				"n"
+			],
+			"match": {
+				"n=one": "{title} asks to install {count} emulator",
+				"n=*": "{title} asks to install {count} emulators"
+			}
+		}
+	],
 	"library_source_absent": "{title} isn't installed on this host",
 	"plugin_access_folders": "Folder access ({count})",
 	"plugin_access_read_only": "Read only",
@@ -508,6 +524,11 @@
 	"plugin_access_saves_note": "Every emulator on this host. A save it replaces is kept in this folder first.",
 	"plugin_access_install": "Install",
 	"plugin_access_installing": "Installing…",
+	"plugin_access_install_confirm_title": "Install {name}?",
+	"plugin_access_install_confirm_body": "Punktfunk downloads {name} and installs it on this machine for the plugin. Confirm with your console password.",
+	"plugin_access_walk_install": "Installing… {seconds} s",
+	"plugin_access_walk_download": "Downloading… {percent} %",
+	"plugin_access_install_failed": "{name} didn't install — {cause}",
 	"plugin_access_not_now": "Not now",
 	"plugin_access_via_link": "Asked for through the link {path}",
 	"plugin_access_port": "Connect to port {port} on this computer",

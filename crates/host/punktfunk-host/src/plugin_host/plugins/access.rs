@@ -12,7 +12,7 @@
 //! runner's unit must see a root too: [`AccessStore::runner_roots`] feeds its drop-in.
 
 use super::manifest::PluginManifest;
-use super::walks::{self, AccessWalk};
+use super::walks::{self, AccessFailure, AccessWalk};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
@@ -215,6 +215,10 @@ pub struct PluginAccessSnapshot {
     /// Folders whose access is changing for this plugin right now.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub walks: Vec<AccessWalk>,
+    /// Pending rows whose install failed, each until its next try.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    pub failed: Vec<AccessFailure>,
 }
 
 /// One folder a plugin asks for. `files` means nothing with `write`, which takes the tree.
@@ -399,6 +403,20 @@ fn path_eq(a: &Path, b: &Path) -> bool {
 
 fn same_path(a: &str, b: &str) -> bool {
     path_eq(Path::new(a), Path::new(b))
+}
+
+/// `path` with its nearest folder that exists resolved: a folder an install has yet to make
+/// keeps one spelling through a linked home (`/home` → `/var/home` on Fedora Atomic).
+pub(crate) fn resolve_unmade(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find_map(|a| Some((a.canonicalize().ok()?, path.strip_prefix(a).ok()?)))
+        .map_or_else(
+            || path.to_path_buf(),
+            |(real, rest)| match rest.as_os_str().is_empty() {
+                true => real,
+                false => real.join(rest),
+            },
+        )
 }
 
 /// Is `path` at or below `base`? On Windows the `\\?\` a canonical grant carries, the slash
@@ -1490,21 +1508,28 @@ impl AccessStore {
         let _guard = self.exclusive()?;
         let access = self.load_access()?;
         let mut pending_all = self.load_pending();
-        let canon = path.to_string_lossy().into_owned();
+        let canon = resolve_unmade(path).to_string_lossy().into_owned();
+        let same = |p: &str| same_path(&resolve_unmade(Path::new(p)).to_string_lossy(), &canon);
         let entry = access.get(id).cloned().unwrap_or_default();
         let mut pending = pending_all.remove(id).unwrap_or_default();
+        // A row kept under another spelling of this folder is this one: the first stays.
+        let (before, mut seen) = (pending.len(), false);
+        pending.retain(|p| {
+            let this = same(&p.path) && p.core.as_deref() == core;
+            let keep = !(this && seen);
+            seen |= this;
+            keep
+        });
+        let respelled = pending.len() != before;
         let outcome = |o: &str| RequestOutcome {
             path: canon.clone(),
             outcome: o.into(),
         };
-        let answer = if entry.grants.iter().any(|g| same_path(&g.path, &canon)) {
+        let answer = if entry.grants.iter().any(|g| same(&g.path)) {
             outcome("granted")
-        } else if entry.denied.iter().any(|d| same_path(d, &canon)) {
+        } else if entry.denied.iter().any(|d| same(d)) {
             outcome("denied")
-        } else if pending
-            .iter()
-            .any(|p| same_path(&p.path, &canon) && p.core.as_deref() == core)
-        {
+        } else if seen {
             outcome("pending")
         } else if entry.grants.len() >= MAX_GRANTS {
             outcome("refused:grant_limit")
@@ -1532,9 +1557,13 @@ impl AccessStore {
                 changed: true,
             });
         };
+        if respelled {
+            pending_all.insert(id.to_string(), pending);
+            self.write_pending(&pending_all)?;
+        }
         Ok(Mutation {
             value: answer,
-            changed: false,
+            changed: respelled,
         })
     }
 
@@ -2317,6 +2346,7 @@ fn snapshot_of(
         ports: entry.ports,
         denied_ports: entry.denied_ports,
         walks: walks::of(id),
+        failed: walks::failures_of(id),
     }
 }
 
@@ -2461,6 +2491,39 @@ mod tests {
         assert!(snap.pending.is_empty());
         let real = app.canonicalize().unwrap();
         assert_eq!(snap.grants[0].path, real.to_string_lossy());
+    }
+
+    /// One emulator asked for under both spellings of a linked home is one row, and a second
+    /// row a store kept from before goes on the next ask.
+    #[cfg(unix)]
+    #[test]
+    fn an_install_asked_under_two_spellings_of_its_home_is_one_row() {
+        let f = fixture();
+        let root = f.policy.home.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(root.join("var/home/u/.local/share")).unwrap();
+        std::os::unix::fs::symlink(root.join("var/home"), root.join("linkhome")).unwrap();
+        let tail = "u/.local/share/punktfunk/emulators/cemu/app";
+        let (linked, real) = (
+            root.join("linkhome").join(tail),
+            root.join("var/home").join(tail),
+        );
+        let store = f.store();
+        let ask = |p: &Path| store.request_emulator("demo", "cemu", p, None).unwrap();
+        assert!(ask(&linked).changed);
+        let again = ask(&real);
+        assert_eq!(
+            (again.value.outcome.as_str(), again.changed),
+            ("pending", false)
+        );
+        assert_eq!(store.snapshot_for("demo").unwrap().pending.len(), 1);
+        // A store from before kept the other spelling as its own row.
+        let mut kept = store.load_pending();
+        let mut twin = kept["demo"][0].clone();
+        twin.path = linked.to_string_lossy().into_owned();
+        kept.get_mut("demo").unwrap().push(twin);
+        store.write_pending(&kept).unwrap();
+        assert!(ask(&real).changed);
+        assert_eq!(store.snapshot_for("demo").unwrap().pending.len(), 1);
     }
 
     #[test]

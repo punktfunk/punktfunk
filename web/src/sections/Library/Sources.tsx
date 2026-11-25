@@ -497,12 +497,7 @@ const SourceRow: FC<{
 						className="text-left text-sm font-medium text-amber-600 hover:underline dark:text-amber-500"
 						onClick={() => setAccessOpen((open) => !open)}
 					>
-						{access.pending.some((row) => !row.port)
-							? m.library_source_access_pending({
-									title: source.label,
-									count: access.pending.filter((row) => !row.port).length,
-								})
-							: m.library_source_port_pending({ title: source.label })}
+						{accessLine(access, source.label)}
 					</button>
 					{accessOpen && (
 						<PendingAccess
@@ -517,6 +512,26 @@ const SourceRow: FC<{
 			)}
 		</SourceItem>
 	);
+};
+
+/**
+ * A source's request line: the folders it can't read first, then what it asks to install, then a
+ * port. Rows on one folder count once, as the request list shows them.
+ */
+export const accessLine = (access: PluginAccessSnapshot, title: string) => {
+	const folders = access.pending.filter(
+		(row) => !row.port && !row.emulator && !row.core,
+	);
+	const installs = new Set(
+		access.pending
+			.filter((row) => row.emulator || row.core)
+			.map((row) => row.path),
+	);
+	if (folders.length > 0)
+		return m.library_source_access_pending({ title, count: folders.length });
+	if (installs.size > 0)
+		return m.library_source_install_pending({ title, count: installs.size });
+	return m.library_source_port_pending({ title });
 };
 
 /**
