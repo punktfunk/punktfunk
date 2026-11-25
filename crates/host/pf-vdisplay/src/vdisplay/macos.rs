@@ -198,6 +198,7 @@ pub(crate) struct OwnScreen {
     slot: Option<u32>,
     join: bool,
     hdr: bool,
+    mm: Option<(u16, u16)>,
     live: Weak<Screen>,
 }
 
@@ -208,6 +209,10 @@ impl VirtualDisplay for OwnScreen {
 
     fn set_hdr(&mut self, on: bool) {
         self.hdr = on;
+    }
+
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.mm = mm;
     }
 
     fn hdr(&self) -> bool {
@@ -316,6 +321,7 @@ impl OwnScreen {
             product: PRODUCT,
             serial,
             hdr: self.hdr,
+            mm: self.mm,
         })?;
         let id = display.id();
         settle(SETTLE, "come online", || {

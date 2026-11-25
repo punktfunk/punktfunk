@@ -194,6 +194,11 @@ misbehaves afterwards, turn this off and replug it.
 
 Set scaling once while streaming and each device gets it back on the next connection.
 
+Windows and macOS hosts give the streamed screen the physical size the picture has on your device,
+so Windows starts it at the scale it picks for a monitor that size. With **Match window** on, that
+is the device's whole screen. A device that does not report its screen's size gets a screen sized
+at 96 DPI, which keeps a TV at its couch scale.
+
 | Host | How |
 |---|---|
 | **Windows** | Set scaling in Settings while streaming; Windows remembers it per device. |

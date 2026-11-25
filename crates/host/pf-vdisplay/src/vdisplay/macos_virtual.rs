@@ -34,6 +34,9 @@ pub(crate) struct Spec<'a> {
     pub serial: u32,
     /// Its modes are HDR: macOS gives the display headroom above white. Needs [`hdr_modes`].
     pub hdr: bool,
+    /// The size the picture has on the client's glass, in millimetres: the panel this
+    /// display declares. `None` sizes the mode at [`DPI`].
+    pub mm: Option<(u16, u16)>,
 }
 
 /// Whether this macOS makes HDR displays: the mode initializer that takes a transfer function,
@@ -170,8 +173,8 @@ impl Display {
                     dispatch2::DispatchQoS::UserInitiated,
                 ),
             );
-            let mm = |px: u32| f64::from(px) * 25.4 / DPI;
-            let size = CGSize::new(mm(spec.width), mm(spec.height));
+            let (w, h) = panel_mm(spec.width, spec.height, spec.mm);
+            let size = CGSize::new(w, h);
             let d = &*descriptor;
             // SAFETY: setters on a descriptor this function owns, each verified by `available`
             // to take exactly the type passed. The setters retain the name and the queue.
@@ -277,6 +280,15 @@ impl Drop for Display {
 /// A desktop-size display reads as an ordinary monitor, not a high-density panel.
 const DPI: f64 = 96.0;
 
+/// The panel a `width`x`height` display declares, in millimetres: the client's `mm`, else
+/// the mode at [`DPI`].
+fn panel_mm(width: u32, height: u32, mm: Option<(u16, u16)>) -> (f64, f64) {
+    let at_dpi = |px: u32| f64::from(px) * 25.4 / DPI;
+    mm.map_or((at_dpi(width), at_dpi(height)), |(w, h)| {
+        (w.into(), h.into())
+    })
+}
+
 /// The transfer function of an HDR mode: the screen then reports headroom of 5 above white.
 /// 0 and 2 to 6 make an SDR mode (macOS 27.2).
 const HDR_TRANSFER: u32 = 1;
@@ -307,6 +319,14 @@ fn new(class: &CStr) -> Option<Retained<AnyObject>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The client's size is the panel at every mode; an unknown one sizes the mode at 96 DPI.
+    #[test]
+    fn the_panel_size_is_the_clients() {
+        assert_eq!(panel_mm(3840, 2160, Some((598, 336))), (598.0, 336.0));
+        assert_eq!(panel_mm(1920, 1080, Some((598, 336))), (598.0, 336.0));
+        assert_eq!(panel_mm(3840, 2160, None).0.round(), 1016.0);
+    }
 
     /// The presence check reads the runtime alone and creates nothing.
     #[test]
