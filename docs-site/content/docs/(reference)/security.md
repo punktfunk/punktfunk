@@ -204,7 +204,9 @@ it:
   so it can't reach the host process. Your `~/.ssh`, browser profile and the host's credentials
   aren't in it. A plugin that asks for the network gets a network of its own through
   [passt](https://passt.top), which the runner needs installed: it reaches the internet and your
-  LAN, but no service listening on the host's own loopback and no abstract socket. On Windows each plugin runs in its own AppContainer under the runner's
+  LAN, but no service listening on the host's own loopback and no abstract socket. A service that
+  listens on every address is reachable through another address of the host, such as a Docker
+  bridge's. On Windows each plugin runs in its own AppContainer under the runner's
   `NT AUTHORITY\LocalService` account: it sees only the folders and registry keys its manifest
   declared and you allowed, its own state, no other plugin's, and no network unless its manifest
   asks. It reaches the host over a pipe of its own, not the management port. A box that can't
