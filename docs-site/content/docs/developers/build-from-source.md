@@ -1,23 +1,45 @@
 ---
 title: Build from source
-description: Compile the Linux host when no package fits your release, and build every other part of Punktfunk from a clone.
+description: Compile the host, a client, the web console or the Windows drivers from a clone, with the packages and commands each one needs.
 ---
 
-Compile the Linux host yourself, or build a client, the web console, the docs site or the Windows
-drivers from a clone.
-
-For the host, the package repos are the supported path ([Install the host](/docs/install)). Build
-from source when no package fits your release, or to work on it. A source build gets no packaged
-service and no updates: you set up the service yourself.
-
-Rust comes from [rustup](https://rustup.rs). `rust-toolchain.toml` pins the version, and rustup
-installs it on the first build:
+Build any part of Punktfunk from a clone. Rust comes from [rustup](https://rustup.rs);
+`rust-toolchain.toml` pins the version, and rustup installs it on the first build:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
+| To build | On | Go to |
+|---|---|---|
+| Everything in the Cargo workspace, to work on it | Ubuntu 26.04 | [Workspace prerequisites](#workspace-prerequisites) |
+| A host to run, where no package fits | Linux | [Linux host](#linux-host) |
+| The desktop client | Linux, Windows | [Linux client](#linux-client), [Windows host and client](#windows-host-and-client) |
+| The host | Windows, macOS | [Windows host and client](#windows-host-and-client), [macOS host](#macos-host) |
+| The drivers | Windows | [Windows drivers](#windows-drivers) |
+| A phone, TV or Mac client | macOS, any | [Apple client](#apple-client), [Android client](#android-client) |
+| The console, the plugin runner, this site | Any | [Web console, runner and docs site](#web-console-runner-and-docs-site) |
+
+## Workspace prerequisites
+
+The whole Cargo workspace, clients and tools included, builds on Ubuntu 26.04 with the packages CI
+installs (`ci/rust-ci.Dockerfile`):
+
+```sh
+sudo apt install build-essential clang libclang-dev pkg-config cmake git curl \
+  libpipewire-0.3-dev libopus-dev libwayland-dev libxkbcommon-dev \
+  libgl-dev libegl-dev libgbm-dev libgtk-4-dev libadwaita-1-dev libsdl3-dev
+git clone https://git.unom.io/unom/punktfunk.git && cd punktfunk
+cargo build --workspace --locked
+```
+
+The first build downloads a prebuilt Skia (about 19 MB) for the console UI. Then enable the
+[git hooks](/docs/developers/contributing#git-hooks).
+
 ## Linux host
+
+The package repos are the supported way to run a host ([Install the host](/docs/install)). A
+source build gets no packaged service and no updates.
 
 Build with the `nvenc` and `vulkan-encode` features, as the packages do. Without `nvenc` an NVIDIA
 box has no hardware encoder; without `vulkan-encode` AMD and Intel fall back to VAAPI, which needs a
@@ -77,8 +99,8 @@ target/release/punktfunk-host serve              # native clients only
 target/release/punktfunk-host serve --gamestream # plus Moonlight (trusted LAN only)
 ```
 
-The host finds `punktfunk-encode-worker` beside itself and runs PyroWave and the NVIDIA frame
-convert there at raised GPU priority. Grant it the capability the packages grant:
+The host finds `punktfunk-encode-worker` beside itself. Grant it the capability the packages
+grant, so it can raise its GPU priority:
 `sudo setcap cap_sys_nice=ep target/release/punktfunk-encode-worker`.
 
 To run the host as a user service from a clone at `~/punktfunk`, copy
@@ -90,19 +112,6 @@ systemctl --user daemon-reload && systemctl --user enable --now punktfunk-host
 
 [Running as a service](/docs/running-as-a-service) covers the rest.
 
-## Workspace prerequisites
-
-The whole Cargo workspace, clients and tools included, builds on Ubuntu 26.04 with the packages CI
-installs (`ci/rust-ci.Dockerfile`):
-
-```sh
-sudo apt install build-essential clang libclang-dev pkg-config cmake git curl \
-  libpipewire-0.3-dev libopus-dev libwayland-dev libxkbcommon-dev \
-  libgl-dev libegl-dev libgbm-dev libgtk-4-dev libadwaita-1-dev libsdl3-dev
-```
-
-The first build downloads a prebuilt Skia (about 19 MB) for the console UI.
-
 ## Linux client
 
 ```sh
@@ -110,7 +119,7 @@ cargo build --release -p punktfunk-client-linux -p punktfunk-client-session -p p
 target/release/punktfunk-client
 ```
 
-It needs GTK 4.20+, libadwaita 1.8+ and SDL3. The shell starts `punktfunk-session` from beside
+It needs GTK 4.20+, libadwaita 1.8+ and SDL3. The app starts `punktfunk-session` from beside
 itself, so build both. More:
 [clients/linux](https://git.unom.io/unom/punktfunk/src/branch/main/clients/linux/README.md).
 
@@ -149,6 +158,20 @@ $env:Version_Number = '10.0.26100.0'
 overflow `MAX_PATH`. To install a build on a test box, run `deploy-dev.ps1 -Install` from an
 elevated shell after stopping the host (`punktfunk-host service stop`). Signing and the dev loop:
 [packaging/windows](https://git.unom.io/unom/punktfunk/src/branch/main/packaging/windows/README.md).
+
+## macOS host
+
+On a Mac with Apple silicon and Xcode:
+
+```sh
+cargo build --release --locked -p punktfunk-host
+```
+
+macOS ties screen recording, input and virtual gamepads to a signed app, so a host that streams
+the Mac's screen runs from `Punktfunk Host.app`, not as a bare binary. The scripts in
+`packaging/macos/` assemble and sign that bundle; an ad-hoc signature works on your own Mac,
+without virtual gamepads. Steps and signing modes:
+[packaging/macos](https://git.unom.io/unom/punktfunk/src/branch/main/packaging/macos/README.md).
 
 ## Apple client
 
@@ -198,7 +221,7 @@ All three run on [Bun](https://bun.sh). Run `bun install` in the directory first
 | `sdk/` | `bun src/runner-cli.ts` | The runner with your scripts and installed plugins (`--list` shows them) |
 | `docs-site/` | `bun run dev` | This site on `http://localhost:3001/docs` |
 
-The console's dev server sends every API call with `PUNKTFUNK_MGMT_TOKEN`: set it to the contents of
+The console's dev server sends every API call with `PUNKTFUNK_MGMT_TOKEN`: set it to the token in
 the host's `mgmt-token` file, or every call fails. `PUNKTFUNK_MGMT_URL` points it at another host.
 More:
 [web](https://git.unom.io/unom/punktfunk/src/branch/main/web/README.md),

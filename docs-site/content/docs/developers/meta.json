@@ -4,15 +4,20 @@
   "root": true,
   "pages": [
     "index",
+    "---Understand---",
     "architecture",
+    "sessions",
+    "code-map",
+    "---Contribute---",
     "build-from-source",
     "testing",
     "contributing",
     "releasing",
-    "---Extending Punktfunk---",
+    "---Build on Punktfunk---",
     "management-api",
     "writing-plugins",
     "embedding",
+    "---Internals---",
     "multi-seat-contract"
   ]
 }

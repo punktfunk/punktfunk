@@ -1,19 +1,33 @@
 ---
 title: Contributing
-description: Get a change merged — hooks, the local pass, draft pull requests, CI lanes and labels, generated files and the docs rules.
+description: Get a change merged — talk first, hooks, the local pass, draft pull requests, CI lanes and labels, generated files and the docs rules.
 ---
 
-How a change gets from your clone into `main`: the hooks, the local pass, the pull request and the
-CI lanes it runs.
+Take a change from your clone into `main`: what to agree first, what to run locally, and which CI
+lanes a pull request runs at each stage.
 
-Talk a new feature or design through with the maintainer first, on
-[Discord](https://discord.gg/wzEGg9y45z) or as an idea on
-[improve unom](https://improve.unom.io/p/punktfunk), before you open an issue or a pull request;
-the tracker holds bugs and agreed work. A bug reported on improve unom gets its tracker issue by
-itself ([Reporting an Issue](/docs/report-an-issue)). A new
-player-facing setting needs the maintainer's yes first
-([docs/settings.md](https://git.unom.io/unom/punktfunk/src/branch/main/docs/settings.md)).
-Security reports go to **security@punktfunk.com**, never to an issue.
+```mermaid The way of a change, and what CI runs at each step
+graph TD
+  IDEA[A feature or design idea] --> TALK[Talk to the maintainer first]
+  BUG[A bug, or agreed work] --> WORK[Branch, commit, local pass]
+  TALK --> WORK
+  WORK --> DRAFT[Draft pull request]
+  DRAFT -->|cheap gates| READY[Ready for review]
+  READY -->|rust, web, docs lanes| LABEL[A maintainer adds ci labels]
+  LABEL -->|platform lanes| MERGE[Merged to main]
+```
+
+## Before you write code
+
+- **A new feature or design** starts as a conversation with the maintainer, on
+  [Discord](https://discord.gg/wzEGg9y45z) or as an idea on
+  [improve unom](https://improve.unom.io/p/punktfunk), before any issue or pull request. The
+  tracker holds bugs and agreed work.
+- **A bug** reported on improve unom gets its tracker issue by itself
+  ([Reporting an Issue](/docs/report-an-issue)).
+- **A new player-facing setting** needs the maintainer's yes first
+  ([docs/settings.md](https://git.unom.io/unom/punktfunk/src/branch/main/docs/settings.md)).
+- **A security report** goes to **security@punktfunk.com**, never to an issue.
 
 ## Git hooks
 
@@ -30,22 +44,27 @@ command that fixes each failure. Biome runs only where `web/` or `plugin-kit/` h
 
 ## The full local pass
 
-Run [the workspace suite](/docs/developers/testing#the-workspace-suite), then the checks for what
-you touched: `web/`, `docs-site/`, a client, or platform-gated code from another OS.
-[Testing](/docs/developers/testing) lists them. When your local `main` lags, run the writing gate
-against the remote: `WRITING_BASE=origin/main sh scripts/ci/check-writing.sh`.
+Run [the workspace suite](/docs/developers/testing#the-workspace-suite), then the
+[checks for what you touched](/docs/developers/testing#checks-by-area). When your local `main`
+lags, run the writing gate against the remote:
+`WRITING_BASE=origin/main sh scripts/ci/check-writing.sh`.
 
 ## Open a pull request
 
-Open it as a draft while you iterate: a `WIP:` title prefix in Gitea. A draft runs the cheap gates
-only: writing style, docs drift and links, the text census, secret scan, the `bun.nix` check, and
-the SDK, plugin-kit and Decky checks.
+Open it as a draft while you iterate: a `WIP:` title prefix in Gitea. Each lane runs only when the
+change touches its paths.
 
-Mark it ready for review to run `rust`, `rust-arm64`, `web` and `docs-site` too, or add the
-`ci:all` label to run them on a draft. Neither starts a run by itself: push again, or press
-**Re-run** on the latest run in the Actions tab. Each lane runs only when the change touches its
-paths. The installer smoke test, the packaging lint, the setup binary build, the macOS host compile
-check and the Windows host lint filter by path alone, so they run on drafts too.
+| Pull request is | CI runs |
+|---|---|
+| A draft | The cheap gates: writing style, docs drift and links, the text census, secret scan, the `bun.nix` check, and the SDK, plugin-kit and Decky checks |
+| Ready for review, or labelled `ci:all` | Also `rust`, `rust-arm64`, `web` and `docs-site` |
+| Labelled for a platform | Also that [platform lane](#platform-lanes) |
+| Merged to `main` | Every `ci.yml` lane; the platform workflows when their own paths change |
+
+Marking a pull request ready or adding a label starts no run by itself: push again, or press
+**Re-run** on the latest run in the Actions tab. The installer smoke test, the packaging lint, the
+setup binary build, the macOS host compile check and the Windows host lint filter by path alone,
+so they run on drafts too.
 
 ### Platform lanes
 
@@ -60,9 +79,6 @@ a label.
 | `ci:windows-host` | The Windows drivers and the setup test |
 | `ci:nix-rust` | The Nix flake |
 | `ci:all` | Everything above, plus the ready-for-review lanes |
-
-A push to `main` runs every `ci.yml` lane; the platform workflows run there when their own paths
-change.
 
 ## Generated files
 
@@ -80,8 +96,9 @@ These are checked in, and CI fails when the committed copy drifts:
 | `*.spv` shaders in `pf-zerocopy` and `pf-encode` | `glslangValidator -V <name>.comp -o <name>.spv` |
 | Settings table in `configuration.md` | `UPDATE_SETTINGS_DOCS=1 cargo test -p pf-host-config docs_table_is_current` |
 
-A management-API change needs the three OpenAPI rows. A `Cargo.lock` change needs the notices. A
-new dependency must be permissive; see [Licensing](#licensing).
+A management-API change needs the three OpenAPI rows, and more:
+[Changing the API](/docs/developers/management-api#changing-the-api). A `Cargo.lock` change needs
+the notices. A new dependency must be permissive; see [Licensing](#licensing).
 
 ## Docs
 
@@ -94,11 +111,16 @@ Every user-facing fact has one home, and everything else links to it:
 | [punktfunk.unom.io](https://punktfunk.unom.io) (separate repo) | Marketing, downloads, blog | Instructions |
 
 When a change moves a user-facing fact, update the page that owns it in the same pull request. How
-to write a page: [docs/writing.md §4c](https://git.unom.io/unom/punktfunk/src/branch/main/docs/writing.md#4c-docs-pages).
-CI checks the textual half: `check-docs-drift.sh` (the OpenAPI and `platforms.json` snapshots,
-`PUNKTFUNK_*` and `PFVD_*` names the docs mention, host commands in [Host CLI](/docs/host-cli)) and
-`check-docs-links.sh` (page links, heading anchors, relative file links). A new `PUNKTFUNK_*` or
-`PFVD_*` variable needs a docs mention, or a line in
+to write a page, diagrams included:
+[docs/writing.md §4c](https://git.unom.io/unom/punktfunk/src/branch/main/docs/writing.md#4c-docs-pages).
+
+CI checks the textual half:
+
+- `check-docs-drift.sh`: the OpenAPI and `platforms.json` snapshots, the `PUNKTFUNK_*` and
+  `PFVD_*` names the docs mention, and the host commands in [Host CLI](/docs/host-cli).
+- `check-docs-links.sh`: page links, heading anchors and relative file links.
+
+A new `PUNKTFUNK_*` or `PFVD_*` variable needs a docs mention, or a line in
 `scripts/ci/docs-undocumented-env-baseline.txt` in the same commit.
 
 ## Writing rules
@@ -107,6 +129,8 @@ CI checks the textual half: `check-docs-drift.sh` (the OpenAPI and `platforms.js
 style for commits and the pull-request title (§1), the changelog (§2), comments (§3), error messages
 (§4) and docs pages (§4c), with a checklist for every pull request (§5).
 `scripts/ci/check-writing.sh` enforces the lengths and fails the pull request.
+
+A commit subject is `type(scope): summary`: imperative, at most 72 characters, one change.
 
 ## Licensing
 

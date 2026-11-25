@@ -95,8 +95,9 @@ Every client discovers hosts automatically and does a one-time
 
 Building, testing and contributing are in the
 **[developer docs](https://docs.punktfunk.unom.io/docs/developers)**:
-[Architecture](https://docs.punktfunk.unom.io/docs/developers/architecture) (crate map and design
-invariants) ·
+[Architecture](https://docs.punktfunk.unom.io/docs/developers/architecture) ·
+[How a session works](https://docs.punktfunk.unom.io/docs/developers/sessions) ·
+[Code map](https://docs.punktfunk.unom.io/docs/developers/code-map) ·
 [Build from source](https://docs.punktfunk.unom.io/docs/developers/build-from-source) ·
 [Testing](https://docs.punktfunk.unom.io/docs/developers/testing) ·
 [Contributing](https://docs.punktfunk.unom.io/docs/developers/contributing).

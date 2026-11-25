@@ -140,7 +140,7 @@ own. A launch at the desk is held the same way.
   "run": "/home/me/.config/punktfunk/scripts/tv-profile.sh" }
 ```
 
-Plugins hold the same stage: see [Writing plugins](/docs/developers/writing-plugins#hold-a-launch).
+Plugins hold the same stage: see [Plugin recipes](/docs/developers/writing-plugins/recipes#hold-a-launch).
 
 ### A hook that doesn't fire
 
