@@ -620,6 +620,12 @@ install -Dm0644 scripts/punktfunk-scripting-seat@.service \
 install -Dm0644 packaging/linux/apparmor/punktfunk-scripting %{buildroot}%{_sysconfdir}/apparmor.d/punktfunk-scripting
 install -Dm0755 packaging/linux/punktfunk-scripting-apparmor.generator \
   %{buildroot}%{_prefix}/lib/systemd/user-generators/punktfunk-scripting-apparmor
+# The generator starts each runner through one of these. A profile attaches by path, so each
+# profile has a file of its own.
+install -Dm0755 packaging/linux/punktfunk-scripting-apparmor-confined \
+  %{buildroot}%{_prefix}/lib/punktfunk-scripting/apparmor-confined
+install -Dm0755 packaging/linux/punktfunk-scripting-apparmor-confined \
+  %{buildroot}%{_prefix}/lib/punktfunk-scripting/apparmor-confined-seat
 %endif
 
 %if %{with web} || %{with scripting}
@@ -788,6 +794,9 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %dir %{_sysconfdir}/apparmor.d
 %config(noreplace) %{_sysconfdir}/apparmor.d/punktfunk-scripting
 %{_prefix}/lib/systemd/user-generators/punktfunk-scripting-apparmor
+%dir %{_prefix}/lib/punktfunk-scripting
+%{_prefix}/lib/punktfunk-scripting/apparmor-confined
+%{_prefix}/lib/punktfunk-scripting/apparmor-confined-seat
 %endif
 
 %if %{with web} || %{with scripting}

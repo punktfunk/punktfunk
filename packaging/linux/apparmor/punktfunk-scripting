@@ -2,8 +2,12 @@
 #
 # Where AppArmor keeps unprivileged user namespaces from unconfined processes
 # (kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu's default), systemd cannot build the
-# unit's mount namespace. The punktfunk-scripting-apparmor user generator then swaps the namespace
-# directives for this profile. It attaches to no path, so elsewhere it is loaded and unused.
+# unit's mount namespace. The punktfunk-scripting-apparmor user generator then starts the runner
+# through apparmor-confined, the path this profile attaches to. Nothing else runs that path, so
+# elsewhere the profile is loaded and unused.
+#
+# Attached to a path, never set by the unit: a profile the user manager sets stacks onto
+# `unconfined`, and in that half unshare gets no capability and pasta cannot start.
 #
 # Site additions go in local/punktfunk-scripting, as a unit's go in a drop-in.
 
@@ -14,13 +18,13 @@ include <tunables/global>
 # A made seat's home sits under the seats tree, outside @{HOME}.
 @{PF_HOMES}=@{HOME} /var/lib/punktfunk-seats/seats/*/home/
 
-profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
+profile punktfunk-scripting /usr/lib/punktfunk-scripting/apparmor-confined flags=(attach_disconnected,mediate_deleted) {
   include <abstractions/base>
   include <abstractions/nameservice>
   include <abstractions/private-files-strict>
 
-  # bwrap runs stacked under this profile, so each plugin sandbox is built from these. The
-  # capabilities hold only inside the user namespace bwrap makes.
+  # unshare, bwrap and pasta build each plugin sandbox from these. The capabilities hold only
+  # inside the user namespaces unshare and bwrap make.
   userns,
   capability sys_admin,
   capability setpcap,
@@ -45,8 +49,8 @@ profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
   unix,
   dbus,
   signal (receive) peer=unconfined,
-  # This tree only. A user manager's change_profile stacks onto unconfined, and bwrap's own
-  # profile stacks onto this one.
+  # This tree only. Attached, every child inherits this profile (`ix` below) and its label. Set
+  # by a unit instead, it stacks onto unconfined, and bwrap's own profile stacks onto it.
   signal peer="{,bwrap//&}punktfunk-scripting{,//&unconfined,//&unpriv_bwrap}",
   ptrace (read, trace) peer="{,bwrap//&}punktfunk-scripting{,//&unconfined,//&unpriv_bwrap}",
 
@@ -72,7 +76,7 @@ profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
 
 # The runner of a seat on a person's own account (punktfunk-scripting-seat@.service): the profile
 # above over the seat's config directory, with none of the person's own.
-profile punktfunk-scripting-seat flags=(attach_disconnected,mediate_deleted) {
+profile punktfunk-scripting-seat /usr/lib/punktfunk-scripting/apparmor-confined-seat flags=(attach_disconnected,mediate_deleted) {
   include <abstractions/base>
   include <abstractions/nameservice>
   include <abstractions/private-files-strict>

@@ -3,16 +3,21 @@
 # user namespaces from unconfined processes. There systemd skips a unit's mount namespace in
 # silence and its bounding-set drop fails, so this drop-in trades every directive that needs a
 # namespace for the profile of the unit's name: punktfunk-scripting, and punktfunk-scripting-seat
-# for a seat on a person's own account. A box without the profile fails the unit closed.
-# Elsewhere it writes nothing and each unit keeps its namespace sandbox.
+# for a seat on a person's own account.
+#
+# The profile is attached, not set: ExecStart goes through apparmor-confined, whose path carries
+# it, and which refuses to run the runner on a box without the profile. Elsewhere this writes
+# nothing and each unit keeps its namespace sandbox.
 [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] || exit 0
 for unit in punktfunk-scripting punktfunk-scripting-seat@; do
+  profile=${unit%@}
   dir="$1/$unit.service.d"
   mkdir -p "$dir" || exit 0
   # `zz-` sorts after `systemctl --user edit`'s override.conf and the host's roots drop-in.
   cat > "$dir/zz-apparmor.conf" <<EOF
 [Service]
-AppArmorProfile=${unit%@}
+ExecStart=
+ExecStart=/usr/lib/punktfunk-scripting/apparmor-confined${profile#punktfunk-scripting} $profile /usr/bin/punktfunk-scripting
 ProtectSystem=no
 ProtectHome=no
 ProtectControlGroups=no
