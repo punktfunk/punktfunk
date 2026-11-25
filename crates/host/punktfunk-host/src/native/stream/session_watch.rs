@@ -55,13 +55,30 @@ fn has_game_mode() -> bool {
     os.is("bazzite") || os.is("steamos") || crate::vdisplay::managed_session_available()
 }
 
+/// What the watcher starts from. A box that left the Game Mode this session took over, while
+/// the session was still starting, switched before anyone looked: starting from Game Mode makes
+/// the session it went to the change it is.
+fn first_reading(
+    left_game_mode: bool,
+    detected: crate::vdisplay::ActiveKind,
+) -> crate::vdisplay::ActiveKind {
+    if left_game_mode {
+        crate::vdisplay::ActiveKind::Gaming
+    } else {
+        detected
+    }
+}
+
+/// `left_game_mode`: the stream is on a Game Mode this host took over, and the box has ended
+/// that login already ([`first_reading`]).
 pub(super) fn session_watcher_loop(
     tx: std::sync::mpsc::Sender<SessionSwitch>,
     stop: Arc<AtomicBool>,
+    left_game_mode: bool,
 ) {
     use crate::vdisplay;
     const DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
-    let mut current = vdisplay::detect_active_session().kind;
+    let mut current = first_reading(left_game_mode, vdisplay::detect_active_session().kind);
     let mut pending: Option<(vdisplay::ActiveKind, std::time::Instant)> = None;
     while !stop.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -181,5 +198,20 @@ fn content_watcher_loop(
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vdisplay::ActiveKind::{DesktopKde, Gaming};
+
+    /// A box that left the Game Mode the session took over, before the watcher started, is
+    /// still seen to switch. Any other session starts from what the box shows.
+    #[test]
+    fn a_switch_during_the_start_is_still_a_switch() {
+        assert_eq!(first_reading(true, DesktopKde), Gaming);
+        assert_eq!(first_reading(false, DesktopKde), DesktopKde);
+        assert_eq!(first_reading(false, Gaming), Gaming);
     }
 }

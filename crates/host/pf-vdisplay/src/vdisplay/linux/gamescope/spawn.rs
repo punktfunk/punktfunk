@@ -543,6 +543,8 @@ pub(super) struct GamescopeProc {
     pub(super) steam_home: Option<std::path::PathBuf>,
     /// That Steam's [`steam_runtime_dir`], removed at teardown.
     pub(super) steam_dir: Option<std::path::PathBuf>,
+    /// This spawn asked the desktop's Steam to quit, so teardown starts it again.
+    pub(super) freed_desktop_steam: bool,
     pub(super) started: Instant,
 }
 
@@ -591,6 +593,9 @@ impl Drop for GamescopeProc {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if self.freed_desktop_steam {
+            give_desktop_steam_back();
+        }
         // Clear the relayed EIS socket name so an injector can't reconnect to this now-dead
         // session's socket between sessions (the stale path is the "Connection refused").
         let _ = std::fs::remove_file(&self.relay);

@@ -465,7 +465,14 @@ fn run(
         let _game_life = target.as_ref().map(|t| {
             let on_game_exit = life.on_game_exit.clone();
             let lifecycle = lifecycle.clone();
-            let on_exit = crate::session_launch::end_on_game_exit(move || {
+            // The box session the game lands in; one in its own gamescope spawn has none.
+            #[cfg(target_os = "linux")]
+            let box_session =
+                (!crate::vdisplay::launch_is_nested(compositor, gamescope_route.as_ref()))
+                    .then(crate::vdisplay::mark_session);
+            #[cfg(not(target_os = "linux"))]
+            let box_session = None;
+            let on_exit = crate::session_launch::end_on_game_exit(box_session, move || {
                 tracing::info!("the launched game exited — ending the session");
                 lifecycle.end(crate::events::SessionEndReason::GameExited);
                 // Skip keep-alive linger so the next `/launch` starts clean.

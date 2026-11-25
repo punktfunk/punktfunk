@@ -51,8 +51,8 @@ pub(crate) use heads::list_monitors;
 pub(crate) use splash::run as splash_run;
 pub(crate) use steam_launch::{is_steam_launch, launch_into_session};
 pub(crate) use takeover::{
-    cancel_pending_restore, held_takeover, preflight_takeover_privilege, release_autologin_mask,
-    release_takeover, restore_takeover_now, restore_takeover_on_startup,
+    box_left_idled_session, cancel_pending_restore, held_takeover, preflight_takeover_privilege,
+    release_autologin_mask, release_takeover, restore_takeover_now, restore_takeover_on_startup,
     schedule_restore_tv_session, start_restore_worker, takeover_privilege_verdict, HeldTakeover,
 };
 use {argv::*, bind::*, discovery::*, dropins::*, spawn::*, steam_launch::*, takeover::*, wsi::*};
@@ -312,12 +312,14 @@ impl GamescopeDisplay {
         // instance free.
         let app = resolved_spawn_app(self.cmd.as_deref());
         let steam = app.as_deref().is_some_and(is_steam_launch);
+        // The desktop's Steam this launch asked to quit: the spawn's teardown starts it again.
+        let mut freed_desktop_steam = false;
         if steam {
             // No attach degrade here: a box without takeover privilege fails with the actionable error.
             stop_autologin_sessions()
                 .context("dedicated Steam launch needs the box's gaming session freed")?;
             // Desktop Steam holds the instance too; autologin stop cannot see it.
-            free_desktop_steam()?;
+            freed_desktop_steam = free_desktop_steam()?;
         } else if free_box_session_for_exclusive(steam, exclusive) {
             // Best-effort: on Game Mode the autologin session is DRM master, so Exclusive needs it
             // gone. A refusal costs the dark screen, not the game.
@@ -331,9 +333,15 @@ impl GamescopeDisplay {
         }
         let inst = SPAWN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let log = spawn_log_path(inst);
-        let child = spawn(mode, app, inst, self.hdr, self.isolation.as_ref())?;
+        let child =
+            spawn(mode, app, inst, self.hdr, self.isolation.as_ref()).inspect_err(|_| {
+                if freed_desktop_steam {
+                    give_desktop_steam_back();
+                }
+            })?;
         let mut proc = GamescopeProc {
             child,
+            freed_desktop_steam,
             log: log.clone(),
             relay: self
                 .isolation
@@ -1007,21 +1015,15 @@ fn running_autologin_gamescope_unit() -> Option<String> {
         .map(|u| u.to_string())
 }
 
-/// Steam first, asked to quit: a SIGKILL mid-write loses `config.vdf` or `registry.vdf`. Then
-/// SIGKILL, not SIGTERM: on NVIDIA, gamescope's SIGTERM shutdown can leave every later
+/// Steam first, given `steam_wait` to quit ([`quit_steam_in`]) behind a paused session script.
+/// Then SIGKILL, not SIGTERM: on NVIDIA, gamescope's SIGTERM shutdown can leave every later
 /// `vkCreateDevice` failing until reboot, and SIGKILL does not. Then `stop` + `reset-failed` so
 /// relaunch is clean. The run it ends is the host's, so Game Mode's crash counters forget it.
-fn kill_unit(unit: &str) {
-    if let Some(pid) = steam_pid_in_unit(unit) {
-        if !shut_steam_down(pid, STEAM_STOP_WAIT) {
-            tracing::warn!(
-                unit,
-                pid,
-                secs = STEAM_STOP_WAIT.as_secs(),
-                "gamescope: Steam did not quit when asked — killing its session anyway"
-            );
-        }
-    }
+/// The shutdown restore has 20 s for all of it: only a takeover and a switch wait
+/// [`STEAM_SHUTDOWN_WAIT`].
+fn kill_unit(unit: &str, steam_wait: Duration) {
+    pause_session_script(unit);
+    quit_steam_in(unit, steam_wait);
     // All three budgeted: this runs on disconnect restore and on shutdown, where the whole
     // sequence has `SHUTDOWN_RESTORE_GRACE` (`native.rs`) before it gives up. Three unbounded
     // `systemctl` calls against a busy user manager spend that budget on their own.
@@ -1038,6 +1040,60 @@ fn kill_unit(unit: &str) {
         UNIT_VERB_BUDGET,
     );
     forget_host_short_sessions();
+}
+
+/// Swap a display manager's Game Mode unit for the loaded idle drop-in, inside its login. The
+/// login waits on the unit with `systemctl --wait start`, which returns once the unit is down
+/// with no job queued; the display manager then logs into its default session, the desktop after
+/// a one-off Game Mode. So nothing here may stop the unit outside a job: the session script is
+/// paused before Steam quits, and one restart job (the drop-in's SIGKILL) replaces it.
+/// `try-restart`, so a unit the box stopped meanwhile stays stopped. A host that dies in
+/// between leaves the script paused: the units are owed before this runs, and the hand-back
+/// restarts a paused one ([`takeover::runs_idle_placeholder`]).
+fn idle_unit(unit: &str) {
+    if !pause_session_script(unit) {
+        tracing::warn!(
+            unit,
+            "gamescope: the box's session script did not pause — its login ends if Steam quits \
+             before the restart"
+        );
+    }
+    quit_steam_in(unit, STEAM_SHUTDOWN_WAIT);
+    host_session_verb("try-restart", unit);
+}
+
+/// Pause `unit`'s session script: `SIGSTOP` to the main process. Left running, it reacts to
+/// Steam quitting: it SIGTERMs gamescope, counts a short run, and exits, which stops the unit
+/// outside any job. `false` when systemd signalled nothing. The stop that follows ends a paused
+/// script, and so does a hand-back's restart.
+fn pause_session_script(unit: &str) -> bool {
+    crate::proc::status_within(
+        Command::new("systemctl").args([
+            "--user",
+            "kill",
+            "--kill-who=main",
+            "--signal=SIGSTOP",
+            unit,
+        ]),
+        UNIT_VERB_BUDGET,
+    )
+    .is_ok_and(|s| s.success())
+}
+
+/// Ask the Steam in `unit` to quit and give it `wait`: a SIGKILL mid-write loses `config.vdf`
+/// or `registry.vdf`, and a running game its save.
+fn quit_steam_in(unit: &str, wait: Duration) {
+    let Some(pid) = steam_pid_in_unit(unit) else {
+        return;
+    };
+    if !shut_steam_down(pid, wait) {
+        tracing::warn!(
+            unit,
+            pid,
+            secs = wait.as_secs(),
+            "gamescope: Steam did not quit when asked — killing its session anyway"
+        );
+    }
 }
 
 /// Point the libei injector at the EIS socket of the gamescope in `scope` (it reads the relay
@@ -1354,7 +1410,12 @@ fn unit_gone(unit: &str) -> bool {
 }
 
 fn stop_session(unit_name: &str) {
-    kill_unit(unit_name);
+    stop_session_within(unit_name, STEAM_STOP_WAIT);
+}
+
+/// [`stop_session`], with `steam_wait` for Steam to quit ([`kill_unit`]).
+fn stop_session_within(unit_name: &str, steam_wait: Duration) {
+    kill_unit(unit_name, steam_wait);
     let _ = std::fs::remove_file(ei_socket_file());
     for sentinel in POWER_SENTINELS {
         let _ = std::fs::remove_file(sentinel);
@@ -1394,6 +1455,48 @@ mod tests {
             std::env::var("PATH").unwrap_or_default()
         );
         (fake, path)
+    }
+
+    /// Idling a display manager's Game Mode unit never stops it outside a job, or its login's
+    /// `systemctl --wait start` returns and the DM logs into its default session. `try-restart`
+    /// leaves a unit the box stopped meanwhile stopped.
+    #[test]
+    fn idling_a_dm_unit_pauses_its_script_then_restarts_it_in_one_job() {
+        let name = "idling_a_dm_unit_pauses_its_script_then_restarts_it_in_one_job";
+        let (fake, path) = fake_systemctl(name);
+        crate::fake::in_child(module_path!(), name, &[("PATH", &path)], || {
+            const UNIT: &str = "gamescope-session-plus@ogui-steam.service";
+            idle_unit(UNIT);
+            assert_eq!(
+                crate::fake::home_lines("systemctl-calls"),
+                [
+                    format!("--user kill --kill-who=main --signal=SIGSTOP {UNIT}"),
+                    format!("--user try-restart {UNIT}"),
+                ]
+            );
+        });
+        let _ = std::fs::remove_dir_all(&fake);
+    }
+
+    /// The session script is paused before anything else of a kill: running, it SIGTERMs
+    /// gamescope the moment Steam quits, ahead of the SIGKILL.
+    #[test]
+    fn a_kill_pauses_the_session_script_first() {
+        let name = "a_kill_pauses_the_session_script_first";
+        let (fake, path) = fake_systemctl(name);
+        crate::fake::in_child(module_path!(), name, &[("PATH", &path)], || {
+            kill_unit(SESSION_UNIT, STEAM_STOP_WAIT);
+            assert_eq!(
+                crate::fake::home_lines("systemctl-calls"),
+                [
+                    format!("--user kill --kill-who=main --signal=SIGSTOP {SESSION_UNIT}"),
+                    format!("--user kill --signal=SIGKILL {SESSION_UNIT}"),
+                    format!("--user stop {SESSION_UNIT}"),
+                    format!("--user reset-failed {SESSION_UNIT}"),
+                ]
+            );
+        });
+        let _ = std::fs::remove_dir_all(&fake);
     }
 
     /// A restart systemd refuses hands the box back at once with systemd's word, and no node

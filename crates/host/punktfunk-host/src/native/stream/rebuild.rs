@@ -859,15 +859,31 @@ impl StreamState {
     /// Follow the latest session switch, the watcher's or the seat's: rebuild the backend in
     /// place, with the session's display request, the switch's launch and the cursor plan of the
     /// compositor it switches to, and keep streaming. A launched game the old session takes
-    /// down with it does not end the stream.
+    /// down with it does not end the stream. A session on its own gamescope spawn is not the
+    /// box's, and stays where it is when the box switches.
     pub(super) fn on_session_switch(&mut self) {
         let Some(sw) = self.ends.session_rx.try_iter().last() else {
             return;
         };
+        #[cfg(target_os = "linux")]
+        if sw.env.is_some()
+            && crate::vdisplay::launch_is_nested(
+                self.display.compositor,
+                self.display.vd_params.route.as_ref(),
+            )
+        {
+            tracing::debug!(
+                to = ?sw.kind,
+                "session switch: the box switched under a session on its own gamescope — staying"
+            );
+            return;
+        }
         // The box's sessions end on a switch, and so does a seat's Game Mode; a seat's desktop
-        // runs on under its Game Mode.
-        let leaves_its_apps =
-            sw.env.is_some() || self.display.compositor == crate::vdisplay::Compositor::Gamescope;
+        // runs on under its Game Mode. A switch to the compositor the stream is on moves
+        // nothing: the capture-loss rebuild followed it first.
+        let leaves_its_apps = sw.compositor != self.display.compositor
+            && (sw.env.is_some()
+                || self.display.compositor == crate::vdisplay::Compositor::Gamescope);
         if let Some(g) = self.game_life.as_ref().filter(|_| leaves_its_apps) {
             g.shared().end_with_session();
         }

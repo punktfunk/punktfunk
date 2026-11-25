@@ -639,8 +639,9 @@ pub fn managed_session_available() -> bool {
 /// Schedule a debounced TV restore after a managed takeover session ends.
 /// A reconnect inside the window reuses the warm session (no per-connect
 /// gamescope stop/relaunch). No-op when nothing was taken. Needs
-/// [`start_restore_worker`] running to fire. A box already on its desktop gets
-/// back what our session held at once, whatever the keep-alive. `quit` says the
+/// [`start_restore_worker`] running to fire. A box that left our session for its
+/// desktop gets back what the session held at once, whatever the keep-alive; a
+/// session started beside that desktop is kept like any other. `quit` says the
 /// last session was stopped on purpose, `slept` how long the box slept under it.
 #[cfg(target_os = "linux")]
 pub fn restore_managed_session(quit: bool, slept: std::time::Duration) {
@@ -801,9 +802,66 @@ pub fn release_autologin_mask(switched_to: crate::ActiveKind) {
 #[cfg(not(target_os = "linux"))]
 pub fn release_autologin_mask(_switched_to: crate::ActiveKind) {}
 
+/// The box session a launch found: what it showed, and which compositor instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionMark {
+    kind: crate::ActiveKind,
+    pid: Option<u32>,
+}
+
+/// The session the box shows now, for [`session_left`].
+pub fn mark_session() -> SessionMark {
+    let now = crate::detect_active_session();
+    SessionMark {
+        kind: now.kind,
+        pid: now.compositor_pid,
+    }
+}
+
+/// `mark`'s session is no longer what the box shows: another compositor, another instance of
+/// it, or none. Or the box ended the Game Mode login a takeover idled, on its way to a desktop
+/// whose compositor is not up yet. What ran in that session went down with it.
+#[cfg(target_os = "linux")]
+pub fn session_left(mark: SessionMark) -> bool {
+    mark_session() != mark || gamescope::box_left_idled_session()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn session_left(_mark: SessionMark) -> bool {
+    false
+}
+
+/// The box ended the Game Mode login a takeover idled: its user switched it to another
+/// session, which a stream on the takeover's session has yet to follow.
+#[cfg(target_os = "linux")]
+pub fn box_left_game_mode() -> bool {
+    gamescope::box_left_idled_session()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn box_left_game_mode() -> bool {
+    false
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    /// A launch's session is left once the box shows another compositor, or another instance
+    /// of the same one: what ran in it went down with it.
+    #[test]
+    fn a_session_is_left_once_the_box_shows_another() {
+        let now = mark_session();
+        assert!(!session_left(now), "what the box shows now is not left");
+        let restarted = SessionMark {
+            pid: Some(now.pid.map_or(1, |p| p.wrapping_add(1))),
+            ..now
+        };
+        assert!(
+            session_left(restarted),
+            "another instance of the compositor"
+        );
+    }
 
     #[test]
     fn gamescope_mode_ladder() {

@@ -88,11 +88,12 @@ pub use toplevels::{
 #[path = "vdisplay/routing.rs"]
 pub(crate) mod routing;
 pub use routing::{
-    cancel_pending_tv_restore, input_backend_id, managed_session_available,
-    preflight_takeover_privilege, reclaim_topology_journal, release_autologin_mask,
+    box_left_game_mode, cancel_pending_tv_restore, input_backend_id, managed_session_available,
+    mark_session, preflight_takeover_privilege, reclaim_topology_journal, release_autologin_mask,
     resolve_gamescope_route, restore_managed_session, restore_takeover_now,
-    restore_takeover_on_startup, start_restore_worker, takeover_privilege_verdict,
-    wants_dedicated_game_session, GamescopeRoute, TakeoverInapplicable, TakeoverVerdict,
+    restore_takeover_on_startup, session_left, start_restore_worker, takeover_privilege_verdict,
+    wants_dedicated_game_session, GamescopeRoute, SessionMark, TakeoverInapplicable,
+    TakeoverVerdict,
 };
 #[cfg(target_os = "linux")]
 pub use routing::{
