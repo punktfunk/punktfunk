@@ -13,7 +13,7 @@
 //!
 //! The id is untrusted process input, so it is validated once here rather than
 //! at each use: it reaches a device-parameter marker and log lines.
-//! `docs-site/content/docs/developers/multi-seat-contract.md` is the contract of record.
+//! `docs-site/content/docs/developers/multi-seat-contract/` is the contract of record.
 
 /// What this host process is. A policy that turns on more than one role is an exhaustive
 /// `match`, so a new variant fails to compile wherever nobody has decided for it.
