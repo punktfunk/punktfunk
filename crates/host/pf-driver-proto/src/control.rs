@@ -114,8 +114,10 @@ pub struct AddRequest {
     /// `refresh_hz` to the millihertz: 59 940 beside 60. Zero is the whole rate, which is also
     /// all a driver older than [`EXACT_RATE_SINCE`](crate::EXACT_RATE_SINCE) runs.
     pub refresh_mhz: u32,
-    /// Pads the `u64`-aligned struct to a multiple of 8.
-    pub _reserved: u32,
+    /// The size the picture has on the client's glass, `[width, height]` in millimetres, for
+    /// the EDID's panel size ([`edid::generate`](crate::edid::generate)). `0` is unknown. The
+    /// struct's old tail padding: an older driver ignores it, and an older host sends zeros.
+    pub display_mm: [u16; 2],
 }
 
 /// How many [`AddRequest::extra_modes`] one ADD carries.
@@ -279,6 +281,7 @@ const _: () = {
     assert!(offset_of!(AddRequest, hw_cursor) == 36);
     assert!(offset_of!(AddRequest, extra_modes) == 40);
     assert!(offset_of!(AddRequest, refresh_mhz) == 40 + 8 * MAX_EXTRA_MODES);
+    assert!(offset_of!(AddRequest, display_mm) == 44 + 8 * MAX_EXTRA_MODES);
     assert!(size_of::<AddRequest>() == 48 + 8 * MAX_EXTRA_MODES);
 
     assert!(size_of::<AddReply>() == 24);
@@ -350,11 +353,14 @@ mod tests {
                 m
             },
             refresh_mhz: 119_880,
-            _reserved: 0,
+            display_mm: [600, 340],
         };
         let bytes = bytemuck::bytes_of(&req);
         assert_eq!(bytes.len(), size_of::<AddRequest>());
+        assert_eq!(bytes.len(), 176);
         assert_eq!(*bytemuck::from_bytes::<AddRequest>(bytes), req);
+        // The size fills the last four bytes, width first.
+        assert_eq!(bytes[172..], [0x58, 0x02, 0x54, 0x01]);
         // preferred_monitor_id sits at offset 20.
         assert_eq!(bytes[20..24], 7u32.to_le_bytes());
         // Luminance tail rides after the legacy boundary; a zero-filled tail decodes as unknown.

@@ -847,6 +847,7 @@ impl VdisplayDriver for PfVdisplayDriver {
         render_luid: Option<LUID>,
         preferred_monitor_id: u32,
         client_hdr: Option<pf_frame::HdrMeta>,
+        display_mm: Option<(u16, u16)>,
         hw_cursor: bool,
     ) -> Result<AddedMonitor> {
         let session_id = next_session_id();
@@ -882,7 +883,7 @@ impl VdisplayDriver for PfVdisplayDriver {
             hw_cursor: hw_cursor as u32,
             extra_modes,
             refresh_mhz: exact_mhz(mode),
-            _reserved: 0,
+            display_mm: display_mm.map_or([0; 2], |(w, h)| [w, h]),
         };
         // Opt-in; non-fatal: a failed pin carries on with the natural adapter.
         if let Some(luid) = render_luid {
@@ -1024,6 +1025,8 @@ pub struct PfVdisplayDisplay {
     /// Client HDR volume (`None` = unknown/SDR → driver EDID defaults). Advertised in the
     /// created monitor's EDID so host apps tone-map to the client's panel.
     client_hdr: Option<pf_frame::HdrMeta>,
+    /// The picture's size on the client's glass: the created monitor's EDID declares it.
+    display_mm: Option<(u16, u16)>,
     /// The session's HDR verdict. Not a reuse key: the capture sets a console display's depth.
     hdr: bool,
     /// Declare an IddCx hardware cursor on the ADD.
@@ -1042,6 +1045,7 @@ impl PfVdisplayDisplay {
             client_fp: None,
             topology: None,
             client_hdr: None,
+            display_mm: None,
             hdr: false,
             hw_cursor: false,
             quit: None,
@@ -1065,6 +1069,10 @@ impl VirtualDisplay for PfVdisplayDisplay {
 
     fn set_client_hdr(&mut self, hdr: Option<pf_frame::HdrMeta>) {
         self.client_hdr = hdr;
+    }
+
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.display_mm = mm;
     }
 
     fn set_hdr(&mut self, on: bool) {
@@ -1104,6 +1112,7 @@ impl VirtualDisplay for PfVdisplayDisplay {
             self.client_fp,
             self.topology,
             self.client_hdr,
+            self.display_mm,
             self.hdr,
             self.hw_cursor,
             self.quit.clone(),

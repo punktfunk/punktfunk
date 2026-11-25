@@ -604,6 +604,9 @@ pub(in crate::native) struct SessionTerms {
     pub(in crate::native) topology: Option<crate::vdisplay::policy::Topology>,
     /// The role the Welcome states ([`role_echo`]).
     role: Option<RoleEcho>,
+    /// The size the picture has on the client's glass, in millimetres. A cap or a game
+    /// override fills the same glass, so it holds at every mode. `None` is unknown.
+    pub(in crate::native) display_mm: Option<(u16, u16)>,
 }
 
 impl SessionTerms {
@@ -760,6 +763,7 @@ pub(super) async fn negotiate(
     // AC-3 codes 7.1 as 5.1: Welcome, capture and encoder all take the plane's count.
     let (audio_plane, audio_channels) =
         negotiate_audio_plane(&n, &hello, audio_channels, bitrate_kbps).await?;
+    let display_mm = n.first.display_mm;
     let mut terms = SessionTerms {
         hello,
         codec_bit,
@@ -788,6 +792,7 @@ pub(super) async fn negotiate(
         wanted,
         topology,
         role,
+        display_mm,
     };
     let welcome = welcome(&n, &terms);
     terms.cursor_forward = welcome.host_caps & punktfunk_core::quic::HOST_CAP_CURSOR != 0;
@@ -2382,6 +2387,7 @@ pub(crate) mod tests {
             wanted: None,
             topology: None,
             role: None,
+            display_mm: None,
         }
     }
 

@@ -297,6 +297,7 @@ async fn dial(
             screens: p.screens.clone(),
             view: p.view,
             screen_wish: p.screen_wish.clone(),
+            display_mm: p.display_mm,
         };
         v2io::send(&mut send, &hello).await?;
         if let Some(unlock) = unlock {
@@ -754,6 +755,28 @@ mod tests {
         let _ = crate::client::NativeClient::connect(params);
         let from = rt.block_on(tokio::time::timeout(Duration::from_secs(5), door_side));
         assert!(from.unwrap().unwrap().is_ipv6());
+    }
+
+    /// The dial's picture size reaches the host's `ClientHello`.
+    #[test]
+    fn a_dial_carries_its_display_size() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _in_rt = rt.enter();
+        let ([door, _], pin) = one_box();
+        let port = door.local_addr().unwrap().port();
+        let door_side = rt.spawn(async move {
+            let (conn, _tx, _r, h) = hello(&door).await;
+            conn.close(0u32.into(), b"");
+            h.display_mm
+        });
+        let params = ConnectParams {
+            pin: Some(pin),
+            display_mm: Some((600, 340)),
+            ..ConnectParams::new("127.0.0.1", port, mode(), Duration::from_secs(5))
+        };
+        let _ = crate::client::NativeClient::connect(params);
+        let got = rt.block_on(tokio::time::timeout(Duration::from_secs(5), door_side));
+        assert_eq!(got.unwrap().unwrap(), Some((600, 340)));
     }
 
     /// Studio range is asked for only on the embedder's report, SDR and HDR each on its own.

@@ -53,5 +53,44 @@ final class ScreenPlanTests: XCTestCase {
         XCTAssertNil(StreamLayerView.picturePoint(
             CGPoint(x: 100, y: 50), bounds: bounds, scale: 2, content: (0, 0), fit: .fit))
     }
+
+    /// A picture filling a 27-inch 4K panel (597×336 mm) is that size at any mode. A window
+    /// half the panel is half of it, Match window is the whole panel whatever the window, and a
+    /// display with no real size reads unknown.
+    func testThePictureSizeIsTheGlassItCovers() {
+        func size(
+            _ mode: (width: UInt32, height: UInt32), over covered: (width: Int, height: Int),
+            mm: CGSize = CGSize(width: 597, height: 336), points: CGSize = CGSize(width: 2560, height: 1440),
+            matchWindow: Bool = false
+        ) -> [UInt16] {
+            let s = NSScreen.pictureSizeMM(
+                mode: mode, covered: covered, fit: .fit, panel: (3840, 2160), mm: mm, points: points,
+                matchWindow: matchWindow)
+            return [s.width, s.height]
+        }
+        XCTAssertEqual(size((3840, 2160), over: (3840, 2160)), [597, 336])
+        XCTAssertEqual(size((1920, 1080), over: (3840, 2160)), [597, 336], "render scale 0.5")
+        XCTAssertEqual(size((3840, 2160), over: (1920, 1080)), [299, 168], "a window half the panel")
+        XCTAssertEqual(
+            size((1280, 720), over: (1280, 720), matchWindow: true), [597, 336],
+            "the host keeps one size while the mode follows the window")
+        XCTAssertEqual(size((3840, 2160), over: (3840, 2160), mm: .zero), [0, 0])
+        XCTAssertEqual(
+            size((3840, 2160), over: (3840, 2160), mm: CGSize(width: 60, height: 34)), [0, 0],
+            "centimetres read as millimetres: over 1000 PPI")
+        // macOS's guess for a display without EDID: 72 DPI of its points.
+        let guess = CGSize(width: 1920 * 25.4 / 72, height: 1080 * 25.4 / 72)
+        XCTAssertEqual(
+            size((3840, 2160), over: (3840, 2160), mm: guess, points: CGSize(width: 1920, height: 1080)),
+            [0, 0])
+        // Many TVs write their aspect ratio, 16×9 cm, where the size belongs.
+        for matchWindow in [false, true] {
+            XCTAssertEqual(
+                size(
+                    (1920, 1080), over: (1920, 1080), mm: CGSize(width: 160, height: 90),
+                    matchWindow: matchWindow),
+                [0, 0])
+        }
+    }
 }
 #endif

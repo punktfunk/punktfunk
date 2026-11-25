@@ -627,6 +627,8 @@ fn run_screen(base: ScreenBase, mut run: ScreenRun) {
     params.hw_cursor = false;
     params.launch = None;
     params.join_live = false;
+    // The hello's size is screen 0's.
+    params.display_mm = None;
     let plan = crate::session_plan::SessionPlan {
         cursor_forward: false,
         cursor_blend: false,
@@ -1058,6 +1060,7 @@ mod tests {
                 topology: None,
                 client_fp: Some([3; 32]),
                 client_hdr: None,
+                display_mm: None,
                 hdr: false,
                 hw_cursor: true,
                 join_live: false,

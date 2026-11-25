@@ -476,7 +476,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 75
+#define PUNKTFUNK_ABI_VERSION 76
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1926,8 +1926,12 @@ typedef struct {
     // round to `refresh_hz`, asks for the whole rate.
     // [`punktfunk_connection_refresh_mhz`] reads what the host delivers.
     uint32_t refresh_mhz;
-    // Always `0`. Fills what would otherwise be padding.
-    uint32_t reserved7;
+    // The size the picture has on this caller's glass, in millimetres: the panel when it
+    // fills the screen, less in a window. The host declares a display that size. `0` on
+    // either side, which callers that zeroed `reserved7` send, is unknown.
+    uint16_t display_width_mm;
+    // See `display_width_mm`.
+    uint16_t display_height_mm;
 } PunktfunkConnectOpts;
 #endif
 

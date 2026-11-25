@@ -126,7 +126,7 @@ fn present_seat_display(stop: HANDLE) {
             hw_cursor: 0,
             extra_modes: Default::default(),
             refresh_mhz: 0,
-            _reserved: 0,
+            display_mm: [0; 2],
         },
     );
     dbglog!(

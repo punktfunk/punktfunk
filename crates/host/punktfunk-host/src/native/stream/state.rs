@@ -924,6 +924,7 @@ fn display_request(
         topology: terms.topology,
         client_fp: ctx.conn.peer_fingerprint(),
         client_hdr: terms.client_hdr(),
+        display_mm: terms.display_mm,
         hdr: terms.verdict.display_hdr,
         hw_cursor: terms.cursor_forward || metadata_composite,
         join_live: terms.tenure.join_live(),

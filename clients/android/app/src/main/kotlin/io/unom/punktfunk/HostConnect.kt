@@ -190,10 +190,10 @@ fun readVendorKeysAtStart() {
 
 /**
  * The one place [NativeBridge.nativeConnect] is assembled, for [JniHostNative]. Derives the mode
- * and view ([streamAsk]), HDR and gamepad settings the host needs from [spec]'s settings under its
- * game overrides, keeps the codecs and 10-bit a hardware decoder takes at that mode from one walk
- * of the codec list ([VideoDecoders.snapshot]), waits for the last session's close and the vendor
- * key read, and dials off the main thread. The dial cannot be interrupted, so it runs
+ * and view ([streamAsk]), the picture's size ([pictureSizeMm]), HDR and gamepad settings the host needs
+ * from [spec]'s settings under its game overrides, keeps the codecs and 10-bit a hardware decoder
+ * takes at that mode from one walk of the codec list ([VideoDecoders.snapshot]), waits for the last
+ * session's close and the vendor key read, and dials off the main thread. The dial cannot be interrupted, so it runs
  * `NonCancellable`. [unlock] crosses as byte arrays and is wiped when the native call returns.
  * Returns the session handle, or `0` on failure.
  */
@@ -203,6 +203,8 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
         nativeDisplayMode(context, secondScreen = settings.secondScreen)
     }
     val (w, h, hz) = mode
+    // The glass the picture lands on, read once: the host sizes its display from it.
+    val mm = pictureSizeMm(context, w to h, settings.videoFit, settings.secondScreen)
     // HDR only where the display shows it: else the host sends SDR, not PQ the panel mis-tone-maps.
     val hdrEnabled = settings.hdrOn(displayHdr(context))
     // 10-bit on its own asks nothing of the PANEL: Main10 at BT.709 decodes and presents on an
@@ -299,6 +301,7 @@ suspend fun connectToHost(context: Context, spec: DialSpec, unlock: Unlock? = nu
             deliveryFlags = spec.deliveryFlags,
             profile = spec.profile,
             hostScreen = settings.hostScreen,
+            displayWidthMm = mm?.first ?: 0, displayHeightMm = mm?.second ?: 0,
         )
         if (!spec.promptsUnlock && unlock == null) return@withContext NativeBridge.nativeConnect(request.toJson())
         try {

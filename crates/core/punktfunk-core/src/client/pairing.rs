@@ -266,6 +266,7 @@ async fn knock_once(conn: &quinn::Connection, name: &str) -> Result<()> {
         screens: Vec::new(),
         view: None,
         screen_wish: None,
+        display_mm: None,
     };
     v2io::send(&mut send, &hello).await?;
     let mut waiting = false;

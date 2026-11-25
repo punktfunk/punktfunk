@@ -200,17 +200,19 @@ pub struct ClientLuminance {
     pub min_millinits: u32,
 }
 
-/// EDID screen-size bytes 0x15/0x16 hold the image size in CENTIMETRES, and Windows derives a
-/// display's DPI from resolution over that size. A FIXED size therefore makes the virtual
-/// display's scale ride its mode: a fixed 50 cm reads as ~97 DPI at 1080p but ~260 DPI at
-/// 5120 px wide, so the OS quite correctly scales the desktop up and hands out a cursor to
-/// match. Sizing from the mode pins the display near 96 DPI, which
-/// leaves scaling where it belongs — the client's own choice, not an artefact of our EDID.
+/// EDID screen-size bytes 0x15/0x16 hold the image size in CENTIMETRES, and the OS picks a
+/// display's scale from that size and the resolution. `mm` is the size the picture has on the
+/// client's glass along this side, so the display claims that panel at every mode. `0` is
+/// unknown and sizes `px` at 96 DPI, which keeps a couch TV at its couch scale.
 ///
 /// One byte each, so `1..=255`: 0 means "undefined" (projectors) and would put the DPI
 /// decision back with the OS.
-fn size_cm(px: u32) -> u8 {
-    (u64::from(px) * 254 / 9600).clamp(1, 255) as u8
+fn size_cm(px: u32, mm: u16) -> u8 {
+    let cm = match mm {
+        0 => u64::from(px) * 254 / 9600,
+        mm => (u64::from(mm) + 5) / 10,
+    };
+    cm.clamp(1, 255) as u8
 }
 
 /// Base-block offsets of the horizontal and vertical image size.
@@ -223,13 +225,15 @@ const V_SIZE_CM_OFFSET: usize = 0x16;
 /// `lum` is the CLIENT display's luminance volume, coded into the HDR block's desired-content
 /// bytes so apps tone-map to the panel the stream lands on; all-zero keeps the built-in
 /// ~993-nit defaults. `preferred` is the session's `(width, height, refresh)`: it replaces the
-/// hard-coded 1080p60 preferred-timing DTD when it fits the encoding (4K120-class does not).
+/// hard-coded 1080p60 preferred-timing DTD when it fits the encoding (4K120-class does not),
+/// and sets the panel size with `mm`, `[width, height]` ([`size_cm`]).
 /// The modes the OS OFFERS still come from the IddCx mode list, not this descriptor.
 #[must_use]
 pub fn generate(
     serial: u32,
     lum: ClientLuminance,
     preferred: Option<(u32, u32, u32)>,
+    mm: [u16; 2],
 ) -> [u8; 256] {
     let mut edid = [0u8; 256];
     edid[..128].copy_from_slice(&BASE);
@@ -237,11 +241,9 @@ pub fn generate(
     if let Some(d) = preferred.and_then(|(w, h, r)| dtd(w, h, r)) {
         edid[54..72].copy_from_slice(&d);
     }
-    // Declare a size that puts this mode near 96 DPI, or the OS scales the desktop for a
-    // panel we only claimed to be.
     if let Some((w, h, _)) = preferred {
-        edid[H_SIZE_CM_OFFSET] = size_cm(w);
-        edid[V_SIZE_CM_OFFSET] = size_cm(h);
+        edid[H_SIZE_CM_OFFSET] = size_cm(w, mm[0]);
+        edid[V_SIZE_CM_OFFSET] = size_cm(h, mm[1]);
     }
     edid[128..132].copy_from_slice(&CTA_HEADER);
     edid[132..136].copy_from_slice(&COLORIMETRY_DB);
@@ -361,7 +363,7 @@ mod tests {
             max_frame_avg_nits: 300,
             min_millinits: 20,
         };
-        assert_eq!(generate(7, lum, Some((2560, 1440, 120))), GOLDEN);
+        assert_eq!(generate(7, lum, Some((2560, 1440, 120)), [0, 0]), GOLDEN);
     }
 
     /// The declared panel size must track the mode, or the display's DPI rides its resolution:
@@ -370,7 +372,7 @@ mod tests {
     #[test]
     fn the_declared_panel_size_keeps_every_mode_near_96_dpi() {
         for (w, h) in [(1920u32, 1080u32), (2560, 1440), (3840, 2160), (5120, 1440)] {
-            let e = generate(1, ClientLuminance::default(), Some((w, h, 60)));
+            let e = generate(1, ClientLuminance::default(), Some((w, h, 60)), [0, 0]);
             let (cm_w, cm_h) = (u32::from(e[0x15]), u32::from(e[0x16]));
             assert!(cm_w > 0 && cm_h > 0, "{w}x{h}: zero means undefined");
             // dpi = px / (cm / 2.54). Rounding to whole centimetres is the only error here.
@@ -381,6 +383,23 @@ mod tests {
                 "{w}x{h} declared {cm_w}x{cm_h} cm = {dpi_w}x{dpi_h} DPI, wanted ~96"
             );
         }
+    }
+
+    /// A known size declares the client's panel at every mode: a 27-inch monitor's 598x336 mm
+    /// reads 60x34 cm, a size the OS scales as a desk monitor. An unknown side keeps the
+    /// 96-DPI size of the mode.
+    #[test]
+    fn the_declared_panel_size_is_the_clients() {
+        let size = |w, h, mm| {
+            let e = generate(1, ClientLuminance::default(), Some((w, h, 60)), mm);
+            (e[0x15], e[0x16])
+        };
+        assert_eq!(size(3840, 2160, [598, 336]), (60, 34));
+        assert_eq!(size(1920, 1080, [598, 336]), (60, 34));
+        assert_eq!(size(3840, 2160, [0, 0]), (101, 57));
+        assert_eq!(size(3840, 2160, [598, 0]), (60, 57));
+        assert_eq!(size(1920, 1080, [u16::MAX, u16::MAX]), (255, 255));
+        assert_eq!(size(640, 480, [1, 4]), (1, 1));
     }
 
     #[test]
@@ -395,7 +414,7 @@ mod tests {
             (1, lum, Some((1920, 1080, 60))),
             (u32::MAX, lum, Some((3840, 2160, 120))),
         ] {
-            let e = generate(serial, l, mode);
+            let e = generate(serial, l, mode, [0, 0]);
             assert_eq!(block_sum(&e[..128]), 0, "base block, serial {serial}");
             assert_eq!(block_sum(&e[128..]), 0, "CTA block, serial {serial}");
         }
@@ -404,7 +423,7 @@ mod tests {
     #[test]
     fn edid_serial_lands_at_0x0c_and_rechecksums() {
         for serial in [0u32, 1, 7, 0x00FF_00FF, u32::MAX] {
-            let e = generate(serial, ClientLuminance::default(), None);
+            let e = generate(serial, ClientLuminance::default(), None, [0, 0]);
             assert_eq!(e[0x0C..0x10], serial.to_le_bytes());
             assert_eq!(get_serial(&e).unwrap(), serial);
             // The base block alone is what the mode callbacks sometimes get handed back.
@@ -418,23 +437,23 @@ mod tests {
     #[test]
     fn edid_swaps_the_preferred_dtd_only_when_the_mode_fits() {
         let lum = ClientLuminance::default();
-        let placeholder = generate(1, lum, None);
+        let placeholder = generate(1, lum, None, [0, 0]);
         // The stock descriptor is the 148.50 MHz 1080p60 timing baked into the base block.
         assert_eq!(
             u16::from_le_bytes([placeholder[54], placeholder[55]]),
             14_850
         );
         // A mode that fits replaces all 18 bytes; 4K120 does not fit, so the stock one stays.
-        let swapped = generate(1, lum, Some((2560, 1440, 120)));
+        let swapped = generate(1, lum, Some((2560, 1440, 120)), [0, 0]);
         assert_eq!(swapped[54..72], dtd(2560, 1440, 120).unwrap());
-        let too_fast = generate(1, lum, Some((3840, 2160, 120)));
+        let too_fast = generate(1, lum, Some((3840, 2160, 120)), [0, 0]);
         assert_eq!(too_fast[54..72], placeholder[54..72]);
     }
 
     #[test]
     fn edid_hdr_block_tracks_the_client_volume() {
         // No client volume reported: the built-in ~993 / 400 / 0.05 nit defaults stay.
-        let stock = generate(1, ClientLuminance::default(), None);
+        let stock = generate(1, ClientLuminance::default(), None, [0, 0]);
         assert_eq!(stock[136..143], [0xE6, 0x06, 0x05, 0x01, 0x8A, 0x60, 0x12]);
         // A known peak overrides all three; the EOTF and descriptor bytes never move.
         let lum = ClientLuminance {
@@ -442,7 +461,7 @@ mod tests {
             max_frame_avg_nits: 400,
             min_millinits: 50,
         };
-        let coded = generate(1, lum, None);
+        let coded = generate(1, lum, None, [0, 0]);
         assert_eq!(coded[136..140], [0xE6, 0x06, 0x05, 0x01]);
         assert_eq!(coded[140], cta_max_luminance_code(400));
         // Unknown frame-average and unknown min both code as 0 = "no data" on the wire.
@@ -453,6 +472,7 @@ mod tests {
                 ..Default::default()
             },
             None,
+            [0, 0],
         );
         assert_eq!(partial[141], 0);
         assert_eq!(partial[142], 0);

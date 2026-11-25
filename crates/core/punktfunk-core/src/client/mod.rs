@@ -592,6 +592,10 @@ pub struct ConnectParams {
     /// ([`crate::render_scale::view`]): the host scales the picture to it before encoding.
     /// `None` encodes `mode`.
     pub view: Option<(u32, u32)>,
+    /// The size the picture has on this client's glass, in millimetres, width then height
+    /// ([`ClientHello::display_mm`](crate::quic::v2::hello::ClientHello::display_mm)). `None`
+    /// is unknown: the host keeps its own panel size.
+    pub display_mm: Option<(u16, u16)>,
     pub compositor: CompositorPref,
     pub gamepad: GamepadPref,
     /// Encoder rate in kbps; `0` = host default, and the only value that arms ABR.
@@ -704,6 +708,7 @@ impl ConnectParams {
             port,
             mode,
             view: None,
+            display_mm: None,
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
             bitrate_kbps: 0,

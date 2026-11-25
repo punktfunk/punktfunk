@@ -561,8 +561,8 @@ fn after_arrival(arrived: bool, linked: bool) -> AfterArrival {
 }
 
 /// `IddCxMonitorCreate` for monitor `id`: an HDMI connector at index `id` whose EDID (serial
-/// `id`) carries `req`'s luminance volume and, when it fits, its mode as the preferred timing.
-/// `None` on a refused create.
+/// `id`) carries `req`'s luminance volume, the panel size it states and, when it fits, its
+/// mode as the preferred timing. `None` on a refused create.
 fn create_object(
     adapter: iddcx::IDDCX_ADAPTER,
     id: u32,
@@ -574,7 +574,7 @@ fn create_object(
         min_millinits: req.min_luminance_millinits,
     };
     let preferred = Some((req.width, req.height, req.refresh_hz));
-    let mut edid = pf_driver_proto::edid::generate(id, client_lum, preferred);
+    let mut edid = pf_driver_proto::edid::generate(id, client_lum, preferred, req.display_mm);
     let desc = iddcx::IDDCX_MONITOR_DESCRIPTION {
         Size: core::mem::size_of::<iddcx::IDDCX_MONITOR_DESCRIPTION>() as u32,
         Type: iddcx::IDDCX_MONITOR_DESCRIPTION_TYPE::IDDCX_MONITOR_DESCRIPTION_TYPE_EDID,

@@ -1008,6 +1008,7 @@ async fn handshake(
         screens: screens_ask(args),
         view: args.view,
         screen_wish: None,
+        display_mm: None,
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.

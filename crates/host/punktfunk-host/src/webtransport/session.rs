@@ -445,6 +445,7 @@ mod tests {
             screens: Vec::new(),
             view: None,
             screen_wish: None,
+            display_mm: None,
         }
     }
 

@@ -481,9 +481,17 @@ final class SessionModel: ObservableObject {
         let showsScreens = effective.screens == "all"
         let scale = (effective.renderScale, RenderScale.maxDimension(codec: effective.codec))
         let screenAsk = showsScreens ? ScreenAsk.ofThisMac(mode: mode, scale: scale) : .none
+        // The picture's size on this display, over the session's fullscreen or this window.
+        let displayMM = NSScreen.main.map {
+            $0.pictureSizeMM(
+                mode: (mode.width, mode.height), fit: VideoFit(name: effective.videoFit),
+                fullscreen: effective.fullscreenWhileStreaming, matchWindow: effective.matchWindow,
+                window: NSApp.keyWindow)
+        } ?? (0, 0)
         #else
         let showsScreens = false
         let screenAsk = ScreenAsk.none
+        let displayMM: (width: UInt16, height: UInt16) = (0, 0)
         #endif
         // Main actor: a screen read. HDR is advertised only to a display that presents it.
         let displayHDR = NativeDisplay.presentsHDR
@@ -502,7 +510,8 @@ final class SessionModel: ObservableObject {
                 hw444TenBit: Stage444Probe.hwDecode444_10bit)
             let connectLine = "connect \(host.displayName) \(host.address):\(host.port) "
                 + "mode=\(offer.width)x\(offer.height)@\(offer.hz) "
-                + "view=\(view.map { "\($0.width)x\($0.height)" } ?? "-") codec=\(effective.codec) "
+                + "view=\(view.map { "\($0.width)x\($0.height)" } ?? "-") "
+                + "mm=\(displayMM.width)x\(displayMM.height) codec=\(effective.codec) "
                 + "bitrate=\(offer.bitrateKbps)kbps "
                 + "hdr=\(offer.hdr) 10bit=\(offer.tenBit) 444=\(offer.want444) "
                 + "audio=\(offer.audioChannels)ch/\(offer.audioRateHz)Hz/\(offer.audioBits)bit "
@@ -513,7 +522,7 @@ final class SessionModel: ObservableObject {
             let result = Result { try PunktfunkConnection(
                 host: host.address, port: host.port,
                 width: offer.width, height: offer.height, refreshHz: offer.hz,
-                refreshMilliHz: refreshMilliHz, view: view,
+                refreshMilliHz: refreshMilliHz, view: view, displayMM: displayMM,
                 pinSHA256: pin, identity: identity, compositor: offer.compositor,
                 gamepad: gamepad, bitrateKbps: offer.bitrateKbps, videoCaps: offer.videoCaps,
                 audioChannels: offer.audioChannels,

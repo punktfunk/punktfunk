@@ -204,6 +204,7 @@ struct Ask {
     /// The session's topology; `None` reads `client_fp`'s ([`topology_action`]).
     topology: Option<crate::policy::Topology>,
     client_hdr: Option<pf_frame::HdrMeta>,
+    display_mm: Option<(u16, u16)>,
     hw_cursor: bool,
     quit: Option<Arc<AtomicBool>>,
     /// An HDR session in a seat: [`VirtualDisplayManager::isolate_group_first`] writes it.
@@ -1143,6 +1144,7 @@ impl VirtualDisplayManager {
         client_fp: Option<[u8; 32]>,
         topology: Option<crate::policy::Topology>,
         client_hdr: Option<pf_frame::HdrMeta>,
+        display_mm: Option<(u16, u16)>,
         hdr: bool,
         hw_cursor: bool,
         quit: Option<Arc<AtomicBool>>,
@@ -1157,6 +1159,7 @@ impl VirtualDisplayManager {
             client_fp,
             topology,
             client_hdr,
+            display_mm,
             hw_cursor,
             quit,
             seat_hdr: hdr && in_seat_session(),
@@ -1410,6 +1413,7 @@ impl VirtualDisplayManager {
             render_pin,
             ask.slot,
             ask.client_hdr,
+            ask.display_mm,
             hw_cursor,
         )?;
         self.refuse_cross_slot(dev, slot_plan, &added)?;
@@ -1443,6 +1447,7 @@ impl VirtualDisplayManager {
             render_pin,
             ask.slot,
             ask.client_hdr,
+            ask.display_mm,
             old.hw_cursor,
         )?;
         Ok(Monitor {
@@ -3134,8 +3139,17 @@ mod tests {
         }
         let hold = ccd.hold_next_isolate();
         let acquire = std::thread::spawn(move || {
-            mgr.acquire(m(1920, 1080, 60), None, None, None, false, false, None)
-                .map(|_| ())
+            mgr.acquire(
+                m(1920, 1080, 60),
+                None,
+                None,
+                None,
+                None,
+                false,
+                false,
+                None,
+            )
+            .map(|_| ())
         });
         hold.entered
             .recv_timeout(Duration::from_secs(10))

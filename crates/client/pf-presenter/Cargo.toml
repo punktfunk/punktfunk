@@ -84,12 +84,15 @@ windows = { workspace = true, features = [
 # shell and the session window group as ONE taskbar app across the visibility handoff. Gdi: the
 # window's monitor, the key for the HDR volume lookup.
 windows-sys = { workspace = true, features = [
+    # SetupDi* and the registry: the window's monitor's EDID (win32.rs).
+    "Win32_Devices_DeviceAndDriverInstallation",
     # QueryDisplayConfig: the exact rate of the window's monitor (win32.rs).
     "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Storage_Packaging_Appx",
     "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

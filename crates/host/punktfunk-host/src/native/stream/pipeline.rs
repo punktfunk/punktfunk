@@ -161,6 +161,7 @@ pub(in crate::native) fn prepare_display(
         topology: terms.topology,
         client_fp: client_identity,
         client_hdr: terms.client_hdr(),
+        display_mm: terms.display_mm,
         hdr: terms.verdict.hdr,
         hw_cursor: terms.cursor_forward || metadata_composite,
         join_live: terms.tenure.join_live(),

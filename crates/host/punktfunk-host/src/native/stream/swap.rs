@@ -524,6 +524,7 @@ pub(super) mod tests {
                     topology: None,
                     client_fp: None,
                     client_hdr: None,
+                    display_mm: None,
                     hdr: false,
                     hw_cursor: false,
                     join_live: false,

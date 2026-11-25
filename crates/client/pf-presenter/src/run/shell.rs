@@ -274,33 +274,28 @@ impl Shell {
     }
 
     /// Resize the window to `picture`, the size the stream is shown at (its view, else its
-    /// mode), within the display's usable area, before the stream starts. Match-window and
-    /// fullscreen keep the size they own.
-    pub(super) fn size_to_stream(&mut self, picture: (u32, u32)) {
+    /// mode), within the display's usable area, before the stream starts. Returns the pixel
+    /// size asked for, which X11 applies later. Match-window and fullscreen keep the size they
+    /// own and return `None`.
+    pub(super) fn size_to_stream(&mut self, picture: (u32, u32)) -> Option<(u32, u32)> {
         if self.fullscreen || self.opts.match_window {
-            return;
+            return None;
         }
-        let Ok(area) = self
+        let area = self
             .window
             .get_display()
             .and_then(|d| d.get_usable_bounds())
-        else {
-            return;
-        };
+            .ok()?;
         // Windows and X11 report the frame; Wayland reports none.
         let frame = self.window.border_size().unwrap_or_default();
-        let (w, h, x, y) = stream_window_rect(
-            picture,
-            self.window.pixel_density(),
-            frame,
-            area,
-            self.opts.window_pos,
-        );
+        let density = self.window.pixel_density();
+        let (w, h, x, y) = stream_window_rect(picture, density, frame, area, self.opts.window_pos);
         tracing::info!(w, h, "window sized to the stream");
-        if self.window.set_size(w, h).is_ok() {
-            use sdl3::video::WindowPos::Positioned;
-            self.window.set_position(Positioned(x), Positioned(y));
-        }
+        self.window.set_size(w, h).ok()?;
+        use sdl3::video::WindowPos::Positioned;
+        self.window.set_position(Positioned(x), Positioned(y));
+        let px = |v: u32| (v as f32 * density).round().max(1.0) as u32;
+        Some((px(w), px(h)))
     }
 }
 
