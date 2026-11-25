@@ -179,6 +179,10 @@ struct Args {
     /// reads it scales the picture down before encoding. A `--remode` step carries it too,
     /// unless it says `noview`.
     view: Option<(u32, u32)>,
+    /// `--display-mm WxH` — the size the picture has on the client's glass, in millimetres.
+    /// The host declares it as the virtual display's panel; without it the host sizes the
+    /// panel at 96 DPI.
+    display_mm: Option<(u16, u16)>,
     /// `--configs` — say this client takes a `StreamConfig` per epoch, as the shipped clients
     /// do. Without it the host answers as to an older client: one config at connect, then a
     /// second `Reconfigured` where it corrects a mode.
@@ -442,6 +446,15 @@ fn parse_argv(argv: Vec<String>) -> Args {
         view: get("--view").and_then(|v| {
             let (w, h) = v.split_once('x')?;
             Some((w.parse().ok()?, h.parse().ok()?))
+        }),
+        display_mm: get("--display-mm").map(|v| {
+            v.split_once('x')
+                .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                .filter(|&(w, h): &(u16, u16)| w > 0 && h > 0)
+                .unwrap_or_else(|| {
+                    eprintln!("--display-mm takes WxH in millimetres, both above 0");
+                    std::process::exit(2);
+                })
         }),
         configs: argv.iter().any(|a| a == "--configs"),
     }
@@ -1008,7 +1021,7 @@ async fn handshake(
         screens: screens_ask(args),
         view: args.view,
         screen_wish: None,
-        display_mm: None,
+        display_mm: args.display_mm,
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.
@@ -2657,6 +2670,15 @@ mod tests {
             [((1280, 720, 60), 5, true), ((1920, 1080, 120), 9, false)]
         );
         assert!(args(&["--remode", "1280x720x60"]).remode.is_empty());
+    }
+
+    #[test]
+    fn display_mm_is_width_then_height() {
+        assert_eq!(
+            args(&["--display-mm", "598x336"]).display_mm,
+            Some((598, 336))
+        );
+        assert_eq!(args(&[]).display_mm, None);
     }
 
     #[test]
