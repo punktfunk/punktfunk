@@ -1,8 +1,10 @@
+import { Link } from "@tanstack/react-router";
 import {
 	Check,
 	ChevronRight,
 	Clipboard,
 	Gamepad2,
+	LineChart,
 	Loader2,
 	MonitorPlay,
 	XCircle,
@@ -11,6 +13,7 @@ import {
 import { motion } from "motion/react";
 import { type FC, type ReactNode, useState } from "react";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
+import type { CaptureMeta } from "@/api/gen/model/captureMeta";
 import type { SessionInfo } from "@/api/gen/model/sessionInfo";
 import type { SessionRow } from "@/api/gen/model/sessionRow";
 import type { SessionSummary } from "@/api/gen/model/sessionSummary";
@@ -505,12 +508,41 @@ function endedLabel(s: SessionSummary): string {
 }
 
 /**
- * One past session: the device, how long, when; its numbers fold under it. Copy hands over the
- * API's own answer, so what is pasted into an issue is what the host said.
+ * The performance recording a past session left: one from the same device that started within
+ * the session, the closest to its start. Ten seconds of slack, as the recorder arms a moment
+ * before the session's first frame.
  */
-export const RecentSessionRow: FC<{ session: SessionSummary }> = ({
-	session,
-}) => {
+export function recordingOf(
+	s: SessionSummary,
+	recordings: readonly CaptureMeta[],
+): CaptureMeta | undefined {
+	const from = (s.started_unix - 10) * 1000;
+	const to = (s.started_unix + s.duration_s) * 1000;
+	const start = s.started_unix * 1000;
+	return recordings
+		.filter(
+			(r) =>
+				r.client === s.client &&
+				r.started_unix_ms >= from &&
+				r.started_unix_ms <= to,
+		)
+		.sort(
+			(a, b) =>
+				Math.abs(a.started_unix_ms - start) -
+				Math.abs(b.started_unix_ms - start),
+		)[0];
+}
+
+/**
+ * One past session: the device, how long, when, and its performance recording when it left one;
+ * its numbers fold under it. Copy hands over the API's own answer, so what is pasted into an
+ * issue is what the host said.
+ */
+export const RecentSessionRow: FC<{
+	session: SessionSummary;
+	/** Its recording's id, when it left one. */
+	recording?: string;
+}> = ({ session, recording }) => {
 	const [copied, setCopied] = useState(false);
 	const span = session.bitrate;
 	const facts = [
@@ -552,6 +584,16 @@ export const RecentSessionRow: FC<{ session: SessionSummary }> = ({
 					{fmtAgo(session.started_unix + session.duration_s)} · {session.mode} ·{" "}
 					{session.codec.toUpperCase()}
 				</span>
+				{recording && (
+					<Link
+						to="/diagnostics/performance"
+						search={{ recording }}
+						className="ml-auto inline-flex items-center gap-1 self-center text-xs text-muted-foreground hover:text-foreground"
+					>
+						<LineChart className="size-3.5" />
+						{m.home_session_recording()}
+					</Link>
+				)}
 			</div>
 			<Details>
 				<p className="text-xs text-muted-foreground tabular-nums">

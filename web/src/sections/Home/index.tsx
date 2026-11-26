@@ -15,6 +15,7 @@ import {
 	useGetStatus,
 } from "@/api/gen/host/host";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
+import type { CaptureMeta } from "@/api/gen/model/captureMeta";
 import type { HostInfo } from "@/api/gen/model/hostInfo";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
@@ -38,6 +39,7 @@ import {
 	useStopOneSession,
 	useStopSession,
 } from "@/api/gen/session/session";
+import { useStatsRecordingsList } from "@/api/gen/stats/stats";
 import { useLibraryEntries } from "@/api/library";
 import { isFullSeat, seatClient } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
@@ -58,6 +60,7 @@ import { Attention } from "./Attention";
 import {
 	GameRowView,
 	RecentSessionRow,
+	recordingOf,
 	SeatRowView,
 	type SessionActions,
 	SessionRowView,
@@ -70,10 +73,11 @@ const failed = (fallback: string) => (e: unknown) =>
 /** How many past sessions Home shows; the host keeps only a handful anyway. */
 const RECENT_MAX = 5;
 
-/** The last few sessions, newest first. */
-export const RecentSessionsCard: FC<{ sessions: SessionSummary[] }> = ({
-	sessions,
-}) => (
+/** The last few sessions, newest first, each linked to the performance recording it left. */
+export const RecentSessionsCard: FC<{
+	sessions: SessionSummary[];
+	recordings?: CaptureMeta[];
+}> = ({ sessions, recordings = [] }) => (
 	<Card>
 		<CardHeader>
 			<CardTitle className="flex items-center gap-2">
@@ -84,7 +88,11 @@ export const RecentSessionsCard: FC<{ sessions: SessionSummary[] }> = ({
 		<CardContent>
 			<motion.ul {...staggerProps(ROW_GAP)} className="flex flex-col divide-y">
 				{sessions.slice(0, RECENT_MAX).map((s) => (
-					<RecentSessionRow key={`${s.id}:${s.started_unix}`} session={s} />
+					<RecentSessionRow
+						key={`${s.id}:${s.started_unix}`}
+						session={s}
+						recording={recordingOf(s, recordings)?.id}
+					/>
 				))}
 			</motion.ul>
 		</CardContent>
@@ -307,6 +315,7 @@ const OperatorHome: FC = () => {
 		},
 	});
 	const recent = useGetRecentSessions({ query: { retry: false } });
+	const recordings = useStatsRecordingsList({ query: { retry: false } });
 	const actions = useSessionActions(status.data?.active_sessions ?? 0);
 	const endGame = useEndGame();
 	// A door's leftover game is a seat's, so its host ends it, or stops the session it runs in.
@@ -470,7 +479,10 @@ const OperatorHome: FC = () => {
 			}
 			sessions={
 				recent.data && recent.data.sessions.length > 0 ? (
-					<RecentSessionsCard sessions={recent.data.sessions} />
+					<RecentSessionsCard
+						sessions={recent.data.sessions}
+						recordings={recordings.data}
+					/>
 				) : null
 			}
 			recent={<ActivityCard />}

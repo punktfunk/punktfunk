@@ -65,7 +65,25 @@ const meta = {
 		status: loaded(statusActive),
 		live: true,
 		now: boxRows(statusActive),
-		sessions: <RecentSessionsCard sessions={[lastSession]} />,
+		sessions: (
+			<RecentSessionsCard
+				sessions={[lastSession]}
+				recordings={[
+					{
+						id: "2026-11-26T10-00-00Z_2560x1600",
+						client: lastSession.client,
+						started_unix_ms: lastSession.started_unix * 1000 + 800,
+						duration_ms: lastSession.duration_s * 1000,
+						kind: "native",
+						width: 2560,
+						height: 1600,
+						fps: 120,
+						codec: "av1",
+						sample_count: 2_500,
+					},
+				]}
+			/>
+		),
 	},
 } satisfies Meta<typeof HomeView>;
 

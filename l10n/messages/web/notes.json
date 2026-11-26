@@ -84,6 +84,7 @@
 	"home_now": "Card title on Home above the sessions and games streaming at this moment.",
 	"home_now_empty": "Empty state inside the 'Now' card on Home.",
 	"home_recent_sessions": "Card title on Home above a list of the last few finished sessions.",
+	"home_session_recording": "Link on a Recent sessions row on Home, shown when the session left a performance recording. Opens it under Diagnostics > Performance.",
 	"home_attention_pending": "Line in Home's attention card, followed by a link to the Devices page. names: the waiting devices' names, comma-separated.",
 	"home_attention_audio": "Line in Home's attention card, followed by a link to the Host page. state: a short status such as 'Not wired' or 'No game audio'.",
 	"home_own_desktop": "Detail on a Home row for a profile that plays on its own desktop session (a seat) instead of the host's screen.",
