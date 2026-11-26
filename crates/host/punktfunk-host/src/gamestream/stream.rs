@@ -458,6 +458,7 @@ fn run(
                 seat: seat.as_deref(),
                 place: crate::library::Place::Stream,
                 compositor_pid,
+                joined: cfg.joined.is_some(),
             },
             #[cfg(windows)]
             &crate::library::View::here(),

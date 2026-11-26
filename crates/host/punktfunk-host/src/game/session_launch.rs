@@ -222,6 +222,8 @@ pub(crate) struct SpawnAt<'a> {
     /// The compositor process this session spawned. The launch goes down with it. `None`
     /// where the session spawned none.
     pub compositor_pid: Option<u32>,
+    /// This session shows another device's head, which stays on what that device chose.
+    pub joined: bool,
 }
 
 /// What [`spawn`] started.
@@ -242,7 +244,9 @@ pub(crate) struct Spawned {
 
 /// Once capture is live: end this client's other games, start the title unless the claim
 /// adopted a running copy, then settle the claim with the compositor the launch runs in. Once
-/// per launch; a rebuild never re-spawns. Windows looks a library title up again in `view`.
+/// per launch; a rebuild never re-spawns. With no title, a client whose launch still runs gets
+/// that launch's workspace back, as an adoption does. Windows looks a library title up again in
+/// `view`.
 pub(crate) fn spawn(
     target: Option<&LaunchTarget>,
     owner: &LaunchOwner,
@@ -253,6 +257,14 @@ pub(crate) fn spawn(
     #[allow(unused_mut)]
     let mut out = Spawned::default();
     let Some(t) = target else {
+        // No lease holds this claim, so nothing puts the head back at the end: the workspace
+        // stays the launch's, and a per-session head goes with the session.
+        #[cfg(target_os = "linux")]
+        if at.place == crate::library::Place::Stream && !at.joined {
+            if let Some(ws) = crate::launchreg::running_workspace(owner.fingerprint.as_deref()) {
+                crate::library::adopt_launch_workspace(at.compositor, ws);
+            }
+        }
         return out;
     };
     let adopt = claim.is_some_and(|c| !c.must_spawn());
