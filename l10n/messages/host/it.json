@@ -629,6 +629,7 @@
 	"seatcheck_seat_display_driver_outdated": "Il driver dello schermo della postazione è più vecchio di questo Punktfunk. Le postazioni lo aggiornano al successivo avvio.",
 	"seatcheck_seat_display_driver_unstaged": "Il driver dello schermo della postazione non è installato su questo host. Reinstalla Punktfunk.",
 	"seatcheck_seat_display_rank": "Il driver dello schermo di Desktop remoto di Windows è più recente di quello di Punktfunk, quindi le postazioni si avviano senza immagine. Aggiorna Punktfunk.",
+	"seatcheck_seat_listener_rules": "La porta di Desktop remoto da cui accedono le postazioni è aperta ad altri computer, perché le sue regole del firewall mancano o sono disattivate. Disattiva e riattiva le postazioni in Profili → Postazioni.",
 	"seatcheck_seat_port_closed": "È in esecuzione, ma le sue porte {native_port} e {mgmt_port} non sono entrambe aperte. Ferma e riavvia la postazione.",
 	"seatcheck_seat_port_taken": "Un altro programma occupa la sua porta {port}, quindi la postazione non può avviarsi. Riavvia l’host.",
 	"seatcheck_seat_resources": "Lo slot dello schermo e le porte non corrispondono ({slot}, {native_port}, {mgmt_port}). Rimuovi il profilo e aggiungilo di nuovo.",

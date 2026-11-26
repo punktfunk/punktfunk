@@ -439,6 +439,18 @@ pub(super) fn rdp_reachable() -> bool {
         .any(|rule| switch::reaches_rdp_from_network(&rule, seat_listener))
 }
 
+/// The seat listener is configured, but a rule that keeps its port to this PC is gone or off
+/// ([`switch::seat_listener_blocked`]). For the doctor.
+pub(super) fn seat_listener_unblocked() -> bool {
+    let names = super::seat_listener::RULES.map(|(name, _)| name);
+    super::seat_listener::configured()
+        && !switch::seat_listener_blocked(
+            &firewall_rules(FIREWALL_RULES),
+            &names,
+            keeper::SEAT_LISTENER_PORT,
+        )
+}
+
 /// Narrows Remote Desktop's firewall rules again when the operator keeps Remote Desktop on this
 /// PC and a rule of Remote Desktop's groups is open to the network. That happens without the
 /// operator: the Session Host role, a Windows update and a restore of the firewall defaults

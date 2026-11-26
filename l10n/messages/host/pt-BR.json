@@ -629,6 +629,7 @@
 	"seatcheck_seat_display_driver_outdated": "O driver de tela do posto é mais antigo que este Punktfunk. Os postos o atualizam quando forem iniciados novamente.",
 	"seatcheck_seat_display_driver_unstaged": "O driver de tela do posto não está instalado neste host. Reinstale o Punktfunk.",
 	"seatcheck_seat_display_rank": "O driver de tela da Área de Trabalho Remota do próprio Windows é mais recente que o do Punktfunk, então os postos iniciam sem imagem. Atualize o Punktfunk.",
+	"seatcheck_seat_listener_rules": "A porta da Área de Trabalho Remota pela qual os postos fazem login está aberta para outros computadores, porque as regras de firewall dela sumiram ou estão desativadas. Desative e ative os postos em Perfis → Postos.",
 	"seatcheck_seat_port_closed": "O posto está em execução, mas as portas {native_port} e {mgmt_port} dele não estão abertas ao mesmo tempo. Pare e inicie o posto.",
 	"seatcheck_seat_port_taken": "Outro programa ocupa a porta {port} do posto, então ele não consegue iniciar. Reinicie o host.",
 	"seatcheck_seat_resources": "O slot de tela e as portas do posto não correspondem ({slot}, {native_port}, {mgmt_port}). Remova o perfil e adicione-o novamente.",

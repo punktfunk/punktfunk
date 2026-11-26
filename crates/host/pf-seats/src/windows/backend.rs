@@ -434,6 +434,7 @@ impl WindowsBackend {
             termservice,
             rdp_local_only: enable::rdp_local_chosen(),
             rdp_reachable: enable::rdp_reachable(),
+            listener_unblocked: enable::seat_listener_unblocked(),
             missing_file,
             driver,
             inbox_driver_newer,

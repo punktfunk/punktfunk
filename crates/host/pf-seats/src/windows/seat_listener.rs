@@ -34,7 +34,8 @@ const OWN_VALUES: [&str; 4] = [
     MARKER,
 ];
 const DLL: &str = "pf_seat_audio";
-const RULES: [(&str, &str); 2] = [
+/// The firewall rules that block the listener's port, by name and protocol.
+pub(super) const RULES: [(&str, &str); 2] = [
     ("punktfunk seat listener (TCP)", "TCP"),
     ("punktfunk seat listener (UDP)", "UDP"),
 ];

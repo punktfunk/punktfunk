@@ -629,6 +629,7 @@
 	"seatcheck_seat_display_driver_outdated": "Le pilote d’affichage des postes est plus ancien que ce Punktfunk. Les postes le mettent à jour à leur prochain démarrage.",
 	"seatcheck_seat_display_driver_unstaged": "Le pilote d’affichage des postes n’est pas installé sur cet hôte. Réinstallez Punktfunk.",
 	"seatcheck_seat_display_rank": "Le pilote d’affichage Bureau à distance propre à Windows est plus récent que celui de Punktfunk, donc les postes démarrent sans image. Mettez Punktfunk à jour.",
+	"seatcheck_seat_listener_rules": "Le port Bureau à distance par lequel les postes se connectent est ouvert aux autres ordinateurs, car ses règles de pare-feu sont absentes ou désactivées. Désactivez puis réactivez les postes sous Profils → Postes.",
 	"seatcheck_seat_port_closed": "Il s’exécute, mais ses ports {native_port} et {mgmt_port} ne sont pas tous deux ouverts. Arrêtez puis démarrez le poste.",
 	"seatcheck_seat_port_taken": "Un autre programme occupe son port {port}, donc le poste ne peut pas démarrer. Redémarrez l’hôte.",
 	"seatcheck_seat_resources": "Son emplacement d’affichage et ses ports ne correspondent pas ({slot}, {native_port}, {mgmt_port}). Supprimez le profil, puis ajoutez-le de nouveau.",

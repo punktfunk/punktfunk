@@ -56,6 +56,9 @@ pub(crate) struct BoxFacts {
     /// An enabled firewall rule lets an address other than this PC's reach Remote Desktop, on its
     /// own port or the seat listener's.
     pub rdp_reachable: bool,
+    /// The seat listener is configured, but a firewall rule that keeps its port to this PC is
+    /// gone or off.
+    pub listener_unblocked: bool,
     /// The first of the host and keeper executables that isn't on disk.
     pub missing_file: Option<PathBuf>,
     pub driver: DriverState,
@@ -145,6 +148,18 @@ pub(crate) fn report_rows(facts: BoxFacts) -> Vec<Diagnostic> {
              from the network under Profiles → Seats.",
         )
         .worded("seatcheck_rdp_network"));
+    }
+    // Whatever the operator chose: the seat listener is only ever for this PC.
+    if facts.listener_unblocked {
+        rows.push(
+            Diagnostic::warning(
+                "seat_listener_rules",
+                "The Remote Desktop port that seats sign in through is open to other computers, \
+                 because its firewall rules are gone or turned off. Turn seats off and on under \
+                 Profiles → Seats.",
+            )
+            .worded("seatcheck_seat_listener_rules"),
+        );
     }
     if let Some(missing) = &facts.missing_file {
         rows.push(
@@ -569,6 +584,7 @@ mod tests {
             termservice: true,
             rdp_local_only: true,
             rdp_reachable: false,
+            listener_unblocked: false,
             missing_file: None,
             driver: DriverState::Current,
             inbox_driver_newer: Some(false),
@@ -834,6 +850,29 @@ mod tests {
         for (local, reachable) in [(true, false), (false, true), (false, false)] {
             assert!(!codes(&rows(local, reachable)).contains(&"rdp_network"));
         }
+    }
+
+    /// A seat listener without its block rules warns under either choice.
+    #[test]
+    fn a_seat_listener_without_its_rules_warns() {
+        for rdp_local_only in [true, false] {
+            let rows = report_rows(BoxFacts {
+                rdp_local_only,
+                listener_unblocked: true,
+                ..healthy()
+            });
+            assert_eq!(
+                pick(&rows, "seat_listener_rules"),
+                (
+                    Warning,
+                    "The Remote Desktop port that seats sign in through is open to other \
+                     computers, because its firewall rules are gone or turned off. Turn seats \
+                     off and on under Profiles → Seats."
+                        .into()
+                )
+            );
+        }
+        assert!(!codes(&report_rows(healthy())).contains(&"seat_listener_rules"));
     }
 
     #[test]

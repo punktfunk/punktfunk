@@ -629,6 +629,7 @@
 	"seatcheck_seat_display_driver_outdated": "El controlador de pantalla de los puestos es anterior a este Punktfunk. Los puestos lo actualizan la próxima vez que se inician.",
 	"seatcheck_seat_display_driver_unstaged": "El controlador de pantalla de los puestos no está instalado en este host. Reinstala Punktfunk.",
 	"seatcheck_seat_display_rank": "El controlador de pantalla de Escritorio remoto de Windows es más reciente que el de Punktfunk, así que los puestos se inician sin imagen. Actualiza Punktfunk.",
+	"seatcheck_seat_listener_rules": "El puerto de Escritorio remoto por el que inician sesión los puestos está abierto a otros equipos, porque sus reglas de firewall faltan o están desactivadas. Desactiva y vuelve a activar los puestos en Perfiles → Puestos.",
 	"seatcheck_seat_port_closed": "Está en ejecución, pero sus puertos {native_port} y {mgmt_port} no están abiertos los dos. Detén el puesto y vuelve a iniciarlo.",
 	"seatcheck_seat_port_taken": "Otro programa ocupa su puerto {port}, así que el puesto no puede iniciarse. Reinicia el host.",
 	"seatcheck_seat_resources": "Su ranura de pantalla y sus puertos no coinciden ({slot}, {native_port}, {mgmt_port}). Elimina el perfil y vuelve a añadirlo.",

@@ -161,6 +161,7 @@
 	"seatcheck_ledger": "Seat doctor, first row. {count} is how many seats exist.",
 	"seatcheck_rds_grace_days": "Seat check. {count} is days left (more than 30).",
 	"seatcheck_rds_grace_ending": "Seat check, the last 30 days. {count} is days left.",
+	"seatcheck_seat_listener_rules": "Windows seat check. The port is a second Remote Desktop port that only seats use; it must stay closed to other computers.",
 	"seatcheck_seat_port_closed": "Seat check about one seat. Both are port numbers.",
 	"seatcheck_seat_port_taken": "Seat check about one seat. {port} is a port number.",
 	"seatcheck_seat_resources": "Seat check about one seat. {slot} is a display slot number, the others port numbers.",

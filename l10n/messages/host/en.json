@@ -703,6 +703,7 @@
 	"seatcheck_seat_display_driver_outdated": "The seat display driver is older than this Punktfunk. Seats update it when they next start.",
 	"seatcheck_seat_display_driver_unstaged": "The seat display driver isn't installed on this host. Reinstall Punktfunk.",
 	"seatcheck_seat_display_rank": "Windows' own Remote Desktop display driver is newer than Punktfunk's, so seats start without a picture. Update Punktfunk.",
+	"seatcheck_seat_listener_rules": "The Remote Desktop port that seats sign in through is open to other computers, because its firewall rules are gone or turned off. Turn seats off and on under Profiles → Seats.",
 	"seatcheck_seat_port_closed": "It's running, but its ports {native_port} and {mgmt_port} aren't both open. Stop and start the seat.",
 	"seatcheck_seat_port_taken": "Another program holds its port {port}, so the seat can't start. Restart the host.",
 	"seatcheck_seat_resources": "Its display slot and ports don't match ({slot}, {native_port}, {mgmt_port}). Remove the profile and add it again.",

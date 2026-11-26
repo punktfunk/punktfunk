@@ -15,6 +15,7 @@
 //! So a step that fails leaves enough behind for the next turn-off to undo it.
 //! [`reaches_rdp_from_network`] reads whether a firewall rule lets the network reach Remote
 //! Desktop, or the seat listener, against the operator's choice of this PC only.
+//! [`seat_listener_blocked`] reads whether the seat listener's own block rules are in place.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -171,6 +172,28 @@ pub(crate) fn reaches_rdp_from_network(rule: &str, seat_listener: Option<u16>) -
         && (has("LPort", "3389")
             || seat_listener.is_some_and(|port| has("LPort", &port.to_string())))
         && (remote.is_empty() || remote.iter().any(|&(key, range)| !loopback(key, range)))
+}
+
+/// Every rule in `names` is among `stored` as an enabled inbound block rule on the seat
+/// listener's `port`. `stored` is the local rules, one registry string each.
+pub(crate) fn seat_listener_blocked(stored: &[String], names: &[&str], port: u16) -> bool {
+    let port = port.to_string();
+    names.iter().all(|name| {
+        stored.iter().any(|rule| {
+            let fields: Vec<(&str, &str)> =
+                rule.split('|').filter_map(|f| f.split_once('=')).collect();
+            let has = |key: &str, value: &str| {
+                fields
+                    .iter()
+                    .any(|(k, v)| k.eq_ignore_ascii_case(key) && v.eq_ignore_ascii_case(value))
+            };
+            has("Name", name)
+                && has("Action", "Block")
+                && has("Active", "TRUE")
+                && has("Dir", "In")
+                && has("LPort", &port)
+        })
+    })
 }
 
 /// `range`, the value of an `RA4` or `RA6` field, holds this PC's own addresses only: an
@@ -437,5 +460,32 @@ mod tests {
         let block = "v2.33|Action=Block|Active=TRUE|Dir=In|Protocol=6|LPort=3390|\
                      RA4=0.0.0.0-126.255.255.255|Name=punktfunk seat listener (TCP)|";
         assert!(!reaches_rdp_from_network(block, Some(3390)));
+    }
+
+    /// Both block rules must be there, on, blocking inbound, on the listener's port.
+    #[test]
+    fn the_seat_listener_is_blocked_only_by_both_rules() {
+        const NAMES: [&str; 2] = [
+            "punktfunk seat listener (TCP)",
+            "punktfunk seat listener (UDP)",
+        ];
+        let rule = |name: &str| {
+            format!(
+                "v2.33|Action=Block|Active=TRUE|Dir=In|Protocol=6|LPort=3390|\
+                 RA4=0.0.0.0-126.255.255.255|Name={name}|"
+            )
+        };
+        let both = vec![rule(NAMES[0]), rule(NAMES[1])];
+        assert!(seat_listener_blocked(&both, &NAMES, 3390));
+        assert!(!seat_listener_blocked(&both, &NAMES, 3391));
+        assert!(!seat_listener_blocked(&both[..1], &NAMES, 3390));
+        for change in [
+            ("Active=TRUE", "Active=FALSE"),
+            ("Action=Block", "Action=Allow"),
+            ("Dir=In", "Dir=Out"),
+        ] {
+            let changed = vec![both[0].clone(), both[1].replace(change.0, change.1)];
+            assert!(!seat_listener_blocked(&changed, &NAMES, 3390), "{change:?}");
+        }
     }
 }

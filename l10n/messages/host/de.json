@@ -680,6 +680,7 @@
 	"seatcheck_seat_display_driver_outdated": "Der Seat-Anzeigetreiber ist älter als dieses Punktfunk. Seats aktualisieren ihn beim nächsten Start.",
 	"seatcheck_seat_display_driver_unstaged": "Der Seat-Anzeigetreiber ist auf diesem Host nicht installiert. Installiere Punktfunk neu.",
 	"seatcheck_seat_display_rank": "Der eigene Remotedesktop-Anzeigetreiber von Windows ist neuer als der von Punktfunk, deshalb starten Seats ohne Bild. Aktualisiere Punktfunk.",
+	"seatcheck_seat_listener_rules": "Der Remotedesktop-Port, über den sich Seats anmelden, ist für andere Computer offen, weil seine Firewall-Regeln fehlen oder ausgeschaltet sind. Schalte Seats unter Profile → Seats aus und wieder ein.",
 	"seatcheck_seat_port_closed": "Er läuft, aber seine Ports {native_port} und {mgmt_port} sind nicht beide offen. Stoppe den Seat und starte ihn neu.",
 	"seatcheck_seat_port_taken": "Ein anderes Programm belegt seinen Port {port}, deshalb kann der Seat nicht starten. Starte den Host neu.",
 	"seatcheck_seat_resources": "Anzeigeplatz und Ports passen nicht zusammen ({slot}, {native_port}, {mgmt_port}). Entferne das Profil und füge es neu hinzu.",
