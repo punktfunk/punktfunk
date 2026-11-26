@@ -250,8 +250,14 @@ export const HostSettingsView: FC<{
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
-				<div className="flex flex-wrap items-end gap-3">
-					<h1 className="text-2xl font-semibold">{m.nav_host()}</h1>
+				<h1 className="text-2xl font-semibold">{m.nav_host()}</h1>
+				{top}
+				{/* The search and Show advanced act on the settings below, so they sit with them. */}
+				<div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+					<p className="min-w-0 flex-1 basis-72 text-sm text-muted-foreground">
+						{m.host_settings_intro()}{" "}
+						<DocsLink path="configuration#settings-in-the-web-console" />
+					</p>
 					<div className="flex w-full flex-wrap items-center gap-x-4 gap-y-2 sm:ml-auto sm:w-auto">
 						<div className="relative w-full sm:w-64">
 							<Search
@@ -282,11 +288,6 @@ export const HostSettingsView: FC<{
 						</div>
 					</div>
 				</div>
-				{top}
-				<p className="text-sm text-muted-foreground">
-					{m.host_settings_intro()}{" "}
-					<DocsLink path="configuration#settings-in-the-web-console" />
-				</p>
 				{banner}
 
 				<QueryState
