@@ -1040,9 +1040,9 @@ fn not_the_plugins_row(
 /// A seat host's own titles, as the box may see them
 ///
 /// The custom entries this seat host keeps in its own config folder, each by its `own:` id,
-/// title, platform and `http(s)` art: never how it starts, and never a cover on its disk. The box
-/// asks when the seat's library changes and when the seat comes up, and lists them for the seat's
-/// profile. A host that keeps none answers an empty list.
+/// title, platform and art: never how it starts. A cover on its disk goes as this host's art path
+/// for it, never the file's. The box asks when the seat's library changes and when the seat comes
+/// up, and lists them for the seat's profile. A host that keeps none answers an empty list.
 #[utoipa::path(
     get,
     path = "/library/own",
@@ -1061,9 +1061,10 @@ pub(crate) async fn list_own_titles() -> Json<Vec<crate::library::OwnTitle>> {
 ///
 /// What a seat host's `GET /library/own` answered, for the profile `as` names, on the host that
 /// writes the library: the door hands it here, and a Windows box stores its seats' itself. Rows
-/// are checked as an Art & Metadata source's are: a row with a bad id or title, a cover that isn't
-/// `http(s)` and a bad platform are dropped. An answer that isn't a list, lists more than 500 or
-/// names an id twice is refused, and the stored titles stay. Emits `library.changed` on a change.
+/// are checked as an Art & Metadata source's are: a row with a bad id or title, a cover that is
+/// neither `http(s)` nor the seat's art path for that slot, and a bad platform are dropped. An
+/// answer that isn't a list, lists more than 500 or names an id twice is refused, and the stored
+/// titles stay. Emits `library.changed` on a change.
 #[utoipa::path(
     put,
     path = "/library/own",
@@ -1891,7 +1892,8 @@ pub(crate) async fn set_source_overrides(
 /// can try the next candidate, and so is a URL the fetch refused — `GET /library` advertises
 /// that one verbatim again. The response carries `Cache-Control` and an `ETag` of the bytes; a
 /// request whose `If-None-Match` names that tag gets 304 with no body. On a Linux door the
-/// covers are in the owner's home, and the owner's host serves them while it runs. With `as`,
+/// covers are in the owner's home, and the owner's host serves them while it runs. A cover of a
+/// profile's own title on its seat's disk comes from that seat's host while it runs. With `as`,
 /// the art as that profile sees it: its own picks first.
 ///
 /// `v` is the version `GET /library` listed the cover under. A host that lists another for the
@@ -1931,10 +1933,19 @@ pub(crate) async fn get_library_art(
     // The proxy does not know which store the id belongs to.
     let stored = tokio::task::spawn_blocking(move || {
         let value = crate::library::library_art_value(&view, &id, kind);
-        let version = value.as_deref().map(crate::library::art_version);
+        // The seat's art path is listed as it came, under the seat's version.
+        let on_seat = value
+            .as_deref()
+            .and_then(|v| crate::library::seat_art_version(&id, kind, v));
+        let version = on_seat
+            .map(str::to_owned)
+            .or_else(|| value.as_deref().map(crate::library::art_version));
         let own = || value.as_deref().and_then(crate::library::resolve_art_bytes);
         let listed = lists_asked_version(asked.v.as_deref(), version.as_deref());
-        let theirs = || owner_art(&id, kind, view.layer());
+        let theirs = || match on_seat {
+            Some(_) => seat_art(&view, &id, kind),
+            None => owner_art(&id, kind, view.layer()),
+        };
         let art = if listed {
             own().or_else(theirs)
         } else {
@@ -1997,16 +2008,39 @@ fn owner_art(
     let seats = crate::seats::snapshot();
     let owner = seats.owner().ok().flatten()?;
     let path = format!("library/art/{}/{}", path_segment(id), kind.name());
-    let ask = |path: String| match crate::seats::forward(owner, super::owner::Forwarded::get(path))?
-    {
+    let ask = |path: String| image_from(owner, path);
+    profile
+        .and_then(|p| ask(format!("{path}?as={}", path_segment(p))))
+        .or_else(|| ask(path))
+}
+
+/// A profile's own title keeps its cover on its seat's disk: that seat's host serves it, as its
+/// own. The seat is another account, so its answer is typed by its bytes, never by its header.
+/// `None` for a view with no seat, and while that host is down; a cover never starts a seat.
+/// Blocking.
+fn seat_art(
+    view: &crate::library::View,
+    id: &str,
+    kind: crate::library::ArtKind,
+) -> Option<(Vec<u8>, String)> {
+    let seat = format!("{:032x}", view.reach.seat?);
+    let seats = crate::seats::snapshot();
+    let (row, _) = seats.seat(&seat)?;
+    let (bytes, _) = image_from(
+        row,
+        format!("library/art/{}/{}", path_segment(id), kind.name()),
+    )?;
+    crate::library::checked_art(bytes)
+}
+
+/// The image `seat`'s host answers `path` with; `None` for any other answer. Blocking.
+fn image_from(seat: &pf_seats::Seat, path: String) -> Option<(Vec<u8>, String)> {
+    match crate::seats::forward(seat, super::owner::Forwarded::get(path))? {
         super::owner::Answer::Reply(200, Some(ctype), bytes) if ctype.starts_with("image/") => {
             Some((bytes, ctype))
         }
         _ => None,
-    };
-    profile
-        .and_then(|p| ask(format!("{path}?as={}", path_segment(p))))
-        .or_else(|| ask(path))
+    }
 }
 
 /// `s` as one path segment: unreserved characters, `:` and `@` stay, every other byte is
