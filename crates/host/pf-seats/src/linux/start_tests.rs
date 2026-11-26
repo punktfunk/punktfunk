@@ -433,6 +433,7 @@ fn a_made_seat_s_cold_and_warm_start_run_exactly_these() {
         SHOW,
         "getent passwd punktfunk",
         "getent passwd",
+        "getent group punktfunk-door",
         "systemctl daemon-reload",
         "systemctl stop user@UID.service",
         "systemctl reset-failed punktfunk-seat@ACCOUNT.service",
