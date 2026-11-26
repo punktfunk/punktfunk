@@ -12,8 +12,8 @@
 //! battery, `0x46`/`0x79` wireless. Feature reports are 64 bytes on id `1`; haptics are OUTPUT
 //! `0x80..=0x85`.
 //!
-//! A typed fallback covers a client that declared the kind but sends no raw feed: ordinary
-//! gamepad plane → a minimal `0x42` state report. The first raw report switches to as-is
+//! A typed fallback covers a client that declared the kind but sends no raw feed: the gamepad
+//! plane and motion → a minimal `0x42` state report. The first raw report switches to as-is
 //! permanently.
 
 use super::steam_proto::RAW_STALE;
@@ -92,6 +92,12 @@ pub struct TritonState {
     pub ly: i16,
     pub rx: i16,
     pub ry: i16,
+    /// The fallback's IMU in a Steam pad's raw units and axes, from `RichInput::Motion`.
+    pub gyro: [i16; 3],
+    pub accel: [i16; 3],
+    /// The IMU block's µs timestamp, and when the last motion sample arrived.
+    imu_ts: u32,
+    imu_last: Option<Instant>,
 }
 
 impl TritonState {
@@ -107,6 +113,10 @@ impl TritonState {
             ly: 0,
             rx: 0,
             ry: 0,
+            gyro: [0; 3],
+            accel: [0; 3],
+            imu_ts: 0,
+            imu_last: None,
         }
     }
 
@@ -154,9 +164,6 @@ impl TritonState {
         set(&mut b, lt >= 240, tbtn::LT_CLICK);
         set(&mut b, rt >= 240, tbtn::RT_CLICK);
         TritonState {
-            raw: [0u8; TRITON_REPORT_LEN],
-            raw_len: 0,
-            heard: None,
             buttons: b,
             lt: trig(lt),
             rt: trig(rt),
@@ -164,17 +171,22 @@ impl TritonState {
             ly,
             rx,
             ry,
+            ..TritonState::neutral()
         }
     }
 
     /// Typed fallback over `prev`, and proof the client is alive. As-is mode is sticky: a typed
     /// frame between two raw reports must not flap the pad back to synth (the client sends
-    /// both planes).
+    /// both planes). Motion arrives on the rich plane, so a button frame keeps it.
     pub fn merge_frame(prev: &TritonState, f: &GamepadFrame, now: Instant) -> TritonState {
         TritonState {
             raw: prev.raw,
             raw_len: prev.raw_len,
             heard: Some(now),
+            gyro: prev.gyro,
+            accel: prev.accel,
+            imu_ts: prev.imu_ts,
+            imu_last: prev.imu_last,
             ..TritonState::from_gamepad(
                 f.buttons,
                 f.ls_x,
@@ -218,25 +230,65 @@ impl TritonState {
         self.heard = Some(now);
     }
 
-    /// A raw report from the client's physical pad becomes the state. Touchpad and motion have
-    /// nothing to fold: the raw feed carries pads + IMU, and the synth fallback has no surface.
-    /// Only the controller's own report ids pass: the descriptor also declares a mouse (`0x40`)
-    /// and a keyboard (`0x41`), and the gamepad grant covers neither.
+    /// A raw report from the client's physical pad becomes the state. Only the controller's own
+    /// report ids pass: the descriptor also declares a mouse (`0x40`) and a keyboard (`0x41`),
+    /// and the gamepad grant covers neither.
+    ///
+    /// Motion feeds the fallback's IMU block, converted as for a Deck: SDL reads the Deck's
+    /// and this pad's IMU with the same scale and axes. The timestamp advances by the µs since
+    /// the previous sample, at least one, so it always rises. A raw-fed pad presents its own
+    /// report, so motion never shows there. The fallback has no trackpad surface.
     pub fn apply_rich(&mut self, rich: RichInput, now: Instant) {
-        if let RichInput::HidReport { len, data, .. } = rich {
-            let len = (len as usize).min(data.len()).min(self.raw.len());
-            if len == 0 || pf_driver_proto::triton::input_len(data[0]).is_none() {
-                return;
+        match rich {
+            RichInput::HidReport { len, data, .. } => {
+                let len = (len as usize).min(data.len()).min(self.raw.len());
+                if len == 0 || pf_driver_proto::triton::input_len(data[0]).is_none() {
+                    return;
+                }
+                self.raw[..len].copy_from_slice(&data[..len]);
+                self.raw_len = len as u8;
+                self.heard = Some(now);
             }
-            self.raw[..len].copy_from_slice(&data[..len]);
-            self.raw_len = len as u8;
-            self.heard = Some(now);
+            RichInput::Motion { gyro, accel, .. } => {
+                (self.gyro, self.accel) = super::steam_remap::motion_wire_to_deck(gyro, accel);
+                let us = self.imu_last.map_or(1, |last| {
+                    let us = now.saturating_duration_since(last).as_micros();
+                    us.clamp(1, u128::from(u32::MAX)) as u32
+                });
+                self.imu_ts = self.imu_ts.wrapping_add(us);
+                self.imu_last = Some(now);
+                self.heard = Some(now);
+            }
+            _ => {}
         }
+    }
+
+    /// Zero the fallback's angular velocity; acceleration stays (gravity persists). The IMU
+    /// timestamp moves one tick, so a reader that skips a repeated timestamp sees the stop.
+    /// `true` if the gyro was moving.
+    pub fn neutralize_gyro(&mut self) -> bool {
+        let changed = self.gyro != [0; 3];
+        if changed {
+            self.gyro = [0; 3];
+            self.imu_ts = self.imu_ts.wrapping_add(1);
+        }
+        changed
+    }
+
+    /// A different controller took this pad: drop the last one's raw report and motion, so its
+    /// typed input shows and no stale rotation stays. The IMU timestamp moves one tick, so a
+    /// reader sees the zeroed block as new.
+    pub fn clear_rich(&mut self) {
+        self.raw_len = 0;
+        self.gyro = [0; 3];
+        self.accel = [0; 3];
+        self.imu_ts = self.imu_ts.wrapping_add(1);
     }
 }
 
-/// Fallback `0x42` (`TritonMTUNoQuat_t`). Pads and IMU stay zero: no raw feed, and Steam ignores
-/// IMU until `SETTING_IMU_MODE` on a real report anyway.
+/// Fallback `0x42` (`TritonMTUNoQuat_t`). The trackpads stay zero. The IMU block at byte 30 is
+/// a u32 µs timestamp, then accel and gyro X/Y/Z, where SDL's Triton driver and the client's
+/// IMU gate read them.
 pub fn serialize_triton_state(buf: &mut [u8; TRITON_STATE_LEN], st: &TritonState, seq: u8) {
     buf.fill(0);
     buf[0] = ID_TRITON_CONTROLLER_STATE;
@@ -248,6 +300,10 @@ pub fn serialize_triton_state(buf: &mut [u8; TRITON_STATE_LEN], st: &TritonState
     buf[12..14].copy_from_slice(&st.ly.to_le_bytes());
     buf[14..16].copy_from_slice(&st.rx.to_le_bytes());
     buf[16..18].copy_from_slice(&st.ry.to_le_bytes());
+    buf[30..34].copy_from_slice(&st.imu_ts.to_le_bytes());
+    for (i, v) in st.accel.iter().chain(&st.gyro).enumerate() {
+        buf[34 + i * 2..36 + i * 2].copy_from_slice(&v.to_le_bytes());
+    }
 }
 
 /// Raw reports for [`HidOutput::HidRaw`](punktfunk_core::quic::HidOutput), plus 0xCA rumble for
@@ -623,7 +679,109 @@ mod tests {
         assert_eq!(i16::from_le_bytes([r[6], r[7]]), 32767); // sTriggerLeft
         assert_eq!(i16::from_le_bytes([r[10], r[11]]), 1000); // sLeftStickX
         assert_eq!(i16::from_le_bytes([r[16], r[17]]), -32768); // sRightStickY
-        assert!(r[18..].iter().all(|&b| b == 0)); // pads + IMU zero
+        assert!(r[18..].iter().all(|&b| b == 0)); // no motion yet: pads + IMU zero
+    }
+
+    fn motion(gyro: [i16; 3], accel: [i16; 3]) -> RichInput {
+        RichInput::Motion {
+            pad: 0,
+            gyro,
+            accel,
+        }
+    }
+
+    /// The IMU words of a fallback report: timestamp, accel X/Y/Z, gyro X/Y/Z.
+    fn imu(st: &TritonState) -> (u32, [i16; 3], [i16; 3]) {
+        let mut seq = 0;
+        let (r, len) = st.report(&mut seq, t0());
+        assert_eq!((len, r[0]), (TRITON_STATE_LEN, ID_TRITON_CONTROLLER_STATE));
+        let w = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]);
+        let ts = u32::from_le_bytes([r[30], r[31], r[32], r[33]]);
+        (ts, [w(34), w(36), w(38)], [w(40), w(42), w(44)])
+    }
+
+    /// Wire motion lands in the IMU block in Deck units, and SDL's Triton read
+    /// (`[x, z, −y]`, 2000 °/s and 2 g full scale) brings the wire axes back.
+    #[test]
+    fn motion_lands_in_the_fallback_imu_block() {
+        let mut st = TritonState::neutral();
+        st.apply_rich(motion([1000, -2000, 500], [10000, -5000, 2500]), t0());
+        let (_, accel, gyro) = imu(&st);
+        assert_eq!(gyro, [800, -400, -1600]);
+        assert_eq!(accel, [16384, -4096, -8192]);
+        assert_eq!([gyro[0], gyro[2], -gyro[1]], [800, -1600, 400]);
+        let mut seq = 0;
+        let (r, _) = st.report(&mut seq, t0());
+        assert!(r[18..30].iter().all(|&b| b == 0), "trackpads stay zero");
+        assert!(
+            r[46..].iter().all(|&b| b == 0),
+            "nothing past the IMU block"
+        );
+    }
+
+    /// A button frame keeps the last motion sample and its timestamp.
+    #[test]
+    fn a_button_frame_keeps_motion() {
+        let mut st = TritonState::neutral();
+        st.apply_rich(motion([1000, 0, 0], [0, 10000, 0]), t0());
+        st.apply_rich(
+            motion([1000, 0, 0], [0, 10000, 0]),
+            t0() + std::time::Duration::from_millis(4),
+        );
+        let before = imu(&st);
+        let frame = GamepadFrame {
+            buttons: gs::BTN_A,
+            ..GamepadFrame::default()
+        };
+        let st = TritonState::merge_frame(&st, &frame, t0());
+        assert_eq!(st.buttons, tbtn::A);
+        assert_eq!(imu(&st), before);
+    }
+
+    /// The timestamp advances by the µs since the previous sample, one for two in the same
+    /// microsecond, and by the real gap after a long pause. A stopped gyro moves it once more,
+    /// so the zero reads as a new sample.
+    #[test]
+    fn the_imu_timestamp_always_rises() {
+        let ms = std::time::Duration::from_millis;
+        let mut st = TritonState::neutral();
+        let mut stamps = Vec::new();
+        for at in [ms(0), ms(4), ms(4), ms(8)] {
+            st.apply_rich(motion([100, 0, 0], [0, 10000, 0]), t0() + at);
+            stamps.push(imu(&st).0);
+        }
+        assert_eq!(stamps, [1, 4001, 4002, 8002]);
+        assert!(st.neutralize_gyro());
+        let (ts, accel, gyro) = imu(&st);
+        assert_eq!((ts, gyro), (8003, [0; 3]));
+        assert_eq!(accel, [0, 0, 16384], "gravity stays");
+        assert!(!st.neutralize_gyro(), "already still");
+        let fifty_min = std::time::Duration::from_secs(50 * 60);
+        st.apply_rich(motion([100, 0, 0], [0, 10000, 0]), t0() + ms(8) + fifty_min);
+        assert_eq!(imu(&st).0, 8003 + 3_000_000_000);
+    }
+
+    /// A different controller taking the pad drops the last one's raw report and motion, and
+    /// the IMU timestamp moves so the zeroed block reads as new.
+    #[test]
+    fn a_reclaimed_pad_drops_raw_and_motion() {
+        let mut st = TritonState::neutral();
+        st.apply_rich(hid_report(&[0x42, 0x11, 0x22]), t0());
+        st.apply_rich(motion([1000, 0, 0], [0, 10000, 0]), t0());
+        st.clear_rich();
+        let (ts, accel, gyro) = imu(&st);
+        assert_eq!((ts, accel, gyro), (2, [0; 3], [0; 3]));
+    }
+
+    /// A raw-fed pad presents the physical pad's own report: motion never overwrites it.
+    #[test]
+    fn a_raw_report_wins_over_motion() {
+        let mut seq = 0;
+        let mut st = TritonState::neutral();
+        st.apply_rich(hid_report(&[0x42, 0x11, 0x22]), t0());
+        st.apply_rich(motion([1000, 1000, 1000], [0, 10000, 0]), t0());
+        let (r, len) = st.report(&mut seq, t0());
+        assert_eq!((len, &r[..3]), (3, &[0x42, 0x11, 0x22][..]));
     }
 
     #[test]
