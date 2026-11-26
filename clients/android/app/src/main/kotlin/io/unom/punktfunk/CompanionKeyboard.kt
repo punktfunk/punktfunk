@@ -22,11 +22,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.keyVk
 
 /*
@@ -34,7 +36,7 @@ import io.unom.punktfunk.kit.keyVk
  * ours on the lower screen. An IME cannot show on the second display's unfocusable window, and a
  * focusable window would take the handheld's buttons off the stream, so each key goes to the
  * host as a virtual key — the host's own layout decides what it types, as for a physical
- * keyboard. A modifier latches: held on the host until the next key lifts or a second tap.
+ * keyboard. The stream's key row ([KeyRow]) shares the latch and the cap.
  */
 
 /** One edge on the wire; down and up apart, so a held key repeats on the host. */
@@ -68,22 +70,111 @@ internal val KEY_ROWS: List<List<Key>> = listOf(
     ),
 )
 
+/** The stream's key row ([KeyRow]): the keys a phone's keyboard lacks. */
+internal val KEY_ROW: List<Key> = listOf(
+    k("Esc"), k("Tab"), mod("Ctrl"), mod("Alt"), mod("Shift"), mod("Win"),
+    k("←", 0x25), k("↓", 0x28), k("↑", 0x26), k("→", 0x27),
+    k("Del"), k("Home"), k("End"), k("PgUp", 0x21), k("PgDn", 0x22),
+) + F_ROW
+
+/** The key that types [c] unshifted in the US order of [KEY_ROWS]; `null` for one it lacks. */
+internal fun typedVk(c: Char): Int? = when (c) {
+    ' ' -> 0x20
+    '\n' -> 0x0D
+    else -> KEY_ROWS.flatten().firstOrNull { it.legend.singleOrNull() == c.lowercaseChar() }?.vk
+}
+
+/**
+ * Latched modifiers over [sink]. A modifier goes down at its press and up on a second press,
+ * after the next other key lifts, or at [release]. Whoever owns a latch releases it when its keys
+ * leave, so the host never keeps one. [latched] is Compose state, which lights a held cap.
+ */
+internal class KeyLatch(private val sink: KeySink) {
+    var latched by mutableStateOf(emptySet<Int>())
+        private set
+
+    fun press(key: Key) {
+        when {
+            !key.modifier -> sink.key(key.vk, true)
+            key.vk in latched -> {
+                sink.key(key.vk, false)
+                latched = latched - key.vk
+            }
+            else -> {
+                sink.key(key.vk, true)
+                latched = latched + key.vk
+            }
+        }
+    }
+
+    fun lift(key: Key) {
+        if (key.modifier) return
+        sink.key(key.vk, false)
+        release()
+    }
+
+    fun release() {
+        latched.forEach { sink.key(it, false) }
+        latched = emptySet()
+    }
+
+    /**
+     * [text] typed on another keyboard while a modifier is latched: one character with a key
+     * ([typedVk]) goes down and up under the modifiers, anything else to [asText] once they are up.
+     */
+    fun type(text: String, asText: (String) -> Unit) {
+        val vk = text.singleOrNull()?.let(::typedVk)
+        if (vk != null) {
+            sink.key(vk, true)
+            sink.key(vk, false)
+        }
+        release()
+        if (vk == null) asText(text)
+    }
+}
+
+/**
+ * One key of the stream's key row under a finger. The row scrolls, so a key cannot go down at
+ * the touch: a tap sends it down and up, and a long press holds it down until [end], so the
+ * host repeats it. A modifier latches either way.
+ */
+internal class RowKey(private val latch: KeyLatch, private val key: Key) {
+    private var held = false
+
+    fun tap() {
+        latch.press(key)
+        latch.lift(key)
+    }
+
+    fun longPress() {
+        if (key.modifier) {
+            tap()
+        } else {
+            latch.press(key)
+            held = true
+        }
+    }
+
+    /** The finger is gone, lifted or cancelled: a held key comes up. */
+    fun end() {
+        if (!held) return
+        held = false
+        latch.lift(key)
+    }
+}
+
 /** The page needs this much width for the function row; below it the five rows stand alone. */
 private val F_ROW_WIDTH = 560.dp
 
 /**
- * The key grid. [sink] takes every edge. Latched modifiers go down at the tap and up after the
- * next key's lift, on a second tap, or when the page leaves — the host never keeps one.
+ * The key grid. [sink] takes every edge; a key goes down at the touch and up at the lift, and the
+ * page's [KeyLatch] lets every modifier go when the page leaves.
  */
 @Composable
 internal fun CompanionKeyboard(sink: KeySink, haptics: ConsoleHaptics, modifier: Modifier = Modifier) {
     val out by rememberUpdatedState(sink)
-    var latched by remember { mutableStateOf(setOf<Int>()) }
-    fun releaseLatched() {
-        latched.forEach { out.key(it, false) }
-        latched = emptySet()
-    }
-    DisposableEffect(Unit) { onDispose { releaseLatched() } }
+    val latch = remember { KeyLatch { vk, down -> out.key(vk, down) } }
+    DisposableEffect(latch) { onDispose { latch.release() } }
     BoxWithConstraints(modifier.fillMaxSize()) {
         val rows = if (maxWidth >= F_ROW_WIDTH) listOf(F_ROW) + KEY_ROWS else KEY_ROWS
         Column(Modifier.fillMaxSize().padding(start = 4.dp, end = 12.dp, bottom = 12.dp)) {
@@ -92,28 +183,18 @@ internal fun CompanionKeyboard(sink: KeySink, haptics: ConsoleHaptics, modifier:
                     for (key in row) {
                         KeyCap(
                             key,
-                            armed = key.modifier && key.vk in latched,
-                            modifier = Modifier.weight(key.weight).fillMaxHeight().padding(2.dp),
-                            onDown = {
-                                haptics.tick()
-                                if (key.modifier) {
-                                    if (key.vk in latched) {
-                                        out.key(key.vk, false)
-                                        latched = latched - key.vk
-                                    } else {
-                                        out.key(key.vk, true)
-                                        latched = latched + key.vk
-                                    }
-                                } else {
-                                    out.key(key.vk, true)
-                                }
-                            },
-                            onUp = {
-                                if (!key.modifier) {
-                                    out.key(key.vk, false)
-                                    releaseLatched()
-                                }
-                            },
+                            armed = key.vk in latch.latched,
+                            modifier = Modifier.weight(key.weight).fillMaxHeight().padding(2.dp)
+                                .pointerInput(key) {
+                                    detectTapGestures(
+                                        onPress = {
+                                            haptics.tick()
+                                            latch.press(key)
+                                            tryAwaitRelease()
+                                            latch.lift(key)
+                                        },
+                                    )
+                                },
                         )
                     }
                 }
@@ -122,29 +203,19 @@ internal fun CompanionKeyboard(sink: KeySink, haptics: ConsoleHaptics, modifier:
     }
 }
 
+/** One key's cap, lit while [armed]. The gesture is the caller's, in [modifier]. */
 @Composable
-private fun KeyCap(key: Key, armed: Boolean, modifier: Modifier, onDown: () -> Unit, onUp: () -> Unit) {
+internal fun KeyCap(key: Key, armed: Boolean, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
-    val down by rememberUpdatedState(onDown)
-    val up by rememberUpdatedState(onUp)
+    val held = stringResource(R.string.android_key_held_a11y)
     Surface(
         shape = MaterialTheme.shapes.small,
         color = if (armed) scheme.primaryContainer else scheme.surfaceVariant,
         contentColor = if (armed) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
-        modifier = modifier
-            .semantics {
-                role = Role.Button
-                stateDescription = if (armed) "held" else ""
-            }
-            .pointerInput(key) {
-                detectTapGestures(
-                    onPress = {
-                        down()
-                        tryAwaitRelease()
-                        up()
-                    },
-                )
-            },
+        modifier = modifier.semantics {
+            role = Role.Button
+            stateDescription = if (armed) held else ""
+        },
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(key.legend, style = MaterialTheme.typography.labelLarge, maxLines = 1)

@@ -1,14 +1,19 @@
 //! `/api/v1/actions` — discovery of what this host can run, filtered per caller, and the
-//! id-only invoke. See `design/host-actions.md`. Built-ins: four power actions and
-//! `display.next`; later host- or plugin-provided actions reuse these two routes.
+//! id-only invoke. See `design/host-actions.md`. Built-ins: four power actions, `host.update`
+//! and `display.next`; later host- or plugin-provided actions reuse these two routes.
 //!
 //! Admin bearer: both routes, everything permitted. Paired streaming cert: both routes; a
-//! power invoke re-reads `effective(fp, now)` and demands `GRANT_POWER`, `display.next`
-//! demands the caller's own live session and `GRANT_DISPLAY`. Plugin token: neither.
+//! power invoke re-reads `effective(fp, now)` and demands `GRANT_POWER`, `host.update` the
+//! manage grant (`GRANT_MANAGE_GAMES`), `display.next` the caller's own live session and
+//! `GRANT_DISPLAY`. Plugin token: neither.
 //!
 //! Invoke is a trigger: the id selects a fixed host-side behavior, the body is empty, and no
 //! request field reaches the privileged path. Power on accept: `202` → typed `HostPower`
-//! close of every session → ~1 s so the reply flushes → act. `display.next` ends nothing.
+//! close of every session → ~1 s so the reply flushes → act. `host.update` installs the
+//! signed release the host's own check offers. `display.next` ends nothing.
+//!
+//! The manage grant covers upkeep by action id. It never covers pairing, access, plugins,
+//! hooks or host settings: those widen access or run new code, and stay the operator's.
 
 use super::auth::{AuthLane, PairedDevice};
 use super::shared::*;
@@ -21,6 +26,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Clone, Copy)]
 enum Verb {
     Power(PowerVerb),
+    /// Start the update one click installs ([`invoke_update`]).
+    Update,
     /// Move the streamed-monitor pin to the next head ([`next_monitor`]).
     DisplayNext,
 }
@@ -37,7 +44,7 @@ struct Builtin {
     verb: Verb,
 }
 
-const BUILTINS: [Builtin; 5] = [
+const BUILTINS: [Builtin; 6] = [
     Builtin {
         id: "power.sleep",
         title: "Sleep host",
@@ -65,6 +72,13 @@ const BUILTINS: [Builtin; 5] = [
         danger: true,
         group: "host",
         verb: Verb::Power(PowerVerb::Restart),
+    },
+    Builtin {
+        id: "host.update",
+        title: "Update host",
+        danger: true,
+        group: "host",
+        verb: Verb::Update,
     },
     Builtin {
         id: "display.next",
@@ -95,7 +109,7 @@ pub(crate) struct ActionInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable_code: Option<String>,
     /// Whether THIS caller may invoke it. Admin: always. Cert: the live `GRANT_POWER` bit for
-    /// power, its own live session for `display.next`.
+    /// power, the manage grant for `host.update`, its own live session for `display.next`.
     pub permitted: bool,
 }
 
@@ -146,11 +160,25 @@ fn display_permitted(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> bool {
     }
 }
 
+/// Admin always; a paired cert iff its live mask carries the manage grant
+/// ([`punktfunk_core::quic::GRANT_MANAGE_GAMES`]). Any other lane: no.
+fn manage_permitted(st: &MgmtState, lane: AuthLane, fp: Option<&str>) -> bool {
+    match lane {
+        AuthLane::Admin => true,
+        AuthLane::Cert => {
+            super::downloads::granted(st, fp, punktfunk_core::quic::GRANT_MANAGE_GAMES)
+        }
+        AuthLane::Plugin | AuthLane::Person | AuthLane::PersonVouched | AuthLane::Public => false,
+    }
+}
+
 /// Platform probe per verb. Blocking (logind D-Bus, compositor IPC): call it off the worker.
 fn probe(verb: Verb) -> Availability {
     match verb {
         Verb::Power(v) if crate::power::supported() => crate::power::probe(v),
         Verb::Power(_) => Availability::refused(POWER_UNSUPPORTED.0, POWER_UNSUPPORTED.1),
+        // Listed only while an update is on offer ([`list_actions`]), and then it can run.
+        Verb::Update => Availability::yes(),
         Verb::DisplayNext => match next_monitor_target() {
             Ok(_) => Availability::yes(),
             Err((code, reason)) => Availability::refused(code, reason),
@@ -256,8 +284,10 @@ fn host_monitors() -> anyhow::Result<Vec<crate::vdisplay::monitors::PhysicalMoni
 ///
 /// Per-caller view: platform availability plus whether this caller may invoke each one.
 /// Admin: everything permitted. Paired cert: power per the device's live Host-power grant,
-/// `display.next` while the device streams a session of its own and may choose its screen.
-/// Unknown ids still render with the server-supplied title.
+/// `host.update` per its Manage-host grant, `display.next` while the device streams a session
+/// of its own and may choose its screen. `host.update` is listed only while a newer release is
+/// out and this install updates in one click. Unknown ids still render with the
+/// server-supplied title.
 #[utoipa::path(
     get,
     path = "/actions",
@@ -275,12 +305,16 @@ pub(crate) async fn list_actions(
 ) -> Result<Json<ActionList>, Response> {
     let fp = device.as_ref().map(|e| e.0 .0.as_str());
     let power = power_permitted(&st, lane, fp);
+    let manage = manage_permitted(&st, lane, fp);
     let display = display_permitted(&st, lane, fp);
+    let update_offered = super::update::one_click_offer(&st).await.is_some();
     // D-Bus and compositor round trips — off the async worker, all of them in one hop.
     let probed = blocking("action_check", || BUILTINS.map(|b| probe(b.verb))).await?;
     let actions = BUILTINS
         .iter()
         .zip(probed)
+        // No row for an update this host can't start: none is out, or it updates by a command.
+        .filter(|(b, _)| update_offered || !matches!(b.verb, Verb::Update))
         .map(|(b, avail)| ActionInfo {
             id: b.id.into(),
             title: b.title.into(),
@@ -291,6 +325,7 @@ pub(crate) async fn list_actions(
             unavailable_code: avail.code.map(str::to_string),
             permitted: match b.verb {
                 Verb::Power(_) => power,
+                Verb::Update => manage,
                 Verb::DisplayNext => display,
             },
         })
@@ -303,8 +338,8 @@ pub(crate) async fn list_actions(
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Once per (fingerprint, action) per boot — a retrying client must not turn the host log
-/// into the DoS (`GrantDrops`).
-fn log_denial_once(fp: &str, action: &str, device: &str) {
+/// into the DoS (`GrantDrops`). `grant` names what the device's access lacks.
+fn log_denial_once(fp: &str, action: &str, device: &str, grant: &str) {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
     static LOGGED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
@@ -317,8 +352,9 @@ fn log_denial_once(fp: &str, action: &str, device: &str) {
             device,
             fingerprint = fp,
             action,
-            "denied a host action — this device's access lacks the Host power grant \
-             (further denials of this pair are silent this boot)"
+            grant,
+            "host action denied: the device's access lacks the grant (further denials of \
+             this pair are silent this boot)"
         );
     }
 }
@@ -330,6 +366,9 @@ fn log_denial_once(fp: &str, action: &str, device: &str) {
 /// flushes, then act; paired-cert callers need Host power and are `409` while another
 /// device's session is live or a seat host doesn't answer, the admin console never is. One
 /// power action at a time.
+/// `host.update` answers `202` and starts the update the host's own check offers, which ends
+/// every stream when the host restarts; a paired cert needs Manage host and is `409` while
+/// another device's session is live. Progress and outcome are on `GET /update/status`.
 /// `display.next` answers `200` with the monitor now streamed and ends nothing; a paired
 /// cert needs a live session of its own and the Choose-its-screen grant.
 #[utoipa::path(
@@ -337,13 +376,13 @@ fn log_denial_once(fp: &str, action: &str, device: &str) {
     path = "/actions/{id}",
     tag = "actions",
     operation_id = "invokeAction",
-    params(("id" = String, Path, description = "Action id (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `display.next`)")),
+    params(("id" = String, Path, description = "Action id (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `host.update`, `display.next`)")),
     responses(
         (status = OK, description = "Done (`display.next`): the monitor streamed from now on", body = ActionOutcome),
-        (status = ACCEPTED, description = "Accepted — sessions are being ended and the action follows in about a second"),
-        (status = FORBIDDEN, description = "This caller's access does not include this action (no Host power grant; for `display.next`, no live session of its own or no Choose-its-screen grant)", body = ApiError),
+        (status = ACCEPTED, description = "Accepted — sessions are being ended and the action follows in about a second; for `host.update`, the update has started"),
+        (status = FORBIDDEN, description = "This caller's access does not include this action (no Host power grant; for `host.update`, no Manage host grant; for `display.next`, no live session of its own or no Choose-its-screen grant)", body = ApiError),
         (status = NOT_FOUND, description = "Unknown action id", body = ApiError),
-        (status = CONFLICT, description = "Refused: an action is already in flight, another device's session is live or a seat host doesn't answer (cert lane), or the platform said no (a foreign sleep inhibitor, a second local user, a single monitor, …)", body = ApiError),
+        (status = CONFLICT, description = "Refused: an action is already in flight, another device's session is live or a seat host doesn't answer (cert lane), the platform said no (a foreign sleep inhibitor, a second local user, a single monitor, …), or `host.update` has nothing to install or no one-click update on this install", body = ApiError),
         (status = NOT_IMPLEMENTED, description = "This host platform has no executor for it (macOS host)", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "`display.next` could not store the new monitor", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
@@ -373,11 +412,12 @@ pub(crate) async fn invoke_action(
     });
     let verb = match builtin.verb {
         Verb::Power(verb) => verb,
+        Verb::Update => return invoke_update(&st, builtin.id, lane, fp, device).await,
         Verb::DisplayNext => return invoke_display_next(&st, builtin.id, lane, fp, device).await,
     };
     if !power_permitted(&st, lane, fp) {
         let device_name = device.as_ref().map(|d| d.name.as_str()).unwrap_or("");
-        log_denial_once(fp.unwrap_or(""), builtin.id, device_name);
+        log_denial_once(fp.unwrap_or(""), builtin.id, device_name, "Host power");
         return api_error_coded(
             StatusCode::FORBIDDEN,
             "device_not_allowed_host_power",
@@ -389,29 +429,8 @@ pub(crate) async fn invoke_action(
         let (code, text) = POWER_UNSUPPORTED;
         return api_error_coded(StatusCode::NOT_IMPLEMENTED, code, text);
     }
-    // Another device's LIVE session blocks a cert-lane invoke; your own does not. Admin is
-    // never blocked. A GameStream stream is always another device: its cert is never native.
-    // On a box with seats, a stream on any seat host counts too.
-    if lane == AuthLane::Cert {
-        let fp_hex = fp.unwrap_or("").to_string();
-        let others_native = crate::session_status::other_client_live(&fp_hex);
-        let gamestream = st.app.streaming.load(Ordering::SeqCst);
-        let on_seat = match blocking("seat_check", move || {
-            crate::seats::other_client_on_a_seat(&fp_hex)
-        })
-        .await
-        {
-            Ok(busy) => busy,
-            Err(resp) => return resp,
-        };
-        if others_native || gamestream || on_seat {
-            return api_error_coded(
-                StatusCode::CONFLICT,
-                "host_power_busy_other_device",
-                "Another device is streaming from this host, or a seat that isn't answering might \
-                 be. Try again in a moment.",
-            );
-        }
+    if let Some(busy) = busy_with_another_device(&st, lane, fp).await {
+        return busy;
     }
     let avail = match blocking("power_check", move || crate::power::probe(verb)).await {
         Ok(avail) => avail,
@@ -485,6 +504,78 @@ pub(crate) async fn invoke_action(
         }
         crate::power::set_closing(false);
         IN_FLIGHT.store(false, Ordering::SeqCst);
+    });
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// The `409` for a paired cert while another device streams, else `None`. The caller's own
+/// session never blocks it, and the admin lane is never blocked. A GameStream stream is always
+/// another device: its cert is never native. On a box with seats, a stream on any seat host
+/// counts, and so does a seat that doesn't answer.
+async fn busy_with_another_device(
+    st: &MgmtState,
+    lane: AuthLane,
+    fp: Option<&str>,
+) -> Option<Response> {
+    if lane != AuthLane::Cert {
+        return None;
+    }
+    let fp_hex = fp.unwrap_or("").to_string();
+    let others_native = crate::session_status::other_client_live(&fp_hex);
+    let gamestream = st.app.streaming.load(Ordering::SeqCst);
+    let on_seat = match blocking("seat_check", move || {
+        crate::seats::other_client_on_a_seat(&fp_hex)
+    })
+    .await
+    {
+        Ok(busy) => busy,
+        Err(resp) => return Some(resp),
+    };
+    (others_native || gamestream || on_seat).then(|| {
+        api_error_coded(
+            StatusCode::CONFLICT,
+            "host_power_busy_other_device",
+            "Another device is streaming from this host, or a seat that isn't answering might \
+             be. Try again in a moment.",
+        )
+    })
+}
+
+/// `host.update`: start the update one click installs, as **Update now** does in the console.
+/// The host restarts at the end, which ends every stream, so a paired cert is refused while
+/// another device streams. The update job is its own in-flight guard, not [`IN_FLIGHT`].
+async fn invoke_update(
+    st: &MgmtState,
+    id: &'static str,
+    lane: AuthLane,
+    fp: Option<&str>,
+    device: Option<crate::events::DeviceRef>,
+) -> Response {
+    if !manage_permitted(st, lane, fp) {
+        let device_name = device.as_ref().map(|d| d.name.as_str()).unwrap_or("");
+        log_denial_once(fp.unwrap_or(""), id, device_name, "Manage host");
+        return api_error_coded(
+            StatusCode::FORBIDDEN,
+            "device_not_allowed_to_manage_host",
+            "This device's access doesn't include managing the host — ask the host's owner to \
+             turn on the Manage host grant",
+        );
+    }
+    if let Some(busy) = busy_with_another_device(st, lane, fp).await {
+        return busy;
+    }
+    if let Some(refusal) = super::update::start_for_action(st).await {
+        return refusal;
+    }
+    let invoker = device
+        .as_ref()
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| "the host console".into());
+    tracing::info!(action = id, invoked_by = %invoker, "host update started");
+    crate::events::emit(crate::events::EventKind::ActionInvoked {
+        id: id.into(),
+        device,
+        outcome: "accepted".into(),
     });
     StatusCode::ACCEPTED.into_response()
 }

@@ -210,7 +210,7 @@
 	"apierr_rdp_firewall_restore": "No se pudieron restaurar las reglas de firewall de Escritorio remoto.",
 	"apierr_rdp_listener_off": "No se pudo volver a desactivar Escritorio remoto.",
 	"apierr_rdp_listener_on": "No se pudo activar Escritorio remoto.",
-	"apierr_rdp_pin_changed": "El certificado de Escritorio remoto ha cambiado, así que los puestos no pueden iniciar sesión. Desactiva y vuelve a activar los puestos en Perfiles → Puestos para registrar el nuevo.",
+	"apierr_rdp_pin_changed": "Escritorio remoto respondió con un certificado que no es de este host, así que los puestos no pueden iniciar sesión. Cierra cualquier otro programa que use el puerto de Escritorio remoto y vuelve a intentarlo.",
 	"apierr_rdp_trust": "No se pudo registrar el certificado de Escritorio remoto de este host. Comprueba que Escritorio remoto esté en ejecución y vuelve a intentarlo.",
 	"apierr_recording_not_deleted": "No se pudo eliminar la grabación",
 	"apierr_recording_not_read": "No se pudo leer la grabación",

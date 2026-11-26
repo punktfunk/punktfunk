@@ -137,7 +137,9 @@ jobs:
             packaging/winget/server/handler.mjs "$DEST:unom-winget/"
           $SSH "$DEST" 'set -eu
             cd ~/unom-winget
-            docker compose -f compose.production.yml up -d
+            # Recreate: the server imports handler.mjs once, and an unchanged compose file
+            # would leave the running container on the old code.
+            docker compose -f compose.production.yml up -d --force-recreate
             sleep 3
             curl -fsS http://127.0.0.1:3240/healthz \
               || echo "NOTE: no catalogue yet - publish a stable tag to populate it"'

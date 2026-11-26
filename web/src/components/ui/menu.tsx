@@ -224,10 +224,13 @@ const InlineAction: FC<{
 				disabled={disabled || a.disabled}
 				onValueChange={a.onChange}
 			>
+				{/* `size`, not `h-8`: the trigger's own height is a `data-[size]` variant a plain
+				    class cannot override, and a row's buttons are `sm`. */}
 				<SelectTrigger
+					size="sm"
 					aria-label={a.label}
 					title={a.label}
-					className="h-8 w-auto gap-1 text-sm"
+					className="w-auto gap-1 text-sm"
 				>
 					<SelectValue />
 				</SelectTrigger>

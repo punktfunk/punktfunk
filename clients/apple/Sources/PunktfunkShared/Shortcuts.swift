@@ -587,6 +587,7 @@ extension SlotId {
         case "power.reboot": L10n.hostPowerReboot
         case "power.shutdown": L10n.hostPowerShutdown
         case "host.restart": L10n.hostPowerRestartService
+        case "host.update": L10n.hostactionUpdate
         case "display.next": L10n.hostactionDisplayNext
         default: nil
         }

@@ -210,7 +210,7 @@
 	"apierr_rdp_firewall_restore": "Impossible de rétablir les règles de pare-feu de Bureau à distance.",
 	"apierr_rdp_listener_off": "Impossible de désactiver de nouveau Bureau à distance.",
 	"apierr_rdp_listener_on": "Impossible d’activer Bureau à distance.",
-	"apierr_rdp_pin_changed": "Le certificat de Bureau à distance a changé, donc les postes ne peuvent plus se connecter. Désactivez puis réactivez les postes sous Profils → Postes pour enregistrer le nouveau.",
+	"apierr_rdp_pin_changed": "Bureau à distance a répondu avec un certificat qui n’est pas celui de cet hôte, donc les postes ne peuvent plus se connecter. Fermez tout autre programme qui utilise le port de Bureau à distance, puis réessayez.",
 	"apierr_rdp_trust": "Impossible d’enregistrer le certificat Bureau à distance de cet hôte. Vérifiez que Bureau à distance est en cours d’exécution, puis réessayez.",
 	"apierr_recording_not_deleted": "Impossible de supprimer l’enregistrement",
 	"apierr_recording_not_read": "Impossible de lire l’enregistrement",

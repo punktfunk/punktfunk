@@ -467,6 +467,10 @@ impl Seats for SessionSeats {
         ))
     }
 
+    fn sent_to(&self, _: &str) -> Option<String> {
+        None
+    }
+
     fn call(&self, target: &Target, call: Forwarded) -> Answer {
         self.calls
             .lock()

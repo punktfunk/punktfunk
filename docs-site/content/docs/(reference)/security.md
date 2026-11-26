@@ -123,6 +123,13 @@ one. The host streams the composed desktop, so a window hidden from recording to
 Run the Windows host on a gaming or dedicated PC, not on your work laptop or the box with your
 password vault.
 
+### Windows seats can change Steam's files
+
+Steam's installer gives every Windows account on the PC full control of Steam's folder. A seat's
+account can change Steam's own files there. It can also add a non-Steam game to the PC's Steam,
+which the other seats then find in theirs. Give a Windows seat only to someone you would let
+install software on the PC.
+
 ### The Linux host runs as your user
 
 The Linux host runs in your desktop session as your own account, not root, and its web console
@@ -152,6 +159,28 @@ only root can change.
   **Seats update your games** off to keep your libraries read-only to seats.
 - **Your library.** Every seat gets a read-only copy of your game library, so a game on a seat
   can read it, commands and prep steps of your custom titles included. It can't change it.
+
+### What the box's host can reach
+
+With **Reachable without logging in** on, the host and console that face the network run as
+`punktfunk`. Taken over, they reach what the console password reaches:
+
+- **The owner's account and every profile with a desktop of its own.** The console sets hooks,
+  plugins and custom titles there, and they run as that account. A host without **Reachable
+  without logging in** runs as the owner's account outright.
+- **An existing account, in two cases.** With its password, typed after the takeover
+  ([below](#only-its-person-opens-an-existing-linux-account)). And while that person has
+  [their own console](/docs/own-account) open: the box's console carries that sign-in, for 12
+  hours at most.
+
+Turning **Reachable without logging in** off doesn't undo a takeover. The box's identity, paired
+devices and console password go back to the owner's account as they are. To start clean,
+[remove the host](/docs/uninstall#linux-hosts) with its config directory, install it and pair
+again.
+
+On SteamOS the account that installed Punktfunk owns the programs every seat runs, in
+`/opt/punktfunk/host`. That account can run code as each seat's user, an existing account
+included.
 
 ### A profile on an existing account runs as that person
 

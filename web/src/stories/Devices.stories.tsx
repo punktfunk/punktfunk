@@ -8,6 +8,7 @@ import {
 } from "@/sections/Devices/PairedDevices";
 import { type NativePairing, PairSheet } from "@/sections/Devices/PairSheet";
 import { PendingRow, WaitingRow } from "@/sections/Devices/PendingDevices";
+import { pairedRows } from "@/sections/Devices/pairedRows";
 import { DevicesView } from "@/sections/Devices/view";
 import {
 	accessNowUnix,
@@ -23,22 +24,9 @@ const noop = () => {};
 const idle = { isLoading: false, error: null, refetch: noop };
 const listed = { loading: false, empty: false, refetch: noop };
 
-/** The fixture clients as rows, access fields carried along (what the container maps). */
-const nativeRows: PairedRow[] = nativeClients.map((c) => ({
-	protocol: "native" as const,
-	fingerprint: c.fingerprint,
-	name: c.name,
-	accessLevel: c.access_level,
-	grants: c.grants,
-	expiresUnix: c.expires_unix,
-}));
-
-const moonlightRows: PairedRow[] = pairedClients.map((c) => ({
-	protocol: "moonlight" as const,
-	fingerprint: c.fingerprint,
-	name: c.label ?? c.subject ?? "",
-	label: c.label,
-}));
+/** The fixture clients as rows, mapped the way the container maps them. */
+const nativeRows: PairedRow[] = pairedRows(nativeClients, undefined);
+const moonlightRows: PairedRow[] = pairedRows(undefined, pairedClients);
 
 const pairedRow = (r: PairedRow, i: number) => (
 	<PairedRowView

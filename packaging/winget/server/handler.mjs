@@ -7,7 +7,8 @@
 //
 //   GET  /information                        server identity + declared capabilities
 //   POST /manifestSearch                     search; 204 when nothing matches
-//   GET  /packageManifests/{PackageIdentifier}   the full manifest (optional ?Version=)
+//   GET  /packageManifests/{PackageIdentifier}   the full manifest (optional ?Version=); 204
+//                                            for a package or version this source lacks
 //
 // Contract: documentation/WinGet-1.1.0.yaml in that repo. Every response is wrapped in `Data`
 // (ResponseObjectSchema). Note the spec's content-type key is literally `application/Json`; the
@@ -178,13 +179,15 @@ async function handle(request, data) {
     const pkg = data.packages.find(
       (p) => p.PackageIdentifier.toLowerCase() === id.toLowerCase(),
     );
-    if (!pkg) return error(404, `unknown PackageIdentifier '${id}'`);
+    // winget asks every source for an exact id this way and reads a 404 as a broken source, so a
+    // package or version this source lacks is 204: "nothing here", and the other sources answer.
+    if (!pkg) return noContent();
 
     const wanted = url.searchParams.get("Version");
     const versions = wanted
       ? pkg.Manifest.Versions.filter((v) => v.PackageVersion === wanted)
       : pkg.Manifest.Versions;
-    if (versions.length === 0) return error(404, `version '${wanted}' not found`);
+    if (versions.length === 0) return noContent();
 
     return json({ Data: { PackageIdentifier: pkg.Manifest.PackageIdentifier, Versions: versions } });
   }

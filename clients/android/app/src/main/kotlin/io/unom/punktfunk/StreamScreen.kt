@@ -929,6 +929,7 @@ fun StreamScreen(
                     // Real IME text path when the host types committed text (see KeyCaptureView).
                     v.textHandle =
                         if (NativeBridge.nativeTextInputSupported(handle)) handle else 0L
+                    v.keyLatch = peripherals.keyLatch
                     v.setOnCapturedPointerListener { _, ev ->
                         (ctx as? MainActivity)?.mouseForwarder?.onCapturedPointer(ev) ?: false
                     }
@@ -986,6 +987,10 @@ fun StreamScreen(
                     onShow = { launchHold = null },
                 )
             }
+        }
+        // Over everything while the summoned keyboard is up. A TV's remote cannot reach its keys.
+        if (!isTv && keyCapture?.imeShown == true) {
+            KeyRow(peripherals.keyLatch, haptics) { keyCapture?.settleIme() }
         }
     }
 }
@@ -1247,11 +1252,27 @@ internal class KeyCaptureView(context: Context) : View(context) {
     /** The session handle when the host types committed text; `0` = VK-only fallback. */
     var textHandle: Long = 0L
 
-    /** Whether [setImeVisible] last showed the IME — for toggle-style callers (remote pointer). */
-    var imeShown = false
+    /** The session's latched modifiers, which typing on the text path goes under ([HostTextConnection]). */
+    var keyLatch: KeyLatch? = null
+
+    /**
+     * Whether [setImeVisible] last showed the IME — for toggle-style callers (remote pointer) and
+     * the key row. Compose state, so the row follows it.
+     */
+    var imeShown by mutableStateOf(false)
         private set
 
     override fun onCheckIsTextEditor(): Boolean = imeShown
+
+    /**
+     * The IME starts over on a fresh, empty connection, its composition left standing on the host
+     * as typed. A key from outside the IME moves the host's caret, so the next diff must not reach
+     * back past it.
+     */
+    fun settleIme() {
+        if (!imeShown || textHandle == 0L) return
+        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.restartInput(this)
+    }
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
         // Only an editor while the user has SUMMONED the keyboard (gesture / remote toggle).
@@ -1265,7 +1286,7 @@ internal class KeyCaptureView(context: Context) : View(context) {
         return if (textHandle != 0L) {
             outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
                 InputType.TYPE_TEXT_FLAG_AUTO_CORRECT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            HostTextConnection(this, textHandle)
+            HostTextConnection(this, textHandle, keyLatch)
         } else {
             outAttrs.inputType = InputType.TYPE_NULL
             BaseInputConnection(this, false)
@@ -1324,15 +1345,20 @@ internal class KeyCaptureView(context: Context) : View(context) {
  * Known approximation: diff lengths are counted in Unicode scalars, assuming one host Backspace
  * deletes one scalar — true for the composition text IMEs actually produce (emoji and other
  * multi-unit graphemes commit directly rather than composing).
+ *
+ * Committed text carries no modifiers. While [latch] holds one, what the IME types goes through
+ * [KeyLatch.type] instead ([underLatch]).
  */
 private class HostTextConnection(
-    view: KeyCaptureView,
+    private val view: KeyCaptureView,
     private val handle: Long,
+    private val latch: KeyLatch?,
 ) : BaseInputConnection(view, true) {
     /** What the host currently shows of the active composition ("" = none). */
     private var sentComposition = ""
 
     override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
+        if (underLatch(text)) return true
         retype(text.toString())
         sentComposition = ""
         val ok = super.commitText(text, newCursorPosition)
@@ -1341,8 +1367,21 @@ private class HostTextConnection(
     }
 
     override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
+        if (underLatch(text)) return true
         retype(text.toString())
         return super.setComposingText(text, newCursorPosition)
+    }
+
+    /**
+     * [text] typed under a latched modifier goes as a key press, or as text once the latch is up.
+     * The mirror never takes it and the IME starts over, so neither keeps a character the host
+     * never showed. The row settled the IME at the latch, so [text] is this keystroke alone.
+     */
+    private fun underLatch(text: CharSequence): Boolean {
+        val held = latch?.takeIf { it.latched.isNotEmpty() && text.isNotEmpty() } ?: return false
+        held.type(text.toString(), ::sendText)
+        view.settleIme()
+        return true
     }
 
     override fun finishComposingText(): Boolean {
@@ -1402,9 +1441,11 @@ private class HostTextConnection(
         if (chunk.isNotEmpty()) NativeBridge.nativeSendText(handle, chunk.toString())
     }
 
+    /** One key down and up: the next key for a latched modifier, which lets go after it. */
     private fun tapVk(vk: Int) {
         NativeBridge.nativeSendKey(handle, vk, true, 0)
         NativeBridge.nativeSendKey(handle, vk, false, 0)
+        latch?.release()
     }
 
     /** Bound the mirror buffer: once nothing is composing, old text serves no purpose. */

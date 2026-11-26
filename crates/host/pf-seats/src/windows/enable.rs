@@ -1,6 +1,7 @@
 //! Turns seats on and off on Windows. This covers the prerequisite checks, the seat display
 //! driver, the Remote Desktop listener and its firewall scope, the seat listener, and the pinned
-//! RDP certificate.
+//! RDP certificate. Turning on pins the leaf Remote Desktop presents only when the machine holds
+//! that certificate in its store (`rdp.rs`).
 //!
 //! - [`checks`] only reads.
 //! - [`turn_on`] creates the Seats key and records in it what it changed (`ListenerWasOff`,
@@ -15,10 +16,12 @@
 use super::backend::{seats_enabled, server_edition, session_wrapper, ENABLING, SEATS_KEY};
 use super::doctor::DriverState;
 use super::keeper;
+use super::rdp;
 use super::switch::{self, Recorded, Step};
 use super::util::{backend_error, WinResult};
 use crate::backend::BackendError;
 use crate::ipc::Diagnostic;
+use crate::persistence::SecretRoot;
 use pf_paths::POWERSHELL;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -69,7 +72,7 @@ const QUERY_LIMIT: Duration = Duration::from_secs(180);
 pub(super) const DOCTOR_BUDGET: Duration = Duration::from_secs(240);
 const INSTALL_LIMIT: Duration = Duration::from_secs(900);
 const TOOL_LIMIT: Duration = Duration::from_secs(300);
-/// How long the keeper's `trust` may run; its own handshake gives up after 15 s.
+/// How long the keeper's `observe` may run; its own handshake gives up after 15 s.
 const KEEPER_LIMIT: Duration = Duration::from_secs(60);
 /// The role's install state, then licensing and a GPU as `0`/`1` flags, on the last line. A role
 /// the cmdlet can't read is `Unknown`, after the cmdlet's error. `Available`, a role not
@@ -426,12 +429,14 @@ pub(super) fn rdp_local_chosen() -> bool {
 }
 
 /// A local or Group Policy firewall rule, in any group, lets an address other than this PC's
-/// reach Remote Desktop ([`switch::reaches_rdp_from_network`]). For the doctor.
+/// reach Remote Desktop, or the seat listener while it is configured
+/// ([`switch::reaches_rdp_from_network`]). For the doctor.
 pub(super) fn rdp_reachable() -> bool {
+    let seat_listener = super::seat_listener::configured().then_some(keeper::SEAT_LISTENER_PORT);
     [FIREWALL_RULES, POLICY_RULES]
         .iter()
         .flat_map(|store| firewall_rules(store))
-        .any(|rule| switch::reaches_rdp_from_network(&rule))
+        .any(|rule| switch::reaches_rdp_from_network(&rule, seat_listener))
 }
 
 /// Narrows Remote Desktop's firewall rules again when the operator keeps Remote Desktop on this
@@ -958,9 +963,10 @@ fn powershell_lines(script: &str, limit: Duration) -> Result<Vec<String>, String
         .collect())
 }
 
-/// Record the leaf TermService presents, in place of an earlier one: turning seats on is the
-/// operator's yes to the certificate as it is now. The keeper observes it, since the handshake
-/// needs IronRDP, which the service doesn't link.
+/// Record the leaf TermService presents, in place of an earlier one, when the machine holds it
+/// ([`rdp::machine_pins`]). The keeper's `observe` reads the leaf, since the handshake needs
+/// IronRDP, which the service doesn't link. A leaf the machine doesn't hold refuses, and the
+/// log names it and the ones the machine holds.
 fn trust_rdp_certificate(host_path: &Path) -> WinResult<()> {
     let keeper = keeper::keeper_path(host_path);
     if !keeper.is_file() {
@@ -978,13 +984,23 @@ fn trust_rdp_certificate(host_path: &Path) -> WinResult<()> {
         }
         match pf_paths::run_within(
             Command::new(&keeper)
-                .args(["trust", "--replace"])
+                .arg("observe")
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped()),
             KEEPER_LIMIT,
         ) {
-            Ok(output) if output.status.success() => return Ok(()),
+            Ok(output) if output.status.success() => {
+                let printed = String::from_utf8_lossy(&output.stdout);
+                cause = match rdp::parse_pin(&printed) {
+                    Some(leaf) => match record_held(leaf) {
+                        Ok(()) => return Ok(()),
+                        Err(refused) => refused,
+                    },
+                    None => format!("keeper observe printed {:?}", printed.trim()),
+                };
+                break;
+            }
             // STATUS_DLL_NOT_FOUND: a fresh Windows Server has no Visual C++ runtime.
             Ok(output) if output.status.code() == Some(0xC000_0135_u32 as i32) => {
                 return Err(refuse(
@@ -1004,6 +1020,15 @@ fn trust_rdp_certificate(host_path: &Path) -> WinResult<()> {
         cause,
     )
     .said("rdp_trust"))
+}
+
+/// Store `leaf` as the pin, replacing any other, when the machine holds it. The pin goes to the
+/// service's own seat root, [`crate::persistence::default_root`]. `Err` is the cause for the log.
+fn record_held(leaf: [u8; 32]) -> Result<(), String> {
+    crate::pin::accept_leaf(leaf, &rdp::machine_pins())?;
+    let root = SecretRoot::open(crate::persistence::default_root())
+        .map_err(|error| format!("open the seat root: {error}"))?;
+    rdp::store_pin(&root, leaf, true).map_err(|error| error.to_string())
 }
 
 /// What a query may take: up to [`QUERY_LIMIT`], and none once `deadline` has passed.

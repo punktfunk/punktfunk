@@ -20,9 +20,12 @@ the same for sessions a seat's games left behind.
 loopback RDP session open. The supervisor hands it the seat's credentials on stdin, never on the
 command line. Run `punktfunk-seat-keeper trust` from an elevated prompt once, before the first
 seat: it records the RDP certificate the keeper will accept. Turning seats on does this too,
-and replaces an earlier record. Each seat start compares the certificate TermService presents
-now with the record; a change fails the seat with `rdp_pin_changed` until seats are turned
-off and on. The keeper's stderr goes to the seat's `host.log`.
+and replaces an earlier record. Either records a certificate only when the machine holds it:
+any certificate in `LocalMachine\Remote Desktop`, or the one whose SHA-1 thumbprint the
+`SSLCertificateSHA1Hash` of `RDP-Tcp` or `punktfunk-tcp` names, in `LocalMachine\My`. Each seat
+start compares the certificate TermService presents now with the record. A new certificate the
+machine holds becomes the record; any other fails the seat with `rdp_pin_changed`. The keeper's
+stderr goes to the seat's `host.log`.
 
 ### The seats group
 
@@ -138,10 +141,13 @@ A failed check changes nothing: the answer is 200 with `enabled: false` and the 
    off writes it back. With `allow_rdp_from_network` the inbound rules on port 3389 are
    enabled if they were off; Shadow stays as it is. The service limits them again each time
    it starts.
-4. Adds the seat listener `punktfunk-tcp`: a copy of `RDP-Tcp` on port 3390 whose sessions load
-   `pf_seat_audio.dll`, with port 3390 blocked from every address but loopback. The x64 build goes
-   to `System32\punktfunk` and the x86 build to `SysWOW64\punktfunk`. Every seat start brings
-   them up to date. Not on ARM64.
+4. Blocks port 3390 from every address but loopback with two firewall rules, then adds the seat
+   listener `punktfunk-tcp`: a copy of `RDP-Tcp` on port 3390 whose sessions load
+   `pf_seat_audio.dll`. The rules go first because TermService opens the port as soon as the
+   listener is written. When the rules can't be added the listener isn't written, a listener
+   already in place is disabled, and seats use port 3389. The x64 build goes to
+   `System32\punktfunk` and the x86 build to `SysWOW64\punktfunk`. Every seat start brings them
+   up to date. Not on ARM64.
 5. Records the Remote Desktop certificate, as `punktfunk-seat-keeper trust --replace` does.
 
 The keeper connects to 3390 when it listens, else to 3389. TermService opens and closes a listener

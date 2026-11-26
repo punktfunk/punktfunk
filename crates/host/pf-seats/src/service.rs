@@ -15,19 +15,20 @@
 //! seconds to start.
 //!
 //! A password check runs under the limits of [`crate::attempts`]. On Linux it also runs outside
-//! `ops`. A person's Linux row starts only through [`unlock`].
+//! `ops`. The accounts' failures are kept in [`PASSWORD_FAILURES`] across a restart. A person's
+//! Linux row starts only through [`unlock`].
 
 mod pads;
 mod unlock;
 
-use crate::attempts::{Attempts, Outcome, Target};
+use crate::attempts::{Attempts, Outcome, Saved, Target, Ticket, SAVED_BYTES};
 use crate::backend::{BackendError, PlatformBackend};
 use crate::ipc::{
     ApiError, Command, CommandResult, Diagnostic, DiagnosticLevel, DoctorReport, ErrorCode,
     SeatingStatus,
 };
 use crate::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
-use crate::persistence::{LedgerStore, StoreError};
+use crate::persistence::{LedgerStore, SecretRoot, StoreError};
 use crate::secret::Secret;
 use crate::unlock::Challenges;
 use std::path::Path;
@@ -36,6 +37,8 @@ use std::time::Instant;
 
 /// The device a password typed in the console counts against.
 const CONSOLE: &str = "console";
+/// The file under the ledger's root that keeps each account's failed password checks.
+const PASSWORD_FAILURES: &str = "password-failures.json";
 
 pub struct SeatService<B> {
     backend: B,
@@ -47,6 +50,9 @@ pub struct SeatService<B> {
     ops: Mutex<()>,
     /// Failed password checks and key proofs, per device and per account.
     attempts: Mutex<Attempts>,
+    /// Held from a password check's count through the write of [`PASSWORD_FAILURES`], so the
+    /// file takes the counts in order. `attempts` is taken inside it and released before the write.
+    saving: Mutex<()>,
     /// The live challenge of each person's device with a key.
     challenges: Mutex<Challenges>,
     /// The start, stop or delete in flight; `List` reports its seat's published state meanwhile.
@@ -68,15 +74,17 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     /// A service over `store`, already open: the caller may reshape its root's mode before the
-    /// ledger loads.
+    /// ledger loads. The accounts' failed password checks load from the same root.
     pub fn with_store(store: LedgerStore, backend: B) -> Result<Self, StoreError> {
         let ledger = store.load()?;
+        let attempts = saved_attempts(store.root());
         Ok(Self {
             backend,
             store,
             ledger: Mutex::new(ledger),
             ops: Mutex::new(()),
-            attempts: Mutex::new(Attempts::default()),
+            attempts: Mutex::new(attempts),
+            saving: Mutex::new(()),
             challenges: Mutex::new(Challenges::default()),
             changing: Mutex::new(None),
             flatpak: Mutex::new(()),
@@ -479,9 +487,32 @@ impl<B: PlatformBackend> SeatService<B> {
             Err(error) if unproven(&error.code) => Outcome::Failed,
             Err(_) => Outcome::Unjudged,
         };
-        self.attempts()
-            .settle(target, ticket, outcome, Instant::now());
+        self.count(target, ticket, outcome);
         answer.map_err(ApiError::from)
+    }
+
+    /// Counts `outcome` for `target`. A password judged right or wrong changes the accounts'
+    /// failures, which are then written to [`PASSWORD_FAILURES`] outside the `attempts` lock. A
+    /// write that fails is logged: the limit still holds in memory.
+    fn count(&self, target: Target<'_>, ticket: Ticket, outcome: Outcome) {
+        let now = Instant::now();
+        if outcome == Outcome::Unjudged || target.account.is_none() {
+            self.attempts().settle(target, ticket, outcome, now);
+            return;
+        }
+        let _saving = self.saving.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = {
+            let mut attempts = self.attempts();
+            attempts.settle(target, ticket, outcome, now);
+            attempts.export(now, unix_now())
+        };
+        let Some(bytes) = saved.to_json() else {
+            tracing::warn!(cap = SAVED_BYTES, "password failures over the file's cap");
+            return;
+        };
+        if let Err(error) = self.store.root().write_atomic(PASSWORD_FAILURES, &bytes) {
+            tracing::warn!(%error, "password failures not saved");
+        }
     }
 
     fn start(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
@@ -814,6 +845,27 @@ impl From<StoreError> for ApiError {
 
 fn not_found(id: &SeatId) -> ApiError {
     ApiError::new(ErrorCode::NotFound, format!("seat {id} does not exist"))
+}
+
+/// The accounts' failed password checks the last run saved under `root`. A file that can't be
+/// read or parsed is logged and loads as none: the supervisor starts all the same.
+fn saved_attempts(root: &SecretRoot) -> Attempts {
+    let mut attempts = Attempts::default();
+    match root.read_current(PASSWORD_FAILURES, SAVED_BYTES) {
+        Ok(None) => {}
+        Ok(Some(bytes)) => match Saved::parse(&bytes) {
+            Some(saved) => attempts.import(saved, Instant::now(), unix_now()),
+            None => tracing::warn!("password failures file unreadable"),
+        },
+        Err(error) => tracing::warn!(%error, "password failures file not loaded"),
+    }
+    attempts
+}
+
+/// The wall clock in unix seconds.
+fn unix_now() -> i64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// SHA-256 of the certificate DER in `dir`'s `native-cert.pem`, lowercase hex: the pin a client

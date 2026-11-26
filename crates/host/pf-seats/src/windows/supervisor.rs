@@ -577,8 +577,7 @@ impl Rig {
     }
 
     fn start_keeper(&mut self) -> WinResult<()> {
-        let pin = rdp::load_pin(&self.root)?;
-        rdp::require_live(&self.host_path, pin)?;
+        let pin = rdp::require_live(&self.root, &self.host_path, rdp::load_pin(&self.root)?)?;
         let credential = self.accounts.credential_for_start(&self.seat)?;
         let host_root = host_root(&self.root, &self.seat)?;
         let bootstrap = RdpBootstrap::new(

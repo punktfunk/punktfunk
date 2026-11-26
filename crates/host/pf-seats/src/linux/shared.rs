@@ -8,11 +8,11 @@
 //! - `seats/<id>/`: the seat user's home, those three private folders, and the box owner's
 //!   libraries as the seat sees them (`libraries.rs`).
 //! - `trust/<id>/`: the seat's trust copy, a read-only copy of the box's pairing store and
-//!   profiles from the door's directory. The seat's user can read what the seat needs and
-//!   nothing else of the door's. A seat on a person's own account gets only the pairing records
-//!   of the devices its row lets on. So does the seat of a locked profile, with the lock and
-//!   without the PIN. Every seat but the owner's also finds the box's library here, with its own
-//!   profile's layer and no other profile's.
+//!   profiles from the door's directory. Root owns it where the filesystem has ACLs, and the
+//!   seat's user reads what the seat needs and nothing else of the door's ([`Reader`]). A seat
+//!   on a person's own account gets only the pairing records of the devices its row lets on. So
+//!   does the seat of a locked profile, with the lock and without the PIN. Every seat but the
+//!   owner's also finds the box's library here, with only its own profile's layer.
 //! - `library/`: the box's library copy. The owner's host writes the library in the owner's
 //!   home. The supervisor copies it here, with every profile's layer, the plugins' grants and the
 //!   firmware the plugins staged. The door serves it to every client, and each seat's trust copy
@@ -568,6 +568,34 @@ pub(super) fn acl_bytes(entries: &[(u16, u16, u32)]) -> Vec<u8> {
     acl
 }
 
+/// The access ACL of a file only root writes and `uid` may read: `rw-` for root, `r--` for `uid`
+/// and the mask, nothing for the group or others. A folder (`dir`) adds `x` to all three.
+pub(super) fn reader_acl(uid: u32, dir: bool) -> Vec<u8> {
+    let x = u16::from(dir);
+    acl_bytes(&[
+        (ACL_USER_OBJ, 6 | x, ACL_NO_ID),
+        (ACL_USER, 4 | x, uid),
+        (ACL_GROUP_OBJ, 0, ACL_NO_ID),
+        (ACL_MASK, 4 | x, ACL_NO_ID),
+        (ACL_OTHER, 0, ACL_NO_ID),
+    ])
+}
+
+/// Sets `acl` as the access ACL of `fd`. On a test's thread that asks, it fails as a filesystem
+/// without ACLs does.
+fn set_acl(fd: impl AsFd, acl: &[u8]) -> std::io::Result<()> {
+    #[cfg(test)]
+    if tests::REFUSE_ACL.get() {
+        return Err(Errno::NOTSUP.into());
+    }
+    Ok(rustix::fs::fsetxattr(
+        fd,
+        ACL_ACCESS,
+        acl,
+        XattrFlags::empty(),
+    )?)
+}
+
 /// Removes the seat's directories, its trust copy, its token and its library stage. Missing ones
 /// are fine.
 pub(super) fn remove_seat_dirs(state: &Path, id: &SeatId) -> Result<(), BackendError> {
@@ -643,41 +671,127 @@ fn copy_cert(base: &Path, below: &[&str], dst: &Path) -> std::io::Result<()> {
     super::session::write_if_changed(&dst.join(CERT), &text, 0o600).map(drop)
 }
 
-/// Who reads a trust copy. A seat user reads through the group, `root:gid 0640`. The owner's own
-/// account may have a shared primary group, so it reads as the file's owner, `uid:gid 0600`.
+/// Who reads a copy, and so who owns each of its files and folders.
+///
+/// - [`Reader::group`]: a made seat's user, through the seat's group. Root owns each file and
+///   folder as `root:gid`, files `0640`, folders `0750`.
+/// - [`Reader::person`]: the owner's account or a person's own account, whose primary group
+///   others may share. The account owns each file and folder as `uid:gid`, files `0600`, folders
+///   `0700`. Files root writes into a made seat's home take this reader too.
+/// - [`open_copy`] turns a person reader into one that reads through an ACL entry for its uid.
+///   Root owns each file and folder, and the group gets nothing, so the account can neither
+///   create nor rename anything in its copy. A filesystem without ACLs keeps the person reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Reader {
     uid: Option<u32>,
+    /// The group of a file the account owns. It grants nothing while `acl` is set.
     gid: u32,
+    /// Root owns the copy, and `uid` reads it through an ACL entry.
+    acl: bool,
 }
 
 impl Reader {
     pub(super) fn group(gid: u32) -> Self {
-        Self { uid: None, gid }
+        Self {
+            uid: None,
+            gid,
+            acl: false,
+        }
     }
 
     pub(super) fn person(uid: u32, gid: u32) -> Self {
         Self {
             uid: Some(uid),
             gid,
+            acl: false,
         }
     }
 
+    /// Whether the account owns the copy: a person reader without an ACL.
+    fn owns(self) -> bool {
+        self.uid.is_some() && !self.acl
+    }
+
+    /// The mode of a file in the copy. With an ACL it is the mode the ACL's entries give, so the
+    /// `chmod` in [`Reader::hand`] leaves the ACL as it is.
     fn file_mode(self) -> u32 {
-        if self.uid.is_some() {
+        if self.owns() {
             0o600
         } else {
             0o640
         }
     }
 
+    /// The mode of a folder in the copy, picked as [`Reader::file_mode`] picks a file's.
     fn dir_mode(self) -> u32 {
-        if self.uid.is_some() {
+        if self.owns() {
             0o700
         } else {
             0o750
         }
     }
+
+    /// Whether a file of the copy that `owner` owns is kept as it is. With an ACL only a file root
+    /// owns is kept: a file the account owns is from an older copy, and is copied again.
+    fn keeps(self, owner: u32) -> bool {
+        !self.acl || owner == rustix::process::geteuid().as_raw()
+    }
+
+    /// Refuses the folder `fd`, found at `name` in a copy with an ACL, unless root or the account
+    /// owns it. A folder the account owns is from an older copy. Any other folder was moved in
+    /// from elsewhere, and root neither takes it over nor empties it.
+    fn claim(self, fd: &OwnedFd, name: &str) -> std::io::Result<()> {
+        let owner = rustix::fs::fstat(fd)?.st_uid;
+        if !self.acl || owner == rustix::process::geteuid().as_raw() || Some(owner) == self.uid {
+            return Ok(());
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{name} belongs to uid {owner}, not to root or the copy's reader"),
+        ))
+    }
+
+    /// Hands `fd`, a file or a folder (`dir`) of the copy, to this reader: the ACL first, then
+    /// the mode, then the owner. A folder the account owns from an older copy stays readable to
+    /// it at each step.
+    fn hand(self, fd: impl AsFd, dir: bool) -> std::io::Result<()> {
+        let mut owner = (self.uid, Some(self.gid));
+        if let (true, Some(uid)) = (self.acl, self.uid) {
+            set_acl(&fd, &reader_acl(uid, dir))?;
+            let root = rustix::process::geteuid().as_raw();
+            owner = (Some(root), Some(rustix::process::getegid().as_raw()));
+        }
+        let mode = if dir {
+            self.dir_mode()
+        } else {
+            self.file_mode()
+        };
+        rustix::fs::fchmod(&fd, Mode::from_raw_mode(mode as _))?;
+        std::os::unix::fs::fchown(fd, owner.0, owner.1)
+    }
+}
+
+/// The reader `dst`, a person's trust copy, was made for: the account its ACL names while root
+/// owns it, else the account that owns it.
+fn copy_reader(dst: &OwnedFd) -> std::io::Result<Reader> {
+    let stat = rustix::fs::fstat(dst)?;
+    let owned = Reader::person(stat.st_uid, stat.st_gid);
+    if stat.st_uid != rustix::process::geteuid().as_raw() {
+        return Ok(owned);
+    }
+    let mut buf = [0u8; ACL_START];
+    let named = rustix::fs::fgetxattr(dst, ACL_ACCESS, &mut buf[..])
+        .ok()
+        .and_then(|len| {
+            let user = (buf[..len].get(4..)?.chunks_exact(8))
+                .find(|e| u16::from_le_bytes([e[0], e[1]]) == ACL_USER)?;
+            Some(u32::from_le_bytes([user[4], user[5], user[6], user[7]]))
+        });
+    Ok(named.map_or(owned, |uid| Reader {
+        uid: Some(uid),
+        acl: true,
+        ..owned
+    }))
 }
 
 /// Removes `name` from `dir`; `true` when there was one.
@@ -689,10 +803,11 @@ fn unlink(dir: &OwnedFd, name: &str) -> std::io::Result<bool> {
     }
 }
 
-/// Copies `name`, at most `max` bytes, from `src` into `dst` for `reader` when it differs, and
-/// removes it from `dst` when `src` has none. Returns whether `dst` changed. Both are directory
-/// handles, so no link on either side is followed, whoever owns the directory. An unchanged file
-/// is not read; a changed one is streamed, never held whole.
+/// Copies `name`, at most `max` bytes, from `src` into `dst` for `reader` when it differs or
+/// `reader` doesn't keep the copy's owner ([`Reader::keeps`]), and removes it from `dst` when
+/// `src` has none. Returns whether `dst` changed. Both are directory handles, so no link on
+/// either side is followed, whoever owns the directory. An unchanged file is not read; a changed
+/// one is streamed, never held whole.
 fn sync_file(
     src: Option<&OwnedFd>,
     dst: &OwnedFd,
@@ -710,6 +825,7 @@ fn sync_file(
     let wanted = (meta.mtime(), meta.mtime_nsec(), meta.size());
     let current = rustix::fs::statat(dst, name, AtFlags::SYMLINK_NOFOLLOW)
         .ok()
+        .filter(|st| reader.keeps(st.st_uid))
         .map(|st| stamp(&st));
     if !needs_copy(wanted, current) {
         return Ok(false);
@@ -728,8 +844,7 @@ fn sync_file(
             format!("{name} grew beyond {max} bytes"),
         ));
     }
-    out.set_permissions(std::fs::Permissions::from_mode(reader.file_mode()))?;
-    std::os::unix::fs::fchown(&out, reader.uid, Some(reader.gid))?;
+    reader.hand(&out, false)?;
     out.set_modified(meta.modified()?)?;
     drop(out);
     rustix::fs::renameat(dst, temp.as_str(), dst, name)?;
@@ -738,9 +853,9 @@ fn sync_file(
 
 /// Brings a made seat's trust copy level with the box's files in `box_dir`, without the box's
 /// identity: a game on the seat could otherwise answer as the box. Returns whether anything
-/// changed. The door owns `box_dir` and the owner owns their own copy, so both are read and
-/// written through directory handles. A locked profile's seat gets the pairing list its lock
-/// admits and the lock without its PIN ([`lock_filter`]).
+/// changed. The door owns `box_dir` and an account may own its copy ([`Reader`]), so both are
+/// read and written through directory handles. A locked profile's seat gets the pairing list its
+/// lock admits and the lock without its PIN ([`lock_filter`]).
 ///
 /// A file that can't be copied keeps its last good copy and the rest still follow; the first
 /// failure is the answer. A box directory that isn't there, as in a reinstall, leaves every copy
@@ -793,7 +908,8 @@ fn sync_trust(
     who: Who<'_>,
 ) -> Result<bool, BackendError> {
     let io = |what: &str, e| io_err("trust_copy", what, e);
-    let dst = open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
+    let (dst, reader) =
+        open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
     let (mut changed, mut first) = (false, None);
     let mut note = |copied: std::io::Result<bool>, what: &str| match copied {
         Ok(did) => changed |= did,
@@ -878,8 +994,8 @@ fn write_admitted(
     put_file(dst, PAIRED, &bytes, reader)
 }
 
-/// [`write_admitted`] into the trust copy `id` has, for the reader it was made for. A seat that
-/// never started has none; its start writes one.
+/// [`write_admitted`] into the trust copy `id` has, for the reader it was made for
+/// ([`copy_reader`]). A seat that never started has none; its start writes one.
 pub(super) fn rewrite_admitted(
     box_dir: &Path,
     state: &Path,
@@ -892,13 +1008,13 @@ pub(super) fn rewrite_admitted(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(io("open the trust copy", e)),
     };
-    let owner = rustix::fs::fstat(&dst).map_err(|e| io("read the trust copy's owner", e.into()))?;
-    let reader = Reader::person(owner.st_uid, owner.st_gid);
+    let reader = copy_reader(&dst).map_err(|e| io("read the trust copy's owner", e))?;
     write_admitted(box_dir, &dst, reader, admitted).map_err(|e| io("write the pairing list", e))
 }
 
 /// `bytes` as `name` in `dst` for `reader`, through a new file renamed over the old, when the
-/// file holds anything else. `true` when it changed.
+/// file holds anything else or `reader` doesn't keep its owner ([`Reader::keeps`]). `true` when
+/// it changed.
 pub(super) fn put_file(
     dst: &OwnedFd,
     name: &str,
@@ -908,7 +1024,7 @@ pub(super) fn put_file(
     let current = safe_open::read_at(dst, name, MAX_TRUST_BYTES)
         .ok()
         .flatten();
-    if current.is_some_and(|(held, _)| held == bytes) {
+    if current.is_some_and(|(held, meta)| held == bytes && reader.keeps(meta.uid())) {
         return Ok(false);
     }
     let temp = format!("{name}.tmp");
@@ -918,8 +1034,7 @@ pub(super) fn put_file(
     let mode = Mode::from_raw_mode(reader.file_mode() as _);
     let mut out = std::fs::File::from(rustix::fs::openat(dst, temp.as_str(), create, mode)?);
     out.write_all(bytes)?;
-    out.set_permissions(std::fs::Permissions::from_mode(reader.file_mode()))?;
-    std::os::unix::fs::fchown(&out, reader.uid, Some(reader.gid))?;
+    reader.hand(&out, false)?;
     drop(out);
     rustix::fs::renameat(dst, temp.as_str(), dst, name)?;
     Ok(true)
@@ -942,7 +1057,7 @@ pub(super) fn refresh_box_library(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(io("open the owner's config folder", e)),
     };
-    let dst =
+    let (dst, reader) =
         open_copy(&box_library_dir(state), reader).map_err(|e| io("open the library copy", e))?;
     let library = sync_library(Some(&src), &dst, reader, &|_| true)
         .map_err(|e| io("copy the owner's library", e));
@@ -962,7 +1077,8 @@ pub(super) fn refresh_seat_library(
     reader: Reader,
 ) -> Result<bool, BackendError> {
     let io = |what: &str, e| io_err("trust_copy", what, e);
-    let dst = open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
+    let (dst, reader) =
+        open_copy(&trust_dir(state, id), reader).map_err(|e| io("open the trust copy", e))?;
     let src = open_source(&box_library_dir(state)).map_err(|e| io("open the box library", e))?;
     let own = seat_profile(box_dir, id);
     sync_library(src.as_ref(), &dst, reader, &|p| own.as_deref() == Some(p))
@@ -1211,7 +1327,8 @@ fn sync_each(
 }
 
 /// The folder `name` in `dst` level with `src`, its source already opened: made for `reader`
-/// and filled through `fill`, or, with no source, emptied through `fill` and removed.
+/// and filled through `fill`, or, with no source, emptied through `fill` and removed. A folder
+/// that `reader` refuses ([`Reader::claim`]) is an error, and stays as it is.
 fn sync_dir(
     src: Option<&OwnedFd>,
     dst: &OwnedFd,
@@ -1230,9 +1347,9 @@ fn sync_dir(
     let Some(copies) = safe_open::dir_at(dst, name)? else {
         return Ok(false);
     };
+    reader.claim(&copies, name)?;
     if src.is_some() {
-        rustix::fs::fchmod(&copies, Mode::from_raw_mode(reader.dir_mode() as _))?;
-        std::os::unix::fs::fchown(&copies, reader.uid, Some(reader.gid))?;
+        reader.hand(&copies, true)?;
     }
     let changed = fill(src, &copies)?;
     if src.is_none() {
@@ -1241,11 +1358,32 @@ fn sync_dir(
     Ok(changed)
 }
 
-/// `dst` made and handed to `reader`, then opened: a copy root writes for one reader.
-fn open_copy(dst: &Path, reader: Reader) -> std::io::Result<OwnedFd> {
-    make_dir(dst, reader.dir_mode())?;
-    std::os::unix::fs::chown(dst, reader.uid, Some(reader.gid))?;
-    safe_open::dir(dst)
+/// `dst` made and opened, then handed to `reader`: a copy root writes for one reader. Returns the
+/// reader each file and folder in it is made for, which for a person reader reads through an
+/// ACL. A filesystem that refuses ACLs keeps the person reader, logged once per start.
+fn open_copy(dst: &Path, reader: Reader) -> std::io::Result<(OwnedFd, Reader)> {
+    std::fs::create_dir_all(dst)?;
+    let copy = safe_open::dir(dst)?;
+    let acl = Reader {
+        acl: reader.uid.is_some(),
+        ..reader
+    };
+    let no_acl = |e: &std::io::Error| {
+        let errno = Errno::from_io_error(e);
+        errno.is_some_and(|e| [Errno::NOTSUP, Errno::OPNOTSUPP].contains(&e))
+    };
+    match acl.hand(&copy, true) {
+        Ok(()) => return Ok((copy, acl)),
+        Err(error) if acl.acl && no_acl(&error) => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(copy = %dst.display(), %error, "trust copies owned by their accounts");
+            });
+        }
+        Err(e) => return Err(e),
+    }
+    reader.hand(&copy, true)?;
+    Ok((copy, reader))
 }
 
 /// A directory a copy is taken from, `None` when it doesn't exist.
@@ -1622,6 +1760,29 @@ fn write_library_folders(seat: &Passwd) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    thread_local! {
+        /// Set, [`set_acl`] on this thread fails as a filesystem without ACLs does.
+        pub(super) static REFUSE_ACL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Whether the filesystem under `dir` keeps an access ACL. Off one, the account owns a
+    /// person's copy, as [`Reader::person`] says.
+    fn keeps_acls(dir: &Path) -> bool {
+        let probe = dir.join("acl-probe");
+        std::fs::write(&probe, "").unwrap();
+        let acl = reader_acl(rustix::process::geteuid().as_raw(), false);
+        let kept = rustix::fs::setxattr(&probe, ACL_ACCESS, &acl, XattrFlags::empty()).is_ok();
+        std::fs::remove_file(probe).unwrap();
+        kept
+    }
+
+    /// The access ACL of `path`, empty when it has none.
+    fn acl_of(path: &Path) -> Vec<u8> {
+        let mut buf = [0u8; 256];
+        let len = rustix::fs::getxattr(path, ACL_ACCESS, &mut buf[..]).unwrap_or(0);
+        buf[..len].to_vec()
+    }
+
     fn id() -> SeatId {
         SeatId::parse("0123456789abcdef0123456789abcdef").unwrap()
     }
@@ -1978,14 +2139,19 @@ mod tests {
         assert!(!trust.join("profiles.json").exists());
     }
 
-    /// The owner's copy is theirs alone: owned by the account, closed to every group, because a
-    /// person's primary group may be one everybody on the box shares.
+    /// Root owns the owner's copy, and only the account reads it, through an ACL entry for its
+    /// uid. Every group is closed out: a person's primary group may be one everybody on the box
+    /// shares.
     #[test]
-    fn the_owner_s_trust_copy_is_private_to_the_account() {
+    fn root_owns_the_owner_s_trust_copy_and_the_account_alone_reads_it() {
         let temp = tempfile::tempdir().unwrap();
         let box_dir = temp.path();
         let state_temp = tempfile::tempdir().unwrap();
         let state = state_temp.path();
+        if !keeps_acls(state) {
+            eprintln!("no POSIX ACLs under {}: skipped", state.display());
+            return;
+        }
         box_with_identity(box_dir);
         std::fs::create_dir(box_dir.join("profiles")).unwrap();
         std::fs::write(box_dir.join("profiles/a.png"), "png").unwrap();
@@ -1993,9 +2159,160 @@ mod tests {
         let reader = Reader::person(me.uid(), me.gid());
         assert!(refresh_trust(box_dir, state, &id(), reader).is_ok());
         let trust = trust_dir(state, &id());
-        assert_eq!(mode(&trust), 0o700);
-        assert_eq!(mode(&trust.join("profiles")), 0o700);
-        assert_eq!(mode(&trust.join("profiles/a.png")), 0o600);
+        for (path, dir) in [
+            (trust.clone(), true),
+            (trust.join("profiles"), true),
+            (trust.join("profiles/a.png"), false),
+        ] {
+            assert_eq!(mode(&path), if dir { 0o750 } else { 0o640 });
+            assert_eq!(
+                acl_of(&path),
+                reader_acl(me.uid(), dir),
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    /// On a filesystem that refuses ACLs, the account owns a person's copy: folders `0700`, files
+    /// `0600`, no ACL.
+    #[test]
+    fn without_acls_the_account_owns_a_person_s_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let (box_dir, state) = (temp.path().join("box"), temp.path().join("state"));
+        std::fs::create_dir_all(box_dir.join("profiles")).unwrap();
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(box_dir.join("profiles.json"), "{}").unwrap();
+        std::fs::write(box_dir.join("profiles/a.png"), "png").unwrap();
+        let me = std::fs::metadata(&box_dir).unwrap();
+        let reader = Reader::person(me.uid(), me.gid());
+        REFUSE_ACL.set(true);
+        let copied = refresh_person_trust(&box_dir, &state, &id(), reader, &BTreeSet::new());
+        REFUSE_ACL.set(false);
+        copied.unwrap();
+        let trust = trust_dir(&state, &id());
+        for (path, wanted) in [
+            (trust.clone(), 0o700),
+            (trust.join("profiles"), 0o700),
+            (trust.join("profiles.json"), 0o600),
+            (trust.join(PAIRED), 0o600),
+            (trust.join("profiles/a.png"), 0o600),
+        ] {
+            let meta = std::fs::metadata(&path).unwrap();
+            assert_eq!((meta.mode() & 0o7777, meta.uid()), (wanted, me.uid()));
+            assert!(acl_of(&path).is_empty(), "{}", path.display());
+        }
+    }
+
+    /// A person's copy that the account owns, as one made without ACLs, passes to root at the
+    /// next refresh with them: each folder and file, the account reading through its ACL entry.
+    /// Checked as each uid through `setpriv`: the account reads its copy and can't create or
+    /// rename anything in it, and another uid can't read it. A folder another uid moved in at a
+    /// known name is refused, and keeps its owner, mode and files. Needs root to hand files to
+    /// other uids, Linux for ACLs that mean anything, and `setpriv` from util-linux.
+    #[test]
+    #[ignore = "needs root on Linux: hands the copy to other uids and reads its ACLs back"]
+    fn an_account_s_copy_passes_to_root_and_a_planted_folder_is_left_alone() {
+        // Ids no account has, below 65536: a container's user namespace maps only those.
+        const READER: u32 = 59_940;
+        const STRANGER: u32 = 59_941;
+        let temp = tempfile::tempdir().unwrap();
+        let (box_dir, state) = (temp.path().join("box"), temp.path().join("state"));
+        std::fs::create_dir_all(box_dir.join("profiles")).unwrap();
+        // Both uids walk to the copy: the temp root opens to them, and `ensure_layout` makes
+        // `state` and `state/trust` 0711, as on a box.
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        ensure_layout(&state).unwrap();
+        assert!(
+            keeps_acls(&state),
+            "no POSIX ACLs under {}",
+            state.display()
+        );
+        std::fs::write(box_dir.join("profiles.json"), "{}").unwrap();
+        std::fs::write(box_dir.join("profiles/a.png"), "png").unwrap();
+        let paired = r#"{"clients":[{"fingerprint":"aa"}]}"#;
+        std::fs::write(box_dir.join(PAIRED), paired).unwrap();
+        let reader = Reader::person(READER, READER);
+        let refresh = || refresh_person_trust(&box_dir, &state, &id(), reader, &BTreeSet::new());
+        let trust = trust_dir(&state, &id());
+
+        REFUSE_ACL.set(true);
+        refresh().unwrap();
+        REFUSE_ACL.set(false);
+        assert_eq!(
+            std::fs::metadata(&trust).unwrap().uid(),
+            READER,
+            "an older copy"
+        );
+        refresh().unwrap();
+        let admitted = BTreeSet::from(["aa".to_owned()]);
+        assert!(rewrite_admitted(&box_dir, &state, &id(), &admitted).unwrap());
+        for (path, dir) in [
+            (trust.clone(), true),
+            (trust.join("profiles"), true),
+            (trust.join("profiles.json"), false),
+            (trust.join(PAIRED), false),
+            (trust.join("profiles/a.png"), false),
+        ] {
+            let meta = std::fs::symlink_metadata(&path).unwrap();
+            let wanted = if dir { 0o750 } else { 0o640 };
+            let at = path.display();
+            assert_eq!(
+                (meta.uid(), meta.gid(), meta.mode() & 0o7777),
+                (0, 0, wanted),
+                "{at}"
+            );
+            assert_eq!(acl_of(&path), reader_acl(READER, dir), "{at}");
+        }
+
+        let as_uid = |uid: u32, program: &str, args: &[&Path]| {
+            let status = std::process::Command::new("setpriv")
+                .args([&format!("--reuid={uid}"), &format!("--regid={uid}")])
+                .args(["--clear-groups", "--", program])
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .status();
+            let status =
+                status.unwrap_or_else(|e| panic!("setpriv (util-linux) did not start: {e}"));
+            status.success()
+        };
+        let (paired_copy, profiles) = (trust.join(PAIRED), trust.join("profiles"));
+        assert!(as_uid(READER, "cat", &[&paired_copy]), "the account reads");
+        assert!(
+            as_uid(READER, "cat", &[&profiles.join("a.png")]),
+            "the account reads"
+        );
+        assert!(as_uid(READER, "ls", &[&profiles]), "the account lists");
+        let planted_file = trust.join("planted");
+        assert!(
+            !as_uid(READER, "touch", &[&planted_file]),
+            "the account creates"
+        );
+        let moved = trust.join("moved");
+        assert!(
+            !as_uid(READER, "mv", &[&profiles, &moved]),
+            "the account renames"
+        );
+        assert!(
+            !as_uid(STRANGER, "cat", &[&paired_copy]),
+            "a stranger reads"
+        );
+        assert!(!as_uid(STRANGER, "ls", &[&trust]), "a stranger lists");
+
+        let planted = trust.join("profiles");
+        std::fs::remove_dir_all(&planted).unwrap();
+        std::fs::create_dir(&planted).unwrap();
+        std::fs::write(planted.join("theirs.png"), "theirs").unwrap();
+        std::os::unix::fs::chown(&planted, Some(STRANGER), Some(STRANGER)).unwrap();
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(refresh().is_err());
+        let meta = std::fs::symlink_metadata(&planted).unwrap();
+        assert_eq!(
+            (meta.uid(), meta.gid(), meta.mode() & 0o7777),
+            (STRANGER, STRANGER, 0o755)
+        );
+        assert!(planted.join("theirs.png").exists());
+        assert!(!planted.join("a.png").exists());
     }
 
     /// The box's library follows the owner's own files and reaches a seat's trust copy, minus
@@ -2290,13 +2607,19 @@ mod tests {
         assert!(seat_copy(&box_dir).unwrap());
         let trust = trust_dir(&state, &id()).join(LIBRARY_PROFILES);
         assert_eq!(listing(&trust), [ANNA]);
-        assert_eq!(mode(&trust.join(ANNA)), 0o700);
+        // With ACLs root owns the copy, and the account reads it through its entry.
+        let (folder, file) = if keeps_acls(&state) {
+            (0o750, 0o640)
+        } else {
+            (0o700, 0o600)
+        };
+        assert_eq!(mode(&trust.join(ANNA)), folder);
         assert_eq!(
             std::fs::read_to_string(trust.join(ANNA).join("library-hidden.json")).unwrap(),
             "[1]"
         );
-        assert_eq!(mode(&trust.join(ANNA).join("library-hidden.json")), 0o600);
-        assert_eq!(mode(&trust.join(ANNA).join("own-titles.json")), 0o600);
+        assert_eq!(mode(&trust.join(ANNA).join("library-hidden.json")), file);
+        assert_eq!(mode(&trust.join(ANNA).join("own-titles.json")), file);
         assert!(!seat_copy(&box_dir).unwrap(), "unchanged is a no-op");
 
         // The seat becomes Ben's: Anna's folder goes, with what a cut-short copy left.

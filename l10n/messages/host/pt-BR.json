@@ -210,7 +210,7 @@
 	"apierr_rdp_firewall_restore": "Não foi possível restaurar as regras de firewall da Área de Trabalho Remota.",
 	"apierr_rdp_listener_off": "Não foi possível desativar a Área de Trabalho Remota novamente.",
 	"apierr_rdp_listener_on": "Não foi possível ativar a Área de Trabalho Remota.",
-	"apierr_rdp_pin_changed": "O certificado da Área de Trabalho Remota mudou, então os postos não conseguem fazer login. Desative e ative os postos em Perfis → Postos para registrar o novo.",
+	"apierr_rdp_pin_changed": "A Área de Trabalho Remota respondeu com um certificado que não é deste host, então os postos não conseguem fazer login. Feche qualquer outro programa que use a porta da Área de Trabalho Remota e tente novamente.",
 	"apierr_rdp_trust": "Não foi possível registrar o certificado da Área de Trabalho Remota deste host. Verifique se a Área de Trabalho Remota está em execução e tente novamente.",
 	"apierr_recording_not_deleted": "Não foi possível excluir a gravação",
 	"apierr_recording_not_read": "Não foi possível ler a gravação",

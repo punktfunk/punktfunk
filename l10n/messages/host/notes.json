@@ -126,6 +126,7 @@
 	"diag_virtual_deck_vhci_not_member_summary": "{user} is a login name, {group} a Linux group name.",
 	"diag_virtual_deck_vhci_unwritable_remedy": "{group} is a Linux group name.",
 	"hostaction_display_next": "Host action: stream the host's next physical monitor.",
+	"hostaction_update": "Host action: install the newer version of the host software that is out.",
 	"hostupdate_pacman_not_opted_in": "Update result. {path} is the root-owned opt-in file, /etc/punktfunk/update.conf.",
 	"hostupdate_rolled_back": "Update result. {from} and {to} are version strings.",
 	"launch_adopted": "{title} is the game's title. Sent with kind Adopted, which clients do not show today.",

@@ -1,9 +1,10 @@
 //! Leaf-certificate fingerprinting and pinned rustls verification for the RDP keeper.
 //!
-//! The keeper reaches TermService over loopback TLS and trusts exactly one leaf: the one
-//! `punktfunk-seat-keeper trust` recorded. The leaf SHA-256 uses the same aws-lc-rs provider
-//! as rustls. CertificateVerify is still checked, so replaying a public certificate without
-//! its key cannot pass.
+//! The keeper reaches TermService over loopback TLS and trusts exactly one leaf, the pin. The
+//! pin is the SHA-256 of a leaf that answered there and that the machine also holds in a
+//! certificate store only administrators and SYSTEM write ([`accept_leaf`]). The leaf SHA-256
+//! uses the same aws-lc-rs provider as rustls. CertificateVerify is still checked, so replaying
+//! a public certificate without its key cannot pass.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,6 +13,21 @@ pub fn cert_fingerprint(cert_der: &[u8]) -> [u8; 32] {
         .as_ref()
         .try_into()
         .expect("SHA-256 output is 32 bytes")
+}
+
+/// Accepts `leaf` as the pin only when it is one of `held`, the fingerprints of the certificates
+/// the machine keeps for Remote Desktop. A machine that holds none refuses every leaf. The
+/// refusal names both sides, for the log.
+pub fn accept_leaf(leaf: [u8; 32], held: &[[u8; 32]]) -> Result<(), String> {
+    if held.contains(&leaf) {
+        return Ok(());
+    }
+    let held: Vec<String> = held.iter().map(hex::encode).collect();
+    Err(format!(
+        "RDP leaf {} is not a certificate this machine holds for Remote Desktop (holds [{}])",
+        hex::encode(leaf),
+        held.join(", ")
+    ))
 }
 
 #[derive(Debug)]
@@ -87,6 +103,14 @@ impl rustls::client::danger::ServerCertVerifier for PinVerify {
 mod tests {
     use super::*;
     use rustls::client::danger::ServerCertVerifier as _;
+
+    #[test]
+    fn only_a_leaf_the_machine_holds_becomes_the_pin() {
+        assert!(accept_leaf([1; 32], &[[2; 32], [1; 32]]).is_ok());
+        let refused = accept_leaf([3; 32], &[[2; 32]]).unwrap_err();
+        assert!(refused.contains(&hex::encode([3; 32])) && refused.contains(&hex::encode([2; 32])));
+        assert!(accept_leaf([1; 32], &[]).is_err());
+    }
 
     #[test]
     fn pin_mismatch_records_the_leaf_before_rejecting() {

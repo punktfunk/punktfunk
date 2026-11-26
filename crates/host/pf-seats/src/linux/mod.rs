@@ -91,10 +91,10 @@ pub fn recorded_owner() -> Option<String> {
     accounts::recorded_owner(Path::new(STATE_DIR))
 }
 
-/// Whether an off's hold stands under [`STATE_DIR`]: an off that began and didn't finish. An on
-/// removes it before anything else and never sets it.
+/// Whether an off's hold stands under [`STATE_DIR`]: an off that began and didn't finish. The
+/// hold an on sets while it copies doesn't count ([`door_switch::off_held`]).
 pub fn off_held() -> bool {
-    Path::new(STATE_DIR).join(door_switch::HOLD).exists()
+    door_switch::off_held(Path::new(STATE_DIR))
 }
 
 /// Whether `account` may switch the door `on` or off now, by the record root keeps
