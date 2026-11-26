@@ -154,11 +154,11 @@ Licensing** alone isn't enough: Session Host is its own part of the Remote Deskt
 A seat starting puts it back. If the line stays, turn seats off and on under **Profiles** →
 **Seats**.
 
-### Remote Desktop's certificate has changed
+### Remote Desktop answered with a certificate that isn't this host's
 
-Windows renews the certificate Remote Desktop presents when it expires or the PC is renamed.
-Seats only sign in to the one they recorded. Turn seats off and on under **Profiles** →
-**Seats** to record the new one.
+Seats sign in only to a certificate this PC holds for Remote Desktop, and take up a renewed one
+by themselves. Another program is answering on Remote Desktop's port: close it, then start the
+seat again.
 
 ### The seat didn't start in time
 

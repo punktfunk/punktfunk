@@ -13,8 +13,8 @@
 //!   removes the key after every undo.
 //!
 //! So a step that fails leaves enough behind for the next turn-off to undo it.
-//! [`reaches_rdp_from_network`] reads whether a firewall rule breaks the operator's choice of
-//! this PC only.
+//! [`reaches_rdp_from_network`] reads whether a firewall rule lets the network reach Remote
+//! Desktop, or the seat listener, against the operator's choice of this PC only.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -60,7 +60,7 @@ pub(crate) enum Step {
     AllowListener,
     /// Bring the seat listener up; a failure only costs pad audio.
     EnsureSeatListener,
-    /// Pin the certificate Remote Desktop presents now.
+    /// Pin the certificate Remote Desktop presents now, when the machine holds it.
     TrustCertificate,
     /// Drop `Enabling`: seats are on.
     Finish,
@@ -144,9 +144,11 @@ pub(crate) fn narrowed(recorded: &Recorded) -> bool {
 }
 
 /// An enabled inbound allow rule on Remote Desktop's port that an address other than this PC's
-/// reaches, whatever group it is in. `rule` is one rule as Windows Firewall stores it in the
-/// registry, `|`-separated; a rule without `RA…` remote address fields takes any address.
-pub(crate) fn reaches_rdp_from_network(rule: &str) -> bool {
+/// reaches, whatever group it is in. `seat_listener` is the seat listener's port while it is
+/// configured: a rule on that port counts too. `rule` is one rule as Windows Firewall stores
+/// it in the registry, `|`-separated; a rule without `RA…` remote address fields takes any
+/// address.
+pub(crate) fn reaches_rdp_from_network(rule: &str, seat_listener: Option<u16>) -> bool {
     let fields: Vec<(&str, &str)> = rule.split('|').filter_map(|f| f.split_once('=')).collect();
     let has = |key: &str, value: &str| {
         fields
@@ -166,7 +168,8 @@ pub(crate) fn reaches_rdp_from_network(rule: &str) -> bool {
     has("Action", "Allow")
         && has("Active", "TRUE")
         && has("Dir", "In")
-        && has("LPort", "3389")
+        && (has("LPort", "3389")
+            || seat_listener.is_some_and(|port| has("LPort", &port.to_string())))
         && (remote.is_empty() || remote.iter().any(|&(key, range)| !loopback(key, range)))
 }
 
@@ -374,33 +377,26 @@ mod tests {
     /// Any group's rule counts, a custom one too; only loopback scopes and blocks don't.
     #[test]
     fn a_rule_reaches_remote_desktop_unless_it_keeps_to_loopback() {
+        let reaches = |rule: &str| reaches_rdp_from_network(rule, None);
         let rule = |extra: &str| {
             format!(
                 "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort=3389|{extra}\
                  Name=Custom RDP|"
             )
         };
-        assert!(reaches_rdp_from_network(&rule("")));
-        assert!(reaches_rdp_from_network(&rule(
-            "EmbedCtxt=@FirewallAPI.dll,-28752|"
-        )));
-        assert!(reaches_rdp_from_network(&rule(
-            "RA4=10.0.5.0/255.255.255.0|"
-        )));
-        assert!(reaches_rdp_from_network(&rule(
-            "RA4=LocalSubnet|RA6=LocalSubnet|"
-        )));
-        assert!(reaches_rdp_from_network(&rule(
-            "RA4=127.0.0.1|RA6=fe80::/64|"
-        )));
-        assert!(reaches_rdp_from_network(&rule("RA4=127.0.0.1-128.0.0.1|")));
-        assert!(reaches_rdp_from_network(&rule("RA4=127.0.0.0/0|")));
-        assert!(reaches_rdp_from_network(&rule("RA42=IntrAnet|")));
+        assert!(reaches(&rule("")));
+        assert!(reaches(&rule("EmbedCtxt=@FirewallAPI.dll,-28752|")));
+        assert!(reaches(&rule("RA4=10.0.5.0/255.255.255.0|")));
+        assert!(reaches(&rule("RA4=LocalSubnet|RA6=LocalSubnet|")));
+        assert!(reaches(&rule("RA4=127.0.0.1|RA6=fe80::/64|")));
+        assert!(reaches(&rule("RA4=127.0.0.1-128.0.0.1|")));
+        assert!(reaches(&rule("RA4=127.0.0.0/0|")));
+        assert!(reaches(&rule("RA42=IntrAnet|")));
         // What seats narrow the rules to, and other loopback-only scopes.
-        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.0/255.0.0.0|")));
-        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.2|RA6=::1|")));
-        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.1-127.0.0.9|")));
-        assert!(!reaches_rdp_from_network(&rule("RA4=127.0.0.0/8|")));
+        assert!(!reaches(&rule("RA4=127.0.0.0/255.0.0.0|")));
+        assert!(!reaches(&rule("RA4=127.0.0.2|RA6=::1|")));
+        assert!(!reaches(&rule("RA4=127.0.0.1-127.0.0.9|")));
+        assert!(!reaches(&rule("RA4=127.0.0.0/8|")));
         // Off, blocking, outbound or on another port.
         let open = rule("");
         for other in [
@@ -409,7 +405,37 @@ mod tests {
             open.replace("Dir=In", "Dir=Out"),
             open.replace("LPort=3389", "LPort=3390"),
         ] {
-            assert!(!reaches_rdp_from_network(&other), "{other}");
+            assert!(!reaches(&other), "{other}");
         }
+    }
+
+    /// The seat listener's port counts only while it is configured; a block never does.
+    #[test]
+    fn a_rule_reaches_the_seat_listener_while_it_is_configured() {
+        let rule = |port: u16, extra: &str| {
+            format!(
+                "v2.33|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort={port}|{extra}\
+                 Name=Custom|"
+            )
+        };
+        for (port, listener, extra, reaches) in [
+            (3390, Some(3390), "", true),
+            (3390, Some(3390), "RA4=LocalSubnet|", true),
+            (3390, Some(3390), "RA4=127.0.0.1-128.0.0.1|", true),
+            (3390, Some(3390), "RA4=127.0.0.0/8|RA6=::1|", false),
+            (3390, None, "", false),
+            (3391, Some(3390), "", false),
+            (3389, Some(3390), "", true),
+        ] {
+            assert_eq!(
+                reaches_rdp_from_network(&rule(port, extra), listener),
+                reaches,
+                "{port} {listener:?} {extra}"
+            );
+        }
+        // The rules seats add to block the port are not a way in.
+        let block = "v2.33|Action=Block|Active=TRUE|Dir=In|Protocol=6|LPort=3390|\
+                     RA4=0.0.0.0-126.255.255.255|Name=punktfunk seat listener (TCP)|";
+        assert!(!reaches_rdp_from_network(block, Some(3390)));
     }
 }

@@ -216,7 +216,7 @@
 	"apierr_rdp_firewall_restore": "Die Firewall-Regeln von Remotedesktop ließen sich nicht wiederherstellen.",
 	"apierr_rdp_listener_off": "Remotedesktop ließ sich nicht wieder ausschalten.",
 	"apierr_rdp_listener_on": "Remotedesktop ließ sich nicht einschalten.",
-	"apierr_rdp_pin_changed": "Das Zertifikat von Remotedesktop hat sich geändert, deshalb können sich Seats nicht anmelden. Schalte Seats unter Profile → Seats aus und wieder ein, um das neue zu hinterlegen.",
+	"apierr_rdp_pin_changed": "Remotedesktop hat mit einem Zertifikat geantwortet, das nicht zu diesem Host gehört, deshalb können sich Seats nicht anmelden. Beende andere Programme, die den Port von Remotedesktop nutzen, und versuch es dann erneut.",
 	"apierr_rdp_trust": "Das Remotedesktop-Zertifikat dieses Hosts ließ sich nicht hinterlegen. Prüfe, ob Remotedesktop läuft, und versuch es dann erneut.",
 	"apierr_recording_not_deleted": "Die Aufzeichnung konnte nicht gelöscht werden",
 	"apierr_recording_not_read": "Die Aufzeichnung konnte nicht gelesen werden",
