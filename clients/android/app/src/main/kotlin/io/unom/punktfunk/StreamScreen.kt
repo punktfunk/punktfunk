@@ -990,7 +990,20 @@ fun StreamScreen(
         }
         // Over everything while the summoned keyboard is up. A TV's remote cannot reach its keys.
         if (!isTv && keyCapture?.imeShown == true) {
-            KeyRow(peripherals.keyLatch, haptics) { keyCapture?.settleIme() }
+            KeyRow(
+                overlayCfg.rowButtons, overlayCfg, ringActions, peripherals.keyLatch, haptics,
+                onPress = { keyCapture?.settleIme() },
+            ) { action, phase ->
+                // The row is up only with the keyboard, so there the Keyboard action hides it.
+                if (action == Shortcuts.Action.Slot(SlotId.Keyboard)) {
+                    showKeyboard(false)
+                } else {
+                    fireShortcut(
+                        action, phase, handle, ring, overlayCfg, ringActions, context, shortcutArm, openRingCentred,
+                        confirmEndStream = true,
+                    ) { ui.shortcutHint = it }
+                }
+            }
         }
     }
 }

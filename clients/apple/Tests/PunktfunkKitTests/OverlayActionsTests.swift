@@ -34,6 +34,7 @@ final class OverlayActionsTests: XCTestCase {
         for id in try XCTUnwrap(file["slot_ids"] as? [String]) {
             XCTAssertEqual(SlotId.parse(id)?.id, id)
         }
+        XCTAssertEqual(RowSlot.defaultRow.map(\.id), try XCTUnwrap(file["default_row"] as? [String]))
         let cases = try XCTUnwrap(file["cases"] as? [[String: Any]])
         XCTAssertGreaterThanOrEqual(cases.count, 10, "the vector file is the contract")
         let platforms: [String: RingPlatform] = ["touch": .touch, "desktop": .desktop]
@@ -43,6 +44,8 @@ final class OverlayActionsTests: XCTestCase {
             let cfg = OverlayConfig.parse(c["blob"] as? String, platform: platform)
             let want = try XCTUnwrap(c["ring"] as? [Any], name).map { $0 as? String }
             XCTAssertEqual(cfg.ring.map { $0?.id }, want, "\(name): ring")
+            // A case with no `row` expects a row the player never edited.
+            XCTAssertEqual(cfg.row?.map(\.id), c["row"] as? [String], "\(name): row")
             let stored = cfg.toJSON()
             let json = try JSONSerialization.jsonObject(with: Data(stored.utf8))
             XCTAssertTrue(sameJSON(json, c["round_trip"] as Any), "\(name): stored \(stored)")
@@ -118,9 +121,11 @@ extension OverlayActionsTests {
         XCTAssertEqual(cfg.shortcuts.count, 1, "saving an existing id replaces it")
         XCTAssertEqual(cfg.shortcut("s1")?.label, "Menu")
         var bindings = Shortcuts()
+        cfg.row = [.action(.shortcut("s1")), .key("tab")]
         cfg.removeShortcut("s1", bindings: &bindings)
         XCTAssertTrue(cfg.shortcuts.isEmpty)
         XCTAssertNil(cfg.ring[5], "the slot that sent it is empty")
+        XCTAssertEqual(cfg.row, [.key("tab")], "and it left the row")
     }
 }
 

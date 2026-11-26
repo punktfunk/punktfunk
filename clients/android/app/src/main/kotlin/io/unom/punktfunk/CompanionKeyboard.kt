@@ -29,6 +29,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.kit.R
+import io.unom.punktfunk.kit.Shortcuts
+import io.unom.punktfunk.kit.SlotId
+import io.unom.punktfunk.kit.keyLegend
 import io.unom.punktfunk.kit.keyVk
 
 /*
@@ -70,17 +73,21 @@ internal val KEY_ROWS: List<List<Key>> = listOf(
     ),
 )
 
-/** The stream's key row ([KeyRow]): the keys a phone's keyboard lacks. */
-internal val KEY_ROW: List<Key> = listOf(
-    k("Esc"), k("Tab"), mod("Ctrl"), mod("Alt"), mod("Shift"), mod("Win"),
-    k("←", 0x25), k("↓", 0x28), k("↑", 0x26), k("→", 0x27),
-    k("Del"), k("Home"), k("End"), k("PgUp", 0x21), k("PgDn", 0x22),
-) + F_ROW
+/** Ctrl, Alt, Shift and Win: the keys that latch. */
+private val MODIFIER_VKS = setOf(0x11, 0x12, 0x10, 0x5B)
 
-/** The key that types [c] unshifted in the US order of [KEY_ROWS]; `null` for one it lacks. */
-internal fun typedVk(c: Char): Int? = when (c) {
-    ' ' -> 0x20
-    '\n' -> 0x0D
+/** A key row button's key ([RowSlot.Key]); `null` for a name [keyVk] does not know. */
+internal fun rowKey(name: String): Key? = keyVk(name)?.let { Key(keyLegend(name), it, modifier = it in MODIFIER_VKS) }
+
+/**
+ * The key that types [c] unshifted in the US order of [KEY_ROWS], a capital as its letter, Tab
+ * and Return as theirs; `null` for one it lacks. ASCII only: an arrow's legend is no typed arrow.
+ */
+internal fun typedVk(c: Char): Int? = when {
+    c == ' ' -> 0x20
+    c == '\n' || c == '\r' -> 0x0D
+    c == '\t' -> 0x09
+    c.code >= 0x80 -> null
     else -> KEY_ROWS.flatten().firstOrNull { it.legend.singleOrNull() == c.lowercaseChar() }?.vk
 }
 
@@ -134,32 +141,50 @@ internal class KeyLatch(private val sink: KeySink) {
 }
 
 /**
- * One key of the stream's key row under a finger. The row scrolls, so a key cannot go down at
- * the touch: a tap sends it down and up, and a long press holds it down until [end], so the
+ * One button of the stream's key row under a finger. The row scrolls, so nothing goes down at the
+ * touch: a tap fires, and a long press holds a key or a key combination down until [end], so the
  * host repeats it. A modifier latches either way.
+ *
+ * A quick action goes to [fire], the stream's shortcut path, by the phases a held shortcut uses.
+ * A key combination is the next key to a latched modifier, which lifts after it; any other
+ * action leaves the latch alone. `clients/shared/key-row-vectors.json` holds the rules.
  */
-internal class RowKey(private val latch: KeyLatch, private val key: Key) {
+internal class RowButton(
+    private val latch: KeyLatch,
+    slot: RowSlot,
+    private val fire: (Shortcuts.Action, Shortcuts.Phase) -> Unit,
+) {
+    private val key = (slot as? RowSlot.Key)?.let { rowKey(it.name) }
+    private val action = (slot as? RowSlot.Action)?.let { Shortcuts.Action.Slot(it.slot) }
+    private val keyLike = action?.kind == Shortcuts.Kind.KEY_LIKE
+    private val combination = action?.slot is SlotId.Shortcut
     private var held = false
 
     fun tap() {
-        latch.press(key)
-        latch.lift(key)
+        key?.let {
+            latch.press(it)
+            latch.lift(it)
+        }
+        action?.let { fire(it, if (keyLike) Shortcuts.Phase.TAP else Shortcuts.Phase.ONCE) }
+        if (combination) latch.release()
     }
 
     fun longPress() {
-        if (key.modifier) {
-            tap()
-        } else {
-            latch.press(key)
-            held = true
+        when {
+            key != null && !key.modifier -> latch.press(key)
+            action != null && keyLike -> fire(action, Shortcuts.Phase.DOWN)
+            else -> return tap()
         }
+        held = true
     }
 
-    /** The finger is gone, lifted or cancelled: a held key comes up. */
+    /** The finger is gone, lifted or cancelled: what a long press holds comes up. */
     fun end() {
         if (!held) return
         held = false
-        latch.lift(key)
+        key?.let(latch::lift)
+        action?.let { fire(it, Shortcuts.Phase.UP) }
+        if (combination) latch.release()
     }
 }
 
@@ -206,6 +231,12 @@ internal fun CompanionKeyboard(sink: KeySink, haptics: ConsoleHaptics, modifier:
 /** One key's cap, lit while [armed]. The gesture is the caller's, in [modifier]. */
 @Composable
 internal fun KeyCap(key: Key, armed: Boolean, modifier: Modifier) {
+    Cap(armed, modifier) { Text(key.legend, style = MaterialTheme.typography.labelLarge, maxLines = 1) }
+}
+
+/** A cap around [content], lit while [armed]: a key's, or a key row button's face. [state] is what a toggle reads out. */
+@Composable
+internal fun Cap(armed: Boolean, modifier: Modifier, state: String = "", content: @Composable () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val held = stringResource(R.string.android_key_held_a11y)
     Surface(
@@ -214,11 +245,9 @@ internal fun KeyCap(key: Key, armed: Boolean, modifier: Modifier) {
         contentColor = if (armed) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
         modifier = modifier.semantics {
             role = Role.Button
-            stateDescription = if (armed) held else ""
+            stateDescription = if (armed) held else state
         },
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(key.legend, style = MaterialTheme.typography.labelLarge, maxLines = 1)
-        }
+        Box(contentAlignment = Alignment.Center) { content() }
     }
 }

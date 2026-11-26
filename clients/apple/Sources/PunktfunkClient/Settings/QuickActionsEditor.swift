@@ -103,6 +103,12 @@ struct QuickActionsEditor: View {
                 Text(overridden ? pickHint + " " + String(localized: L10n.ringEditorPresetOwns) : pickHint)
                     .font(.geist(13, relativeTo: .footnote))
             }
+            #if os(iOS)
+            // The row above the on-screen keyboard, edited on its own page.
+            Section {
+                NavigationLink(String(localized: L10n.ringRowTitle)) { KeyRowEditor(blob: $blob) }
+            }
+            #endif
             #if os(iOS) || os(visionOS)
             // The virtual controller's preset and look (§4.3), written to the blob's `pad`
             // through the same binding the ring uses. Absent on the Mac: there is no touch screen
@@ -280,31 +286,42 @@ struct SlotPicker: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(groups) { g in
-                    Section(g.title) {
-                        ForEach(g.options) { o in
-                            Button {
-                                choose(o.id)
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(o.label)
-                                        if let note = o.note {
-                                            Text(note).font(.footnote).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Spacer()
-                                    if o.id == current { Image(systemName: "checkmark") }
-                                }
-                            }
-                            .foregroundStyle(.primary)
-                        }
-                    }
-                }
+                SlotOptions(groups: groups, current: current, choose: choose)
             }
             .navigationTitle(L10n.ringPickerTitle)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(L10n.commonCancel) { dismiss() } }
+            }
+        }
+    }
+}
+
+/// The catalogue's sections for a picker's list; the current pick is ticked.
+struct SlotOptions: View {
+    let groups: [SlotGroup]
+    let current: String
+    let choose: (String) -> Void
+
+    var body: some View {
+        ForEach(groups) { g in
+            Section(g.title) {
+                ForEach(g.options) { o in
+                    Button {
+                        choose(o.id)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(o.label)
+                                if let note = o.note {
+                                    Text(note).font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if o.id == current { Image(systemName: "checkmark") }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                }
             }
         }
     }

@@ -1,10 +1,17 @@
 {
-  "$comment": "The overlay_actions blob, replayed by pf-client-core overlay_actions::tests, the Android OverlayActionsTest and the Apple OverlayActionsTests. Each case parses `blob` for `platform`, expects the ring's wire ids (null is an empty slot), and expects toJSON of that parse to equal `round_trip` as JSON, numbers compared as f32. `slot_ids` parse and print back unchanged on every client, offered or not, so a rewrite never drops another client's pick. The pad-type rows are the Controller type slot's step order and its words; a type outside the cycle steps to Automatic. Hand-written: a new slot id or a new parse rule adds a row here first.",
+  "$comment": "The overlay_actions blob, replayed by pf-client-core overlay_actions::tests, the Android OverlayActionsTest and the Apple OverlayActionsTests. Each case parses `blob` for `platform`, expects the ring's wire ids (null is an empty slot), and expects toJSON of that parse to equal `round_trip` as JSON, numbers compared as f32. `slot_ids` parse and print back unchanged on every client, offered or not, so a rewrite never drops another client's pick. The pad-type rows are the Controller type slot's step order and its words; a type outside the cycle steps to Automatic. `row` is the keyboard row a touch client shows above its on-screen keyboard: a case expects its ids in order, and a case without `row` expects none stored, which follows `default_row`. A row id is a slot id or `key:<name>`, with a name `key_vk` knows. Hand-written: a new slot id or a new parse rule adds a row here first.",
   "slot_ids": [
     "end_stream", "end_game", "disconnect_linger", "touch_mode", "keyboard", "stats", "mic", "pad",
     "send_text", "guide", "qam", "pad_mouse", "pad_type", "stream_mute", "swap_screens",
     "release_input", "mouse_mode", "fullscreen", "minimize", "clipboard",
     "host:power.reboot", "shortcut:s2"
+  ],
+  "default_row": [
+    "key:escape", "key:tab", "key:ctrl", "key:alt", "key:shift", "key:win",
+    "key:left", "key:down", "key:up", "key:right",
+    "key:delete", "key:home", "key:end", "key:pageup", "key:pagedown",
+    "key:f1", "key:f2", "key:f3", "key:f4", "key:f5", "key:f6",
+    "key:f7", "key:f8", "key:f9", "key:f10", "key:f11", "key:f12"
   ],
   "cases": [
     {
@@ -153,6 +160,48 @@
         "ring": [null, null, null, null, null, null],
         "shortcuts": [],
         "pad": {"layout": "full", "opacity": 0.45, "scale": 1, "controls": {"rs": {"x": 0.5}}}
+      }
+    },
+    {
+      "name": "a row keeps keys, actions and a key combination in order, a key name as written",
+      "platform": "touch",
+      "blob": "{\"v\":2,\"ring\":[],\"shortcuts\":[{\"id\":\"s1\",\"label\":\"Copy\",\"keys\":[\"ctrl\",\"c\"]}],\"row\":[\"key:Esc\",\"key:ctrl\",\"stats\",\"shortcut:s1\",\"host:power.sleep\",\"key:f5\",\"key:f5\"]}",
+      "ring": [null, null, null, null, null, null],
+      "row": ["key:Esc", "key:ctrl", "stats", "shortcut:s1", "host:power.sleep", "key:f5", "key:f5"],
+      "round_trip": {
+        "v": 2,
+        "ring": [null, null, null, null, null, null],
+        "shortcuts": [{"id": "s1", "label": "Copy", "keys": ["ctrl", "c"]}],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1},
+        "row": ["key:Esc", "key:ctrl", "stats", "shortcut:s1", "host:power.sleep", "key:f5", "key:f5"]
+      }
+    },
+    {
+      "name": "an unknown id, an unknown key, a dangling shortcut and a null leave the row",
+      "platform": "touch",
+      "blob": "{\"ring\":[\"mic\"],\"row\":[\"teleport\",\"key:hyper\",\"key:\",\"shortcut:nope\",null,\"key:tab\",\"mic\"]}",
+      "ring": ["mic", null, null, null, null, null],
+      "row": ["key:tab", "mic"],
+      "round_trip": {
+        "v": 2,
+        "ring": ["mic", null, null, null, null, null],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1},
+        "row": ["key:tab", "mic"]
+      }
+    },
+    {
+      "name": "an empty row is stored empty, not as the default",
+      "platform": "desktop",
+      "blob": "{\"v\":2,\"ring\":[\"mic\"],\"row\":[]}",
+      "ring": ["mic", null, null, null, null, null],
+      "row": [],
+      "round_trip": {
+        "v": 2,
+        "ring": ["mic", null, null, null, null, null],
+        "shortcuts": [],
+        "pad": {"layout": "full", "opacity": 0.45, "scale": 1},
+        "row": []
       }
     }
   ],

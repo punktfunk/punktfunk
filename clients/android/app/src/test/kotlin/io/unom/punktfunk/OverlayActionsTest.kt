@@ -49,6 +49,8 @@ class OverlayActionsTest {
         for (i in 0 until ids.length()) {
             assertEquals(ids.getString(i), SlotId.parse(ids.getString(i))?.id)
         }
+        val defaultRow = vectors.getJSONArray("default_row")
+        assertEquals((0 until defaultRow.length()).map(defaultRow::getString), DEFAULT_ROW.map { it.id })
         val cases = vectors.getJSONArray("cases")
         assertTrue("the vector file is the contract", cases.length() >= 10)
         for (i in 0 until cases.length()) {
@@ -63,6 +65,9 @@ class OverlayActionsTest {
             val ring = case.getJSONArray("ring")
             val want = (0 until ring.length()).map { if (ring.isNull(it)) null else ring.getString(it) }
             assertEquals("$name: ring", want, cfg.ring.map { it?.id })
+            // A case with no `row` expects a row the player never edited.
+            val wantRow = case.optJSONArray("row")?.let { r -> (0 until r.length()).map(r::getString) }
+            assertEquals("$name: row", wantRow, cfg.row?.map { it.id })
             val stored = JSONObject(cfg.toJson())
             assertTrue("$name: stored $stored", sameJson(stored, case.getJSONObject("round_trip")))
             assertEquals("$name: reparse", cfg, OverlayConfig.parse(cfg.toJson(), platform))

@@ -81,7 +81,12 @@ internal fun QuickActionsScreen(
     var picking by remember { mutableStateOf<Int?>(null) }
     var editingShortcut by remember { mutableStateOf<ShortcutDraft?>(null) }
     var editingLayout by remember { mutableStateOf(false) }
+    var editingRow by remember { mutableStateOf(false) }
 
+    if (editingRow) {
+        KeyRowEditor(cfg, onChange = { onChange(it.toJson()) }, onBack = { editingRow = false })
+        return
+    }
     if (editingLayout) {
         PadLayoutEditor(
             pad = cfg.pad,
@@ -116,10 +121,11 @@ internal fun QuickActionsScreen(
     fun remove(id: String) {
         onChange(
             cfg.copy(
-                // `parse` would empty a dangling slot on the next read; write it empty now so
-                // the ring shows it at once.
+                // `parse` would empty a dangling slot and drop a dangling row button on the next
+                // read; write both now so the ring and the row show it at once.
                 ring = cfg.ring.map { if (it is SlotId.Shortcut && it.shortcutId == id) null else it },
                 shortcuts = cfg.shortcuts.filter { it.id != id },
+                row = cfg.row?.filter { (it as? RowSlot.Action)?.slot != SlotId.Shortcut(id) },
             ).toJson(),
         )
     }
@@ -162,6 +168,26 @@ internal fun QuickActionsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp),
             )
+        }
+        // The row above the on-screen keyboard, edited on its own screen. A TV has no such keyboard.
+        if (!isTvDevice(ctx)) {
+            SettingsGroup {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { editingRow = true },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.ring_row_title),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
         // The virtual controller's preset and look (§4.3), written to the blob's `pad` through the
         // same path the ring uses.
@@ -417,42 +443,44 @@ internal fun SlotPicker(groups: List<SlotGroup>, current: String, onPick: (Strin
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.ring_picker_title)) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                groups.forEach { g ->
-                    Text(
-                        g.title,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                    )
-                    g.options.forEach { o ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { onPick(o.id) }.padding(vertical = 8.dp)
-                                .alpha(if (o.dim) 0.45f else 1f),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(o.label, style = MaterialTheme.typography.bodyLarge)
-                                o.note?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            if (o.id == current) Text("✓", color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                }
-            }
-        },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { SlotOptions(groups, current, onPick) } },
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
     )
 }
 
+/** The catalogue's rows, group by group, for a picker's column; the current pick is marked. */
+@Composable
+internal fun SlotOptions(groups: List<SlotGroup>, current: String, onPick: (String) -> Unit) {
+    groups.forEach { g ->
+        Text(
+            g.title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+        )
+        g.options.forEach { o ->
+            Row(
+                Modifier.fillMaxWidth().clickable { onPick(o.id) }.padding(vertical = 8.dp)
+                    .alpha(if (o.dim) 0.45f else 1f),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(o.label, style = MaterialTheme.typography.bodyLarge)
+                    o.note?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (o.id == current) Text("✓", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
 /** A shortcut on the editing screen, new or existing. */
 private data class ShortcutDraft(val id: String, val label: String, val keys: List<String>, val isNew: Boolean)
 
-private val MODIFIER_KEYS = listOf("ctrl", "alt", "shift", "win")
+internal val MODIFIER_KEYS = listOf("ctrl", "alt", "shift", "win")
 
 /**
  * The keys a chord can end on, grouped the way a keyboard groups them. Each name is one [keyVk]
