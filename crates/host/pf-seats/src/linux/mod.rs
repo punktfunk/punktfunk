@@ -80,6 +80,11 @@ pub fn saves_dir(id: &SeatId) -> PathBuf {
     shared::seat_dir(Path::new(STATE_DIR), id).join("saves")
 }
 
+/// The systemd unit that runs `account`'s seat. `*` names every seat's.
+pub fn seat_unit(account: &str) -> String {
+    session::unit(account)
+}
+
 /// The box owner `door-helper` recorded under [`STATE_DIR`]: the account the door is on for.
 /// Readable by the door, written only by root.
 pub fn recorded_owner() -> Option<String> {
