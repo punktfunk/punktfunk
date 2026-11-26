@@ -468,7 +468,7 @@ where
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
-    use crate::gamelease::{GameRef, GameState, LeaseKind, EXIT_CONFIRM, SHIM_WINDOW};
+    use crate::gamelease::{GameRef, GameState, LeaseKind, EXIT_CONFIRM, SHIM_WINDOW, SLOW_DISK};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -574,7 +574,7 @@ mod tests {
         // The player quits. Reaped here: a zombie keeps `/proc/<pid>` and looks alive.
         let _ = game.kill();
         let _ = game.wait();
-        let deadline = Instant::now() + EXIT_CONFIRM + Duration::from_secs(5);
+        let deadline = Instant::now() + EXIT_CONFIRM + Duration::from_secs(5) + SLOW_DISK;
         while Instant::now() < deadline && exits.load(Ordering::SeqCst) == 0 {
             std::thread::sleep(Duration::from_millis(100));
         }

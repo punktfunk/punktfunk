@@ -39,6 +39,10 @@ pub(crate) const EXIT_CONFIRM: Duration = Duration::from_secs(3);
 /// 5 s successful child exit = launcher hand-off, never the game. Apollo's `auto_detach` uses
 /// the same 5 s for any exit code.
 pub(crate) const SHIM_WINDOW: Duration = Duration::from_secs(5);
+/// 30 s of room in a test's wait for the synced writes a launch and an exit make. A busy disk
+/// takes seconds for each, and such a wait ends as soon as its state arrives.
+#[cfg(test)]
+pub(crate) const SLOW_DISK: Duration = Duration::from_secs(30);
 /// 10 s after SIGTERM / WM_CLOSE before SIGKILL. Enough to save.
 const TERM_GRACE: Duration = Duration::from_secs(10);
 /// Cap on [`crate::procscan::running_hint`] holding off an exit after every
