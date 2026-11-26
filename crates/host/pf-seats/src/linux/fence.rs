@@ -141,7 +141,7 @@ pub fn run() {
     };
     let lines = match verdict {
         Verdict::Nobody => return,
-        Verdict::Seat(account) => seat_lines(&account),
+        Verdict::Seat(account) => lines_for(&account, InputId::from_env()),
         Verdict::Refused => None,
     };
     print!("{}", lines.as_deref().unwrap_or(REFUSED));
@@ -175,6 +175,13 @@ impl InputId {
             joystick: set("ID_INPUT_JOYSTICK"),
         }
     }
+
+    /// Whether udev classes the node as a keyboard or a mouse and not as a joystick. Such a node
+    /// never goes to a seat, whichever record names its device: whoever can write it types into
+    /// the kernel's own keyboard, SysRq and pointer handlers, which serve the box's console.
+    pub fn desk(self) -> bool {
+        (self.keyboard || self.mouse) && !self.joystick
+    }
 }
 
 /// The lend records' rule for the node at `devpath`, with sysfs at `sys` and the records in
@@ -198,8 +205,7 @@ pub fn judge_lent(sys: &Path, records: Option<&Path>, devpath: &str, input: Inpu
     let Some(class) = interface else {
         return Verdict::Refused;
     };
-    let desk_input =
-        lent::boot_input(class) || ((input.keyboard || input.mouse) && !input.joystick);
+    let desk_input = lent::boot_input(class) || input.desk();
     match plain(&holder) {
         Some(account) if holder != lent::PARKED && !desk_input => Verdict::Seat(account),
         _ => Verdict::Refused,
@@ -266,11 +272,22 @@ fn lower_twin(devices: &Path, number: u64, token: &str) -> Option<bool> {
     }))
 }
 
-/// Prints [`seat_lines`]: nothing for an account that is no seat's.
+/// Prints the rule's lines for a node the caller found to be `account`'s: a seat's uinput proxy,
+/// or a node under a seat's USB port. Prints nothing for an account that is no seat's.
 pub fn print_for(account: &str) {
-    if let Some(lines) = seat_lines(account) {
+    if let Some(lines) = lines_for(account, InputId::from_env()) {
         print!("{lines}");
     }
+}
+
+/// The rule's lines for a node of `account`'s device, which every seat verdict ends in. A
+/// keyboard or mouse node is refused here ([`InputId::desk`]): an emulated Steam Deck carries
+/// both beside its controller. `None` for an account that is no seat's.
+fn lines_for(account: &str, input: InputId) -> Option<String> {
+    if input.desk() {
+        return Some(REFUSED.to_owned());
+    }
+    seat_lines(account)
 }
 
 /// The rule's lines for `account`, when it is a seat's user or the owner's row's. Any other
@@ -544,6 +561,32 @@ mod tests {
         ];
         for ((uid, gid, mode), only, what) in cases {
             assert_eq!(root_only(uid, gid, mode), only, "{what}");
+        }
+    }
+
+    /// A keyboard or mouse node is refused for any account, before the account is even looked
+    /// up. A joystick that also has keys, a touchpad and a hidraw node are not desk input.
+    #[test]
+    fn a_keyboard_or_mouse_node_never_goes_to_a_seat() {
+        let input = |keyboard, mouse, joystick| InputId {
+            keyboard,
+            mouse,
+            joystick,
+        };
+        for desk in [
+            input(true, false, false),
+            input(false, true, false),
+            input(true, true, false),
+        ] {
+            assert_eq!(lines_for("pf-seat-1", desk).as_deref(), Some(REFUSED));
+        }
+        for pad in [
+            input(false, false, true),
+            input(true, false, true),
+            input(false, true, true),
+            InputId::default(),
+        ] {
+            assert!(!pad.desk(), "{pad:?}");
         }
     }
 
