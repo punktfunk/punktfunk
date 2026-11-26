@@ -234,6 +234,7 @@ fn tile_png(icon: &str) -> Option<&'static [u8]> {
         "gog" => include_bytes!("../../assets/gamestream/gog.png").as_slice(),
         "xbox" => include_bytes!("../../assets/gamestream/xbox.png").as_slice(),
         "hydra" => include_bytes!("../../assets/gamestream/hydra.png").as_slice(),
+        "ubisoft" => include_bytes!("../../assets/gamestream/ubisoft.png").as_slice(),
         _ => return None,
     })
 }
@@ -338,6 +339,7 @@ mod tests {
     fn every_mark_tile_is_a_600x800_png() {
         for icon in [
             "monitor", "steam", "lutris", "heroic", "playnite", "epic", "gog", "xbox", "hydra",
+            "ubisoft",
         ] {
             let png = tile_png(icon).unwrap_or_else(|| panic!("no tile for {icon}"));
             assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"), "{icon} is not a PNG");

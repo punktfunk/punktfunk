@@ -15,6 +15,7 @@ field and every client resolves against the set it ships.
 | `gog` | GOG.com | punktfunk-plugin-gog | Simple Icons (CC0 1.0, slug `gogdotcom`) |
 | `xbox` | Xbox | punktfunk-plugin-xbox | Font Awesome Free brands (CC BY 4.0) |
 | `hydra` | Hydra Launcher | punktfunk-plugin-hydra | hydralauncher/hydra (MIT) |
+| `ubisoft` | Ubisoft Connect | punktfunk-plugin-ubisoft | Simple Icons (CC0 1.0, slug `ubisoft`) |
 
 The Epic, GOG and Xbox tiles, and Hydra Big Picture outside a deb, rpm or AUR install, need a
 host that knows their `launcher_ui` values; an older host drops the tile and still syncs the games.

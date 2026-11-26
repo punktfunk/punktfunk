@@ -19,7 +19,7 @@ pub const NATURAL_W: i32 = 150;
 
 /// The launcher marks this shell ships symbolic art for (`data/icons/…`).
 const LAUNCHER_ICON_TOKENS: &[&str] = &[
-    "steam", "lutris", "heroic", "playnite", "epic", "gog", "xbox", "hydra",
+    "steam", "lutris", "heroic", "playnite", "epic", "gog", "xbox", "hydra", "ubisoft",
 ];
 
 /// What a tile shows now.
