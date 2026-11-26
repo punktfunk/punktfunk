@@ -254,13 +254,8 @@ export RUSTFLAGS="%{?build_rustflags}"
 # profile (and CI's canary codegen-units) decide.
 RUSTFLAGS="$(printf '%s' "$RUSTFLAGS" | sed -E 's/ ?-C(debuginfo|codegen-units)=[^ ]*//g')"
 %endif
-# Use the toolchain baked into the builder image as-is, ignoring rust-toolchain.toml. The toml
-# floats `channel = "stable"` and requests rustfmt/clippy (lint-only — not needed for a build); when
-# a newer stable lands upstream, that combination makes rustup try to UPDATE the baked, minimal-
-# profile `stable` toolchain in place, and the in-image OverlayFS rejects the staging rename with
-# EXDEV ("Invalid cross-device link"), failing %build. RUSTUP_TOOLCHAIN bypasses the toml so rustup
-# neither re-resolves the channel nor adds components — it just builds with what's installed.
-export RUSTUP_TOOLCHAIN=stable
+# No RUSTUP_TOOLCHAIN override: rust-toolchain.toml pins the compiler, and the builder image
+# bakes that version. Naming a channel here makes rustup download it on every build.
 # Stamp the exact NVR into the binary for --version / mgmt /health provenance (build.rs reads it).
 export PUNKTFUNK_BUILD_VERSION="%{version}-%{release}"
 # --locked: reproducible from (commit + Cargo.lock), matching the .deb build path.

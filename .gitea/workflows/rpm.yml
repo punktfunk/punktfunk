@@ -209,11 +209,17 @@ jobs:
           # punktfunk-bun, so this job signs those bytes. Baked into the image; the script heals an
           # image that lags the pin in ci/bun.env (docker.yml bootstrap note).
           sh ci/install-bun.sh
+      # cargo's git dir too, not just the registry: cargo clones every git dependency to resolve
+      # the workspace, the Windows client's windows-rs among them (1.5 GB), though nothing
+      # Windows is compiled here. The key family is deb.yml's: for one Cargo.lock both lanes
+      # hold the same downloads, so one entry serves both.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /usr/local/cargo/registry
-          key: cargo-home-fedora-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-home-fedora-
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+          key: cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-
 
       - name: Version + channel
         # vX.Y.Z tag -> X.Y.Z-1 in the base group (a real release); main push -> <next-minor>-0.ciN.g<sha>

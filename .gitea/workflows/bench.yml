@@ -46,6 +46,16 @@ jobs:
         run: |
           git config --global --add safe.directory "$PWD"
           command -v python3 >/dev/null || { apt-get update && apt-get install -y --no-install-recommends python3; }
+      # cargo clones every git dependency to resolve the workspace, windows-rs among them
+      # (1.5 GB), though this benches one crate. Restore only: ci.yml's push run saves the key.
+      - name: Restore cargo home
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+          key: cargo-home-ci-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-ci-
       - name: Tier-1 microbenchmarks (criterion)
         run: cargo bench -p punktfunk-core --bench pipeline -- --warm-up-time 1 --measurement-time 3
       - name: Tier-2 FEC loss recovery (loss-harness)
