@@ -409,10 +409,10 @@ jobs:
             # addition from needing a change here as well as in every packaging script.
             mkdir -p gs-cache && cp -a gs-stage/. gs-cache/
           else
-            # Warn only, even on a tag — the hard gate is the LAST step of this job. Failing here
-            # would skip the sysext build, the sysext feed, AND the release attach below, so a
-            # missing gamescope would also withhold the punktfunk RPMs and the .raw images that
-            # built perfectly well.
+            # Warn only, on a tag and on main too — the hard gate is the LAST step of this job.
+            # Failing here would skip the sysext build, the sysext feed, AND the release attach
+            # below, so a missing gamescope would also withhold the punktfunk RPMs and the .raw
+            # images that built perfectly well.
             echo "::warning::punktfunk-gamescope failed to build for f${{ matrix.fedver }} — the sysext ships without it (gamescope sessions stay SDR)"
           fi
 
@@ -549,15 +549,14 @@ jobs:
             upsert_asset "$RID" "$raw" "$(basename "$raw" .raw).f${{ matrix.fedver }}.raw"
           done
 
-      # A release must not be able to make a claim its own CI silently dropped: the notes and
-      # docs-site say the patched gamescope is dnf-installable, but the build step above only
-      # warns when it fails.
+      # The notes and docs-site say the patched gamescope is dnf-installable, and the build step
+      # above only warns when it fails. A tag or a main build that lacks the RPM goes red here.
       #
       # ⚠ LAST step on purpose: failing at the build step instead would skip the sysext image,
       # the feed publish AND the attach above, withholding the punktfunk RPMs and .raw images
       # that built perfectly well. Everything good ships first; the job goes red after.
-      - name: A stable tag must ship the gamescope RPM
-        if: startsWith(gitea.ref, 'refs/tags/v')
+      - name: A tag or main build must ship the gamescope RPM
+        if: startsWith(gitea.ref, 'refs/tags/v') || gitea.ref == 'refs/heads/main'
         run: |
           shopt -s nullglob
           built=(dist/punktfunk-gamescope-*.rpm)
@@ -567,7 +566,7 @@ jobs:
             keep+=("$r")
           done
           if [ ${#keep[@]} -eq 0 ]; then
-            echo "::error::no punktfunk-gamescope RPM was built for f${{ matrix.fedver }} — a stable tag must not ship without it (the release notes and docs-site say it is installable). Everything else in this job published normally; see the gamescope build step above for the meson error."
+            echo "::error::no punktfunk-gamescope RPM was built for f${{ matrix.fedver }} — a tag or main build must not ship without it (the release notes and docs-site say it is installable). Everything else in this job published normally; see the gamescope build step above for the cause."
             exit 1
           fi
           echo "gamescope RPM present: ${keep[*]}"
