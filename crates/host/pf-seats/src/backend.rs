@@ -1,11 +1,12 @@
-//! Platform boundary for account, session, and process ownership.
+//! The boundary to the platform: everything that touches an account, a session or a process.
 //!
-//! The portable core allocates and persists seat identity and resources, then
-//! asks this trait to provision, start, stop, remove, and inspect them. Methods
-//! receive complete validated seat records; platform secrets never enter the
-//! ledger or control responses. `WindowsBackend` and `LinuxBackend` are the production
-//! implementations. Tests use an in-memory fake, and `UnsupportedBackend` returns a stable
-//! unsupported diagnostic without pretending that a seat is running.
+//! The portable core allocates and saves each seat's identity and resources. Then it asks this
+//! trait to provision, start, stop, remove and inspect the seat. Every method receives a
+//! complete, validated seat record. A platform's secrets never enter the ledger or a response.
+//!
+//! `WindowsBackend` and `LinuxBackend` are the production implementations. Tests use an
+//! in-memory fake. `UnsupportedBackend` answers with a stable "unsupported" diagnostic and never
+//! pretends that a seat is running.
 
 use crate::ipc::{Diagnostic, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};

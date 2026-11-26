@@ -1,13 +1,16 @@
-//! WTS discovery and managed-session teardown.
+//! Finds a seat's session through WTS, the Windows session API, and logs a managed session off.
 //!
-//! Enumeration copies session IDs and states before releasing WTS memory, then
-//! queries each user and domain through `WTSQuerySessionInformationW`; a session that ends
-//! between the two steps is left out. A usable seat session must be active, non-console,
-//! local to this computer, and match the complete account name under Windows case rules.
-//! Multiple matches are an error; how long to wait for one is the supervisor's. Disconnected
-//! sessions remain visible to diagnostics but are never returned as display-capable.
-//! Logoff looks the account's session up when it runs, never by an ID recorded earlier alone:
-//! Windows reuses freed IDs, and only a session's logon time tells a reused one apart.
+//! - **Listing.** Session IDs and states are copied before the WTS memory is released. Then each
+//!   session's user and domain are queried through `WTSQuerySessionInformationW`. A session that
+//!   ends between the two steps is left out.
+//! - **A usable seat session** is active, not the console, local to this computer, and its
+//!   account name matches in full under Windows case rules. More than one match is an error.
+//!   How long to wait for a match is the supervisor's decision.
+//! - **Disconnected sessions** are still listed for diagnostics, but never returned as able to
+//!   show a display.
+//! - **Logoff** looks the account's session up at the moment it runs. An ID recorded earlier is
+//!   never enough alone, because Windows reuses freed IDs. Only a session's logon time tells a
+//!   reused ID apart.
 
 use super::step::Logon;
 use crate::windows::util::{backend_error, computer_name, io_error, WinResult};

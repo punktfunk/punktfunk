@@ -1,12 +1,15 @@
-//! Whether a made seat's Steam opened the libraries the seat shows it.
+//! Checks whether a made seat's Steam could open the libraries the seat shows it.
 //!
-//! Steam's `content_log.txt` names each listed folder it couldn't open at a library load:
-//! `Install folder <path> not mounted.` The check reads the log of every Steam folder in the
-//! seat's home ([`shared::STEAM_ROOTS`]) and takes the last load of the unit's run. For each
-//! folder of ours it missed, it tries the folder as that Steam does: its user, its groups, its
-//! mount namespace, which for the `steamrt64` client is its container's. The error that try meets
-//! names the cause. A Steam the library list doesn't reach, a Flatpak's or a Snap's, is named,
-//! and a Steam the check can't find is logged with what the seat's user runs.
+//! At each library load, Steam's `content_log.txt` names every listed folder it couldn't open:
+//! `Install folder <path> not mounted.` The check reads that log in every Steam folder of the
+//! seat's home ([`shared::STEAM_ROOTS`]) and takes the last load of the unit's current run.
+//!
+//! For each of our folders that Steam missed, the check tries to open the folder the way that
+//! Steam does: as its user, with its groups, in its mount namespace. For the `steamrt64` client
+//! that is the mount namespace of its container. The error from that try names the cause.
+//!
+//! A Steam that the library list doesn't reach, a Flatpak's or a Snap's, is named. A Steam the
+//! check can't find is logged together with what the seat's user runs.
 
 use super::accounts::Passwd;
 use super::{libraries, output, run, safe_open, shared};

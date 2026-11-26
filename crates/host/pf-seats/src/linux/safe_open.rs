@@ -1,10 +1,12 @@
-//! How root reads a file in a tree another uid can write: the box's, a seat's home, the owner's.
+//! How root reads a file in a tree that another uid can write: the door's directory, a seat's
+//! home, the owner's home.
 //!
-//! The last step is always `O_NOFOLLOW | O_NONBLOCK`, so a link is refused and a FIFO or device
-//! answers at once instead of stalling the supervisor. Only a regular file with one link and
-//! within its size cap is read. A directory inside such a tree is opened the same way, one
-//! component at a time ([`dir_at`], [`walk`]); a path is followed only up to a directory root
-//! owns.
+//! - The last step of every open is `O_NOFOLLOW | O_NONBLOCK`. So a link is refused, and a FIFO
+//!   or a device answers at once instead of stalling the supervisor.
+//! - Only a regular file with one link, within its size cap, is read.
+//! - A directory inside such a tree is opened the same way, one component at a time
+//!   ([`dir_at`], [`walk`]).
+//! - A path is followed only as far as a directory that root owns.
 
 use rustix::fs::{Mode, OFlags};
 use std::io::Read as _;

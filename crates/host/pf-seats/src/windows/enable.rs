@@ -1,13 +1,16 @@
-//! Turning seats on and off: the prerequisite checks, the seat display driver, the Remote
-//! Desktop listener and its firewall scope, the seat listener, and the pinned RDP certificate.
+//! Turns seats on and off on Windows. This covers the prerequisite checks, the seat display
+//! driver, the Remote Desktop listener and its firewall scope, the seat listener, and the pinned
+//! RDP certificate.
 //!
-//! [`checks`] only reads. [`turn_on`] creates the Seats key and records there what it changed
-//! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`,
-//! `RdpRulesNarrowed`); [`turn_off`] undoes exactly that and deletes the key last, so a failed
-//! restore can be retried. Both read the key into [`Recorded`], take their steps from
-//! [`super::switch`] and [`perform`] them in order. A refusal carries one plain sentence for
-//! the operator; its cause goes to the log. The seat display driver stays in the driver store
-//! when seats go off.
+//! - [`checks`] only reads.
+//! - [`turn_on`] creates the Seats key and records in it what it changed (`ListenerWasOff`,
+//!   `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`, `RdpRulesNarrowed`).
+//! - [`turn_off`] undoes exactly what is recorded and deletes the key last, so a restore that
+//!   failed can be tried again.
+//!
+//! Both read the key into [`Recorded`], take their steps from [`super::switch`] and [`perform`]
+//! them in order. A refusal carries one plain sentence for the operator, and its cause goes to
+//! the log. The seat display driver stays in the driver store when seats go off.
 
 use super::backend::{seats_enabled, server_edition, session_wrapper, ENABLING, SEATS_KEY};
 use super::doctor::DriverState;

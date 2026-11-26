@@ -1,18 +1,19 @@
-//! Per-seat RDP, quality-gate, and host lifecycle supervision: the OS side.
+//! Runs each Windows seat: its RDP session, its quality gate and its host. This is the OS side.
 //!
-//! Each seat has one [`Runtime`]: its [`State`], a condition variable and a worker.
-//! There is no process-global seat singleton. The worker probes what the state names,
-//! feeds [`State::step`] and performs the actions it answers; `start` and `stop` feed
-//! their requests into the same state and wait on it. The lifecycle, with every timeout
-//! and the retry rule, is `step.rs`.
+//! Each seat has one [`Runtime`]: its [`State`], a condition variable and a worker thread. No
+//! seat state is global to the process. The worker probes whatever the state names, feeds the
+//! result to [`State::step`] and performs the actions that come back. `start` and `stop` feed
+//! their requests into the same state and wait on it. `step.rs` holds the lifecycle, with every
+//! timeout and the retry rule.
 //!
-//! Start blocks until the keeper's session is active, the same-session SDR quality gate
-//! has passed and the host holds both ports. A cycle that ends closes the keeper's job
-//! and logs off the account's session. Explicit stop is idempotent and waits for
-//! that teardown to finish. A service that died leaves the sessions of children that broke
-//! away from the job; the first look at each seat logs them off: all of a made account's, and
-//! of an adopted account only the session its cycle marked. Any other session of an adopted
-//! account is its person's: a start refuses one, nothing logs it off.
+//! - **Start** blocks until the keeper's session is active, the SDR quality gate has passed in
+//!   that same session, and the host holds both ports.
+//! - **A cycle that ends** closes the keeper's job and logs off the account's session.
+//! - **Stop** can be repeated, and waits for that teardown to finish.
+//! - **After the service died**, children that broke away from the job leave their sessions
+//!   behind. The first look at each seat logs those off: every session of a made account, and of
+//!   an adopted account only the session its cycle marked. Any other session of an adopted
+//!   account belongs to its person. A start refuses while one exists, and nothing logs it off.
 
 use super::lent::Lent;
 use super::step::{

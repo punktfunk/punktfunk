@@ -1,11 +1,15 @@
-//! The box's web console in every account's Firefox: an enterprise policy installs the
-//! certificate the door's console serves, so a seat's "open my console" link loads with no
-//! warning. Firefox reads no system store for that certificate, a leaf with no CA bit. Flathub's
-//! Firefox reads its policies through its `systemconfig` extension at `/app/etc/firefox`, a
-//! packaged one from `/etc/firefox`.
+//! Makes the box's web console open without a certificate warning in every account's Firefox.
 //!
-//! The door's account writes the certificate, so root installs only one that vouches for this
-//! box alone ([`checked`]), and writes the DER it checked, never the door's file.
+//! An enterprise policy installs the certificate that the door's console serves, so a seat's
+//! "open my console" link loads with no warning. It takes a policy because that certificate is
+//! a leaf with no CA bit, and Firefox reads no system store for such a certificate.
+//!
+//! Flathub's Firefox reads its policies through its `systemconfig` extension, at
+//! `/app/etc/firefox`. A packaged Firefox reads them from `/etc/firefox`.
+//!
+//! The door's account writes the certificate file. So root installs a certificate only when it
+//! vouches for this box and for nothing else ([`checked`]), and root writes the DER bytes it
+//! checked, never the door's file.
 
 use super::safe_open;
 use super::session::write_if_changed;

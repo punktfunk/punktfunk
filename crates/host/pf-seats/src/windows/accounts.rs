@@ -1,18 +1,20 @@
-//! Ownership-safe provisioning for Windows local seat accounts.
+//! Makes, adopts and removes the Windows local accounts that seats run on. It changes an
+//! account only after proving the account is a seat's.
 //!
-//! A made account is identified only by its exact NetUser comment marker,
-//! which embeds the full seat ID. New accounts use a random persisted password,
-//! `USER_PRIV_USER`, direct membership in the localized Remote Desktop Users
-//! alias resolved from SID S-1-5-32-555 and in [`SEATS_GROUP`], and
-//! `SeDenyInteractiveLogonRight`.
-//! Existing accounts are accepted only after marker and password verification.
-//! An adopted account is a person's own, identified by the SID its row stores. It gets the
-//! same groups and right and the person's password, never a comment or a flag, and its
-//! release takes back only what adopt gave.
-//! Administrator membership and remote-interactive denial make a seat unusable;
-//! deletion requires the same exact identity and an explicit caller action. A made account
-//! goes with its profile, at the next service start if the profile won't go at once; an
-//! adopted one is never deleted.
+//! **A made account** is recognised only by its NetUser comment: an exact marker that contains
+//! the full seat ID. A new one gets a random password, which is stored, `USER_PRIV_USER`,
+//! direct membership in Remote Desktop Users (the localized alias, resolved from SID
+//! S-1-5-32-555) and in [`SEATS_GROUP`], and `SeDenyInteractiveLogonRight`. An existing account
+//! is accepted only after its marker and its password are verified.
+//!
+//! **An adopted account** is a person's own, recognised by the SID its row stores. It gets the
+//! same groups and the same right, with the person's password. It never gets a comment or a
+//! flag. Releasing it takes back only what adopting gave.
+//!
+//! Membership in Administrators, or a denied remote-interactive logon, makes a seat unusable.
+//! Deleting needs the same exact identity and an explicit action by the caller. A made account
+//! is deleted with its profile, at the next service start if the profile can't be removed at
+//! once. An adopted account is never deleted.
 
 use super::doctor::AccountInspection;
 use crate::backend::{Adopted, BackendError};

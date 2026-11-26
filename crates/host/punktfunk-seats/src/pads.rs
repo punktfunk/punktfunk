@@ -1,15 +1,18 @@
-//! The supervisor's pad broker socket (`design/seat-pad-broker.md`): a running seat's host asks
-//! here for a pad, and the supervisor builds and relays it (`pf_inject::pad_broker`).
+//! The supervisor's pad broker socket (`design/seat-pad-broker.md`). A running seat's host asks
+//! here for a pad. The supervisor builds the pad and relays it (`pf_inject::pad_broker`).
 //!
-//! The socket file is world-connectable; the gate is `SO_PEERCRED`: a peer whose uid is not a
-//! running seat's (the owner's row included) is closed unanswered. A seat holds at most
-//! [`MAX_PER_SEAT`] pads and [`vhci::MAX_PER_SEAT`] USB devices; past that the answer is
-//! `capacity`. A USB device is served by a pad server of its own, in a scope of its own
-//! ([`serve_usb`]), so no byte of its descriptors comes from the seat and a supervisor restart
-//! leaves it running. A pad lives as long as its relay, a USB device as long as its pad server:
-//! the seat hanging up, or its host dying, ends both. A relayed pad and an attached USB socket
-//! sit in systemd's fd store, so a supervisor restart picks them up again ([`resume`]). A seat's
-//! stop takes both back ([`revoke`]).
+//! - **Who may ask.** Anyone can connect to the socket file. The check is `SO_PEERCRED`: a peer
+//!   whose uid is not that of a running seat is closed with no answer. The owner's row counts as
+//!   a seat here.
+//! - **Limits.** A seat holds at most [`MAX_PER_SEAT`] pads and [`vhci::MAX_PER_SEAT`] USB
+//!   devices. Past that the answer is `capacity`.
+//! - **USB devices.** Each is served by a pad server of its own, in a systemd scope of its own
+//!   ([`serve_usb`]). So no byte of its descriptors comes from the seat, and a supervisor
+//!   restart leaves it running.
+//! - **Lifetime.** A pad lives as long as its relay, a USB device as long as its pad server. When
+//!   the seat hangs up or its host dies, both end. A seat's stop takes both back ([`revoke`]).
+//! - **Restart.** A relayed pad and an attached USB socket are kept in systemd's fd store, so a
+//!   restarted supervisor picks them up again ([`resume`]).
 
 use crate::vhci;
 use anyhow::Context as _;

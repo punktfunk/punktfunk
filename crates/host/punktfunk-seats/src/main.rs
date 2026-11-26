@@ -1,13 +1,21 @@
-//! `punktfunk-seats`: the Linux seat supervisor and the operator's client for it.
+//! `punktfunk-seats`: the Linux seat supervisor, and the operator's command-line client for it.
 //!
-//! `serve` is the root daemon (`punktfunk-seats.service`). The other verbs send one request to
-//! its socket, as the box host does, and print the answer; `serve-usb` is the pad server the
-//! daemon starts for a seat's USB device, `pam-check` the password check it runs in a child, so
-//! libpam never loads into the daemon, and `login` the main process of a seat unit that opens a
-//! person's session with their password. The pad broker, [`pads`], and each seat's
-//! `/dev/uinput`, [`uinput`], are the daemon's too; they live here rather than in `pf-seats`
-//! because they link `pf-inject`, whose dependencies the Windows seat keeper's own workspace
-//! cannot resolve beside IronRDP.
+//! `serve` runs the supervisor: the root daemon of `punktfunk-seats.service`. The operator's
+//! verbs (`list`, `create`, `start` and the like) each send one request to the daemon's socket,
+//! as the box host does, and print the answer.
+//!
+//! The remaining verbs are helpers that the daemon, udev or a seat's unit runs. The usage text
+//! names the caller of each. Three of them:
+//!
+//! - `serve-usb`: the pad server for one USB device of a seat.
+//! - `pam-check`: the password check, run in a child process so libpam never loads into the
+//!   daemon.
+//! - `login`: the main process of a seat unit that opens a person's session with their password.
+//!
+//! The pad broker ([`pads`]) and each seat's `/dev/uinput` stand-in ([`uinput`]) are part of the
+//! daemon too. They are in this crate and not in `pf-seats` because they link `pf-inject`. The
+//! Windows seat keeper builds `pf-seats` in a workspace of its own, and that workspace can't
+//! resolve `pf-inject`'s dependencies beside IronRDP.
 
 #![forbid(unsafe_code)]
 

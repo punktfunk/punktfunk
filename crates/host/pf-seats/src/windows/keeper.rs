@@ -1,10 +1,13 @@
-//! What `punktfunk-seat-keeper.exe` takes from the supervisor.
+//! What the keeper, `punktfunk-seat-keeper.exe`, uses from this crate.
 //!
-//! The keeper links IronRDP, whose pinned release-candidate crypto cannot share a lockfile
-//! with the host, so it builds in its own workspace and runs as its own process. It reads the
-//! bootstrap the supervisor wrote, asks WTS whether its session still exists, reads the seat
-//! host's disconnect mark in the host root the bootstrap names, and stores the RDP leaf pin;
-//! this module is that surface and nothing else.
+//! The keeper is the small RDP client that signs a seat's account in. It links IronRDP, whose
+//! pinned release-candidate crypto crates can't share a lockfile with the host. So the keeper
+//! builds in a workspace of its own and runs as its own process.
+//!
+//! It does four things through this module: it reads the bootstrap the supervisor wrote, asks
+//! WTS whether its session still exists, reads the seat host's disconnect mark from the host
+//! root that the bootstrap names, and stores the pin of the RDP leaf certificate. The module is
+//! those four and nothing else.
 
 use super::util::{backend_error, require_elevated_admin, WinResult};
 use std::path::{Path, PathBuf};

@@ -1,11 +1,12 @@
-//! LocalSystem-user DPAPI storage for managed seat passwords.
+//! Stores seat account passwords, sealed with DPAPI under the LocalSystem user.
 //!
-//! Each blob is `credential-<SeatId>.bin` below `SecretRoot`. DPAPI uses the
-//! calling LocalSystem profile, `CRYPTPROTECT_UI_FORBIDDEN`, and the exact seat
-//! ID as optional entropy; machine scope is never requested. Plaintext lives in
-//! `Zeroizing` values, and DPAPI output memory is wiped before it is released.
-//! Passwords have no serialization implementation and their `Debug` output is
-//! always redacted. Callers can only load, store, test, or delete one seat blob.
+//! Each seat has one blob, `credential-<SeatId>.bin`, below `SecretRoot`. DPAPI seals it for the
+//! calling LocalSystem profile, with `CRYPTPROTECT_UI_FORBIDDEN` and the exact seat ID as
+//! optional entropy. Machine scope is never requested.
+//!
+//! Plaintext is held in `Zeroizing` values, and the memory DPAPI returns is wiped before it is
+//! released. A password can't be serialized, and its `Debug` output is always redacted. A caller
+//! can only load, store, test or delete the blob of one seat.
 
 use crate::bootstrap::password_rule;
 use crate::model::SeatId;

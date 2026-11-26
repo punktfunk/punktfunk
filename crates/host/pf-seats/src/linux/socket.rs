@@ -1,11 +1,15 @@
-//! The supervisor's Unix socket, open to root and the `punktfunk` user, and to the box owner for
-//! box-wide Flatpaks.
+//! The supervisor's Unix socket. It is open to root, to the `punktfunk` user, and to the box
+//! owner for box-wide Flatpaks.
 //!
-//! One request per connection, framed as on the Windows pipe ([`crate::ipc::answer`]). The
-//! socket file is `0660 root:punktfunk-door`, the door user's own group, plus an ACL entry for
-//! the box owner's uid, but the gate is the kernel's record of who connected (`SO_PEERCRED`): a
-//! peer [`command_allowed`] refuses is closed unanswered. A leftover socket from a crashed
-//! supervisor is replaced; a live one makes [`bind`] fail.
+//! Each connection carries one request, framed as on the Windows pipe ([`crate::ipc::answer`]).
+//!
+//! The socket file is `0660 root:punktfunk-door`, where `punktfunk-door` is the door user's own
+//! group, plus an ACL entry for the box owner's uid. The file mode is not the check, though. The
+//! check is the kernel's record of who connected (`SO_PEERCRED`): a peer that
+//! [`command_allowed`] refuses is closed with no answer.
+//!
+//! A socket file left by a crashed supervisor is replaced. One that a live supervisor holds
+//! makes [`bind`] fail.
 
 use super::shared::{
     acl_bytes, ACL_ACCESS, ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ,

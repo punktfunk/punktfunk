@@ -1,15 +1,20 @@
-//! `punktfunk-seats login <account>`: a person's session opened with their password, as a
-//! display manager opens one, so what their own login unlocks with it unlocks here too.
+//! `punktfunk-seats login <account>`: opens a person's session with their password, the way a
+//! display manager does. So whatever the person's own login unlocks with that password is
+//! unlocked here too.
 //!
-//! It is the main process of `punktfunk-seat@<account>.service` for a cold start the person
-//! proved with their password (the drop-in of `session::render_login`), and runs as root. It
-//! takes the password once from the supervisor ([`super::login_password`]), runs one transaction on
-//! the `punktfunk-seat` PAM service ([`pam::Login`]: authenticate, account, credentials,
-//! session), then forks a child that drops to the person and execs `seat-session`. The root
-//! parent forwards the stop signals, closes the session when the child ends and exits with its
-//! status. Before a session exists it exits with a code of [`fallback`]'s, which tells the
-//! supervisor to start the row without the helper. It never refuses a start: the gate decided
-//! who gets in moments earlier.
+//! It runs as root, as the main process of `punktfunk-seat@<account>.service`, for a cold start
+//! that the person proved with their password (the drop-in from `session::render_login`):
+//!
+//! 1. It takes the password once from the supervisor ([`super::login_password`]).
+//! 2. It runs one transaction on the `punktfunk-seat` PAM service ([`pam::Login`]):
+//!    authenticate, account, credentials, session.
+//! 3. It forks a child that drops to the person and execs `seat-session`.
+//! 4. The root parent forwards the stop signals, closes the PAM session when the child ends,
+//!    and exits with the child's status.
+//!
+//! If it fails before a session exists, it exits with one of [`fallback`]'s codes. That tells
+//! the supervisor to start the row without the helper. The helper never refuses a start: the
+//! supervisor decided moments earlier who gets in.
 
 #![allow(unsafe_code)]
 

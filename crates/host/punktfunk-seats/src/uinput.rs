@@ -1,14 +1,21 @@
-//! A seat's `/dev/uinput`. The supervisor serves each running seat a CUSE device,
-//! `/dev/punktfunk/uinput-<account>`, which the seat's unit binds over `/dev/uinput`, and replays
-//! each open onto a real `/dev/uinput` of its own. A seat never holds the real node: a device it
-//! made there would sit on seat0, and a keyboard or mouse reaches the VT's SysRq and
-//! `/dev/input/mice` whoever owns its node. So only gamepad capabilities pass ([`allowed`]), the
-//! supervisor stamps `phys` itself and records each device it makes for the udev helper
-//! ([`record_device`]), and a seat holds at most [`MAX_OPENS`].
+//! A seat's `/dev/uinput`: a stand-in the supervisor serves, so a seat never holds the real one.
 //!
-//! A caller may be 32-bit: the kernel marks its ioctls, and its `input_event` and FF upload
-//! layouts are translated. The CUSE fd and each open's uinput fd sit in systemd's fd store, so a
-//! supervisor restart keeps the node the seat has bound and the devices on it.
+//! For each running seat the supervisor serves a CUSE device, `/dev/punktfunk/uinput-<account>`.
+//! The seat's unit binds it over `/dev/uinput`. The supervisor replays each open of the stand-in
+//! onto a real `/dev/uinput` handle of its own.
+//!
+//! Why a seat never holds the real node: a device made there sits on seat0, and a keyboard or
+//! mouse reaches the VT's SysRq and `/dev/input/mice` whoever owns its node. So:
+//!
+//! - Only gamepad capabilities pass ([`allowed`]).
+//! - The supervisor sets `phys` itself, and records each device it makes for the udev helper
+//!   ([`record_device`]).
+//! - A seat holds at most [`MAX_OPENS`] opens.
+//!
+//! A caller may be a 32-bit process. The kernel marks its ioctls, and its `input_event` and
+//! force-feedback upload layouts are translated. The CUSE fd and the uinput fd of each open are
+//! kept in systemd's fd store. So after a supervisor restart the seat still has the node it
+//! bound, and the devices on it.
 
 use crate::cuse::{self, Request};
 use pf_inject::pad_broker::{self, ReplayUinput};

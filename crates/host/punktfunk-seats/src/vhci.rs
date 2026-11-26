@@ -1,12 +1,17 @@
-//! A seat's USB/IP pads (`design/seat-pad-broker.md` §1.2). A pad server the supervisor starts
-//! serves the device; the supervisor attaches its connected socket to a vhci port, records
-//! whose the port is, and the udev helper ([`node_owner`]) maps every node under it to that seat.
+//! A seat's USB/IP pads (`design/seat-pad-broker.md` §1.2): controllers that reach the box as
+//! USB devices on a port of the kernel's virtual host controller, vhci.
 //!
-//! [`MAP`] holds one file per seat's port: `<account> <sockfd>`, the socket number `attach`
-//! took, as vhci's `status` shows it. A row whose port is free or holds another socket is
-//! stale. While the supervisor runs with the udev rule for seat pads installed, a new vhci interface
-//! starts unauthorized: the udev helper authorizes a seat's only when [`interface_allowed`] takes
-//! what the kernel parsed.
+//! The supervisor starts a pad server, which serves the device. The supervisor attaches the pad
+//! server's connected socket to a vhci port and records which seat the port belongs to. The udev
+//! helper ([`node_owner`]) then gives every device node under that port to that seat.
+//!
+//! [`MAP`] holds one file per port a seat has, with the content `<account> <sockfd>`. The socket
+//! number is the one `attach` took, as vhci's `status` file shows it. A record whose port is
+//! free, or holds another socket, is stale.
+//!
+//! While the supervisor runs with the udev rule for seat pads installed, a new vhci interface
+//! starts unauthorized. The udev helper authorizes a seat's interface only when
+//! [`interface_allowed`] accepts what the kernel parsed from it.
 
 use anyhow::{Context, Result};
 use pf_inject::usbip;
