@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.unom.punktfunk.components.HostLine
@@ -207,7 +207,7 @@ internal fun HostDetailScreen(
                     ValueRow(stringResource(R.string.hosts_field_address), "${host.address}:${host.port}")
                     ValueRow(stringResource(R.string.hostcard_management_port), host.effectiveMgmtPort.toString())
                     if (host.mac.isNotEmpty()) {
-                        ValueRow(stringResource(R.string.hosts_field_mac), host.mac.joinToString(", "))
+                        ValueRow(stringResource(R.string.hosts_field_mac), host.mac.joinToString("\n"))
                     }
                     ToggleRow(
                         title = stringResource(R.string.hosts_clipboard),
@@ -311,18 +311,24 @@ internal fun HostDetailScreen(
 }
 
 /**
- * A fact about the host: its label, and its value trailing. A value that does not fit beside the
- * label moves under it and wraps, so neither text is squeezed or cut.
+ * A fact about the host: the label takes at most two fifths of the row, the value three fifths
+ * at the end. Both wrap, so a long translated label never squeezes the value to nothing.
  */
 @Composable
 private fun ValueRow(label: String, value: String) {
-    FlowRow(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        itemVerticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(end = 12.dp))
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(2f, fill = false).padding(end = 12.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(3f),
+        )
     }
 }
 
