@@ -1,14 +1,19 @@
-//! A seat's systemd unit: its environment file, its bind-mount drop-in and its state.
+//! Everything systemd reads for a seat: its environment file, its drop-ins and the unit's state.
 //!
-//! `punktfunk-seat@<user>.service` runs the seat's user in a logind session. The supervisor
-//! writes its files under `/run` before each start: `punktfunk/seats/<user>.env`, the seat
-//! contract the host reads plus its management token; a drop-in that binds the seat's private
-//! `compatdata`, `shadercache` and `downloading` over the shared games folder's, shows it the
-//! owner's libraries, hides the box's mounted drives and binds the supervisor's uinput proxy
-//! over `/dev/uinput`; and one that
-//! binds [`NO_UPDATE`] over Steam's OS and firmware update helpers. The seat user's own
-//! `user@<uid>.service` gets the same binds ([`render_manager`]). All are rewritten from the
-//! ledger on a start, so a reboot that empties `/run` loses nothing.
+//! `punktfunk-seat@<user>.service` runs the seat's user in a logind session. Before each start
+//! the supervisor writes these files under `/run`:
+//!
+//! - `punktfunk/seats/<user>.env`: the environment that makes the host a seat host (the seat
+//!   contract), plus its management token.
+//! - A drop-in with the seat's bind mounts. It puts the seat's private `compatdata`,
+//!   `shadercache` and `downloading` over those of the shared games folder, shows the owner's
+//!   libraries, hides the box's mounted drives, and puts the supervisor's uinput stand-in over
+//!   `/dev/uinput`.
+//! - A drop-in that puts [`NO_UPDATE`] over Steam's OS and firmware update helpers.
+//!
+//! The seat user's own systemd manager, `user@<uid>.service`, gets the same bind mounts
+//! ([`render_manager`]). Every file is written again from the ledger at each start, so a reboot
+//! that empties `/run` loses nothing.
 
 use super::accounts::Passwd;
 use super::{err, libraries, run, shared, SeatAccount};

@@ -1,11 +1,17 @@
-//! Desk pads lent to a seat: a USB game controller plugged into the box that only its holder's
-//! account opens. One record per lent key in [`DIR`], root's alone: the holder's account while
-//! its seat runs, [`PARKED`] while it doesn't. The directory exists only while a lend does, and
-//! udev's rule line runs [`super::node_owner`] on USB nodes only while it exists.
+//! Desk pads lent to a seat: a USB game controller plugged into the box, which only the account
+//! that holds it can open.
 //!
-//! A change of holder rewrites the record, then unbinds the device from its driver and binds
-//! it back: every open handle dies, raw USB too, and its nodes come back under the new record. What may be
-//! lent is read from sysfs and udev's database, never from the caller.
+//! [`DIR`] holds one record file per lent controller, and only root can write there. A record
+//! names the holder's account while that account's seat runs, and [`PARKED`] while it doesn't.
+//! The directory exists only while something is lent, and the udev rule runs
+//! [`super::node_owner`] on USB nodes only while it exists.
+//!
+//! When the holder changes, the record is rewritten first. Then the device is unbound from its
+//! driver and bound again. That closes every open handle, raw USB handles too, and the device's
+//! nodes come back owned as the new record says.
+//!
+//! Which controllers may be lent is read from sysfs and udev's database, never taken from the
+//! caller.
 
 use super::node_owner::made_devices::put;
 use crate::backend::{pad_handover, pad_not_a_controller, pad_not_present};

@@ -1,26 +1,26 @@
-//! The box owner's Steam libraries, shown to a seat in place.
+//! Shows the box owner's Steam libraries to a made seat, without copying them.
 //!
-//! Every library the owner's Steam lists appears in the seat at `/run/media/punktfunk/<key>`.
-//! Its `steamapps` arrives through an idmapped mount: on disk each file stays the owner's, in the
-//! seat it is the seat user's, so the seat's Steam plays, updates and runs Proton from it with no
-//! ACL. The folder itself is the seat's own on the library's drive ([`make_anchor`]), where Steam
-//! reads the free space an install needs. The seat's own `compatdata` and `shadercache` under
-//! `seats/<id>/private/<key>` cover the owner's, and the library's own path is inaccessible to the
-//! unit, so the owner's prefixes never reach a seat.
+//! Each library the owner's Steam lists appears in the seat at `/run/media/punktfunk/<key>`:
 //!
-//! The supervisor holds no `CAP_SYS_ADMIN`, so the seat unit's `ExecStartPre=+` mounts each
-//! library at a root-only stage under [`STAGE_ROOT`], through `nsenter` into PID 1's namespace:
-//! systemd gives even a `+` command a namespace of its own once the unit has one. That mount
-//! checks the folder again ([`super::mount_share`]), since its path may change after [`share`].
-//! `BindPaths=` then carries the stage, idmap and all, into the seat. The libraries are read at
-//! each start; a drive the owner mounts later reaches the seat on its next start.
+//! - Its `steamapps` folder comes through an id-mapped mount. On disk every file still belongs
+//!   to the owner. Inside the seat it belongs to the seat's user, so the seat's Steam can play,
+//!   update and run Proton from it with no ACL.
+//! - The folder around it is the seat's own, on the library's drive ([`make_anchor`]). Steam
+//!   reads the free space for an install from there.
+//! - The seat's own `compatdata` and `shadercache`, under `seats/<id>/private/<key>`, are mounted
+//!   over the owner's, and the library's real path is hidden from the unit. So the owner's Wine
+//!   prefixes never reach a seat.
 //!
-//! The box's `seat_library_writable` off (`library_writable` in [`DEFAULTS`]) mounts them
-//! read-only: a seat plays what is installed, and can't update, install or rewrite an
-//! appmanifest there. The few files a game needs to write get private copies ([`spots`]).
+//! The supervisor has no `CAP_SYS_ADMIN`, so it cannot mount. The seat's unit does it before each
+//! start: an `ExecStartPre=+` line runs [`super::mount_share`], which checks the folder again and
+//! mounts it on a root-only stage under [`STAGE_ROOT`]. The line goes through `nsenter` into PID
+//! 1's mount namespace, because systemd gives even a `+` command the unit's own namespace.
+//! `BindPaths=` then carries the stage into the seat. The libraries are read at each start, so a
+//! drive the owner mounts later reaches the seat on its next start.
 //!
-//! Every root the owner granted a plugin appears read-only at its own path ([`Rom`]) through a
-//! stage, idmapped where its filesystem takes it; a shared shortcut's folder as an [`Overlay`].
+//! With the box setting `seat_library_writable` off (`library_writable` in [`DEFAULTS`]) the
+//! mounts are read-only, and the few files a game must write get private copies ([`spots`]). A
+//! folder the owner granted a plugin is read-only ([`Rom`]); a shortcut's is an [`Overlay`].
 
 use super::accounts::Passwd;
 use super::shared::{self, make_dir};
