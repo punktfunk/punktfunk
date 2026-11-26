@@ -22,11 +22,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import io.unom.punktfunk.kit.R
 import io.unom.punktfunk.kit.keyVk
 
 /*
@@ -175,13 +177,14 @@ internal fun CompanionKeyboard(sink: KeySink, haptics: ConsoleHaptics, modifier:
 @Composable
 internal fun KeyCap(key: Key, armed: Boolean, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
+    val held = stringResource(R.string.android_key_held_a11y)
     Surface(
         shape = MaterialTheme.shapes.small,
         color = if (armed) scheme.primaryContainer else scheme.surfaceVariant,
         contentColor = if (armed) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
         modifier = modifier.semantics {
             role = Role.Button
-            stateDescription = if (armed) "held" else ""
+            stateDescription = if (armed) held else ""
         },
     ) {
         Box(contentAlignment = Alignment.Center) {
