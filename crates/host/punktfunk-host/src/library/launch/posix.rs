@@ -161,24 +161,6 @@ pub(crate) fn heroic_command(value: &str) -> Option<String> {
     Some(format!("{prefix} --no-gui '{uri}'"))
 }
 
-/// `<runner>:<appName>` → `heroic://launch?…`. `None` for another runner, or an appName that
-/// would not stay one URI token (Epic/Amazon alnum, GOG digits).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn heroic_launch_uri(value: &str) -> Option<String> {
-    let (runner, app) = value.split_once(':')?;
-    if !matches!(runner, "legendary" | "gog" | "nile") {
-        return None;
-    }
-    if app.is_empty()
-        || !app
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-    {
-        return None;
-    }
-    Some(format!("heroic://launch?appName={app}&runner={runner}"))
-}
-
 /// `open` with one quoted link: LaunchServices starts the app that claims its scheme.
 #[cfg(target_os = "macos")]
 fn open_link(uri: &str) -> String {

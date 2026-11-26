@@ -18,6 +18,8 @@ pub(super) const LAUNCHER_UI_STORES: &[&str] = &[
     "ubisoft",
     "rockstar",
     "itch",
+    "heroic",
+    "heroic-console",
 ];
 
 /// The Xbox app's package identity and app id (its `AppxManifest.xml`). The publisher hash
@@ -177,6 +179,11 @@ fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
         // explorer.exe + Epic URI: one argv, no shell. Same pattern as the Steam fallback.
         "epic" => epic_launch_uri(&spec.value)
             .map(|uri| WinRecipe::handoff(format!("explorer.exe \"{uri}\""))),
+        // `gui=false` keeps Heroic's window shut, as on macOS.
+        "heroic" => heroic_launch_uri(&spec.value).map(|uri| {
+            let exe = store_client_exe("heroic");
+            WinRecipe::handoff(heroic_cmdline(exe.as_deref(), &format!("{uri}&gui=false")))
+        }),
         // Direct exe spawn (not a Galaxy hand-off). `gog_spawn` re-confines the plugin triple.
         "gog" => gog_spawn(&spec.value).map(|(cmdline, workdir)| WinRecipe::game(cmdline, workdir)),
         // Direct exe spawn, only of a path a signed-in user's Game Bar list names.
@@ -268,6 +275,11 @@ fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
             }),
             "hydra-big-picture" => hydra_exe()
                 .map(|exe| WinRecipe::handoff(format!("\"{}\" --big-picture", exe.display()))),
+            // `--console` routes Heroic's UI, `--fullscreen` fills the screen; a running Heroic
+            // ignores both.
+            "heroic-console" => store_client_exe("heroic").map(|exe| {
+                WinRecipe::handoff(format!("\"{}\" --console --fullscreen", exe.display()))
+            }),
             other => store_client_exe(other).map(WinRecipe::handoff_exe),
         },
         // Operator command. `cmd.exe /c` blocks until it returns, so the pid is that command's life.
@@ -307,6 +319,16 @@ fn seat_steam_cmdline(exe: &std::path::Path, seat_id: &str, uri: &str) -> String
         exe.display(),
         pf_seats::steam::ipc_name(seat_id)
     )
+}
+
+/// Heroic's link as `Heroic.exe`'s argv, which a cold or a running Heroic both read, so no
+/// handler need be registered. Without an exe, explorer.exe resolves the `heroic://` handler
+/// Heroic registers for its user on its first run.
+fn heroic_cmdline(exe: Option<&Path>, uri: &str) -> String {
+    match exe {
+        Some(exe) => format!("\"{}\" \"{uri}\"", exe.display()),
+        None => format!("explorer.exe \"{uri}\""),
+    }
 }
 
 /// Default `steam.exe` only. Non-default installs use the explorer.exe protocol
@@ -382,7 +404,8 @@ fn battlenet_exe() -> Option<std::path::PathBuf> {
 
 /// The client a store's launcher tile opens, by `launcher_ui` value. Each forwards to a
 /// running instance, so it is a hand-off. The Amazon and itch apps install per user, and only
-/// the player's own copy counts: the launch runs as them.
+/// the player's own copy counts: the launch runs as them. Heroic installs machine-wide, or per
+/// user from an older installer; both Heroic tiles open the same exe.
 fn store_client_exe(value: &str) -> Option<std::path::PathBuf> {
     let file = |p: std::path::PathBuf| p.is_file().then_some(p);
     let program_files = |rel: &str| {
@@ -408,6 +431,9 @@ fn store_client_exe(value: &str) -> Option<std::path::PathBuf> {
             uninstall_location("Rockstar Games Launcher").and_then(|d| file(d.join("Launcher.exe")))
         }
         "itch" => per_user(r"itch\itch.exe"),
+        "heroic" | "heroic-console" => {
+            program_files(r"Heroic\Heroic.exe").or_else(|| per_user(r"Programs\heroic\Heroic.exe"))
+        }
         _ => None,
     }
 }
@@ -909,11 +935,22 @@ mod tests {
             "ubisoft",
             "rockstar",
             "itch",
+            "heroic",
+            "heroic-console",
         ] {
             assert!(known_launcher_ui(v), "{v}");
         }
         // A store client the box lacks drops its tile, never the library.
-        for v in ["amazon", "battlenet", "ea", "ubisoft", "rockstar", "itch"] {
+        for v in [
+            "amazon",
+            "battlenet",
+            "ea",
+            "ubisoft",
+            "rockstar",
+            "itch",
+            "heroic",
+            "heroic-console",
+        ] {
             assert_eq!(
                 resolvable_launcher_ui(v),
                 store_client_exe(v).is_some(),
@@ -929,7 +966,6 @@ mod tests {
             resolvable_launcher_ui("hydra-big-picture"),
             hydra_exe().is_some()
         );
-        assert!(!known_launcher_ui("heroic"));
         assert!(!known_launcher_ui("lutris"));
     }
 
@@ -958,6 +994,20 @@ mod tests {
         if let Some(r) = ui("hydra-big-picture") {
             assert!(
                 r.cmdline.ends_with("Hydra.exe\" --big-picture"),
+                "{}",
+                r.cmdline
+            );
+            assert!(!r.owns_game);
+        }
+        // Both Heroic tiles share one exe probe; only the console tile carries the flags.
+        assert_eq!(ui("heroic").is_some(), ui("heroic-console").is_some());
+        if let Some(r) = ui("heroic") {
+            assert!(r.cmdline.ends_with("Heroic.exe\""), "{}", r.cmdline);
+            assert!(!r.owns_game);
+        }
+        if let Some(r) = ui("heroic-console") {
+            assert!(
+                r.cmdline.ends_with("Heroic.exe\" --console --fullscreen"),
                 "{}",
                 r.cmdline
             );
@@ -1002,7 +1052,6 @@ mod tests {
             })
         };
         assert!(ui("lutris").is_none());
-        assert!(ui("heroic").is_none());
         assert!(ui("").is_none());
 
         let Some(exe) = playnite_fullscreen_exe() else {
@@ -1239,5 +1288,43 @@ mod tests {
             args: None,
         })
         .is_none());
+    }
+
+    /// A Heroic title hands Heroic's link to Heroic.exe, else to the player's shell, as one quoted
+    /// argv element; the lease finds the game by the entry's install dir. A value the link can't
+    /// carry runs nothing.
+    #[test]
+    fn heroic_titles_hand_their_link_to_heroic() {
+        let heroic = |v: &str| {
+            windows_launch_for(&LaunchSpec {
+                kind: "heroic".into(),
+                value: v.into(),
+                ..Default::default()
+            })
+        };
+        let link = "heroic://launch?appName=1207658924&runner=gog&gui=false";
+        let r = heroic("gog:1207658924").expect("heroic recipe");
+        assert_eq!(
+            r.cmdline,
+            heroic_cmdline(store_client_exe("heroic").as_deref(), link)
+        );
+        assert_eq!(
+            heroic_cmdline(Some(Path::new(r"C:\Program Files\Heroic\Heroic.exe")), link),
+            format!(r#""C:\Program Files\Heroic\Heroic.exe" "{link}""#)
+        );
+        assert_eq!(
+            heroic_cmdline(None, link),
+            format!(r#"explorer.exe "{link}""#)
+        );
+        assert!(r.workdir.is_none());
+        assert!(!r.owns_game, "a protocol hand-off is not the game");
+        for bad in [
+            "sideload:x",
+            "legendary:bad name",
+            "legendary:Q\" & calc",
+            "nile:",
+        ] {
+            assert!(heroic(bad).is_none(), "{bad}");
+        }
     }
 }
