@@ -254,6 +254,9 @@ final class ScreenWindows {
         }
     }
 
+    /// With separate Spaces each display has its own menu bar, and only a window above
+    /// `.mainMenu` covers it. The window hides while the app is inactive, so it never covers
+    /// another app.
     private func open(_ index: UInt8, on display: NSScreen) {
         let window = NSWindow(
             contentRect: display.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -262,6 +265,8 @@ final class ScreenWindows {
         window.backgroundColor = .black
         window.hasShadow = false
         window.isExcludedFromWindowsMenu = true
+        window.level = .mainMenu + 1
+        window.hidesOnDeactivate = true
         window.collectionBehavior = [.fullScreenAuxiliary, .ignoresCycle]
         window.acceptsMouseMovedEvents = true
         let view = ScreenStreamView(screen: index)
