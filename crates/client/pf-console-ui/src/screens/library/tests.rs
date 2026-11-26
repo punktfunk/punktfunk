@@ -1715,3 +1715,42 @@ fn the_plate_lands_on_a_band_item() {
         "plate {plate:?} vs tile {item:?}: off by {off:?}"
     );
 }
+
+/// Once a move's glide lands, the grid rests: the offset and the focused card hold still. A
+/// reveal started from the moving offset aimed at the last frame's position and swapped
+/// between two offsets a fraction of a pixel apart, every frame, for as long as it showed.
+#[test]
+fn a_landed_grid_rests() {
+    let (mut s, library, mut settings) = long_grid();
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+    let rect = Rect::from_xywh(0.0, 0.0, 1280.0, 800.0);
+    for step in 0..6 {
+        let mut fx = Outbox::default();
+        s.menu(
+            MenuEvent::Move(MenuDir::Down),
+            &mut Ctx::test(&mut settings, &library),
+            &mut fx,
+        );
+        let mut seen = Vec::new();
+        for f in 0..150 {
+            s.render(
+                surface.canvas(),
+                rect,
+                1.0,
+                1.0 / 60.0,
+                &fonts,
+                &mut Ctx::test(&mut settings, &library),
+            );
+            if f >= 120 {
+                let card = s.geom[s.cursor.max(0) as usize];
+                seen.push((s.grid.borrow().offset(Id::new(GRID, 0)), card));
+            }
+        }
+        assert!(
+            seen.iter().all(|f| *f == seen[0]),
+            "move {step} still moving after 2 s: {:?}",
+            &seen[..4]
+        );
+    }
+}
