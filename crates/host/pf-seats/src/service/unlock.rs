@@ -53,13 +53,12 @@ fn checked_fingerprint(fingerprint: &str) -> Result<[u8; 32], ApiError> {
 
 /// The code an answer leads with: a backend refusal's own, else the error's.
 fn code_of(error: &ApiError) -> String {
-    match (error.code, error.message.split_once(": ")) {
-        (ErrorCode::Backend, Some((code, _))) => code.to_owned(),
-        (code, _) => serde_json::to_value(code)
+    error.refusal_code().map(str::to_owned).unwrap_or_else(|| {
+        serde_json::to_value(error.code)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default(),
-    }
+            .unwrap_or_default()
+    })
 }
 
 impl<B: PlatformBackend> SeatService<B> {
@@ -393,4 +392,20 @@ fn full() -> ApiError {
         "This profile has too many signed-in devices. Sign one out in the console, then try again.",
     )
     .said("devices_full")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An audit line names a backend refusal by its own code, whether the answer carries it as
+    /// a field or only in its message, and any other error by the error's code.
+    #[test]
+    fn an_audit_line_names_a_backend_refusal_by_its_own_code() {
+        let current = ApiError::from(BackendError::new("credential_wrong", "No."));
+        assert_eq!(code_of(&current), "credential_wrong");
+        let older = ApiError::new(ErrorCode::Backend, "credential_wrong: No.");
+        assert_eq!(code_of(&older), "credential_wrong");
+        assert_eq!(code_of(&invalid("bad")), "invalid_request");
+    }
 }

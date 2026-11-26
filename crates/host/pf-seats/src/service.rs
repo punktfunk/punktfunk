@@ -828,6 +828,7 @@ impl From<BackendError> for ApiError {
     fn from(error: BackendError) -> Self {
         Self {
             message: error.to_string(),
+            refusal: Some(error.code),
             said: error.said,
             params: error.params,
             ..Self::new(ErrorCode::Backend, "")

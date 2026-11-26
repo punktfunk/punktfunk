@@ -241,10 +241,10 @@ fn refusal(error: &ApiError, offered: bool) -> (RejectReason, Said) {
             .map_or_else(String::new, |code| format!("apierr_{code}")),
         params: error.params.clone().into_iter().collect(),
     };
-    let prompt = match (error.code, error.message.split_once(": ")) {
-        (ErrorCode::Backend, Some(("unlock_required", _))) => Some(Said::default()),
-        (ErrorCode::Backend, Some((code, sentence))) if PROMPT_CODES.contains(&code) => {
-            Some(backend(sentence))
+    let prompt = match (error.code, error.refusal_code()) {
+        (ErrorCode::Backend, Some("unlock_required")) => Some(Said::default()),
+        (ErrorCode::Backend, Some(code)) if PROMPT_CODES.contains(&code) => {
+            Some(backend(error.sentence()))
         }
         (ErrorCode::Capacity, _) => Some(backend(&error.message)),
         _ => None,
@@ -258,20 +258,12 @@ fn refusal(error: &ApiError, offered: bool) -> (RejectReason, Said) {
 
 /// The code an answer leads with, for the log: a backend refusal's own, else the error's.
 fn code_of(error: &ApiError) -> String {
-    let own = error.message.split_once(": ").map(|(code, _)| code);
-    match own {
-        Some(code)
-            if error.code == ErrorCode::Backend
-                && !code.is_empty()
-                && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') =>
-        {
-            code.to_owned()
-        }
-        _ => serde_json::to_value(error.code)
+    error.refusal_code().map(str::to_owned).unwrap_or_else(|| {
+        serde_json::to_value(error.code)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default(),
-    }
+            .unwrap_or_default()
+    })
 }
 
 /// Each (seat, device) a connect may still hold, and how many such connects. A connect claims
@@ -484,7 +476,7 @@ pub(crate) mod fake {
 
     /// A supervisor refusal as the supervisor words it.
     pub(crate) fn refused(code: &str, sentence: &str) -> ApiError {
-        ApiError::new(ErrorCode::Backend, format!("{code}: {sentence}"))
+        ApiError::from(pf_seats::BackendError::new(code, sentence))
     }
 
     static ARMED: Mutex<Vec<(String, Arc<dyn Seats>)>> = Mutex::new(Vec::new());
@@ -667,6 +659,19 @@ mod tests {
             code_of(&ApiError::new(ErrorCode::Transport, "read: timed out")),
             "transport"
         );
+        // An older supervisor's answer carries the code only in its message.
+        assert_eq!(wrong.refusal.as_deref(), Some("credential_wrong"));
+        for (error, _) in &cases {
+            let older = ApiError {
+                refusal: None,
+                ..error.clone()
+            };
+            assert_eq!(code_of(&older), code_of(error), "{}", error.message);
+            for offered in [true, false] {
+                let want = heard(error, offered);
+                assert_eq!(heard(&older, offered), want, "{}", error.message);
+            }
+        }
     }
 
     /// The pairing record's name as the supervisor takes it, or one that always passes.

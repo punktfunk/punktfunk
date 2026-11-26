@@ -257,7 +257,7 @@ fn password(stay: bool, enroll: Option<UnlockKey>) -> Proof {
 /// The code an error leads with, as the door reads it.
 fn code(error: &ApiError) -> &str {
     match error.code {
-        ErrorCode::Backend => error.message.split_once(": ").map_or("", |(c, _)| c),
+        ErrorCode::Backend => error.refusal_code().unwrap_or(""),
         ErrorCode::InvalidRequest => "invalid_request",
         ErrorCode::NotFound => "not_found",
         ErrorCode::Capacity => "capacity",
