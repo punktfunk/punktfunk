@@ -19,7 +19,7 @@ use super::safe_open;
 use super::shared::{self, Reader};
 use crate::model::SeatId;
 use crate::steam::shortcuts::{self, CompatRow, Fields};
-use rustix::fs::{AtFlags, Mode};
+use rustix::fs::AtFlags;
 use rustix::io::Errno;
 use std::collections::BTreeSet;
 use std::os::fd::OwnedFd;
@@ -351,7 +351,7 @@ fn place_in(
                 .filter(|(id, ..)| merged.ours.contains(id));
             let mut art = art.peekable();
             if art.peek().is_some() {
-                let grid = seat_folder(&config, "grid", seat)?;
+                let grid = shared::seat_folder(&config, "grid", seat)?;
                 for (_, name, bytes) in art {
                     shared::put_file(&grid, name, bytes, reader)?;
                 }
@@ -386,7 +386,7 @@ fn link_tools(steam: &OwnedFd, seat: &Passwd, tools: &[(String, PathBuf)]) -> st
     let dir = match safe_open::dir_at(steam, TOOLS)? {
         Some(dir) => dir,
         None if tools.is_empty() => return Ok(()),
-        None => seat_folder(steam, TOOLS, seat)?,
+        None => shared::seat_folder(steam, TOOLS, seat)?,
     };
     for name in shared::names(&dir)? {
         let Ok(target) = rustix::fs::readlinkat(&dir, name.as_str(), Vec::new()) else {
@@ -413,20 +413,6 @@ fn link_tools(steam: &OwnedFd, seat: &Passwd, tools: &[(String, PathBuf)]) -> st
         rustix::fs::chownat(&dir, name.as_str(), Some(uid), Some(gid), flags)?;
     }
     Ok(())
-}
-
-/// Folder `name` in `at`, made the seat's when absent. A link there is refused.
-fn seat_folder(at: &OwnedFd, name: &str, seat: &Passwd) -> std::io::Result<OwnedFd> {
-    let made = match rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o755)) {
-        Ok(()) => true,
-        Err(Errno::EXIST) => false,
-        Err(e) => return Err(e.into()),
-    };
-    let dir = safe_open::dir_at(at, name)?.ok_or(std::io::ErrorKind::NotFound)?;
-    if made {
-        std::os::unix::fs::fchown(&dir, Some(seat.uid), Some(seat.gid))?;
-    }
-    Ok(dir)
 }
 
 /// The seat's appids into the box's library copy, beside every other seat's row, and into its
