@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn a_value_never_starts_a_line_of_its_own() {
         let planted = format!("https://a\n{TOKEN_KEY}{}\r\n", "0".repeat(64));
-        let line = quoted("PUNKTFUNK_BROWSER_ORIGINS", &planted);
+        let line = quoted("K", &planted);
         assert_eq!(line.lines().count(), 1, "{line:?}");
         assert_eq!(token_in(&line), None);
         assert_eq!(quoted("K", "a\\b\"c"), "K=\"a\\\\b\\\"c\"\n");
