@@ -157,6 +157,10 @@ pub(crate) struct NativeClient {
     /// When the device last opened a session, unix seconds. `null` until its first session
     /// on a host that records it.
     last_seen_unix: Option<i64>,
+    /// The OS the device last said it runs, such as `macos`, `ios`, `android`, `windows`,
+    /// `linux`, or `web` for a browser. `null` until a client that states it connects.
+    #[schema(example = "android")]
+    platform: Option<String>,
 }
 
 impl NativeClient {
@@ -174,6 +178,7 @@ impl NativeClient {
             until_disconnect: c.until_disconnect,
             preferred_pad_slot: c.preferred_pad_slot,
             last_seen_unix: c.last_seen_unix,
+            platform: c.platform,
         }
     }
 }
@@ -564,6 +569,7 @@ pub(crate) async fn update_native_client_access(
                     preferred_pad_slot: current.preferred_pad_slot,
                     origin: current.origin,
                     last_seen_unix: current.last_seen_unix,
+                    platform: current.platform,
                 });
             Json(NativeClient::from_record(stored)).into_response()
         }

@@ -17613,6 +17613,14 @@
             "type": "string",
             "example": "Living Room iPad"
           },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The OS the device last said it runs, such as `macos`, `ios`, `android`, `windows`,\n`linux`, or `web` for a browser. `null` until a client that states it connects.",
+            "example": "android"
+          },
           "preferred_pad_slot": {
             "type": "integer",
             "format": "int32",

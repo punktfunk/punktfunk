@@ -991,6 +991,7 @@ async fn handshake(
             audio_bits: args.audio_format.map(|(_, b)| b).unwrap_or(0),
         },
         client_label: None,
+        platform: Some(punktfunk_core::quic::PLATFORM.into()),
         abr_features: 0,
         preset: args.preset.clone(),
         link: Default::default(),

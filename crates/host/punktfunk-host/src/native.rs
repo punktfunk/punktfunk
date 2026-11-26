@@ -2582,6 +2582,14 @@ async fn admit(
         None => (GRANT_ALL, None, None),
     };
     let session = fp_hex.map(|fp_hex| host.np.session_started(fp_hex));
+    if let Some(fp_hex) = fp_hex {
+        // A browser is told apart by the plane it came in on; any other client says.
+        let platform = match conn {
+            link::SessionLink::Web(..) => Some("web"),
+            _ => first.platform.as_deref(),
+        };
+        host.np.note_session(fp_hex, platform);
+    }
     if grants & GRANT_LAUNCH == 0 && first.hello.launch.is_some() {
         close_rejected(
             conn,

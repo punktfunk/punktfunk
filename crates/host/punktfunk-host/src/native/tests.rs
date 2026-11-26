@@ -1869,6 +1869,7 @@ fn plain_hello(
         view: None,
         screen_wish: None,
         display_mm: None,
+        platform: None,
     }
 }
 

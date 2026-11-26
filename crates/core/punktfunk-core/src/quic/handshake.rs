@@ -119,6 +119,26 @@ pub fn client_label(s: &str) -> String {
     bounded_label(s, EXT_CLIENT_MAX)
 }
 
+/// Longest [`ClientHello::platform`] in bytes. An id such as `macos`, so short.
+pub const PLATFORM_MAX: usize = 16;
+
+/// The platform this build sends: the OS it was compiled for (`std::env::consts::OS`, such as
+/// `macos`, `ios`, `android`), and `web` in a browser.
+pub const PLATFORM: &str = if cfg!(target_family = "wasm") {
+    "web"
+} else {
+    std::env::consts::OS
+};
+
+/// `s` as a [`ClientHello::platform`]: 1 to [`PLATFORM_MAX`] lowercase ASCII letters, digits,
+/// `-` or `_`. Anything else is no platform, never a cut or cleaned one.
+pub fn platform_id(s: &str) -> Option<String> {
+    let ok = (1..=PLATFORM_MAX).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+    ok.then(|| s.to_string())
+}
+
 /// Control characters go before the trim and the cut is trimmed again, so whitespace one of
 /// them hid or the cut exposed does not survive: a second pass changes nothing.
 fn bounded_label(s: &str, max: usize) -> String {
