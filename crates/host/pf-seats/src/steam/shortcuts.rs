@@ -1,11 +1,13 @@
 //! Steam's binary `shortcuts.vdf`, and the merge that puts the box owner's non-Steam shortcuts
 //! into a seat's own Steam.
 //!
-//! The file is one `shortcuts` map whose entries, keyed `0`, `1`, …, are maps of typed fields.
-//! Steam reads it at start and writes it back from memory, so a merge lands only while that Steam
-//! is closed. An entry's stored `appid` is its identity: Steam lists, launches and keys art by it,
-//! and keeps it when it rewrites the file. Every field survives a merge byte for byte, those this
-//! code never reads too.
+//! The file is one map named `shortcuts`. Its entries are keyed `0`, `1`, … and each is a map of
+//! typed fields. Steam reads the file when it starts and writes it back from memory, so a merge
+//! lasts only when it is written while that Steam is closed.
+//!
+//! An entry's stored `appid` is its identity. Steam lists the entry, launches it and keys its
+//! art by that `appid`, and keeps it when it rewrites the file. A merge keeps every field byte
+//! for byte, including the fields this code never reads.
 
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet};

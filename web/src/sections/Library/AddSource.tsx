@@ -5,6 +5,13 @@ import type { CatalogEntry } from "@/api/gen/model";
 import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@/components/ui/card";
 import { m } from "@/paraglide/messages";
 import { InstallDialog } from "@/sections/Store/InstallDialogs";
 
@@ -21,7 +28,7 @@ export const AddSourceRail: FC<{
 	const [confirming, setConfirming] = useState<CatalogEntry | null>(null);
 	if (entries.length === 0) return null;
 	return (
-		<div className="space-y-2 border-t pt-4">
+		<div className="space-y-2 border-t pt-4 first:border-t-0 first:pt-0">
 			<p className="text-sm font-medium">{m.library_add_source()}</p>
 			<div className="flex flex-wrap gap-2">
 				{entries.map((entry) => (
@@ -90,23 +97,23 @@ export const SourceItem: FC<{
 	</motion.div>
 );
 
-/** One section of the Sources tab: a heading, then its rows. */
+/** One card of the Sources tab: its title, what it is for, then its rows. */
 export const SourceGroup: FC<{
 	icon: ReactNode;
 	title: string;
 	description?: string;
 	children: ReactNode;
 }> = ({ icon, title, description, children }) => (
-	<section className="space-y-3">
-		<div className="space-y-1">
-			<h2 className="flex items-center gap-2 font-semibold">
+	<Card>
+		<CardHeader className="pb-3">
+			<CardTitle className="flex items-center gap-2">
 				{icon}
 				{title}
-			</h2>
+			</CardTitle>
 			{description && (
-				<p className="text-sm text-muted-foreground">{description}</p>
+				<CardDescription className="max-w-prose">{description}</CardDescription>
 			)}
-		</div>
-		{children}
-	</section>
+		</CardHeader>
+		<CardContent>{children}</CardContent>
+	</Card>
 );

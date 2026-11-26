@@ -1,17 +1,22 @@
-//! The box owner's Steam shortcuts in a made seat's own Steam ([`shortcuts`]).
+//! Puts the box owner's Steam shortcuts into a made seat's own Steam ([`shortcuts`]).
 //!
-//! A shortcut reaches a seat when the box's catalog lists it from a source left on, its program
-//! lies in its start folder, and that folder is the owner's, lies deeper than directly in their
-//! home, and passes a granted root's fence ([`libraries::fenced`]). The seat sees the folder at
-//! `/run/media/punktfunk/shortcuts/<key>` as an [`Overlay`]: a game that saves beside itself
-//! keeps each person's saves apart, and the owner's folder never changes. A custom Proton tool such a shortcut maps comes the same way and
-//! is linked into the seat's `compatibilitytools.d`. Launch options that still name the owner's
-//! home after the move keep a shortcut on the owner's desktop: the seat can't see there.
+//! A shortcut reaches a seat when all of these hold:
 //!
-//! Root writes the seat's records through directory handles while its session is down: each
-//! signed-in account's `shortcuts.vdf` and grid art, and the Proton rows of `config/config.vdf`.
-//! The appids go into the box's [`shortcuts::SEAT_FILE`], for the door, and the seat's own copy,
-//! which is also the ledger of what the box put there.
+//! - The box's catalog lists it, from a source that is left on.
+//! - Its program is inside its start folder.
+//! - The start folder belongs to the owner, is deeper than directly in the owner's home, and
+//!   passes the limits of a granted root ([`libraries::shareable`]).
+//!
+//! The seat sees the folder at `/run/media/punktfunk/shortcuts/<key>` as an [`Overlay`]. A game
+//! that saves beside itself then keeps each person's saves apart, and the owner's folder never
+//! changes. A custom Proton tool that such a shortcut maps arrives the same way and is linked
+//! into the seat's `compatibilitytools.d`. If a shortcut's launch options still name the owner's
+//! home after the move, the shortcut stays on the owner's desktop: a seat can't see there.
+//!
+//! Root writes the seat's Steam records through directory handles while the seat's session is
+//! down: each signed-in account's `shortcuts.vdf` and grid art, and the Proton rows of
+//! `config/config.vdf`. The appids are written twice: to the box's [`shortcuts::SEAT_FILE`], for
+//! the door, and to the seat's own copy, which also records what the box put there.
 
 use super::accounts::Passwd;
 use super::libraries::{self, Library, Overlay, VIEW};
@@ -19,12 +24,13 @@ use super::safe_open;
 use super::shared::{self, Reader};
 use crate::model::SeatId;
 use crate::steam::shortcuts::{self, CompatRow, Fields};
-use rustix::fs::{AtFlags, Mode};
+use rustix::fs::AtFlags;
 use rustix::io::Errno;
 use std::collections::BTreeSet;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Mutex, PoisonError};
 
 /// A catalog with descriptions runs to tens of megabytes; past this it isn't the box's.
@@ -41,8 +47,11 @@ static SEAT_FILE_LOCK: Mutex<()> = Mutex::new(());
 struct Picked {
     /// Each entry with its paths moved to its view.
     entries: Vec<Fields>,
-    /// Grid art by appid and file name.
-    art: Vec<(u32, String, Vec<u8>)>,
+    /// The grid art to copy: each file's appid and name, and the owner's `grid` folder that holds
+    /// it. The bytes are read only as [`place_in`] writes the file.
+    art: Vec<(u32, String, Rc<OwnedFd>)>,
+    /// The owner's uid. An art file another uid owns isn't copied.
+    owner: u32,
     compat: Vec<CompatRow>,
     overlays: Vec<Overlay>,
     /// Each tool's link name in the seat's `compatibilitytools.d`, and its view.
@@ -94,7 +103,8 @@ pub(super) fn share(
 }
 
 /// The owner's shortcuts the box's catalog lists from a source left on, from each account of the
-/// owner's Steam at `root`, the first of an appid kept, that seat `seat` can play.
+/// owner's Steam at `root`, the first of an appid kept, that seat `seat` can play. Their art is
+/// named here, with the `grid` folder of the account the shortcut came from, and not read.
 fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[Library]) -> Picked {
     let box_library = safe_open::dir(&shared::box_library_dir(state)).ok();
     let catalog = |name, max| (box_library.as_ref()).and_then(|dir| read(dir, name, max));
@@ -105,7 +115,10 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
         &catalog("library.json", MAX_CATALOG_BYTES).unwrap_or_default(),
         &off,
     );
-    let mut picked = Picked::default();
+    let mut picked = Picked {
+        owner: owner.uid,
+        ..Picked::default()
+    };
     if listed.is_empty() {
         return picked;
     }
@@ -121,7 +134,8 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
         tracing::info!(shortcut = %name, reason, "owner's shortcut not shared with seats");
     };
     let home = std::fs::canonicalize(&owner.home).unwrap_or_else(|_| owner.home.clone());
-    // Each listed entry with its art, its folder as stored, and that folder past the fence.
+    // Each listed entry with its appid, its account's grid, its folder as stored, and that folder
+    // once it passed those limits.
     let mut found = Vec::new();
     let mut seen = BTreeSet::new();
     for config in account_configs(&steam) {
@@ -130,7 +144,7 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
         else {
             continue;
         };
-        let grid = safe_open::dir_at(&config, "grid").ok().flatten();
+        let grid = (safe_open::dir_at(&config, "grid").ok().flatten()).map(Rc::new);
         for entry in entries {
             let Some(id) = shortcuts::appid(&entry).filter(|id| listed.contains(id)) else {
                 continue;
@@ -142,7 +156,7 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
                 skip(&entry, "it starts in no absolute folder");
                 continue;
             };
-            let folder = match libraries::fenced(Path::new(&stored), state, owner, libraries) {
+            let folder = match libraries::shareable(Path::new(&stored), state, owner, libraries) {
                 Ok(folder) if in_home_itself(&folder, &home) => {
                     skip(&entry, "it starts in a folder directly in the owner's home");
                     continue;
@@ -157,20 +171,12 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
                     continue;
                 }
             };
-            let art: Vec<(u32, String, Vec<u8>)> = (grid.as_ref().into_iter())
-                .flat_map(|grid| {
-                    shortcuts::art_names(id).filter_map(|name| {
-                        let bytes = read_owned(grid, &name, owner.uid)?;
-                        Some((id, name, bytes))
-                    })
-                })
-                .collect();
-            found.push((entry, art, stored, folder));
+            found.push((entry, id, grid.clone(), stored, folder));
         }
     }
     let roots = outermost(found.iter().map(|(.., folder)| folder.clone()).collect());
     let idmap = libraries::idmap((owner.uid, owner.gid), seat);
-    for (entry, art, stored, folder) in found {
+    for (entry, id, grid, stored, folder) in found {
         let Some(root) = roots.iter().find(|root| folder.starts_with(root)) else {
             continue;
         };
@@ -195,7 +201,10 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
                 idmap: idmap.clone(),
             });
         }
-        picked.art.extend(art);
+        if let Some(grid) = grid {
+            let art = shortcuts::art_names(id).map(|name| (id, name, Rc::clone(&grid)));
+            picked.art.extend(art);
+        }
         picked.entries.push(moved);
     }
     let ids = picked.entries.iter().filter_map(shortcuts::appid).collect();
@@ -236,7 +245,7 @@ fn tools(
             continue;
         }
         let path = root.join(TOOLS).join(&name);
-        match libraries::fenced(&path, state, owner, libraries) {
+        match libraries::shareable(&path, state, owner, libraries) {
             Ok(tool) if owns(&tool, owner.uid) => found.push((name, tool)),
             Ok(_) => tracing::info!(tool = %name, "owner's proton tool isn't theirs; not shared"),
             Err(reason) => tracing::info!(tool = %name, reason, "owner's proton tool not shared"),
@@ -322,6 +331,10 @@ fn place(seat: &Passwd, picked: &Picked, before: &BTreeSet<u32>) -> BTreeSet<u32
 
 /// `picked` in the seat's Steam at `steam`: each signed-in account's shortcuts and art, the
 /// Proton rows, and the tools' links. Adds the appids the box has there to `ours`.
+///
+/// Each art file is read from the owner's grid, written when the seat's copy differs, and dropped
+/// before the next, so one file's bytes are held at a time. Only the art of an appid the merge put
+/// in the account is read. A `config.vdf` over [`libraries::MAX_TEXT_VDF_BYTES`] is left as it is.
 fn place_in(
     steam: &OwnedFd,
     seat: &Passwd,
@@ -345,16 +358,16 @@ fn place_in(
                 continue;
             };
             shared::put_file(&config, "shortcuts.vdf", &merged.file, reader)?;
-            let art = picked
-                .art
-                .iter()
-                .filter(|(id, ..)| merged.ours.contains(id));
-            let mut art = art.peekable();
-            if art.peek().is_some() {
-                let grid = seat_folder(&config, "grid", seat)?;
-                for (_, name, bytes) in art {
-                    shared::put_file(&grid, name, bytes, reader)?;
-                }
+            let mut seat_grid = None;
+            for (_, name, from) in (picked.art.iter()).filter(|(id, ..)| merged.ours.contains(id)) {
+                let Some(bytes) = read_owned(from, name, picked.owner) else {
+                    continue;
+                };
+                let grid = match &seat_grid {
+                    Some(grid) => grid,
+                    None => seat_grid.insert(shared::seat_folder(&config, "grid", seat)?),
+                };
+                shared::put_file(grid, name, &bytes, reader)?;
             }
             here.extend(merged.ours);
         }
@@ -364,7 +377,7 @@ fn place_in(
         .cloned()
         .collect();
     if let Some(config) = safe_open::dir_at(steam, "config")?
-        && let Some(text) = read(&config, "config.vdf", MAX_STEAM_FILE_BYTES)
+        && let Some(text) = read(&config, "config.vdf", libraries::MAX_TEXT_VDF_BYTES)
     {
         let text = String::from_utf8_lossy(&text);
         if let Some(merged) = shortcuts::with_compat_rows(&text, &rows)
@@ -386,7 +399,7 @@ fn link_tools(steam: &OwnedFd, seat: &Passwd, tools: &[(String, PathBuf)]) -> st
     let dir = match safe_open::dir_at(steam, TOOLS)? {
         Some(dir) => dir,
         None if tools.is_empty() => return Ok(()),
-        None => seat_folder(steam, TOOLS, seat)?,
+        None => shared::seat_folder(steam, TOOLS, seat)?,
     };
     for name in shared::names(&dir)? {
         let Ok(target) = rustix::fs::readlinkat(&dir, name.as_str(), Vec::new()) else {
@@ -413,20 +426,6 @@ fn link_tools(steam: &OwnedFd, seat: &Passwd, tools: &[(String, PathBuf)]) -> st
         rustix::fs::chownat(&dir, name.as_str(), Some(uid), Some(gid), flags)?;
     }
     Ok(())
-}
-
-/// Folder `name` in `at`, made the seat's when absent. A link there is refused.
-fn seat_folder(at: &OwnedFd, name: &str, seat: &Passwd) -> std::io::Result<OwnedFd> {
-    let made = match rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o755)) {
-        Ok(()) => true,
-        Err(Errno::EXIST) => false,
-        Err(e) => return Err(e.into()),
-    };
-    let dir = safe_open::dir_at(at, name)?.ok_or(std::io::ErrorKind::NotFound)?;
-    if made {
-        std::os::unix::fs::fchown(&dir, Some(seat.uid), Some(seat.gid))?;
-    }
-    Ok(dir)
 }
 
 /// The seat's appids into the box's library copy, beside every other seat's row, and into its
@@ -540,5 +539,116 @@ mod tests {
         ));
         assert!(!names_home(&with("/home/other/x /home/o2/x"), homes));
         assert!(!names_home(&Vec::new(), homes));
+    }
+
+    /// A seat user that is whoever runs the test, so its files can be handed to it.
+    fn seat_user(temp: &Path) -> Passwd {
+        Passwd {
+            name: "pf-seat-1".into(),
+            uid: rustix::process::getuid().as_raw(),
+            gid: rustix::process::getgid().as_raw(),
+            gecos: String::new(),
+            home: temp.join("home"),
+        }
+    }
+
+    fn entry(id: u32) -> Fields {
+        let appid = shortcuts::Value::Fixed(2, id.to_le_bytes().to_vec());
+        vec![(b"appid".to_vec(), appid)]
+    }
+
+    /// Every art name of `ids` in the owner's grid at `grid`, as [`pick`] lists them.
+    fn art(grid: &Path, ids: &[u32]) -> Vec<(u32, String, Rc<OwnedFd>)> {
+        let grid = Rc::new(safe_open::dir(grid).unwrap());
+        (ids.iter())
+            .flat_map(|&id| shortcuts::art_names(id).map(move |name| (id, name)))
+            .map(|(id, name)| (id, name, Rc::clone(&grid)))
+            .collect()
+    }
+
+    /// Each signed-in account gets the art of the shortcuts the merge put there. Art the seat
+    /// has already stays as it is, and an appid the merge left out brings none.
+    #[test]
+    fn a_made_seat_gets_the_owner_s_art_in_each_signed_in_account() {
+        let temp = tempfile::tempdir().unwrap();
+        let seat = seat_user(temp.path());
+        let owner_grid = temp.path().join("owner/grid");
+        std::fs::create_dir_all(&owner_grid).unwrap();
+        for (name, bytes) in [
+            ("1p.png", "cover"),
+            ("1_hero.jpg", "hero"),
+            ("2p.png", "owner"),
+        ] {
+            std::fs::write(owner_grid.join(name), bytes).unwrap();
+        }
+        let steam = seat.home.join(shared::SEAT_STEAMS[0]);
+        let (both, theirs) = (
+            steam.join("userdata/10/config"),
+            steam.join("userdata/20/config"),
+        );
+        std::fs::create_dir_all(both.join("grid")).unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(both.join("grid/1p.png"), "cover").unwrap();
+        // The person's own shortcut has appid 2, so the owner's 2 stays out of this account.
+        std::fs::write(theirs.join("shortcuts.vdf"), shortcuts::write(&[entry(2)])).unwrap();
+        let inode = |path: &Path| std::fs::metadata(path).unwrap().ino();
+        let kept = inode(&both.join("grid/1p.png"));
+        let picked = Picked {
+            entries: vec![entry(1), entry(2)],
+            art: art(&owner_grid, &[1, 2]),
+            owner: seat.uid,
+            ..Picked::default()
+        };
+        let ours = place(&seat, &picked, &BTreeSet::new());
+        assert_eq!(ours, BTreeSet::from([1, 2]));
+        let read = |path: PathBuf| std::fs::read_to_string(path).ok();
+        assert_eq!(
+            inode(&both.join("grid/1p.png")),
+            kept,
+            "the same art isn't rewritten"
+        );
+        assert_eq!(read(both.join("grid/1_hero.jpg")).as_deref(), Some("hero"));
+        assert_eq!(read(both.join("grid/2p.png")).as_deref(), Some("owner"));
+        assert_eq!(read(theirs.join("grid/1p.png")).as_deref(), Some("cover"));
+        assert_eq!(
+            read(theirs.join("grid/1_hero.jpg")).as_deref(),
+            Some("hero")
+        );
+        assert_eq!(read(theirs.join("grid/2p.png")), None, "the person's appid");
+    }
+
+    /// A seat's `config.vdf` over the cap gets no Proton row and stays as it is, while the
+    /// shortcuts still go in. The same settings within the cap get the row.
+    #[test]
+    fn a_seat_s_config_vdf_over_the_cap_gets_no_proton_row() {
+        let settings = "\"InstallConfigStore\" { \"Software\" { \"Valve\" { \"Steam\" { } } } }\n";
+        let row = CompatRow {
+            appid: 1,
+            block: "{ \"name\" \"proton-x\" }".into(),
+            tool: "proton-x".into(),
+        };
+        let picked = Picked {
+            entries: vec![entry(1)],
+            compat: vec![row],
+            ..Picked::default()
+        };
+        let cap = libraries::MAX_TEXT_VDF_BYTES as usize;
+        let over = format!("{settings}//{}\n", "x".repeat(cap));
+        for (text, gets_row) in [(settings.to_owned(), true), (over, false)] {
+            let temp = tempfile::tempdir().unwrap();
+            let seat = seat_user(temp.path());
+            let steam = seat.home.join(shared::SEAT_STEAMS[0]);
+            std::fs::create_dir_all(steam.join("userdata/10/config")).unwrap();
+            std::fs::create_dir_all(steam.join("config")).unwrap();
+            std::fs::write(steam.join("config/config.vdf"), &text).unwrap();
+            assert_eq!(place(&seat, &picked, &BTreeSet::new()), BTreeSet::from([1]));
+            let after = std::fs::read_to_string(steam.join("config/config.vdf")).unwrap();
+            assert_eq!(after.contains("proton-x"), gets_row);
+            assert!(
+                gets_row || after == text,
+                "the file over the cap is unchanged"
+            );
+            assert!(steam.join("userdata/10/config/shortcuts.vdf").is_file());
+        }
     }
 }

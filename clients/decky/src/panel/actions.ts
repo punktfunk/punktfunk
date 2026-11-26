@@ -92,6 +92,8 @@ export function actionLabel(a: HostAction): string {
       return t("host_power_shutdown");
     case "host.restart":
       return t("host_power_restart_service");
+    case "host.update":
+      return t("hostaction_update");
     case "display.next":
       return t("hostaction_display_next");
     default:

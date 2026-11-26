@@ -290,6 +290,7 @@
 	"console_webos_stop_confirm": "webOS confirm dialog button.",
 	"console_webos_audio_failed": "webOS menu notice after a stream whose audio failed to open. error = the cause, English.",
 	"console_webos_decoder_failed": "webOS menu notice after the decoder gave up for good.",
+	"console_webos_decoder_blocked": "webOS menu notice, shown after \"Couldn't connect — \", on a TV whose app sandbox hides the video decoder. README is the app's page on GitHub: keep the word.",
 	"console_overlay_present_frames": "Switch / PS5 stats line. frames = frames shown this window; missed = vblanks missed. Bare numbers.",
 	"console_overlay_holding_keyframe": "Switch / PS5 stats field after the present line while the picture holds.",
 	"console_switch_applet_mode": "Switch notice on the first menu when the app runs as an applet. button = the Switch button name, e.g. 'R'. 'Album' is the Switch's own name for it.",

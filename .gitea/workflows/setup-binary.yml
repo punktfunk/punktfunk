@@ -61,6 +61,16 @@ jobs:
       RUSTFLAGS: -C linker=rust-lld -C link-self-contained=yes -C strip=symbols
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # cargo clones every git dependency to resolve the workspace, windows-rs among them
+      # (1.5 GB), though this builds one crate. Restore only: ci.yml's push run saves the key.
+      - name: Restore cargo home
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+          key: cargo-home-ci-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-ci-
       - name: Build
         run: |
           rustup target add ${{ matrix.target }}

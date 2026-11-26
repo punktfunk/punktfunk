@@ -1,17 +1,19 @@
-//! Persisted seat model and deterministic resource allocation.
+//! The ledger: the supervisor's saved list of seats, and how each seat gets its ports and slot.
 //!
-//! A ledger has one schema version and at most four seats. IDs remain stable
-//! while names, accounts, ports, and display slots are unique. Display slots
-//! are fixed at 12 through 15; the native, management and browser ports each
-//! come from a fixed pool of four.
-//! Every value is validated again after deserialization. Runtime state is an
-//! observation, not a substitute for the backend's own process identity.
+//! A ledger has one schema version and at most four rows, one per seat. A row's id never
+//! changes. Names, accounts, ports and display slots are unique across rows. Display slots are
+//! 12 to 15, and the native, management and browser ports each come from a fixed pool of four.
+//! Every value is checked again when the ledger is loaded.
 //!
-//! Whose account a row runs on is its [`RowKind`]: one the supervisor made, the box owner's
-//! (Linux), or a person's own, recorded by uid on Linux and by SID on Windows, where its name
-//! follows the SAM rule. The ledger and every IPC frame spell the kind as six flat fields;
-//! `SeatRecord` is the one place they are read and written, and every rule about a kind is a
-//! method of [`RowKind`]. An adopted account takes a slot and ports like any seat.
+//! A row's runtime state is what the backend last observed. It does not replace the backend's
+//! own knowledge of which process is the seat.
+//!
+//! A row's [`RowKind`] says whose account the seat runs on: an account the supervisor made, the
+//! box owner's (Linux), or a person's own. A person's account is recorded by uid on Linux and by
+//! SID on Windows, where its name follows the SAM naming rule. On disk and in every IPC frame
+//! the kind is spelled as six flat fields. `SeatRecord` is the one place that reads and writes
+//! them, and every rule about a kind is a method of [`RowKind`]. A seat on an existing account
+//! takes a slot and ports like any other.
 
 use crate::backend::Adopted;
 use rand::Rng;
@@ -406,9 +408,12 @@ impl RowKind {
         }
     }
 
-    /// Whether `account` can be this kind's: a made row's by [`validate_account`], the Linux
-    /// owner's and a Linux person's by [`valid_owner_account`], the latter on an ordinary uid, a
-    /// Windows person's by the SAM rule with a local user's SID.
+    /// Whether `account` is a valid account name for a row of this kind:
+    ///
+    /// - a made row: by [`validate_account`]
+    /// - the Linux owner's row and a Linux person's row: by [`valid_owner_account`]. A person's row
+    ///   also needs an ordinary uid.
+    /// - a Windows person's row: by the SAM naming rule, with the SID of a local user
     fn check(&self, account: &str) -> Result<(), ValidationError> {
         let linux = || {
             valid_owner_account(account)

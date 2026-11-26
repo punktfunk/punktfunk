@@ -256,7 +256,7 @@ post_merge() {
   # (re)apply now, no reboot, for this session.
   install -Dm0644 /usr/lib/modules-load.d/punktfunk.conf /etc/modules-load.d/punktfunk.conf 2>/dev/null || :
   install -Dm0644 /usr/lib/udev/rules.d/60-punktfunk.rules /etc/udev/rules.d/60-punktfunk.rules 2>/dev/null || :
-  # The seats' pad fence, for the same reason: a pad made after boot must meet the rule.
+  # The udev rule for seat pads, for the same reason: a pad made after boot must meet the rule.
   install -Dm0644 /usr/lib/udev/rules.d/65-punktfunk-seats.rules /etc/udev/rules.d/65-punktfunk-seats.rules 2>/dev/null || :
   udevadm control --reload 2>/dev/null || :
   # Creating the group is necessary but NOT sufficient: `pf-dm-helper` serves only MEMBERS of it,
@@ -447,7 +447,7 @@ cmd_remove() {
   # The door goes off for its owner while its helper is still in /usr, as every package's removal
   # does.
   if [ -x /usr/libexec/punktfunk/door-remove ]; then /usr/libexec/punktfunk/door-remove || :; fi
-  # The seats' pad fence copy names a program the unmerge deletes.
+  # The copy of the udev rule for seat pads names a program the unmerge deletes.
   rm -f /etc/udev/rules.d/65-punktfunk-seats.rules
   # /etc cleanup needs the /usr payload for the unmodified-compare — do it BEFORE unmerging.
   if merged; then

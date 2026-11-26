@@ -1,13 +1,14 @@
-//! Small Win32 conversions shared by the Windows seat modules.
+//! Small Win32 helpers shared by the Windows seat modules.
 //!
-//! Paths and account names become checked NUL-terminated UTF-16 vectors. Win32
-//! and NetAPI failures become stable backend errors without including secret
-//! inputs. Process identity is compared by SID, not by a localized account
-//! name. Handle ownership transfers immediately into `OwnedHandle`, except the token
-//! `with_privilege` closes itself, and every raw-memory read is limited by the size returned
-//! from the originating API.
-//! These helpers perform no account, session, service, or registry mutation; the one
-//! token change, a privilege enabled for one call, is put back after it.
+//! - Paths and account names become NUL-terminated UTF-16 vectors, checked on the way.
+//! - Win32 and NetAPI failures become stable backend errors that include no secret input.
+//! - Process identity is compared by SID, never by a localized account name.
+//! - A handle goes into an `OwnedHandle` at once. The one exception is the token in
+//!   `with_privilege`, which that function closes itself.
+//! - Every read of raw memory is limited by the size that the originating API returned.
+//!
+//! These helpers change no account, session, service or registry state. The one token change, a
+//! privilege enabled for one call, is undone after the call.
 
 use crate::backend::BackendError;
 use std::ffi::OsStr;

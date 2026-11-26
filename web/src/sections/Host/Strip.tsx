@@ -12,9 +12,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
 import { m } from "@/paraglide/messages";
+import { connectLink } from "./ConnectQr";
 import { CopyRow } from "./CopyRow";
 import { actionTitle, actionUnavailable, ConfirmDialog } from "./PowerCard";
 import { type Update, updateLine } from "./UpdateCard";
+import { jobRunning } from "./updateView";
 
 /**
  * The top of Host, in three bands: who this host is and how current, with **Check for update**
@@ -30,12 +32,12 @@ export const HostStrip: FC<{
 }> = ({ host: h, compositors = [], update, audio }) => {
 	const actions = useListActions();
 	const [confirming, setConfirming] = useState<ActionInfo | null>(null);
-	const list = actions.data?.actions ?? [];
+	// The Updates card below is this page's way to update, with its progress and outcome.
+	const list = (actions.data?.actions ?? []).filter(
+		(a) => a.id !== "host.update",
+	);
 	const compositor = compositors.find((c) => c.default && c.available);
-	const params = new URLSearchParams({ host: h.local_ip });
-	if (h.fingerprint) params.set("fp", h.fingerprint);
-	// No port: clients default to 9777, the same as typing the address by hand.
-	const deepLink = `punktfunk://connect/${h.uniqueid}?${params}`;
+	const deepLink = connectLink(h);
 	const s = update.state.data;
 	return (
 		<Card>
@@ -54,16 +56,21 @@ export const HostStrip: FC<{
 						</p>
 					</div>
 					<div className="ml-auto flex shrink-0 items-center gap-1">
-						{s && !s.check_disabled && !update.applying && !s.job && (
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={update.checkBusy}
-								onClick={update.onCheck}
-							>
-								{update.checkBusy ? m.update_checking() : m.host_check_update()}
-							</Button>
-						)}
+						{s &&
+							!s.check_disabled &&
+							!update.applying &&
+							!jobRunning(s, update.wait) && (
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={update.checkBusy}
+									onClick={update.onCheck}
+								>
+									{update.checkBusy
+										? m.update_checking()
+										: m.host_check_update()}
+								</Button>
+							)}
 						{/* Rare, and four end this host's streams: a menu, not a row of buttons. */}
 						{list.length > 0 && (
 							<RowMenu label={m.host_power_menu()}>
@@ -83,7 +90,7 @@ export const HostStrip: FC<{
 				<div className="space-y-2 py-4">
 					<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
 						<CopyRow label={m.connect_address()} value={h.local_ip} />
-						<CopyRow label={m.connect_link()} value={deepLink} />
+						<CopyRow label={m.connect_link()} value={deepLink} qr={deepLink} />
 					</div>
 					<p className="text-xs text-muted-foreground">{m.connect_help()}</p>
 				</div>

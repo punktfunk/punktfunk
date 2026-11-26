@@ -2,8 +2,9 @@
 //!
 //! Fetches the per-channel signed manifest and verifies it against the Ed25519
 //! keys pinned in `pf-update-check`. `GET /update/status` returns a process-wide
-//! cache and, when older than [`AUTO_REFRESH_AFTER`], kicks a background refresh —
-//! the console already polls, so this module has no timer of its own.
+//! cache and, when older than [`AUTO_REFRESH_AFTER`], kicks a background refresh. The
+//! tray's summary poll does the same ([`offered_version`]). The console and the tray
+//! already poll, so this module has no timer of its own.
 //! `POST /update/check` forces a refresh, rate-limited to one per [`FORCE_MIN_INTERVAL`].
 //!
 //! Apply takes no version, URL, or channel from the request; those come from the
@@ -106,7 +107,10 @@ enum Leg {
 /// Kinds the root helper applies.
 pub(crate) fn helper_kind(kind: detect::InstallKind) -> bool {
     use detect::InstallKind as K;
-    matches!(kind, K::Apt | K::Dnf | K::Sysext | K::RpmOstree | K::Pacman)
+    matches!(
+        kind,
+        K::Apt | K::Dnf | K::Zypper | K::Sysext | K::RpmOstree | K::Pacman
+    )
 }
 
 /// The leg [`start_apply`] may run, or `None` where the console shows the command instead.
@@ -319,36 +323,79 @@ fn classify_failure(e: &FeedError, had_manifest: bool) -> (Option<String>, bool)
     }
 }
 
+/// Claims the background refresh when the cache is older than [`AUTO_REFRESH_AFTER`]. On
+/// `true` the caller runs [`spawn_refresh`] once the lock is released. Never in a test: a
+/// refresh fetches the feed and writes the serial floor into the config directory.
+fn claim_auto_refresh(rt: &mut Runtime) -> bool {
+    if cfg!(test) {
+        return false;
+    }
+    let cold = rt
+        .last_attempt
+        .map(|t| t.elapsed() >= AUTO_REFRESH_AFTER)
+        .unwrap_or(true);
+    let claimed = cold && !rt.refreshing && !check_disabled();
+    if claimed {
+        rt.refreshing = true;
+        rt.last_attempt = Some(Instant::now());
+    }
+    claimed
+}
+
+/// The outcome lands in the cache; the caller's next poll reads it.
+fn spawn_refresh() {
+    tokio::task::spawn_blocking(|| {
+        let _ = refresh_blocking();
+    });
+}
+
 /// Cache + errors; kick a background refresh when older than [`AUTO_REFRESH_AFTER`].
 pub(crate) fn snapshot_and_maybe_refresh() -> Snapshot {
-    let mut kick = false;
-    let snap = {
+    let (kick, snap) = {
         let mut rt = runtime().lock().unwrap();
-        let cold = rt
-            .last_attempt
-            .map(|t| t.elapsed() >= AUTO_REFRESH_AFTER)
-            .unwrap_or(true);
-        if cold && !rt.refreshing && !check_disabled() {
-            rt.refreshing = true;
-            rt.last_attempt = Some(Instant::now());
-            kick = true;
-        }
-        Snapshot {
+        let kick = claim_auto_refresh(&mut rt);
+        let snap = Snapshot {
             checked: rt.checked.clone(),
             last_error: rt.last_error.clone(),
             not_published: rt.not_published,
             job: rt.job.clone(),
             last_result: jobs::read_result(&jobs::result_path()),
             source_behind: rt.source_behind,
-        }
+        };
+        (kick, snap)
     };
     if kick {
-        // Outcome lands in the cache; the console's next poll reads it.
-        tokio::task::spawn_blocking(|| {
-            let _ = refresh_blocking();
-        });
+        spawn_refresh();
     }
     snap
+}
+
+/// The version the cached check offers this install, for the tray's summary. `None` when
+/// current, unchecked, or checks are off. Kicks the same refresh as status, so a host whose
+/// tray runs checks with the console closed.
+pub(crate) fn offered_version() -> Option<String> {
+    // Before the lock: the first call probes the install.
+    let (kind, channel) = detect::detect();
+    let (kick, offer) = {
+        let mut rt = runtime().lock().unwrap();
+        let kick = claim_auto_refresh(&mut rt);
+        (kick, offered(&rt, kind, channel, crate::version::get()))
+    };
+    if kick {
+        spawn_refresh();
+    }
+    offer
+}
+
+fn offered(
+    rt: &Runtime,
+    kind: detect::InstallKind,
+    channel: detect::Channel,
+    current: &str,
+) -> Option<String> {
+    let manifest = &rt.checked.as_ref()?.manifest;
+    offers_update(kind, channel, current, manifest, rt.source_behind)
+        .then(|| manifest.version.clone())
 }
 
 /// Rate-limited `POST /update/check`. Blocks until the refresh finishes.
@@ -657,7 +704,7 @@ mod tests {
         }
     }
 
-    const KINDS: [detect::InstallKind; 11] = {
+    const KINDS: [detect::InstallKind; 12] = {
         use detect::InstallKind as K;
         [
             K::WindowsInstaller,
@@ -667,6 +714,7 @@ mod tests {
             K::RpmOstree,
             K::Apt,
             K::Dnf,
+            K::Zypper,
             K::Pacman,
             K::SteamosSource,
             K::Nix,
@@ -722,6 +770,7 @@ mod tests {
             (K::WindowsInstaller, Some(Leg::Installer), "full"),
             (K::Apt, Some(Leg::Helper), "full"),
             (K::Dnf, Some(Leg::Helper), "full"),
+            (K::Zypper, Some(Leg::Helper), "full"),
             (K::Sysext, Some(Leg::Helper), "full"),
             (K::Pacman, Some(Leg::Helper), "full"),
             (K::RpmOstree, Some(Leg::Helper), "staged"),
@@ -746,7 +795,14 @@ mod tests {
             pacman_optin: false,
             ..ready()
         };
-        for kind in [K::Apt, K::Dnf, K::Sysext, K::RpmOstree, K::Pacman] {
+        for kind in [
+            K::Apt,
+            K::Dnf,
+            K::Zypper,
+            K::Sysext,
+            K::RpmOstree,
+            K::Pacman,
+        ] {
             assert_eq!(apply_leg(kind, bare), None, "{}", kind.as_str());
         }
         assert_eq!(apply_leg(K::SteamosSource, bare), Some(Leg::SteamosSource));
@@ -898,5 +954,23 @@ mod tests {
         assert!(offer(InstallKind::SteamosSource, Some(2)));
         assert!(!offer(InstallKind::SteamosSource, Some(0)));
         assert!(!offer(InstallKind::Pacman, Some(2)));
+    }
+
+    /// The tray is told a version only when the cached check offers this install one.
+    #[test]
+    fn the_tray_hears_a_version_only_when_one_is_offered() {
+        use detect::{Channel, InstallKind};
+        let mut rt = Runtime::default();
+        let offer = |rt: &Runtime, current| offered(rt, InstallKind::Dnf, Channel::Stable, current);
+        assert_eq!(offer(&rt, "0.48.0"), None, "nothing checked yet");
+        rt.checked = Some(Checked {
+            manifest: serde_json::from_value(serde_json::json!({
+                "schema": 1, "channel": "stable", "serial": 1, "version": "0.49.0",
+            }))
+            .unwrap(),
+            fetched_unix: 0,
+        });
+        assert_eq!(offer(&rt, "0.48.0").as_deref(), Some("0.49.0"));
+        assert_eq!(offer(&rt, "0.49.0"), None);
     }
 }

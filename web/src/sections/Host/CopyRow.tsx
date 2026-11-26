@@ -2,15 +2,17 @@ import { Check, Copy } from "lucide-react";
 import { type FC, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
+import { QrButton } from "./ConnectQr";
 
 /**
  * One labelled, monospaced value with a copy button: the host address, or the
- * `punktfunk://connect/` link that opens a client straight onto this host and carries its
- * certificate fingerprint, so the device verifies what it reached.
+ * `punktfunk://connect/` link (`connectLink`). With `qr`, a second button shows that link as a
+ * QR code.
  */
-export const CopyRow: FC<{ label: string; value: string }> = ({
+export const CopyRow: FC<{ label: string; value: string; qr?: string }> = ({
 	label,
 	value,
+	qr,
 }) => {
 	const [copied, setCopied] = useState(false);
 	const copy = async () => {
@@ -44,6 +46,7 @@ export const CopyRow: FC<{ label: string; value: string }> = ({
 						<Copy className="size-4" />
 					)}
 				</Button>
+				{qr && <QrButton link={qr} />}
 			</div>
 		</div>
 	);

@@ -88,6 +88,59 @@ async fn host_actions_follow_the_power_grant() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// `host.update` follows the manage grant, not Power: a device without it is refused by name,
+/// one with it gets past the grant to the update's own refusal. No release is cached in a
+/// test, so nothing can start, and no row is listed.
+#[tokio::test]
+async fn the_update_action_follows_the_manage_grant() {
+    use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_MANAGE_GAMES, GRANT_POWER};
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(crate::test_support::scratch().join("pf-mgmt-update-action.json")),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let (power_fp, manager_fp) = ("aaaa00000011", "bbbb00000012");
+    for (name, fp, grants) in [
+        ("power", power_fp, GRANT_GAMEPAD | GRANT_POWER),
+        ("manager", manager_fp, GRANT_GAMEPAD | GRANT_MANAGE_GAMES),
+    ] {
+        let access = crate::native_pairing::Access {
+            grants,
+            expires_unix: None,
+            until_disconnect: false,
+        };
+        np.add_with_access(name, fp, Some(access)).unwrap();
+    }
+    let app = test_app_native(test_state(), np);
+    let as_device = |mut req: axum::http::Request<Body>, fp: &str| {
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.to_string())));
+        req
+    };
+    let update = || {
+        axum::http::Request::post("/api/v1/actions/host.update")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let (status, body) = send(&app, as_device(update(), power_fp)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "Power is not Manage: {body}");
+    assert_eq!(body["code"], "device_not_allowed_to_manage_host", "{body}");
+
+    let (status, body) = send(&app, as_device(update(), manager_fp)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "past the grant: {body}");
+
+    let (_, body) = send(&app, as_device(get_req("/api/v1/actions"), manager_fp)).await;
+    let listed = body["actions"].as_array().unwrap();
+    assert!(
+        listed.iter().all(|a| a["id"] != "host.update"),
+        "nothing on offer, no row: {body}"
+    );
+}
+
 /// Pause and remove need the manage-games bit on the cert lane; a stored pre-manage Full
 /// still carries it. `/status` tells each device its own grants and the operator none.
 #[tokio::test]

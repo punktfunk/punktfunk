@@ -446,6 +446,7 @@ mod tests {
             view: None,
             screen_wish: None,
             display_mm: None,
+            platform: None,
         }
     }
 
@@ -915,6 +916,10 @@ mod tests {
         assert_eq!(said.code, why.close_code());
         assert_eq!(said.reason, why.to_string());
         assert_eq!(said.reason_id, "reject_launch_not_permitted");
+        // Refused or not, the device connected: its hello names no platform, its plane does.
+        let record = &np.list()[0];
+        assert_eq!(record.platform.as_deref(), Some("web"));
+        assert!(record.last_seen_unix.is_some());
     }
 
     /// A browser never opens a profile on a person's own Linux account, and the supervisor is

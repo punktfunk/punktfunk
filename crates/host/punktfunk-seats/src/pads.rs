@@ -1,22 +1,25 @@
-//! The supervisor's pad broker socket (`design/seat-pad-broker.md`): a running seat's host asks
-//! here for a pad, and the supervisor builds and relays it (`pf_inject::pad_broker`).
+//! The supervisor's pad broker socket (`design/seat-pad-broker.md`). A running seat's host asks
+//! here for a pad. The supervisor builds the pad and relays it (`pf_inject::pad_broker`).
 //!
-//! The socket file is world-connectable; the gate is `SO_PEERCRED`: a peer whose uid is not a
-//! running seat's (the owner's row included) is closed unanswered. A seat holds at most
-//! [`MAX_PER_SEAT`] pads and [`vhci::MAX_PER_SEAT`] USB devices; past that the answer is
-//! `capacity`. A USB device is served by a pad server of its own, in a scope of its own
-//! ([`serve_usb`]), so no byte of its descriptors comes from the seat and a supervisor restart
-//! leaves it running. A pad lives as long as its relay, a USB device as long as its pad server:
-//! the seat hanging up, or its host dying, ends both. A relayed pad and an attached USB socket
-//! sit in systemd's fd store, so a supervisor restart picks them up again ([`resume`]). A seat's
-//! stop takes both back ([`revoke`]).
+//! - **Who may ask.** Anyone can connect to the socket file. The check is `SO_PEERCRED`: a peer
+//!   whose uid is not that of a running seat is closed with no answer. The owner's row counts as
+//!   a seat here.
+//! - **Limits.** A seat holds at most [`MAX_PER_SEAT`] pads and [`vhci::MAX_PER_SEAT`] USB
+//!   devices. Past that the answer is `capacity`.
+//! - **USB devices.** Each is served by a pad server of its own, in a systemd scope of its own
+//!   ([`serve_usb`]). So no byte of its descriptors comes from the seat, and a supervisor
+//!   restart leaves it running.
+//! - **Lifetime.** A pad lives as long as its relay, a USB device as long as its pad server. When
+//!   the seat hangs up or its host dies, both end. A seat's stop takes both back ([`revoke`]).
+//! - **Restart.** A relayed pad and an attached USB socket are kept in systemd's fd store, so a
+//!   restarted supervisor picks them up again ([`resume`]).
 
 use crate::vhci;
 use anyhow::Context as _;
 use pf_inject::pad_broker::{self, BrokeredPad, PadKind, Request, Status};
 use pf_inject::usbip;
 use pf_inject::usbip_relay::Hello;
-use pf_seats::linux::fence::vouch::{self, Vouch};
+use pf_seats::linux::node_owner::made_devices::{self, DeviceRecord};
 use pf_seats::linux::{socket, LinuxBackend};
 use pf_seats::SeatService;
 use rustix::net::Shutdown;
@@ -185,9 +188,10 @@ impl Drop for Hold {
     }
 }
 
-/// Takes back what `account` holds once its seat stopped: each relay and USB socket is shut
-/// down, so its relay reads the seat hanging up and drops the pad, and `vhci_hcd` drops the USB
-/// device, whose pad server then exits. A process that outlived the seat keeps none of them.
+/// Takes back what `account` holds, once its seat has stopped. Each relay socket and each USB
+/// socket of the account is shut down. The relay then reads that the seat hung up, and drops the
+/// pad. `vhci_hcd` drops the USB device, and the device's pad server exits. So a process that
+/// outlived the seat keeps none of them.
 pub fn revoke(account: &str) {
     let held = holds();
     let mine: Vec<&OwnedFd> = held
@@ -205,10 +209,15 @@ pub fn revoke(account: &str) {
     }
 }
 
-/// Relays again every pad systemd kept across a supervisor restart, a uinput pad recorded for
-/// the fence again ([`vouch_kept`]), and watches again every served USB socket, each holding its
-/// seat's slot again so the caps hold. The other kept fds are the caller's. First thing at
-/// start: until then the kept fds would leak into a child.
+/// Picks up what systemd kept across a supervisor restart:
+///
+/// - every pad is relayed again, and a uinput pad is recorded for the udev helper again
+///   ([`record_kept`])
+/// - every served USB socket is watched again
+///
+/// Each one holds its seat's slot again, so the caps per seat still hold. The other kept fds
+/// are the caller's. This runs first thing at start: until it has, the kept fds would leak into
+/// a child.
 pub fn resume() -> Vec<(String, OwnedFd)> {
     let _ = std::fs::remove_dir_all(RELAYED);
     let pad_broker::Kept {
@@ -227,12 +236,12 @@ pub fn resume() -> Vec<(String, OwnedFd)> {
             index = kept.index,
             "seat pad kept across a restart"
         );
-        let vouch = vouch_kept(&kept);
+        let device_record = record_kept(&kept);
         let spawned = std::thread::Builder::new()
             .name("seat-pad".into())
             .spawn(move || {
                 let _slot = slot;
-                let _vouch = vouch;
+                let _device_record = device_record;
                 run_relay(
                     &kept.name,
                     &kept.account,
@@ -344,10 +353,28 @@ pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
 }
 
 /// At the supervisor's stop (`ungate`): without the socket, the box's own hidraw and joystick
-/// nodes open to everyone again, as the distro's rules have them.
+/// nodes open to everyone again, as the distro's rules have them. While a seat's unit runs the
+/// socket stays: a seat outlives a supervisor restart, and its user would open the owner's pads
+/// in the gap.
 pub fn unbind() {
+    if seat_units_up() {
+        tracing::warn!("pad socket stays: a seat's unit is up");
+        return;
+    }
     let _ = std::fs::remove_file(SOCKET_PATH);
     refresh_pad_nodes();
+}
+
+/// Whether any seat's unit is up, starting or stopping. A `systemctl` that gives no answer
+/// counts as yes.
+fn seat_units_up() -> bool {
+    let listed = Command::new("systemctl")
+        .args(["list-units", "--plain", "--no-legend"])
+        .args(["--state=active,activating,deactivating,reloading"])
+        .arg(pf_seats::linux::seat_unit("*"))
+        .stdin(Stdio::null())
+        .output();
+    listed.map_or(true, |out| !out.status.success() || !out.stdout.is_empty())
 }
 
 /// Has udev apply its rules to every hidraw and `js*` node again. `65-punktfunk-seats.rules`
@@ -473,7 +500,7 @@ fn answer(stream: &UnixStream, account: &str, status: Status) {
     }
 }
 
-/// A uinput or uhid pad, recorded for the fence and relayed until the seat hangs up. A
+/// A uinput or uhid pad, recorded for the udev helper and relayed until the seat hangs up. A
 /// PlayStation pad's MAC carries `seat`, and its name the seat's `gamepad_only`.
 fn create(
     stream: UnixStream,
@@ -492,7 +519,7 @@ fn create(
         answer(&stream, account, Status::Capacity);
         return;
     };
-    let (pad, _vouch) = match build_vouched(kind, index, account, seat, gamepad_only) {
+    let (pad, _device_record) = match build_recorded(kind, index, account, seat, gamepad_only) {
         Ok(built) => built,
         Err(error) => {
             tracing::warn!(error = %format!("{error:#}"), account, pad = kind.label(),
@@ -521,40 +548,43 @@ fn create(
     run_relay(&name, account, kind, index, pad, ours);
 }
 
-/// `kind` built for `account`, with the record that vouches for it to the udev fence: a uhid
-/// pad's written under its stamp's token before the pad exists, a uinput pad's once the kernel
-/// names it. Drop the record after the pad. A PlayStation pad's MAC carries `seat`, and its
-/// name `gamepad_only`.
-fn build_vouched(
+/// Builds a pad of `kind` for `account`, with the record that tells the udev helper whose pad
+/// it is. A uhid pad's record is written under the token of the pad's stamp, before the pad
+/// exists. A uinput pad's record is written once the kernel has named the device. Drop the
+/// record after the pad. A PlayStation pad's MAC carries `seat`, and its name carries
+/// `gamepad_only`.
+fn build_recorded(
     kind: PadKind,
     index: u8,
     account: &str,
     seat: u16,
     gamepad_only: bool,
-) -> anyhow::Result<(BrokeredPad, Vouch)> {
-    let mut vouch =
-        Vouch::new(Path::new(vouch::DIR), account, !kind.is_uinput()).context("record the pad")?;
-    let pad = pad_broker::build(kind, index, vouch.mark(), seat, gamepad_only)?;
+) -> anyhow::Result<(BrokeredPad, DeviceRecord)> {
+    let mut device_record =
+        DeviceRecord::new(Path::new(made_devices::DIR), account, !kind.is_uinput())
+            .context("record the pad")?;
+    let pad = pad_broker::build(kind, index, device_record.mark(), seat, gamepad_only)?;
     if let Some(name) = pad.sysname() {
-        vouch.made(&name?).context("record the pad")?;
+        device_record.made(&name?).context("record the pad")?;
     }
-    Ok((pad, vouch))
+    Ok((pad, device_record))
 }
 
 /// A kept uinput pad's record, written again from its own fd: the supervisor that made it may
 /// have written none. A uhid pad keeps the record it was made with.
-fn vouch_kept(kept: &pad_broker::KeptPad) -> Option<Vouch> {
+fn record_kept(kept: &pad_broker::KeptPad) -> Option<DeviceRecord> {
     let name = kept.pad.sysname()?;
-    let vouched = name.and_then(|name| {
-        let mut vouch = Vouch::new(Path::new(vouch::DIR), &kept.account, false)?;
-        vouch.made(&name)?;
-        Ok(vouch)
+    let recorded = name.and_then(|name| {
+        let mut device_record =
+            DeviceRecord::new(Path::new(made_devices::DIR), &kept.account, false)?;
+        device_record.made(&name)?;
+        Ok(device_record)
     });
-    match vouched {
-        Ok(vouch) => Some(vouch),
+    match recorded {
+        Ok(device_record) => Some(device_record),
         Err(error) => {
             tracing::warn!(error = %format!("{error:#}"), account = kept.account,
-                "kept seat pad not recorded: the fence refuses it");
+                "kept seat pad not recorded: the udev helper refuses it");
             None
         }
     }

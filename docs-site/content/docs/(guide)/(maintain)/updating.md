@@ -11,8 +11,10 @@ The top of **Host** in the [web console](/docs/web-console) shows the version yo
 it is current; **Check for update** checks right away. Once a newer release exists, the Updates
 card unfolds below it with the channel you follow, how the host was installed, and either an
 **Update now** button or the command that updates this install. The host checks a signed feed on
-`git.unom.io` while the console is open. The host also fires `update.available`
-and `update.applied` on the [event stream](/docs/host-events#the-event-stream).
+`git.unom.io` every six hours while the console is open or the tray icon runs. Once a newer
+release exists, the tray icon's menu shows **Update to** and the version, which opens this card.
+The host also fires `update.available` and `update.applied` on the
+[event stream](/docs/host-events#the-event-stream).
 
 The channel comes from the repository you installed from (on a Steam Deck, the branch
 `~/punktfunk` follows), and the card never switches it — see [Release Channels](/docs/channels).
@@ -34,6 +36,17 @@ package manager against its own signed repositories; it never picks a version.
 On Windows every attempt writes `C:\ProgramData\punktfunk\logs\update-<version>.log` (open it from
 an elevated PowerShell). If the new host crash-loops, the service reinstalls the previous version,
 says so in the card and writes `update-rollback-from-<version>.log`.
+
+## From a paired client
+
+Once a newer release exists, the host's menu on a paired client shows **Update host**, on every
+install that has the **Update now** button above. It does what the button does and asks before it
+runs, because the host restarts and your stream ends.
+
+- The row appears only for a device with the **Manage host** grant, which Full control includes
+  ([access levels](/docs/access-levels)).
+- The host refuses while another device is streaming.
+- Turning off **Console updates** removes the row too.
 
 ## Update by hand
 

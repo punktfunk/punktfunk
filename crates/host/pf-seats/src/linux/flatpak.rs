@@ -1,5 +1,5 @@
-//! Box-wide Flatpak apps: one `--system` install every account on the box runs, each with its
-//! own `~/.var/app/<id>`, so every seat keeps its own emulator config and saves.
+//! Box-wide Flatpak apps: one `--system` install that every account on the box runs. Each
+//! account has its own `~/.var/app/<id>`, so every seat keeps its own emulator config and saves.
 //!
 //! The id is checked before it gets here ([`crate::ipc::valid_flatpak_id`]).
 

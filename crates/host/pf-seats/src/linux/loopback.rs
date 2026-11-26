@@ -1,16 +1,19 @@
-//! `punktfunk-seats loopback <account>`: a made seat's own loopback address for Steam's UI
-//! link. The seat unit runs it as root on every start (`ExecStartPost=`).
+//! `punktfunk-seats loopback <account>`: gives a made seat a loopback address of its own for
+//! Steam's UI link. The seat's unit runs it as root on every start (`ExecStartPost=`).
 //!
-//! Steam's client serves its UI on `127.0.0.1:57343` whichever user runs it, and every user on a
-//! box shares one loopback. The first Steam to start takes the port; every other user's Steam
-//! UI then connects to that one, gets none of its own controller input and goes down with it.
-//! Two cgroup socket-address programs on the seat user's slice send a bind or a connect to that
-//! address to one of the seat's own ([`address`]). Nothing outside the slice changes, the
-//! owner's Steam included.
+//! The problem: Steam's client serves its UI on `127.0.0.1:57343` whichever user runs it, and
+//! all users of a box share one loopback. The first Steam to start takes the port. Every other
+//! user's Steam UI then connects to that first Steam, gets none of its own controller input, and
+//! goes down when the first Steam does.
 //!
-//! The programs belong to the slice's cgroup and go with it, so every start attaches them, once
-//! the session it opened exists: that session's slice is the one that stays. A row on a
-//! person's own account gets none, its slice is their login.
+//! The fix: two cgroup socket-address programs on the seat user's slice. They send a bind or a
+//! connect to that address to one of the seat's own addresses instead ([`address`]). Nothing
+//! outside the slice changes, the owner's Steam included.
+//!
+//! The programs belong to the slice's cgroup and are removed with it. So every start attaches
+//! them again, once the session that the start opened exists: that session's slice is the one
+//! that stays. A row on a person's own account gets no programs, because its slice is the
+//! person's own login.
 
 use std::net::Ipv4Addr;
 

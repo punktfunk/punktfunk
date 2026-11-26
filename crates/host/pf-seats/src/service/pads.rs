@@ -1,9 +1,10 @@
 //! Desk pads: a game controller plugged into the box, lent to one seat.
 //!
-//! The ledger says who holds a pad; the backend makes it so. A lend, a move and a take-back
-//! save the row first, then have the backend hand the hardware over
-//! ([`PlatformBackend::settle_pads`]). A backend that can't gets the rows back as they were.
-//! Which pad may be lent is the backend's reading of the hardware, never the caller's word.
+//! The ledger says which row holds a pad, and the backend applies that to the hardware. A lend,
+//! a move and a take-back each save the row first, then ask the backend to hand the hardware
+//! over ([`PlatformBackend::settle_pads`]). If the backend can't, the rows are put back as they
+//! were. Which pad may be lent is what the backend reads from the hardware, never what the
+//! caller says.
 
 use super::{not_found, SeatService};
 use crate::backend::{BackendError, PlatformBackend, PresentPad};

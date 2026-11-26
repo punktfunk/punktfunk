@@ -1,26 +1,32 @@
-//! `punktfunk-seats stage <check> <mount> <options> <source> <stage>`: one of the owner's folders
-//! mounted at a seat's stage, checked where it is mounted. The seat unit runs it as root in PID
-//! 1's mount namespace before each start (`ExecStartPre=`, [`super::libraries::unit_lines`]).
+//! `punktfunk-seats mount-share <check> <mount> <options> <source> <stage>`: mounts one of the
+//! owner's folders for a seat, and checks the folder at the moment it mounts it.
 //!
-//! The supervisor checks each folder by path when it writes the unit; a link or a rename on that
-//! path afterwards would choose what the seat gets. So the helper opens `source` without
-//! following a link on any part of its path, judges the folder it holds ([`refusal`]), clones
-//! that folder to a scratch beside the stage, which only root can name, and runs
-//! `mount --bind -o <options>` from there, the idmap among them.
+//! The mount lands on a stage: a root-only directory where a folder is mounted first. The seat's
+//! unit then carries the stage into the seat with `BindPaths=`. The unit runs this helper as root
+//! in PID 1's mount namespace before each start (`ExecStartPre=`,
+//! [`super::libraries::unit_lines`]).
 //!
-//! `owner=<uid>`: root opens the folder and it must be that uid's. `reader=<account>`: the account
-//! opens it with its own groups, so it must be able to walk to it, read it and enter it.
+//! The supervisor checks each folder by path when it writes the unit. A link or a rename on that
+//! path afterwards would decide what the seat gets. So the helper opens `source` without
+//! following a link on any part of the path, checks the folder it then holds ([`refusal`]),
+//! clones it to a scratch mount point beside the stage, which only root can name, and runs
+//! `mount --bind -o <options>` from there. The options carry the id mapping.
 //!
-//! A seventh word, `<upper>`, makes the folder the lower layer of an overlay: it is mounted at
-//! `<stage>.lower`, and the overlay at `<stage>` writes into `<upper>/upper`. Where the kernel
-//! refuses the overlay, the lower is bound at `<stage>` and the seat gets the folder read-only.
-//! A stage already mounted is left as it is.
+//! - `owner=<uid>`: root opens the folder, and it must belong to that uid.
+//! - `reader=<account>`: the account opens it with its own groups, so the account must be able to
+//!   walk to the folder, read it and enter it.
+//! - A seventh word, `<upper>`, makes the folder the lower layer of an overlay at `<stage>` that
+//!   writes into `<upper>/upper`. Where the kernel refuses the overlay, the seat gets the folder
+//!   read-only. A stage that is already mounted is left as it is.
 
 use super::libraries::IDMAP_FS;
 use std::path::{Component, Path};
 
 /// The verb of `punktfunk-seats` that runs the helper.
-pub const VERB: &str = "stage";
+pub const VERB: &str = "mount-share";
+/// Every name the verb answers to. `stage` was its first name: a drop-in that an earlier
+/// version wrote calls it until that seat next starts.
+pub const VERBS: [&str; 2] = [VERB, "stage"];
 
 /// Whom the folder answers to.
 #[derive(Debug, PartialEq, Eq)]
@@ -74,7 +80,7 @@ pub fn run(
     stage: &str,
     upper: Option<&str>,
 ) -> u8 {
-    match linux::stage(check, mount, options, source, stage, upper) {
+    match linux::mount_checked(check, mount, options, source, stage, upper) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("seat stage: {source} not mounted: {error}");
@@ -94,7 +100,7 @@ mod linux {
 
     /// The folder at `source` mounted at `stage`, below an overlay into `upper` when given, or
     /// why not. The scratch goes either way.
-    pub(super) fn stage(
+    pub(super) fn mount_checked(
         check: &str,
         mount: &str,
         options: &str,
@@ -298,9 +304,9 @@ mod linux {
             }
         }
 
-        /// A folder swapped in on the path is judged as it is when opened: a reader is refused
-        /// where a closed folder now lies on the way, and root sees whose the folder now is. The
-        /// thread is root's again after each open.
+        /// A folder that was swapped in on the path is judged as it is at the moment it is
+        /// opened. A reader is refused when a closed folder now lies on the way. Root sees who owns
+        /// the folder now. After each open the thread is root's again.
         #[test]
         fn a_swapped_folder_is_judged_as_it_is_when_opened() {
             if !rustix::process::geteuid().is_root() {
@@ -341,6 +347,12 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The verb still answers to its first name, which older drop-ins call.
+    #[test]
+    fn the_verb_keeps_its_first_name() {
+        assert_eq!(VERBS, ["mount-share", "stage"]);
+    }
 
     #[test]
     fn a_check_names_an_owner_uid_or_a_reader_account() {

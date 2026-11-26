@@ -80,7 +80,8 @@ plugins' tokens and sign-ins live there. A link, a file with a second link or on
 not copied. Play stats stay with each host. A config folder it can't open, as in a home not
 mounted yet, leaves the copy as it was. Deleting the owner's row deletes `library/`.
 
-`level_library` makes that copy at once and answers `leveled` with whether it changed. It waits
+`sync_library` makes that copy at once and answers `synced` with whether it changed. The
+supervisor also reads both under their first names, `level_library` and `leveled`. It waits
 1.5 seconds for a change that holds the copies, such as a seat's removal, then answers the error `busy`.
 
 ## Games
@@ -149,14 +150,19 @@ the seat's `input_event` frames down and rumble back, and a uhid pad's carries t
 daemon's. The pad lives until the seat hangs up. The socket admits a running seat's user only
 (the owner's row included), eight pads per seat. A box without the daemon gives a seat no pad.
 
-## The fence
+## Who owns a pad's device nodes
 
 The daemon stamps each pad's `phys` `punktfunk-seat:…` and records the device in
 `/run/punktfunk/pads/vouched`, root's alone. `65-punktfunk-seats.rules` runs
-`punktfunk-seats fence` on every stamped `input` and `hidraw` node: a recorded device's node
+`punktfunk-seats node-owner` on every stamped `input` and `hidraw` node: a recorded device's node
 becomes that seat user's, `0600`, on a seat of its own, so neither the box's own Steam nor
 another seat sees it, and any other stamped node is root's. While the daemon runs, every other
 hidraw node keeps its group and seat0's ACL but loses `other` access.
+
+An input node that udev classes as a keyboard or a mouse, and not as a joystick, is root's alone
+whichever seat device it belongs to. An emulated Steam Deck carries a keyboard and a mouse
+beside its controller, and whoever can write such a node types into the kernel's own keyboard
+and pointer handlers, which serve the box's console.
 
 ## Lent controllers
 
@@ -169,7 +175,7 @@ controller's vendor, product and serial, found in any port, or its vendor, produ
 when it has no serial. A record also holds the port the lend found the controller in: while a
 second device that carries the same key is plugged in, only the one in that port is the lent
 one. While that directory exists, `65-punktfunk-seats.rules` runs
-`punktfunk-seats fence` on every node of a real USB device. A lent controller's nodes become
+`punktfunk-seats node-owner` on every node of a real USB device. A lent controller's nodes become
 the seat user's as udev creates them, `0600`, without `uaccess`, on a seat name of its own, or
 root's alone while parked; its keyboard and mouse nodes are root's alone always, so a Steam
 Controller's desktop mode reaches nobody, and so is the device's own node under

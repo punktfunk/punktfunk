@@ -135,28 +135,13 @@ export const LockLines: FC<{ lock: LockCard }> = ({ lock }) => {
 	) : null;
 };
 
-/** The card's one action on an open profile: lock it, or the owner's desktop it shares. */
-export const LockAction: FC<{ lock: LockCard; disabled?: boolean }> = ({
-	lock,
-	disabled,
-}) => {
-	if (lock.locked || !lock.onOpen) return null;
-	const label = lock.owner
+/** The card's lock action on an open profile: lock it, or the owner's desktop it shares. None
+ * while locked (the chip opens it then) or when the console cannot open the lock. */
+export const lockActionLabel = (lock: LockCard): string | undefined => {
+	if (lock.locked || !lock.onOpen) return undefined;
+	return lock.owner
 		? m.profiles_lock_owner_action({ owner: lock.owner })
 		: m.profiles_lock_action();
-	return (
-		<Button
-			variant="ghost"
-			size="icon"
-			aria-label={label}
-			aria-haspopup="dialog"
-			title={label}
-			disabled={disabled}
-			onClick={lock.onOpen}
-		>
-			<Lock className="size-4" />
-		</Button>
-	);
 };
 
 /**

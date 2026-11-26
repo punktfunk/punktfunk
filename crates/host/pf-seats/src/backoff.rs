@@ -1,12 +1,12 @@
-//! The wait before a supervised child that keeps exiting starts again.
+//! How long to wait before starting a supervised child again when it keeps exiting.
 //!
-//! A [`Backoff`] counts failures in a row. [`Backoff::failed`] counts one and answers the
-//! wait before the next start, along the caller's [`Curve`]. The caller's [`Reset`] rule
-//! says whether a run that lasted clears the count first; [`Backoff::reset`] clears it
-//! under either rule. Pure over the instants it is handed.
+//! A [`Backoff`] counts failures in a row. [`Backoff::failed`] counts one more and returns the
+//! wait before the next start, along the caller's [`Curve`]. The caller's [`Reset`] rule says
+//! whether a run that lasted long enough clears the count first. [`Backoff::reset`] clears it
+//! under either rule. Pure: the caller passes the instants.
 //!
-//! The service's console host, its web console and a seat's host each hold one, with
-//! their own curve and rule.
+//! Three users each hold one, with a curve and a rule of their own: the service's console host,
+//! the service's web console, and a seat's host.
 
 use std::time::{Duration, Instant};
 

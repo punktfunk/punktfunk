@@ -1,7 +1,8 @@
-//! A password crossing the seat pipe on its way to the backend, which seals it.
+//! A password on its way through the seat pipe to the backend, which seals it (Windows) or
+//! checks it once (Linux).
 //!
-//! It serializes as a bare string, its `Debug` is redacted so a logged command never carries it,
-//! and its memory is wiped when it drops.
+//! It serializes as a bare string. Its `Debug` output is redacted, so a logged command never
+//! carries it. Its memory is wiped when it is dropped.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;

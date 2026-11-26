@@ -166,11 +166,11 @@ export const InstalledList: FC<{
 					refetch={installed.refetch}
 				>
 					{rows.length === 0 ? (
-						<p className="p-card pt-0 text-sm text-muted-foreground">
+						<p className="p-padding-card pt-0 text-sm text-muted-foreground">
 							{m.store_installed_empty()}
 						</p>
 					) : (
-						<Stagger gap={ROW_GAP} className="divide-y px-card pb-2">
+						<Stagger gap={ROW_GAP} className="divide-y px-padding-card pb-2">
 							{rows.map((p) => (
 								<InstalledRow
 									key={p.pkg}

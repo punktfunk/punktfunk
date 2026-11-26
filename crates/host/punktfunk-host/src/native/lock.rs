@@ -163,7 +163,7 @@ fn enrolled(unlock: &ProfileUnlock) -> Option<UnlockKey> {
 }
 
 /// The refusal for wrong PINs that lasts `wait`: seconds under a minute, minutes up to two
-/// hours, else hours, each rounded up. A wait grows to a day ([`pf_seats::locks::PIN_WINDOW_MAX`]).
+/// hours, else hours, each rounded up. A wait grows to a day ([`pf_seats::profile_locks::PIN_WINDOW_MAX`]).
 fn wait_words(wait: Duration) -> Said {
     let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
     let (id, count, unit) = if seconds < 60 {
@@ -245,7 +245,7 @@ mod tests {
             "Too many wrong PINs. Try again in 120 minutes."
         );
         assert_eq!(
-            read(s(pf_seats::locks::PIN_WINDOW_MAX as u64)),
+            read(s(pf_seats::profile_locks::PIN_WINDOW_MAX as u64)),
             (
                 "close_lock_pin_wait_hours".into(),
                 "Too many wrong PINs. Try again in 24 hours.".into(),

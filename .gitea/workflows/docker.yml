@@ -110,6 +110,9 @@ jobs:
             dockerfile: ci/fedora-rpm.Dockerfile
             buildargs: --build-arg FEDORA_VERSION=45
             keysuffix: -f45
+          # openSUSE Tumbleweed builder — rpm.yml's fourth leg compiles in it.
+          - image: punktfunk-opensuse-rpm
+            dockerfile: ci/opensuse-rpm.Dockerfile
           # Android builder (JDK + SDK/NDK + cargo-ndk + sccache) — android.yml and
           # android-screenshots.yml run in it.
           - image: punktfunk-android-ci

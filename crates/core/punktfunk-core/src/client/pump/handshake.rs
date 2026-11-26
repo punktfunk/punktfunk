@@ -273,6 +273,7 @@ async fn dial(
                 audio_bitstreams: p.audio_bitstreams,
             },
             client_label: Some(super::super::client_label()),
+            platform: Some(crate::quic::PLATFORM.into()),
             // Core decides the ABR byte for every embedder: the controller that reads the ack's
             // reason is this crate's, so no client app can leave it clear and make one host
             // answer two ways.
