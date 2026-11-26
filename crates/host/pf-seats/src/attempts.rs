@@ -1,5 +1,5 @@
 //! Attempt limits for secret checks, kept in memory: the supervisor's for passwords, the host's
-//! per device for profile PINs (a profile's own cap is in its lock file, `locks`). Pure: the
+//! per device for profile PINs (a profile's own cap is in its lock file, `profile_locks`). Pure: the
 //! caller passes the time.
 //!
 //! A device, of a seat, an account or a profile, waits `2 s × 2^failures` after each failed check

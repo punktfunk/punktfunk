@@ -166,9 +166,9 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(no_lending())
     }
 
-    /// Bring the box's copy of the owner's library level with it now; `true` when the copy
-    /// changed. A platform whose box host lists the library it writes keeps no copy.
-    fn level_library(&self) -> Result<bool, BackendError> {
+    /// Copies the owner's library into the box's library copy now. `true` when the copy
+    /// changed. A platform whose box host lists the library it writes itself keeps no copy.
+    fn sync_library(&self) -> Result<bool, BackendError> {
         Ok(false)
     }
 }

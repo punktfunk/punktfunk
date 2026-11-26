@@ -134,9 +134,11 @@ pub enum Command {
     TakeBack {
         key: String,
     },
-    /// Linux: bring the box's copy of the owner's library level with it now, ahead of the
-    /// supervisor's own tick. Answers `leveled` once the copy is written.
-    LevelLibrary,
+    /// Linux: copy the owner's library into the box's library copy now, ahead of the
+    /// supervisor's own sync. Answers `synced` once the copy is written. `level_library` was
+    /// this command's first name: a door of an earlier version still sends it.
+    #[serde(alias = "level_library")]
+    SyncLibrary,
 }
 
 /// Who has a desk pad now.
@@ -334,8 +336,10 @@ pub enum CommandResult {
     Pads {
         pads: Vec<DeskPad>,
     },
-    /// The box's library is level with the owner's; `changed` when the copy moved for it.
-    Leveled {
+    /// The box's library copy matches the owner's library. `changed` says whether this sync
+    /// wrote anything. `leveled` was this answer's first name.
+    #[serde(alias = "leveled")]
+    Synced {
         changed: bool,
     },
 }
@@ -963,19 +967,23 @@ mod tests {
         );
     }
 
-    /// The door's ask for a level library and its answer, as both ends spell them.
+    /// The door's request to sync the library and its answer, as both ends spell them. Each
+    /// still reads under its first name, which an earlier version sends.
     #[test]
-    fn the_level_library_frames_round_trip() {
-        let wire = r#"{"type":"level_library"}"#;
-        assert_eq!(serde_json::to_string(&Command::LevelLibrary).unwrap(), wire);
-        assert_eq!(
-            serde_json::from_str::<Command>(wire).unwrap(),
-            Command::LevelLibrary
-        );
-        let done = CommandResult::Leveled { changed: true };
-        let wire = r#"{"kind":"leveled","changed":true}"#;
+    fn the_sync_library_frames_round_trip() {
+        let wire = r#"{"type":"sync_library"}"#;
+        assert_eq!(serde_json::to_string(&Command::SyncLibrary).unwrap(), wire);
+        for spelled in [wire, r#"{"type":"level_library"}"#] {
+            let read = serde_json::from_str::<Command>(spelled).unwrap();
+            assert_eq!(read, Command::SyncLibrary);
+        }
+        let done = CommandResult::Synced { changed: true };
+        let wire = r#"{"kind":"synced","changed":true}"#;
         assert_eq!(serde_json::to_string(&done).unwrap(), wire);
-        assert_eq!(serde_json::from_str::<CommandResult>(wire).unwrap(), done);
+        for spelled in [wire, r#"{"kind":"leveled","changed":true}"#] {
+            let read = serde_json::from_str::<CommandResult>(spelled).unwrap();
+            assert_eq!(read, done);
+        }
     }
 
     /// Only a reverse-DNS name reaches `flatpak`: nothing it reads as an option, a path, a

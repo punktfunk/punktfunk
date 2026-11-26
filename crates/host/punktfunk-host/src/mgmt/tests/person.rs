@@ -323,11 +323,11 @@ async fn one_answer_for_an_open_profile_a_stranger_and_a_pin() {
     let (app, store) = locked_box(tmp.path());
     let but_lock = |dir: &Path| {
         let mut all = files(dir);
-        all.remove(Path::new(pf_seats::locks::FILE));
+        all.remove(Path::new(pf_seats::profile_locks::FILE));
         all
     };
     let before = but_lock(tmp.path());
-    let pin = || pf_seats::locks::PinHash::new("2468");
+    let pin = || pf_seats::profile_locks::PinHash::new("2468");
     for (method, path, body) in lane() {
         let at = || call(&method, path, Some(SEAT_P), &body);
         let stranger = as_device(&app, at(), OTHER).await;
@@ -407,7 +407,7 @@ async fn signing_out_takes_the_lane_away_at_once() {
         .edit(SEAT_P, |l, now| l.admit(&device, now, false));
     assert!(admitted.unwrap());
     assert_eq!(as_device(&app, at(), LISTED).await.0, StatusCode::OK);
-    let left = |l: &mut pf_seats::locks::Lock, now: i64| l.list.left(LISTED, now - 601);
+    let left = |l: &mut pf_seats::profile_locks::Lock, now: i64| l.list.left(LISTED, now - 601);
     store.locks().edit(SEAT_P, left).unwrap();
     assert!(is_refusal(&as_device(&app, at(), LISTED).await));
 }
@@ -546,7 +546,9 @@ async fn enumerate_marks_exactly_the_rows_whose_writes_the_lane_takes() {
     // A device that needs the PIN is listed for it, and is no person.
     store
         .locks()
-        .edit(SEAT_P, |l, _| l.pin = pf_seats::locks::PinHash::new("2468"))
+        .edit(SEAT_P, |l, _| {
+            l.pin = pf_seats::profile_locks::PinHash::new("2468")
+        })
         .unwrap();
     let out = format!("/api/v1/profiles/{SEAT_P}/devices/{LISTED}");
     let out = axum::http::Request::delete(out)

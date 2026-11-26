@@ -147,7 +147,7 @@ impl DeviceList {
     }
 
     /// The key `fingerprint` enrolled for profile `id` on a profile lock, else its key from
-    /// before keys named their profile, which the first proof claims ([`crate::locks::Lock::proved`]).
+    /// before keys named their profile, which the first proof claims ([`crate::profile_locks::Lock::proved`]).
     pub fn key_for(&self, fingerprint: &str, id: &str) -> Option<&UnlockKey> {
         let entry = self.get(fingerprint)?;
         entry.keys.get(id).or(entry.key.as_ref())

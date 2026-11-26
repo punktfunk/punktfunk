@@ -1433,7 +1433,7 @@ impl PlatformBackend for LinuxBackend {
         self.inner.lent.settle(ledger, keys)
     }
 
-    fn level_library(&self) -> Result<bool, BackendError> {
+    fn sync_library(&self) -> Result<bool, BackendError> {
         let Some(_guard) = self.inner.copy_lock.lock_within(LIBRARY_SYNC_WAIT) else {
             return Err(err(
                 "busy",

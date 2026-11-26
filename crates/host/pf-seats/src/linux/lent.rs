@@ -449,7 +449,7 @@ impl Lent {
 
     /// Every record as `ledger` has it, live by each row's state, then a cycle of each plugged-in
     /// device one of `keys` names whose record changed. A record already as the ledger has it
-    /// was leveled, and its device cycled, by a list that ran in between.
+    /// was set live or parked, and its device cycled, by a list that ran in between.
     pub(super) fn settle(&self, ledger: &Ledger, keys: &[String]) -> Result<(), BackendError> {
         let _held = self.hold();
         let want: BTreeMap<&str, Record> = ledger

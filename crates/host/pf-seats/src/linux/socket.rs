@@ -39,7 +39,7 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 const FLATPAK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// The supervisor syncs the box's library copy on its own every two seconds (`linux/mod.rs`), so
 /// a request to sync it now is not worth a longer wait.
-const LEVEL_TIMEOUT: Duration = Duration::from_secs(2);
+const SYNC_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Root, or the `punktfunk` user when it exists. With no such user only root is let in.
 pub fn peer_allowed(peer_uid: u32, punktfunk_uid: Option<u32>) -> bool {
@@ -279,7 +279,7 @@ fn answer_within(command: &Command) -> Duration {
     match command {
         Command::InstallFlatpak { .. } | Command::RemoveFlatpak { .. } => FLATPAK_TIMEOUT,
         Command::Unlock { .. } => super::pam::CHECK_TIMEOUT + ANSWER_TIMEOUT,
-        Command::LevelLibrary => LEVEL_TIMEOUT,
+        Command::SyncLibrary => SYNC_TIMEOUT,
         _ => ANSWER_TIMEOUT,
     }
 }
