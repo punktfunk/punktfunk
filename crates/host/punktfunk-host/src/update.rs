@@ -321,8 +321,12 @@ fn classify_failure(e: &FeedError, had_manifest: bool) -> (Option<String>, bool)
 }
 
 /// Claims the background refresh when the cache is older than [`AUTO_REFRESH_AFTER`]. On
-/// `true` the caller runs [`spawn_refresh`] once the lock is released.
+/// `true` the caller runs [`spawn_refresh`] once the lock is released. Never in a test: a
+/// refresh fetches the feed and writes the serial floor into the config directory.
 fn claim_auto_refresh(rt: &mut Runtime) -> bool {
+    if cfg!(test) {
+        return false;
+    }
     let cold = rt
         .last_attempt
         .map(|t| t.elapsed() >= AUTO_REFRESH_AFTER)
