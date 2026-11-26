@@ -116,7 +116,8 @@ export const LogsCard: FC<{
 	isLoading,
 	onRetry,
 }) => {
-	const [minLevel, setMinLevel] = useState<MinLevel>("DEBUG");
+	// INFO first: a host at debug fills the pane with transport frames. DEBUG is one pick away.
+	const [minLevel, setMinLevel] = useState<MinLevel>("INFO");
 	const [search, setSearch] = useState("");
 	const listRef = useRef<HTMLDivElement>(null);
 
