@@ -30,7 +30,10 @@ export const HostStrip: FC<{
 }> = ({ host: h, compositors = [], update, audio }) => {
 	const actions = useListActions();
 	const [confirming, setConfirming] = useState<ActionInfo | null>(null);
-	const list = actions.data?.actions ?? [];
+	// The Updates card below is this page's way to update, with its progress and outcome.
+	const list = (actions.data?.actions ?? []).filter(
+		(a) => a.id !== "host.update",
+	);
 	const compositor = compositors.find((c) => c.default && c.available);
 	const params = new URLSearchParams({ host: h.local_ip });
 	if (h.fingerprint) params.set("fp", h.fingerprint);

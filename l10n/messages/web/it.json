@@ -343,8 +343,6 @@
 	"access_grant_launch": "Avvia giochi",
 	"access_grant_power": "Alimentazione dell’host",
 	"access_grant_power_caption": "Sospendi, riavvia o spegni l’host. Con l’accesso da tastiera si può già arrivarci dal desktop.",
-	"access_grant_manage_games": "Gestisci giochi",
-	"access_grant_manage_games_caption": "Metti in pausa il download di un gioco o rimuovilo dall’host. Con Avvia giochi si può già avviare un download.",
 	"access_grant_display": "Scegli il suo schermo",
 	"access_grant_display_caption": "Consente di scegliere come questo dispositivo usa i tuoi schermi, nella sua app e nei suoi preset: unico schermo, schermo principale, secondo schermo o copia di un monitor. Senza questo accesso vale ciò che è impostato in Schermi.",
 	"access_expires_label": "Scadenza dell’accesso",
