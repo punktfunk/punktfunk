@@ -6,15 +6,15 @@
 //!
 //! It does four things through this module: it reads the bootstrap the supervisor wrote, asks
 //! WTS whether its session still exists, reads the seat host's disconnect mark from the host
-//! root that the bootstrap names, and stores the pin of the RDP leaf certificate. The module is
-//! those four and nothing else.
+//! root that the bootstrap names, and stores the pin of the RDP leaf certificate once
+//! [`machine_pins`] shows the machine holds it. The module is those four and nothing else.
 
 use super::util::{backend_error, require_elevated_admin, WinResult};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
-pub use super::rdp::store_pin;
+pub use super::rdp::{machine_pins, store_pin};
 pub use crate::bootstrap::RdpBootstrap;
 
 /// The keeper's file name, beside `punktfunk-host.exe`.

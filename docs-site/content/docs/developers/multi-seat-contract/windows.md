@@ -20,9 +20,12 @@ the same for sessions a seat's games left behind.
 loopback RDP session open. The supervisor hands it the seat's credentials on stdin, never on the
 command line. Run `punktfunk-seat-keeper trust` from an elevated prompt once, before the first
 seat: it records the RDP certificate the keeper will accept. Turning seats on does this too,
-and replaces an earlier record. Each seat start compares the certificate TermService presents
-now with the record; a change fails the seat with `rdp_pin_changed` until seats are turned
-off and on. The keeper's stderr goes to the seat's `host.log`.
+and replaces an earlier record. Either records a certificate only when the machine holds it:
+any certificate in `LocalMachine\Remote Desktop`, or the one whose SHA-1 thumbprint the
+`SSLCertificateSHA1Hash` of `RDP-Tcp` or `punktfunk-tcp` names, in `LocalMachine\My`. Each seat
+start compares the certificate TermService presents now with the record. A new certificate the
+machine holds becomes the record; any other fails the seat with `rdp_pin_changed`. The keeper's
+stderr goes to the seat's `host.log`.
 
 ### The seats group
 

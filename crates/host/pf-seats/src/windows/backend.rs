@@ -389,7 +389,8 @@ impl PlatformBackend for WindowsBackend {
 
 impl WindowsBackend {
     /// The box's rows, then each seat's. Every row is one plain sentence; a problem names the
-    /// next move. `seating` adds what turning seats on checks (role, licensing, a GPU).
+    /// next move. `seating` adds what turning seats on checks (role, licensing, a GPU). The pin
+    /// row records a new Remote Desktop certificate the machine holds, as a seat start does.
     fn doctor_report(&self, ledger: &Ledger) -> Vec<Diagnostic> {
         let deadline = Instant::now() + enable::DOCTOR_BUDGET;
         let build = windows_build().map_err(|error| error.message);
@@ -413,7 +414,7 @@ impl WindowsBackend {
         let driver = enable::driver_state(&self.host_path);
         let inbox_driver_newer = enable::inbox_display_driver_newer(&self.host_path);
         let pin = match rdp::load_pin_optional(&self.root) {
-            Ok(Some(pin)) => Some(rdp::require_live(&self.host_path, pin)),
+            Ok(Some(pin)) => Some(rdp::require_live(&self.root, &self.host_path, pin).map(|_| ())),
             _ => None,
         };
         let steam_box = steam::box_install();

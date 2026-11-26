@@ -4,7 +4,8 @@
 //!   stdin, which only the supervisor writes. It never takes a secret on argv or from the
 //!   environment.
 //! - `trust [--replace]` records the pin. It is the elevated operator step that pins the TLS
-//!   leaf certificate of TermService before any seat starts.
+//!   leaf certificate of TermService before any seat starts. It refuses a leaf the machine
+//!   doesn't hold in its Remote Desktop certificate stores.
 //! - `observe` prints the leaf certificate TermService presents now, and stores nothing.
 
 #[cfg(windows)]
@@ -34,6 +35,8 @@ fn main() {
     }
 }
 
+/// Records the leaf TermService presents when the machine holds it (`keeper::machine_pins`).
+/// Without `replace` a different stored pin stays and the command fails.
 #[cfg(windows)]
 fn trust(replace: bool) -> Result<(), pf_seats::BackendError> {
     use pf_seats::windows::keeper;
@@ -41,6 +44,8 @@ fn trust(replace: bool) -> Result<(), pf_seats::BackendError> {
     let root = pf_seats::SecretRoot::open(pf_seats::persistence::default_root())
         .map_err(|error| rdp::io_error("seat_root", "open hardened seat root", error))?;
     let pin = rdp::observe_pin()?;
+    pf_seats::pin::accept_leaf(pin, &keeper::machine_pins())
+        .map_err(|cause| rdp::io_error("rdp_leaf_not_held", "trust RDP leaf", cause))?;
     keeper::store_pin(&root, pin, replace)?;
     println!("trusted RDP leaf SHA-256 {}", hex::encode(pin));
     Ok(())

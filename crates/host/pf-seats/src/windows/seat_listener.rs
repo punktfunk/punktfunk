@@ -21,8 +21,9 @@ use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_READ, KEY_WOW64_64KE
 use winreg::types::ToRegValue;
 use winreg::{RegKey, RegValue};
 
-const WINSTATIONS: &str = r"SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations";
-const STOCK: &str = "RDP-Tcp";
+pub(super) const WINSTATIONS: &str =
+    r"SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations";
+pub(super) const STOCK: &str = "RDP-Tcp";
 /// Set on the listener this module writes; [`remove`] deletes no other.
 const MARKER: &str = "PunktfunkSeatListener";
 /// Values the seat listener sets itself rather than copying.

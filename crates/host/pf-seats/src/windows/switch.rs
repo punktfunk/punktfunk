@@ -60,7 +60,7 @@ pub(crate) enum Step {
     AllowListener,
     /// Bring the seat listener up; a failure only costs pad audio.
     EnsureSeatListener,
-    /// Pin the certificate Remote Desktop presents now.
+    /// Pin the certificate Remote Desktop presents now, when the machine holds it.
     TrustCertificate,
     /// Drop `Enabling`: seats are on.
     Finish,
