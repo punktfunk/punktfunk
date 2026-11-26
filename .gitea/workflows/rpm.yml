@@ -372,7 +372,9 @@ jobs:
           set -x
           # `dnf builddep` resolves Fedora's PACKAGED gamescope, which is older than the master we
           # pin, so it can come up short — xorg-x11-server-Xwayland-devel is the one that actually
-          # bites (wlroots' configure dies on a missing xserver.wrap several minutes in).
+          # bites (wlroots' configure dies on a missing xserver.wrap several minutes in). It also
+          # installs nothing when the mirror has no `updates-source` repo, so the tree's own
+          # dependencies are listed below.
           dnf -y install dnf-plugins-core meson ninja-build glslc || true
           dnf builddep -y gamescope || true
           dnf -y install xorg-x11-server-Xwayland-devel || true
@@ -382,6 +384,19 @@ jobs:
           # "cannot find -lstdc++ / have you installed the static version", so nothing builds at
           # all. A rename here must be LOUD, hence no `|| true`.
           dnf -y install libstdc++-static
+          # What the pinned tree and its wlroots look up on the system, by pkg-config name:
+          # src/meson.build (X libs, libeis, libudev, libdecor, luajit, libinput, SDL2, libavif,
+          # libcap, hwdata), wlroots (libseat, xcb-*) and glslang. A name Fedora drops warns here
+          # and the build below fails: this step never costs the sysext.
+          dnf -y install \
+            'pkgconfig(xdamage)' 'pkgconfig(xcomposite)' 'pkgconfig(xcursor)' 'pkgconfig(xrender)' \
+            'pkgconfig(xext)' 'pkgconfig(xfixes)' 'pkgconfig(xxf86vm)' 'pkgconfig(xtst)' \
+            'pkgconfig(xres)' 'pkgconfig(xmu)' 'pkgconfig(xi)' 'pkgconfig(libeis-1.0)' \
+            'pkgconfig(libudev)' 'pkgconfig(libdecor-0)' 'pkgconfig(luajit)' 'pkgconfig(libinput)' \
+            'pkgconfig(sdl2)' 'pkgconfig(libavif)' 'pkgconfig(libcap)' 'pkgconfig(hwdata)' \
+            'pkgconfig(libseat)' 'pkgconfig(xcb-errors)' 'pkgconfig(xcb-ewmh)' \
+            'pkgconfig(xcb-icccm)' glslang ||
+            echo "::warning::punktfunk-gamescope build dependencies did not install for f${{ matrix.fedver }}"
           # The rest of the Arch package's makedepends that Fedora's older packaged gamescope does
           # not necessarily pull. Best-effort: unlike the static runtime, meson finds fallbacks or
           # does without, and a name that moves between Fedora releases should not fail the job.
