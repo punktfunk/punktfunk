@@ -302,10 +302,13 @@ jobs:
         run: cargo test --workspace --locked
 
       # The seat lifecycle tests marked #[ignore] check which programs a seat's start, stop and
-      # delete run, and three log in through PAM. They need root and the supervisor binary that
-      # Build leaves in target/debug, so this step runs after it.
+      # delete run. They need root and the supervisor binary that Build leaves in target/debug,
+      # so this step runs after it. The three that log in through PAM stay out: `chpasswd`
+      # can't set a password in this job's container.
       - name: Seat lifecycle tests that need root
-        run: cargo test --locked -p pf-seats --lib -- --ignored
+        run: >
+          cargo test --locked -p pf-seats --lib -- --ignored
+          --skip the_login_stack --skip the_helper_opens_one_session
 
       # The message files in l10n/: one line per problem (a key in two parts, a lost
       # placeholder, a missing plural category, over budget, a retired term).
