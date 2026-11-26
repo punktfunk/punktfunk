@@ -36,14 +36,37 @@ Restart=always
 RestartSec=2
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=full
+# Everything but the door's own folder is read-only. The console writes its session files and
+# its password hash there; its runtime directory systemd keeps writable.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/punktfunk
 # It reads only the door's files, under /var/lib.
 ProtectHome=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
+RestrictRealtime=yes
 LockPersonality=yes
+# Its sockets are IP, Unix (name lookups) and netlink (address lookups). No raw or packet
+# socket, no namespace of its own.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+# A call outside the filter fails with EPERM, as on a kernel without it. Bun's JIT maps memory
+# writable and executable, so MemoryDenyWriteExecute stays off.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# An unprivileged user on ports above 1024: no capability to keep.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Other users' processes are invisible to it, and it can't set the clock, read the kernel log
+# or create a set-id file.
+ProtectProc=invisible
+ProtectClock=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
 
 [Install]
 WantedBy=multi-user.target

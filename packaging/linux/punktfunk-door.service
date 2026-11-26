@@ -35,7 +35,11 @@ Restart=always
 RestartSec=2
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=full
+# Everything but the door's own folder is read-only. The supervisor's state is read and its
+# socket connected to, never written. The `+` line above runs outside this sandbox, so its
+# write of host.env needs no entry.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/punktfunk
 # It opens no device and reads no home: door-helper copies the owner's files, from a `+` line.
 ProtectHome=yes
 PrivateDevices=yes
@@ -44,6 +48,25 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictRealtime=yes
 LockPersonality=yes
+# Its sockets are Unix (the supervisor, D-Bus), IP and netlink (the address watch). No raw or
+# packet socket, no namespace of its own.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+# A call outside the filter fails with EPERM, as on a kernel without it. The host links no JIT
+# or script runtime and this unit loads no GPU driver, so no memory is writable and executable.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+# An unprivileged user on ports above 1024: no capability to keep.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# It can't set the clock, read the kernel log or create a set-id file. /proc stays whole: the
+# door reads it for another streaming host that would take its ports.
+ProtectClock=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
 
 [Install]
 WantedBy=multi-user.target
