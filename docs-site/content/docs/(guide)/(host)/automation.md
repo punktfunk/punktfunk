@@ -4,8 +4,9 @@ description: Run a command or call a webhook when the host does something, or pr
 ---
 
 Make the host do something when a stream starts, a device knocks or a game exits: turn on
-Do-Not-Disturb, send a phone notification, pause downloads, switch the TV's HDR. The host publishes
-an **event** for each of these, and you react with:
+Do-Not-Disturb, send a phone notification, pause downloads, switch the TV's HDR, open a
+[hotspot for your phone](/docs/wifi-hotspot). The host publishes an **event** for each of these,
+and you react with:
 
 - **Hooks**: run a command or call a webhook. Set them on the console's **Automation** page or in
   `hooks.json`.

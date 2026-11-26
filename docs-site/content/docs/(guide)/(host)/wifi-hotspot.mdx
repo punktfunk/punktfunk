@@ -1,0 +1,137 @@
+---
+title: Wi-Fi hotspot
+description: Let a Linux host open its own Wi-Fi for your phone while it streams, and move the stream onto it without stopping.
+---
+
+Give your phone a Wi-Fi link straight to a Linux host, with no router in between: the host turns
+its hotspot on when your phone starts a stream and off after it ends.
+
+```mermaid A stream moving onto the hotspot
+graph LR
+  A[Phone streams<br/>over your Wi-Fi] --> B[Host turns on<br/>its hotspot] --> C[Phone joins<br/>the hotspot] --> D[Stream carries on]
+```
+
+## What you need
+
+- **A cable from the host to your router.** The host's Wi-Fi adapter then serves only the hotspot.
+- **A Wi-Fi adapter that can host a network.** Turning the hotspot on the first time tells you.
+- **NetworkManager**, which most desktop distributions use. Its command is `nmcli`.
+
+## Create the hotspot
+
+1. Find the Wi-Fi adapter's name in the `DEVICE` column. It is `wlp3s0` on this page:
+
+   ```sh
+   nmcli device
+   ```
+
+2. Create the hotspot with your own name and passphrase, and turn it on:
+
+   ```sh
+   nmcli connection add type wifi ifname wlp3s0 con-name pf-hotspot autoconnect no \
+     ssid Punktfunk mode ap wifi.band a ipv4.method shared ipv6.method ignore \
+     wifi-sec.key-mgmt wpa-psk wifi-sec.psk 'choose-a-passphrase'
+   nmcli connection up pf-hotspot
+   ```
+
+   `wifi.band a` is 5 GHz. If `up` fails, the adapter can't host on 5 GHz: switch to 2.4 GHz with
+   `nmcli connection modify pf-hotspot wifi.band bg` and run `up` again.
+
+3. Join the hotspot from your phone once. This prints its name, its passphrase and a QR code the
+   phone's camera can read:
+
+   ```sh
+   nmcli device wifi show-password ifname wlp3s0
+   ```
+
+4. Turn it off again. From here on, a stream turns it on:
+
+   ```sh
+   nmcli connection down pf-hotspot
+   ```
+
+## Let Punktfunk through
+
+The hotspot needs its own firewall rules. [Ports & firewall](/docs/ports) says which firewall the
+host runs; with none, skip this.
+
+<Tabs items={['firewalld', 'ufw']}>
+<Tab value="firewalld">
+
+NetworkManager puts a hotspot in the `nm-shared` zone, which blocks Punktfunk:
+
+```sh
+sudo firewall-cmd --permanent --zone=nm-shared --add-service=punktfunk-native
+sudo firewall-cmd --reload
+```
+
+</Tab>
+<Tab value="ufw">
+
+`punktfunk-native` already covers the hotspot. These give the phone an address, name lookups and
+the internet through the host's wired adapter, `enp4s0` here. Without the internet, a phone sends
+the stream over mobile data:
+
+```sh
+sudo ufw allow in on wlp3s0 to any port 67 proto udp
+sudo ufw allow in on wlp3s0 to any port 53
+sudo ufw route allow in on wlp3s0 out on enp4s0
+```
+
+</Tab>
+</Tabs>
+
+## Turn it on with each stream
+
+In the console, open **Automation** → **Add hook** ([Events & hooks](/docs/automation#hooks)) and
+add the two hooks below. For each, tick **Only for a specific client or game**, pick your phone
+under **Client name**, and pick **Run a command** under **Then**.
+
+1. **Session started** turns the hotspot on unless it is on already, and finishes once it is up:
+
+   ```sh
+   nmcli -t -f NAME connection show --active | grep -qx pf-hotspot || nmcli --wait 25 connection up pf-hotspot
+   ```
+
+2. **Session ended** turns it off unless a stream runs again 20 seconds later. The wait lets a
+   phone that lost its stream while switching networks reconnect:
+
+   ```sh
+   sleep 20; if punktfunk-host ctl status --json | grep -q '"active_sessions":0'; then nmcli connection down pf-hotspot; fi
+   ```
+
+## Move a stream onto it
+
+1. Start the stream on your phone over your home Wi-Fi, as always.
+2. When the hotspot appears a few seconds later, pick it in the phone's quick settings or Control
+   Center.
+3. The picture freezes for the few seconds the phone needs to switch. If it takes longer, the
+   app reconnects by itself.
+
+<Callout type="warn">
+On an iPhone or iPad, switch in Control Center: leaving the app for Settings ends the stream.
+</Callout>
+
+The phone keeps using the host's usual address: the host is the hotspot's router and answers
+there too. When the stream ends, the hotspot turns off and the phone goes back to your home Wi-Fi.
+
+## Keep it on all the time
+
+Instead of the two hooks, the hotspot can start with the host. Join it before you stream:
+
+```sh
+nmcli connection modify pf-hotspot connection.autoconnect yes
+```
+
+## Troubleshooting
+
+### The phone joined the hotspot, then the stream stopped
+
+The firewall blocks Punktfunk on the hotspot. Add the rules in
+[Let Punktfunk through](#let-punktfunk-through).
+
+### The hotspot doesn't turn on with a stream
+
+The host log says `hook command exited non-zero` for `nmcli`: read it on the console's
+**Troubleshooting** page or with `journalctl --user -u punktfunk-host`. Run the **Session started**
+command in a terminal to see NetworkManager's reason.
