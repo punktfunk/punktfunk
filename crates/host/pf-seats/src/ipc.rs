@@ -1,13 +1,18 @@
-//! Frames on the supervisor's named pipe or Unix socket, one request per connection.
+//! The supervisor's wire format: frames on its named pipe (Windows) or Unix socket (Linux), one
+//! request per connection.
 //!
-//! A frame is a four-byte big-endian length then JSON, capped at 64 KiB before allocation.
-//! Requests and responses carry a schema version; commands and results are tagged enums;
-//! errors have stable codes and a message. The pipe's DACL admits SYSTEM and Administrators
-//! only, and the socket checks its peer's credentials, so the request carries no credential of
-//! its own; an adopt, credential or unlock frame carries the account's password, which the
-//! supervisor seals (Windows) or checks once (Linux) and forgets. Both ends hold each frame in a buffer
-//! wiped when it drops. [`answer`] serves one request on any reader and writer, which keeps
-//! dispatch testable without a pipe.
+//! A frame is a four-byte big-endian length followed by JSON. A length over 64 KiB is refused
+//! before anything is allocated. Requests and responses carry a schema version. Commands and
+//! results are tagged enums. An error has a stable code and a message.
+//!
+//! A request carries no credential of its own, because the transport already knows the caller:
+//! the pipe's DACL admits only SYSTEM and Administrators, and the socket checks its peer's
+//! credentials. Three kinds of frame carry an account's password: adopt, credential and unlock.
+//! The supervisor seals that password (Windows) or checks it once (Linux), then forgets it. Both
+//! ends keep each frame in a buffer that is wiped when it is dropped.
+//!
+//! [`answer`] serves one request on any reader and writer, so dispatch can be tested without a
+//! pipe.
 
 use crate::backend::PlatformBackend;
 use crate::model::{CreateSeat, Seat, SeatId};

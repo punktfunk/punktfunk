@@ -1,22 +1,25 @@
-//! What seats share and what each keeps: the games folder, the trust copy and the Steam clone.
+//! The supervisor's state directory: what the seats share, and what each seat keeps to itself.
 //!
-//! Under the supervisor's state directory ([`super::STATE_DIR`]), root's alone:
+//! Everything is under [`super::STATE_DIR`], which only root can change:
 //!
-//! - `games/steamapps/{common,compatdata,shadercache,downloading}` is one library every seat
-//!   writes. `compatdata`, `shadercache` and `downloading` are covered per seat by bind mounts
-//!   (`session.rs`), so Wine prefixes and download state never cross.
-//! - `seats/<id>/` holds the seat user's home, those three private directories, and the box
-//!   owner's libraries as the seat sees them (`libraries.rs`).
-//! - `trust/<id>/` is a read-only copy of the box's pairing store and profiles from the door's
-//!   directory, so a seat user can read what it needs and nothing else there. A seat on a
-//!   person's own account gets only the pairing records of the devices its row admits, and so
-//!   does a locked profile's seat, with its lock and no PIN. A seat other than the owner's also
-//!   finds the box's library there, with its own profile's layer and no other.
-//! - `library/` is the box's library: a copy of the owner's, which the owner's host writes, with
-//!   every profile's layer, the plugins' grants and the firmware they staged. The door serves it
-//!   to every client, and each seat's trust copy takes it from here.
-//! - `seats/hosts/<id>/mgmt-token` is the token the box presents to that seat host's loopback
-//!   API. It belongs to the `punktfunk` user, not the seat group: every seat user is a member.
+//! - `games/steamapps/{common,compatdata,shadercache,downloading}`: one Steam library that every
+//!   seat writes. Each seat gets its own `compatdata`, `shadercache` and `downloading` mounted
+//!   over the shared ones (`session.rs`), so Wine prefixes and downloads never mix.
+//! - `seats/<id>/`: the seat user's home, those three private folders, and the box owner's
+//!   libraries as the seat sees them (`libraries.rs`).
+//! - `trust/<id>/`: the seat's trust copy, a read-only copy of the box's pairing store and
+//!   profiles from the door's directory. The seat's user can read what the seat needs and
+//!   nothing else of the door's. A seat on a person's own account gets only the pairing records
+//!   of the devices its row lets on. So does the seat of a locked profile, with the lock and
+//!   without the PIN. Every seat but the owner's also finds the box's library here, with its own
+//!   profile's layer and no other profile's.
+//! - `library/`: the box's library copy. The owner's host writes the library in the owner's
+//!   home. The supervisor copies it here, with every profile's layer, the plugins' grants and the
+//!   firmware the plugins staged. The door serves it to every client, and each seat's trust copy
+//!   takes it from here.
+//! - `seats/hosts/<id>/mgmt-token`: the token the box presents to that seat host's loopback
+//!   API. It belongs to the `punktfunk` user and not to the seat group, because every seat user
+//!   is in that group.
 
 use super::accounts::{is_ordinary, Passwd};
 use super::session::PRIVATE_DIRS;

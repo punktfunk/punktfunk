@@ -1,12 +1,18 @@
 //! Who may open a seat on a person's own account: the devices that proved the person is there,
-//! and the proofs they give. Pure: the caller passes the time.
+//! and what counts as proof. Pure: the caller passes the time.
 //!
-//! A password or key proof makes its device present: while it is connected, until [`GRACE_SECS`]
-//! after the door reports it left, and never past [`CAP_SECS`] from the unlock. Every presence
-//! ends with the session. `stay` lets a device rejoin a running session with no proof; a device
-//! with a `key` is admitted only while present, so a copy of its pairing key alone never reaches
-//! the seat. A key proof signs [`message`], over a challenge [`Challenges`] hands out once. The
-//! Linux backend keeps the list in `seats/<id>/devices.json`.
+//! A device proves it with the account's password or with a key it enrolled. After that the
+//! device is present: while it stays connected, for [`GRACE_SECS`] after the door reports that it
+//! left, and never longer than [`CAP_SECS`] after the unlock. When the session ends, every
+//! device's presence ends.
+//!
+//! - `stay` lets a device rejoin a running session without a new proof.
+//! - A device with a `key` is let on only while it is present. So a copy of its pairing key
+//!   alone never reaches the seat.
+//! - A key proof is a signature over [`message`], which includes a challenge that
+//!   [`Challenges`] hands out once.
+//!
+//! The Linux backend keeps each seat's device list in `seats/<id>/devices.json`.
 
 use crate::ipc::{Device, DeviceEntry, DeviceKind, KeyAlg, Needs, UnlockKey};
 use crate::model::SeatId;
