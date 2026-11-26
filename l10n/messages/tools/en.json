@@ -436,6 +436,7 @@
 	"tray_unit_stop": "Stop",
 	"tray_unit_restart": "Restart",
 	"tray_approve_pairing": "Approve pairing request…",
+	"tray_update_to": "Update to {version}…",
 	"tray_start_host": "Start host",
 	"tray_start_at_login": "Start at log-in",
 	"tray_exit": "Exit tray",

@@ -1,15 +1,20 @@
-//! `punktfunk-seats login <account>`: a person's session opened with their password, as a
-//! display manager opens one, so what their own login unlocks with it unlocks here too.
+//! `punktfunk-seats login <account>`: opens a person's session with their password, the way a
+//! display manager does. So whatever the person's own login unlocks with that password is
+//! unlocked here too.
 //!
-//! It is the main process of `punktfunk-seat@<account>.service` for a cold start the person
-//! proved with their password (the drop-in of `session::render_login`), and runs as root. It
-//! takes the password once from the supervisor ([`super::handover`]), runs one transaction on
-//! the `punktfunk-seat` PAM service ([`pam::Login`]: authenticate, account, credentials,
-//! session), then forks a child that drops to the person and execs `seat-session`. The root
-//! parent forwards the stop signals, closes the session when the child ends and exits with its
-//! status. Before a session exists it exits with a code of [`fallback`]'s, which tells the
-//! supervisor to start the row without the helper. It never refuses a start: the gate decided
-//! who gets in moments earlier.
+//! It runs as root, as the main process of `punktfunk-seat@<account>.service`, for a cold start
+//! that the person proved with their password (the drop-in from `session::render_login`):
+//!
+//! 1. It takes the password once from the supervisor ([`super::login_password`]).
+//! 2. It runs one transaction on the `punktfunk-seat` PAM service ([`pam::Login`]):
+//!    authenticate, account, credentials, session.
+//! 3. It forks a child that drops to the person and execs `seat-session`.
+//! 4. The root parent forwards the stop signals, closes the PAM session when the child ends,
+//!    and exits with the child's status.
+//!
+//! If it fails before a session exists, it exits with one of [`fallback`]'s codes. That tells
+//! the supervisor to start the row without the helper. The helper never refuses a start: the
+//! supervisor decided moments earlier who gets in.
 
 #![allow(unsafe_code)]
 
@@ -89,7 +94,7 @@ fn session_code(code: Option<i32>, signal: Option<i32>) -> u8 {
 }
 
 /// `punktfunk-seats login <account>`, as the unit runs it: the password from
-/// [`super::handover::SOCKET_PATH`], then `seat-session` beside this binary.
+/// [`super::login_password::SOCKET_PATH`], then `seat-session` beside this binary.
 #[cfg(target_os = "linux")]
 pub fn run(account: &str) -> u8 {
     crate::logging::to_stderr();
@@ -98,7 +103,7 @@ pub fn run(account: &str) -> u8 {
         tracing::error!("seat-session not found beside the login helper");
         return NO_SESSION;
     };
-    let socket = Path::new(super::handover::SOCKET_PATH);
+    let socket = Path::new(super::login_password::SOCKET_PATH);
     run_in(account, SERVICE, socket, &program)
 }
 
@@ -157,7 +162,7 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
         tracing::error!(service = ?service, "login service not installed");
         return NO_SERVICE;
     }
-    let password = match super::handover::fetch(socket, account) {
+    let password = match super::login_password::fetch(socket, account) {
         Ok(password) => password,
         Err(cause) => {
             tracing::error!(account, %cause, "login helper got no password");
@@ -267,9 +272,13 @@ impl Person {
         })
     }
 
-    /// `program` in a child that takes this process's descriptors 0 to 2 and no other, the
-    /// session's environment `env`, no blocked signal, the core limit `core` when there is one to
-    /// give back, then the person's groups, gid and uid, in that order, and no way back to root.
+    /// Runs `program` in a child that has no way back to root. The child gets:
+    ///
+    /// - this process's descriptors 0 to 2 and no other,
+    /// - the session's environment `env`,
+    /// - no blocked signal,
+    /// - the core limit `core`, when there is one to give back,
+    /// - then the person's groups, gid and uid, set in that order.
     fn spawn(
         &self,
         program: &Path,
@@ -514,21 +523,27 @@ mod tests {
         assert_eq!(libc::WEXITSTATUS(status), 0, "SIGTERM blocked in the child");
     }
 
-    /// The built helper as `punktfunk-seat@.service` runs it, as root, through this package's PAM
-    /// file over the box's `login` stack, with this test as the supervisor. The session child is
-    /// the person with their groups, no capability, descriptors 0 to 2 alone, `/` as its
-    /// directory and the unit's environment plus the person's names, and no copy of the password
-    /// in its or the helper's argv and environment, or in the helper's log; the helper keeps no
-    /// core limit and forwards a stop. A wrong password, a locked, an expired and a must-change
-    /// account, a missing PAM file, a missing `seat-session` and no password at all each end it
-    /// before a session; a `seat-session` the person can't run ends it with the session closed.
-    /// Makes and removes the account `pfwallet`, the group `pfwalletg`,
+    /// Runs the built helper the way `punktfunk-seat@.service` runs it: as root, through this
+    /// package's PAM file over the box's `login` stack, with this test in the supervisor's place.
+    ///
+    /// - The session child is the person, with the person's groups and no capability. It has only
+    ///   descriptors 0 to 2, `/` as its directory, and the unit's environment plus the person's
+    ///   names.
+    /// - No copy of the password is in the argv or the environment of the child or of the helper,
+    ///   or in the helper's log.
+    /// - The helper keeps no core limit and forwards a stop.
+    /// - Each of these ends the helper before a session: a wrong password, a locked account, an
+    ///   expired account, an account that must change its password, a missing PAM file, a missing
+    ///   `seat-session`, and no password at all.
+    /// - A `seat-session` that the person can't run ends the helper with the session closed.
+    ///
+    /// It makes and removes the account `pfwallet`, the group `pfwalletg`,
     /// `/etc/pam.d/punktfunk-seat`, the login socket and the row's runtime directory.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "needs root, libpam, the login service and a built punktfunk-seats; makes the account pfwallet"]
     fn the_helper_opens_one_session_as_the_person() {
-        use super::super::handover::{self, Handover};
+        use super::super::login_password::{self, LoginPasswords};
         use super::super::pam::tests::{run, seats_binary};
         use crate::secret::Secret;
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -537,7 +552,7 @@ mod tests {
         const GROUP: &str = "pfwalletg";
         const PASSWORD: &str = "wallet pass-7 Ü";
         let pam_file = Path::new("/etc/pam.d").join(SERVICE);
-        let socket = Path::new(handover::SOCKET_PATH);
+        let socket = Path::new(login_password::SOCKET_PATH);
         let runtime = super::super::session::runtime_dir(ACCOUNT);
         for taken in [
             &pam_file,
@@ -608,9 +623,9 @@ mod tests {
         std::fs::write(&program, script).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let (listener, _) = handover::bind(socket).unwrap();
+        let (listener, _) = login_password::bind(socket).unwrap();
         listener.set_nonblocking(true).unwrap();
-        let handover = Handover::default();
+        let handover = LoginPasswords::default();
         let root_only = |stream: &std::os::unix::net::UnixStream, _: &str| {
             let cred = rustix::net::sockopt::socket_peercred(stream).map_err(|e| e.to_string())?;
             cred.uid
@@ -634,7 +649,7 @@ mod tests {
                         match listener.accept() {
                             Ok((stream, _)) => {
                                 stream.set_nonblocking(false).unwrap();
-                                return handover::hand(&handover, stream, root_only);
+                                return login_password::hand(&handover, stream, root_only);
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 std::thread::sleep(Duration::from_millis(20));

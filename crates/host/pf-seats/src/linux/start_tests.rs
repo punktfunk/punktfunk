@@ -1,10 +1,16 @@
-//! What each row kind's transitions ask of the machine, against [`fake`]: every program in
-//! order, and the files a cold start leaves under `/run`. A made seat's provision, a cold start
-//! of any row, a warm start of a made seat or the owner's row, the owner's desk start and a
-//! supervisor start over the owner's row hand folders to other users or write under `/run`, so
-//! those tests need root; a person's warm start, every yield, the owner's release and an owner's
-//! or person's stop run anywhere. A made seat's stop and delete need `/proc`, and the delete's
-//! tests of its `/run` files and the owner's library drives need root too.
+//! Tests of what each start, stop and delete asks of the machine, per row kind, against
+//! [`fake`]: every program that runs, in order, and the files a cold start leaves under `/run`.
+//!
+//! Some need root, because the code under test hands folders to other users or writes under
+//! `/run`:
+//!
+//! - a made seat's provision, and any row's cold start
+//! - a warm start of a made seat or of the owner's row
+//! - the owner's desk start, and a supervisor start over the owner's row
+//! - a delete's checks of its `/run` files and of the owner's library drives
+//!
+//! These run anywhere: a person's warm start, every yield, the owner's release, and the stop of
+//! the owner's or a person's row. A made seat's stop and delete need `/proc`.
 
 use super::*;
 use std::cell::{Cell, RefCell};
@@ -433,6 +439,7 @@ fn a_made_seat_s_cold_and_warm_start_run_exactly_these() {
         SHOW,
         "getent passwd punktfunk",
         "getent passwd",
+        "getent group punktfunk-door",
         "systemctl daemon-reload",
         "systemctl stop user@UID.service",
         "systemctl reset-failed punktfunk-seat@ACCOUNT.service",
@@ -580,7 +587,7 @@ fn the_owner_s_cold_and_warm_start_run_exactly_these() {
 }
 
 /// A person's cold start with a key proof, which opens their session through systemd's own login:
-/// no login drop-in, no handover.
+/// no login drop-in, no password kept for a helper.
 #[test]
 #[ignore = "needs root: hands the row's folders to the person and writes under /run"]
 fn a_person_s_cold_start_runs_exactly_these() {
@@ -646,7 +653,7 @@ fn a_person_s_password_start_runs_exactly_these() {
     let _alone = RUN.lock().unwrap_or_else(|e| e.into_inner());
     clear_run("pfperson", PERSON_UID);
     let rig = rig();
-    rig.backend.login_socket(handover::Label::Off);
+    rig.backend.login_socket(login_password::Label::Off);
     let seat = row("pfperson", PERSON_ID, false, Some(PERSON_UID));
     let passwd = format!(
         "pfperson:x:{PERSON_UID}:{PERSON_UID}:Per:{}:/bin/bash\n",
@@ -693,7 +700,7 @@ fn a_person_s_password_start_runs_exactly_these() {
     assert_eq!(calls_from(0), expect(&expected, "pfperson", PERSON_UID));
     assert_eq!(*logins.lock().unwrap(), [true, false]);
     assert!(!left, "the drop-in went with the helper's start");
-    assert!(!rig.backend.inner.handover.waits("pfperson"));
+    assert!(!rig.backend.inner.login_passwords.waits("pfperson"));
 }
 
 /// The folders a made seat's provision leaves in its seat directory and in `saves`, each with its
@@ -716,9 +723,10 @@ fn seat_folders(state: &Path, id: &str) -> Vec<(String, u32, u32)> {
     out
 }
 
-/// A made seat's provision, the account not yet there: the games group and folder, then the
-/// account with its own group and the groups that exist, its home closed, its folders and Steam
-/// files handed to it. Provisioning again finds the account and makes none.
+/// A made seat's provision when the account doesn't exist yet. First the games group and the
+/// games folder. Then the account, with a group of its own and those of its groups that exist.
+/// Then the account's home is closed, and the seat's folders and Steam files are handed to the
+/// account. Provisioning a second time finds the account and makes none.
 #[test]
 #[ignore = "needs root: hands the seat's folders to its user"]
 fn a_made_seat_s_provision_runs_exactly_these() {
@@ -801,8 +809,8 @@ fn a_made_seat_s_provision_runs_exactly_these() {
 }
 
 /// A made seat never yields to its user at the machine, though they have a session there: its
-/// account is the supervisor's, nobody else's. The keep-level thread is not even offered the row,
-/// since only a row on someone's own account is tracked with a guest to yield to.
+/// account is the supervisor's, nobody else's. The sync thread is not even offered the row,
+/// since only a seat on someone's own account is tracked with an account to yield to.
 #[test]
 fn a_made_seat_never_yields_to_the_desk() {
     let rig = rig();
@@ -815,7 +823,7 @@ fn a_made_seat_never_yields_to_the_desk() {
     yield_to_the_desk(&rig.backend.inner, &seat);
     assert_eq!(calls_from(0), expect(&[SHOW], "pf-seat-7", MADE_UID));
     assert!(owner_at_desk("pf-seat-7"), "the session is there");
-    assert!(Tracked::of(&seat, &found).guest.is_none());
+    assert!(Tracked::of(&seat, &found).own_account.is_none());
 }
 
 /// What deleting a made seat's row asked of the machine.
@@ -851,7 +859,7 @@ fn delete_a_made_seat(
     }
     before(&rig, &seat);
     rig.backend.track(&seat.id, Tracked::of(&seat, &found));
-    rig.backend.inner.lent.level(&seat, true, true);
+    rig.backend.inner.lent.set_live(&seat, true, true);
     assert_eq!(
         lend_holder(&rig.state, &lent_pad()).as_deref(),
         Some(account)
@@ -903,10 +911,16 @@ const DELETE: [&str; 17] = [
     "getent passwd ACCOUNT",
 ];
 
-/// A made seat's delete: the foreign-user check first, then the seat is untracked before its unit
-/// stops, its user is ended and the proxy hook lets go, the account goes with its home, the
-/// seat's directories go, and its lent pad is the desk's again. `/proc` decides when the user is
-/// gone, so this runs where Linux does.
+/// A made seat's delete, in order:
+///
+/// 1. the foreign-user check
+/// 2. the seat is untracked, and only then its unit stops
+/// 3. the seat's user is ended, and the proxy hook lets go
+/// 4. the account is removed with its home
+/// 5. the seat's directories are removed
+/// 6. the seat's lent pad belongs to the desk again
+///
+/// `/proc` decides when the user is gone, so this test runs only on Linux.
 #[test]
 #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc, which only Linux has")]
 fn a_made_seat_s_delete_runs_exactly_these() {
@@ -955,9 +969,9 @@ fn a_made_seat_s_delete_takes_its_files_under_run_and_reloads() {
     assert!(left.is_empty(), "{left:?}");
 }
 
-/// A made seat's delete on a box whose owner's row is prepared: the owner's Steam is known
-/// without a look at every account, and the seat's folders on the drives of its libraries go
-/// first, as the owner.
+/// A made seat's delete on a box where the owner's row is prepared. The owner's Steam is known
+/// without a look at every account. The seat's folders on the drives of the owner's libraries
+/// are removed first, and as the owner.
 #[test]
 #[ignore = "needs root and Linux: hands the owner's Steam to the owner, reads /proc"]
 fn a_made_seat_s_delete_forgets_its_folders_on_the_owner_s_library_drives() {
@@ -1018,10 +1032,10 @@ const START_HOST: &str = "setpriv --reuid UID --regid UID --init-groups env \
      XDG_RUNTIME_DIR=/run/user/UID systemctl --user start punktfunk-host.service \
      punktfunk-kde-session.service";
 
-/// Seats outlive the supervisor, so its start finds the owner's row with its unit maybe up: the
-/// row is written again and tracked for as long as it exists, a stop leaving it tracked, and the
-/// owner's own host restarts onto files that changed. A made seat's row and a person's, in the
-/// same ledger, get nothing.
+/// Seats outlive the supervisor. So when the supervisor starts, it may find the owner's row with
+/// the row's unit already up. It writes the row's files again and tracks the row for as long as
+/// the row exists; a stop leaves it tracked. The owner's own host restarts onto files that
+/// changed. A made seat's row and a person's row in the same ledger get none of this.
 #[test]
 #[ignore = "needs root: hands the trust copy to the owner and writes under /run"]
 fn the_owner_row_is_tracked_after_a_supervisor_restart() {
@@ -1064,10 +1078,10 @@ fn the_owner_row_is_tracked_after_a_supervisor_restart() {
     assert_eq!(cold, expect(&expected_cold, "pfowner", OWNER_UID));
     assert_eq!(warm, expect(&prepare, "pfowner", OWNER_UID));
     let tracked = tracked.expect("the owner's row is tracked");
-    assert_eq!((tracked.kind, tracked.uid), (Own::Owner, OWNER_UID));
+    assert_eq!((tracked.kind, tracked.uid), (SeatAccount::Owner, OWNER_UID));
     assert!(
-        tracked.guest.is_some(),
-        "the keep-level thread can yield it"
+        tracked.own_account.is_some(),
+        "the sync thread can yield it"
     );
     assert_eq!(others, [None, None]);
     assert_eq!(after_stop.as_deref(), Some("pfowner"));
@@ -1200,7 +1214,7 @@ fn release_owner_row(current: Option<&str>) -> Released {
         std::fs::create_dir_all(dir).unwrap();
     }
     rig.backend.track(&seat.id, Tracked::of(&seat, &found));
-    rig.backend.inner.lent.level(&seat, true, true);
+    rig.backend.inner.lent.set_live(&seat, true, true);
     let owner = current.map(|name| accounts::Passwd {
         name: name.into(),
         ..found.clone()

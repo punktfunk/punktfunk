@@ -1,12 +1,15 @@
-//! Length-capped bootstrap passed only through the RDP keeper's inherited stdin.
+//! The bootstrap: what the supervisor hands a keeper so it can sign a seat in. It travels only
+//! through the keeper's inherited stdin.
 //!
-//! The frame carries the local account, plaintext password, expected leaf pin,
-//! and the seat's host root, where the keeper reads the host's disconnect mark.
-//! It has a fixed magic/version, explicit lengths, and a 4 KiB outer cap.
-//! Password storage uses `Zeroizing`; the type's `Debug` output is redacted.
-//! The process launcher writes the frame after job assignment, then closes its
-//! pipe. No bootstrap field is accepted on argv or through the environment.
-//! Pure tests keep this boundary covered on non-Windows builders.
+//! The frame carries the local account, the plaintext password, the expected leaf pin, and the
+//! seat's host root, where the keeper reads the host's disconnect mark. It has a fixed magic and
+//! version, explicit lengths, and an outer cap of 4 KiB.
+//!
+//! The password is held in a `Zeroizing` buffer, and the type's `Debug` output is redacted. The
+//! process launcher writes the frame after the keeper has joined its job, then closes its end
+//! of the pipe. No bootstrap field is accepted on argv or through the environment.
+//!
+//! The tests are pure, so this boundary is tested on builders that aren't Windows too.
 
 use std::fmt;
 use std::io::{self, Read};

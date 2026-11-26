@@ -153,6 +153,28 @@ only root can change.
 - **Your library.** Every seat gets a read-only copy of your game library, so a game on a seat
   can read it, commands and prep steps of your custom titles included. It can't change it.
 
+### What the box's host can reach
+
+With **Reachable without logging in** on, the host and console that face the network run as
+`punktfunk`. Taken over, they reach what the console password reaches:
+
+- **The owner's account and every profile with a desktop of its own.** The console sets hooks,
+  plugins and custom titles there, and they run as that account. A host without **Reachable
+  without logging in** runs as the owner's account outright.
+- **An existing account, in two cases.** With its password, typed after the takeover
+  ([below](#only-its-person-opens-an-existing-linux-account)). And while that person has
+  [their own console](/docs/own-account) open: the box's console carries that sign-in, for 12
+  hours at most.
+
+Turning **Reachable without logging in** off doesn't undo a takeover. The box's identity, paired
+devices and console password go back to the owner's account as they are. To start clean,
+[remove the host](/docs/uninstall#linux-hosts) with its config directory, install it and pair
+again.
+
+On SteamOS the account that installed Punktfunk owns the programs every seat runs, in
+`/opt/punktfunk/host`. That account can run code as each seat's user, an existing account
+included.
+
 ### A profile on an existing account runs as that person
 
 A profile on an existing account plays on that person's own account, on Linux and Windows. So the
@@ -170,9 +192,9 @@ signed in, never with the console password:
 
 | | |
 |---|---|
-| Who decides | `punktfunk-seats`, as root. It checks the password through the machine's login (PAM), keeps the seat's list of signed-in devices, and starts the session. The host that faces the network only passes the password on: taken over, it can read a password typed after that, but can't open the session or add a device. |
+| Who decides | `punktfunk-seats`, as root. It checks the password through the machine's login (PAM), keeps the seat's list of signed-in devices, and starts the session. The host that faces the network only passes the password on. Taken over, it can read a password typed after that, and with that password open the person's session for a device of its own. Without a password it can't: face or finger unlock gives it nothing to reuse. |
 | The password | The app sends it only to a host whose certificate it pinned at pairing, over the encrypted connection, and the host reads it only from a paired device. It is wiped after the check and never written to disk, a log, a command line or an environment. Nothing on the device stores it. |
-| Limits | 5 wrong passwords per device, then 15 minutes. At most 2 wrong passwords per account in 15 minutes reach the login, so a distro that locks an account after 3 failures never does it from a stream. |
+| Limits | 5 wrong passwords per device, then 15 minutes. At most 2 wrong passwords per account in 15 minutes reach the login, so a distro that locks an account after 3 failures never does it from a stream. That 15 minutes doubles with every 10 wrong passwords, up to a day, until the right one. |
 | Face or finger unlock | A key in the device's secure hardware (Secure Enclave, Android Keystore, Windows Hello) that signs only after a match. `punktfunk-seats` checks its signature over a one-time challenge, good for 2 minutes and bound to this seat, this device and this box. A failed signature never reaches the login. |
 | Which devices get on | The seat's host admits only the devices on its list, not every device paired with the box. A device with face or finger unlock is on it only after a fresh match, until 10 minutes after it leaves, so a copy of its pairing can't skip the match. **Sign out** on the profile's card takes a device and its key off. |
 | Record | Each unlock writes one line to the journal of `punktfunk-seats`: seat, account, device, how it unlocked, the result and the failures so far. Never the password. |

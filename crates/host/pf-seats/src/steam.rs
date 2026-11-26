@@ -1,9 +1,11 @@
-//! A seat's own Steam client: what of the box's install it copies and how it starts.
+//! A seat's own Steam client: what it copies from the box's install, and how it starts.
 //!
-//! On Windows, Steam runs once per IPC name on a machine: a second start under the default name
-//! closes whoever runs it, in any session and from any folder. So each Windows seat gets a copy
-//! of the box's client in its own profile and starts it only under [`ipc_name`]; the box keeps
-//! the default. The games stay the box's: the copy lists the box's library folders after its own.
+//! On Windows, one Steam runs per IPC name on a machine. A second start under the default name
+//! closes the Steam that runs under it, in any session and from any folder. So each Windows seat
+//! gets a copy of the box's client in its own profile and starts it only under [`ipc_name`].
+//! The box keeps the default name.
+//!
+//! The games stay the box's: the copy lists the box's library folders after its own.
 
 pub mod shortcuts;
 
@@ -14,9 +16,10 @@ use std::path::{Path, PathBuf};
 /// The folder beside a library's `steamapps` that holds each Linux seat's own folder for it.
 pub const SEAT_ROOTS: &str = ".punktfunk-seats";
 
-/// Top-level entries of a Steam install that a seat's copy leaves behind, on Windows and Linux:
-/// the box's sign-ins, library, caches and logs, Steam Guard's sentry files, and the seats'
-/// folders for the library there ([`SEAT_ROOTS`]). Names compare without case.
+/// The top-level entries of a Steam install that a seat's copy leaves out, on Windows and on
+/// Linux: the box's sign-ins, its library, its caches and logs, Steam Guard's sentry files, and
+/// the folders that seats have there for the library ([`SEAT_ROOTS`]). Names are compared
+/// without case.
 pub fn skipped(name: &str) -> bool {
     const DIRS: [&str; 7] = [
         "config",

@@ -162,10 +162,13 @@ impl NativePairing {
     ) -> Result<NativePairing> {
         let store = store::TrustStore::open(store_path)?;
         let np = NativePairing::with_store(store, fixed_pin, arm_at_start);
-        // A host with no seats answers `Some(false)`, and a seat host's read-only store never
-        // sweeps. The door, and a Windows host with seats on, ask the seat hosts for 10 s at most.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        np.drop_session_only_records(|fp| crate::seats::plays_on_a_seat_by(fp, deadline));
+        // A seat host's read-only store never sweeps, and a host with no seats has no guest on
+        // one. The door, and a Windows host with seats on, ask each guest's seat for 10 s at most.
+        if !np.store.read_only() {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            np.drop_session_only_records(crate::seats::sent::on_seat_at_start(deadline));
+            crate::seats::sent::save();
+        }
         Ok(np)
     }
 
@@ -491,6 +494,21 @@ impl NativePairing {
     /// `false` (no write) for an unknown fingerprint.
     pub fn set_pad_slot(&self, fp_hex: &str, slot: Option<u8>) -> Result<bool> {
         self.store.set_pad_slot(fp_hex, slot)
+    }
+
+    /// Record that `fp_hex` opened a session now, on `platform` when known: what the Devices
+    /// list shows. A seat host reads the box's store, and the box records it. A failed save is
+    /// logged; the session goes on.
+    pub fn note_session(&self, fp_hex: &str, platform: Option<&str>) {
+        if self.store.read_only() {
+            return;
+        }
+        if let Err(e) = self
+            .store
+            .note_session(fp_hex, crate::clock::unix_secs(), platform)
+        {
+            tracing::warn!(error = %format!("{e:#}"), "paired device's last session not saved");
+        }
     }
 
     /// Hold a live-session count for `fp_hex` until the guard drops. Every admitted
@@ -878,6 +896,27 @@ mod tests {
         np.add("Second", "ab12").unwrap();
         assert_eq!(np.list().len(), 1, "re-add must replace, not duplicate");
         assert_eq!(np.list()[0].name, "Second");
+    }
+
+    #[test]
+    fn a_session_stamps_the_record_it_opened_on() {
+        let (_temp, p) = temp();
+        let np = NativePairing::load_with(Some(p.clone()), None, false).unwrap();
+        np.add("Deck", "AB12").unwrap();
+        assert_eq!(np.list()[0].last_seen_unix, None);
+        let before = crate::clock::unix_secs();
+        np.note_session("ab12", Some("linux"));
+        np.note_session("ffff", Some("linux"));
+        let seen = np.list()[0].last_seen_unix.expect("stamped");
+        assert!(seen >= before, "{seen} < {before}");
+        assert_eq!(np.list().len(), 1, "an unknown device gets no record");
+        // A client that does not say keeps the platform an earlier session stated.
+        np.note_session("ab12", None);
+        assert_eq!(np.list()[0].platform.as_deref(), Some("linux"));
+        // It is persisted, not only held in memory.
+        let reread = NativePairing::load_with(Some(p), None, false).unwrap();
+        assert!(reread.list()[0].last_seen_unix >= Some(seen));
+        assert_eq!(reread.list()[0].platform.as_deref(), Some("linux"));
     }
 
     #[test]

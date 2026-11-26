@@ -1,18 +1,19 @@
+import { Link } from "@tanstack/react-router";
 import {
 	Check,
+	ChevronRight,
 	Clipboard,
 	Gamepad2,
-	ImageUp,
+	LineChart,
 	Loader2,
 	MonitorPlay,
-	Volume2,
-	VolumeX,
 	XCircle,
 	ZapOff,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { type FC, type ReactNode, useState } from "react";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
+import type { CaptureMeta } from "@/api/gen/model/captureMeta";
 import type { SessionInfo } from "@/api/gen/model/sessionInfo";
 import type { SessionRow } from "@/api/gen/model/sessionRow";
 import type { SessionSummary } from "@/api/gen/model/sessionSummary";
@@ -21,7 +22,7 @@ import { type AvatarProfile, ProfileAvatar } from "@/components/profile-avatar";
 import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RowActions } from "@/components/ui/menu";
+import { MenuChoice, MenuItem, RowMenu } from "@/components/ui/menu";
 import {
 	fmtAgo,
 	fmtClockDuration,
@@ -110,11 +111,13 @@ const Field: FC<{ label: string; value: string }> = ({ label, value }) => (
 
 /**
  * The numbers behind a row, folded: a fact is a line in a disclosure (R4). Its content is a size
- * container, so a grid inside picks its columns from the room it has.
+ * container, so a grid inside picks its columns from the room it has. The chevron matches the
+ * console's other disclosures.
  */
 const Details: FC<{ children: ReactNode }> = ({ children }) => (
 	<details className="group mt-1">
-		<summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+		<summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+			<ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
 			{m.common_details()}
 		</summary>
 		<div className="@container mt-2">{children}</div>
@@ -169,7 +172,6 @@ function playerValue(row: SessionRow): string {
 
 export interface SessionActions {
 	onStop: (row: SessionRow) => void;
-	onIdr: (row: SessionRow) => void;
 	onMute: (row: SessionRow, muted: boolean) => void;
 	onAccess: (row: SessionRow, level: string) => void;
 	/** `null` hands the session back to the host's first-free claim. `share` joins that
@@ -185,8 +187,9 @@ export interface SessionActions {
  * frame is paced at, the wake shape while it is on, and where the last minute's lost shards
  * fell in their frames (`link`, absent in the first minute).
  *
- * Mute, access and the player slot ride native-only lanes: GameStream has no message for them, so
- * none of the three is offered there.
+ * The row shows End and one ⋯ menu: mute, access and player. Their current values are badges
+ * beside the title. Mute and the player slot ride native-only lanes: GameStream has no message
+ * for them, so neither is offered there.
  */
 export const SessionRowView: FC<
 	SessionActions & {
@@ -214,7 +217,6 @@ export const SessionRowView: FC<
 	end,
 	art,
 	onStop,
-	onIdr,
 	onMute,
 	onAccess,
 	onPlayer,
@@ -278,6 +280,11 @@ export const SessionRowView: FC<
 						<Who profile={profile} device={row.client_name || row.client} />
 					)}
 					{row.muted && <Badge variant="secondary">{m.sessions_muted()}</Badge>}
+					{(row.access_level === "controller" ||
+						row.access_level === "view" ||
+						row.access_level === "custom") && (
+						<Badge variant="secondary">{levelLabel(row.access_level)}</Badge>
+					)}
 					{row.pads.map((slot) => (
 						<Badge key={slot} variant="outline" className="tabular-nums">
 							<Gamepad2 className="size-3" />
@@ -301,73 +308,6 @@ export const SessionRowView: FC<
 			}
 			actions={
 				<>
-					<RowActions
-						disabled={!perSession}
-						labelsFrom="xl"
-						actions={[
-							{
-								label: m.action_request_idr(),
-								icon: <ImageUp />,
-								disabled: busy,
-								onSelect: () => onIdr(row),
-							},
-							nativeLanes && {
-								label: row.muted ? m.action_unmute() : m.action_mute(),
-								icon: row.muted ? <Volume2 /> : <VolumeX />,
-								disabled: busy,
-								onSelect: () => onMute(row, !row.muted),
-							},
-							row.access_level && {
-								kind: "choice",
-								label: m.access_level_label(),
-								value: row.access_level,
-								disabled: busy,
-								onChange: (level) => onAccess(row, level),
-								options: [
-									{ value: "full", label: m.access_level_full() },
-									{ value: "controller", label: m.access_level_controller() },
-									{ value: "view", label: m.access_level_view() },
-									// Only while the live mask is one the three presets cannot name.
-									...(row.access_level === "custom"
-										? [
-												{
-													value: "custom",
-													label: levelLabel("custom"),
-													disabled: true,
-												},
-											]
-										: []),
-								],
-							},
-							// Four, not the host's sixteen slots: local co-op seats four.
-							nativeLanes && {
-								kind: "choice",
-								label: m.sessions_player(),
-								value: playerValue(row),
-								disabled: busy,
-								onChange: (v) => {
-									const share = v.startsWith(SHARE_PLAYER);
-									const slot = share ? v.slice(SHARE_PLAYER.length) : v;
-									onPlayer(
-										row,
-										slot === AUTO_PLAYER ? null : Number(slot),
-										share,
-									);
-								},
-								options: [
-									{ value: AUTO_PLAYER, label: m.sessions_player_auto() },
-									...[0, 1, 2, 3].map((slot) => ({
-										value: slot.toString(),
-										label: m.sessions_player_n({ n: slot + 1 }),
-									})),
-									...[0, 1, 2, 3].map((slot) => ({
-										value: `${SHARE_PLAYER}${slot}`,
-										label: m.sessions_player_share_n({ n: slot + 1 }),
-									})),
-								],
-							},
-						]}
-					/>
 					<Button
 						variant="destructive"
 						size="sm"
@@ -377,6 +317,64 @@ export const SessionRowView: FC<
 						<ZapOff className="size-3.5" />
 						<Label>{end ? end.label : m.action_stop_session()}</Label>
 					</Button>
+					{perSession && (nativeLanes || row.access_level) && (
+						<RowMenu label={m.common_more_actions()} disabled={busy}>
+							{nativeLanes && (
+								<MenuItem onSelect={() => onMute(row, !row.muted)}>
+									{row.muted ? m.action_unmute() : m.action_mute()}
+								</MenuItem>
+							)}
+							{row.access_level && (
+								<MenuChoice
+									label={m.access_level_label()}
+									value={row.access_level}
+									onChange={(level) => onAccess(row, level)}
+									options={[
+										{ value: "full", label: m.access_level_full() },
+										{ value: "controller", label: m.access_level_controller() },
+										{ value: "view", label: m.access_level_view() },
+										// Only while the live mask is one the three presets cannot name.
+										...(row.access_level === "custom"
+											? [
+													{
+														value: "custom",
+														label: levelLabel("custom"),
+														disabled: true,
+													},
+												]
+											: []),
+									]}
+								/>
+							)}
+							{/* Four, not the host's sixteen slots: local co-op seats four. */}
+							{nativeLanes && (
+								<MenuChoice
+									label={m.sessions_player()}
+									value={playerValue(row)}
+									onChange={(v) => {
+										const share = v.startsWith(SHARE_PLAYER);
+										const slot = share ? v.slice(SHARE_PLAYER.length) : v;
+										onPlayer(
+											row,
+											slot === AUTO_PLAYER ? null : Number(slot),
+											share,
+										);
+									}}
+									options={[
+										{ value: AUTO_PLAYER, label: m.sessions_player_auto() },
+										...[0, 1, 2, 3].map((slot) => ({
+											value: slot.toString(),
+											label: m.sessions_player_n({ n: slot + 1 }),
+										})),
+										...[0, 1, 2, 3].map((slot) => ({
+											value: `${SHARE_PLAYER}${slot}`,
+											label: m.sessions_player_share_n({ n: slot + 1 }),
+										})),
+									]}
+								/>
+							)}
+						</RowMenu>
+					)}
 				</>
 			}
 		/>
@@ -510,12 +508,41 @@ function endedLabel(s: SessionSummary): string {
 }
 
 /**
- * One past session: the device, how long, when; its numbers fold under it. Copy hands over the
- * API's own answer, so what is pasted into an issue is what the host said.
+ * The performance recording a past session left: one from the same device that started within
+ * the session, the closest to its start. Ten seconds of slack, as the recorder arms a moment
+ * before the session's first frame.
  */
-export const RecentSessionRow: FC<{ session: SessionSummary }> = ({
-	session,
-}) => {
+export function recordingOf(
+	s: SessionSummary,
+	recordings: readonly CaptureMeta[],
+): CaptureMeta | undefined {
+	const from = (s.started_unix - 10) * 1000;
+	const to = (s.started_unix + s.duration_s) * 1000;
+	const start = s.started_unix * 1000;
+	return recordings
+		.filter(
+			(r) =>
+				r.client === s.client &&
+				r.started_unix_ms >= from &&
+				r.started_unix_ms <= to,
+		)
+		.sort(
+			(a, b) =>
+				Math.abs(a.started_unix_ms - start) -
+				Math.abs(b.started_unix_ms - start),
+		)[0];
+}
+
+/**
+ * One past session: the device, how long, when, and its performance recording when it left one;
+ * its numbers fold under it. Copy hands over the API's own answer, so what is pasted into an
+ * issue is what the host said.
+ */
+export const RecentSessionRow: FC<{
+	session: SessionSummary;
+	/** Its recording's id, when it left one. */
+	recording?: string;
+}> = ({ session, recording }) => {
 	const [copied, setCopied] = useState(false);
 	const span = session.bitrate;
 	const facts = [
@@ -557,6 +584,16 @@ export const RecentSessionRow: FC<{ session: SessionSummary }> = ({
 					{fmtAgo(session.started_unix + session.duration_s)} · {session.mode} ·{" "}
 					{session.codec.toUpperCase()}
 				</span>
+				{recording && (
+					<Link
+						to="/diagnostics/performance"
+						search={{ recording }}
+						className="ml-auto inline-flex items-center gap-1 self-center text-xs text-muted-foreground hover:text-foreground"
+					>
+						<LineChart className="size-3.5" />
+						{m.home_session_recording()}
+					</Link>
+				)}
 			</div>
 			<Details>
 				<p className="text-xs text-muted-foreground tabular-nums">

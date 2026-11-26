@@ -1869,6 +1869,7 @@ fn plain_hello(
         view: None,
         screen_wish: None,
         display_mm: None,
+        platform: None,
     }
 }
 
@@ -2547,19 +2548,27 @@ fn expired_record_knocks_into_pending_and_reapproval_regrants() {
     host.join().unwrap().unwrap();
 }
 
-/// A redirected "this session" guest keeps its record while it plays on the seat. The hold
+/// A redirected "this session" guest keeps its grant while it plays on the seat. The hold
 /// outlasts the dial and the picture bring-up, and ends when the guest has left, or never came,
-/// or the seats have said nothing for too long.
+/// or the seat has said nothing for too long, or a day after it began however the seat answers.
 #[test]
 fn a_redirected_guest_is_held_until_it_leaves_the_seat() {
     let s = std::time::Duration::from_secs;
-    let over = |here, landed, waited, silent| hold_over(here, landed, s(waited), s(silent));
-    assert!(!over(Some(false), false, 10, 0), "still dialing in");
-    assert!(!over(Some(true), true, 600, 0), "playing");
-    assert!(over(Some(false), true, 600, 0), "left after playing");
-    assert!(over(Some(false), false, 121, 0), "never came");
-    assert!(!over(None, true, 600, 5), "a seat that blinked");
-    assert!(over(None, true, 600, 61), "a seat that hangs");
+    let over =
+        |here, landed, waited, silent, held| hold_over(here, landed, s(waited), s(silent), s(held));
+    let day = SEAT_HOLD_CAP.as_secs();
+    assert!(!over(Some(false), false, 10, 0, 10), "still dialing in");
+    assert!(!over(Some(true), true, 600, 0, 600), "playing");
+    assert!(over(Some(false), true, 600, 0, 600), "left after playing");
+    assert!(over(Some(false), false, 121, 0, 121), "never came");
+    assert!(!over(None, true, 600, 5, 600), "a seat that blinked");
+    assert!(over(None, true, 600, 61, 600), "a seat that hangs");
+    assert!(
+        !over(Some(true), true, 600, 0, day - 1),
+        "playing for a day"
+    );
+    assert!(over(Some(true), true, 600, 0, day), "listed past a day");
+    assert!(over(None, true, 600, 5, day), "a silent seat past a day");
 }
 
 /// The device whose next session fails at its launch, and that session's lifecycle once it did.
@@ -3204,7 +3213,7 @@ fn dial_host(
     let (cert, key) = endpoint::generate_identity().unwrap();
     let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
     np.add_with_access("Kid's tablet", &fp, None).unwrap();
-    let lock_file = dir.join(pf_seats::locks::FILE);
+    let lock_file = dir.join(pf_seats::profile_locks::FILE);
     let locks = locks(&fp);
     if !locks.is_null() {
         std::fs::write(&lock_file, locks.to_string()).unwrap();
@@ -3319,7 +3328,7 @@ fn a_profile_sharing_the_owner_s_desktop_opens_with_the_owner_s_lock() {
     };
     assert_eq!(dial_box(19811, mine, sharer()).0, [Heard::Played]);
 
-    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let pin = serde_json::to_value(pf_seats::profile_locks::PinHash::new("2468").unwrap()).unwrap();
     let with_pin = |_: &str| {
         let lock = serde_json::json!({"locked": true, "pin": pin});
         serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}})
@@ -3334,7 +3343,7 @@ fn a_profile_sharing_the_owner_s_desktop_opens_with_the_owner_s_lock() {
     ];
     let (heard, lock_file) = dial_box(19812, with_pin, dials);
     assert_eq!(heard, [Heard::Played, Heard::Played]);
-    let file = pf_seats::locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
+    let file = pf_seats::profile_locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
     assert_eq!(file.profiles.keys().collect::<Vec<_>>(), [OWNER_PROFILE]);
     assert_eq!(file.profiles[OWNER_PROFILE].list.entries().len(), 1);
 }
@@ -3346,7 +3355,7 @@ fn a_profile_sharing_the_owner_s_desktop_opens_with_the_owner_s_lock() {
 fn a_seat_host_checks_the_box_s_lock_file() {
     let _registry = crate::session_status::tests::registry_lock();
     let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let pin = serde_json::to_value(pf_seats::profile_locks::PinHash::new("2468").unwrap()).unwrap();
     let other = |_: &str| {
         let lock = serde_json::json!({"locked": true, "pin": pin,
             "devices": [listed(&"ab".repeat(32))]});
@@ -3375,7 +3384,7 @@ fn a_locked_profile_opens_with_its_pin() {
     use punktfunk_core::reject::RejectReason::{ProfileLocked, SeatUnavailable};
     let _registry = crate::session_status::tests::registry_lock();
     let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let pin = serde_json::to_value(pf_seats::profile_locks::PinHash::new("2468").unwrap()).unwrap();
     let locked = |_: &str| {
         let lock = serde_json::json!({"locked": true, "pin": pin});
         serde_json::json!({"version": 1, "profiles": {KID_PROFILE: lock}})
@@ -3423,7 +3432,7 @@ fn a_locked_profile_opens_with_its_pin() {
     ];
     let (heard, lock_file) = dial_host(19808, false, locked, dials);
     assert_eq!(heard, [kid_seat(19808), kid_seat(19808)]);
-    let file = pf_seats::locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
+    let file = pf_seats::profile_locks::Locks::parse(&std::fs::read(lock_file).unwrap()).unwrap();
     let entries = file.profiles[KID_PROFILE].list.entries();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].kind, pf_seats::ipc::DeviceKind::Stay);
@@ -3443,7 +3452,7 @@ fn a_locked_profile_opens_with_an_enrolled_key() {
     let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let pair = Arc::new(EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING).unwrap());
     let public = hex::encode(pair.public_key().as_ref());
-    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let pin = serde_json::to_value(pf_seats::profile_locks::PinHash::new("2468").unwrap()).unwrap();
     let keyed = |pin: serde_json::Value| {
         let public = public.clone();
         move |fp: &str| {
@@ -3502,7 +3511,7 @@ fn signing_a_device_out_ends_its_session() {
     let fp = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
     let lock = serde_json::json!({"locked": true, "devices": [listed(&fp)]});
     let locks = serde_json::json!({"version": 1, "profiles": {OWNER_PROFILE: lock}});
-    std::fs::write(dir.join(pf_seats::locks::FILE), locks.to_string()).unwrap();
+    std::fs::write(dir.join(pf_seats::profile_locks::FILE), locks.to_string()).unwrap();
     let profiles = Arc::new(crate::profiles::Profiles::load_with(
         Some(dir.join("profiles.json")),
         None,
@@ -3565,10 +3574,10 @@ fn a_dial_starts_a_stopped_seat_only_as_a_wake_would() {
         seat(SHARER_PROFILE, "Guest", &open_seat),
     ]});
     std::fs::write(dir.join("profiles.json"), file.to_string()).unwrap();
-    let pin = serde_json::to_value(pf_seats::locks::PinHash::new("2468").unwrap()).unwrap();
+    let pin = serde_json::to_value(pf_seats::profile_locks::PinHash::new("2468").unwrap()).unwrap();
     let locks = serde_json::json!({"version": 1,
         "profiles": {KID_PROFILE: {"locked": true, "pin": pin}}});
-    std::fs::write(dir.join(pf_seats::locks::FILE), locks.to_string()).unwrap();
+    std::fs::write(dir.join(pf_seats::profile_locks::FILE), locks.to_string()).unwrap();
     let profiles = Arc::new(crate::profiles::Profiles::load_with(
         Some(dir.join("profiles.json")),
         None,

@@ -40,7 +40,6 @@ import { personScope, type SeatPage } from "@/api/seat";
 import { PersonFrame } from "@/components/app-shell";
 import { QueryState } from "@/components/query-state";
 import { SeatScopeView } from "@/components/seat-scope";
-import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiErrorMessage } from "@/lib/errors";
 import { type Closed, PersonContext, type PersonMe } from "@/lib/person";
@@ -540,28 +539,26 @@ const SourcesPage: FC<{ me?: PersonMe; children?: ReactNode }> = ({
 						<TabsTrigger value="sources">{m.library_tab_sources()}</TabsTrigger>
 					</TabsList>
 					<TabsContent value="sources">
-						<Card>
-							<CardContent className="space-y-8">
-								<SourcesCard
-									sources={SOURCES}
-									available={[]}
-									running={new Set()}
-									busyId={null}
-									installBusy={false}
-									activeFilter={null}
-									onToggle={noop}
-									onFilter={noop}
-									onSettings={noop}
-									onInstall={noop}
-									profile={{
-										name: me.name,
-										ownerName: me.owner ?? "",
-										person: true,
-									}}
-								/>
-								<EmulatorsCard />
-							</CardContent>
-						</Card>
+						<div className="flex flex-col gap-card">
+							<SourcesCard
+								sources={SOURCES}
+								available={[]}
+								running={new Set()}
+								busyId={null}
+								installBusy={false}
+								activeFilter={null}
+								onToggle={noop}
+								onFilter={noop}
+								onSettings={noop}
+								onInstall={noop}
+								profile={{
+									name: me.name,
+									ownerName: me.owner ?? "",
+									person: true,
+								}}
+							/>
+							<EmulatorsCard />
+						</div>
 					</TabsContent>
 				</Tabs>
 				{children}

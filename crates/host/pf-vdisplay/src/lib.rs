@@ -202,8 +202,9 @@ impl Compositor {
         )
     }
 
-    /// Starts a device's screen at its own scale: Mutter and niri. Windows remembers each
-    /// device's scale itself; KWin gives every virtual output streamed alone one shared scale.
+    /// Starts a device's screen at the scale the console set for it: Mutter and niri. A Windows
+    /// host only puts the screen back at the scale it was left at; KWin gives every virtual
+    /// output streamed alone one shared scale.
     pub fn applies_device_scale(self) -> bool {
         matches!(self, Compositor::Mutter | Compositor::Niri)
     }

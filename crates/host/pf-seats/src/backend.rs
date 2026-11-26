@@ -1,11 +1,12 @@
-//! Platform boundary for account, session, and process ownership.
+//! The boundary to the platform: everything that touches an account, a session or a process.
 //!
-//! The portable core allocates and persists seat identity and resources, then
-//! asks this trait to provision, start, stop, remove, and inspect them. Methods
-//! receive complete validated seat records; platform secrets never enter the
-//! ledger or control responses. `WindowsBackend` and `LinuxBackend` are the production
-//! implementations. Tests use an in-memory fake, and `UnsupportedBackend` returns a stable
-//! unsupported diagnostic without pretending that a seat is running.
+//! The portable core allocates and saves each seat's identity and resources. Then it asks this
+//! trait to provision, start, stop, remove and inspect the seat. Every method receives a
+//! complete, validated seat record. A platform's secrets never enter the ledger or a response.
+//!
+//! `WindowsBackend` and `LinuxBackend` are the production implementations. Tests use an
+//! in-memory fake. `UnsupportedBackend` answers with a stable "unsupported" diagnostic and never
+//! pretends that a seat is running.
 
 use crate::ipc::{Diagnostic, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
@@ -156,19 +157,23 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(no_lending())
     }
 
-    /// Hands each of `keys` to the holder `ledger` names now, the desk when no row lends it, and
-    /// ends what its last holder had open. The service saved `ledger` first and holds `ops`.
+    /// Hands each pad in `keys` to the holder that `ledger` names now, or to the desk when no row
+    /// holds it, and closes what the last holder had open. The service saved `ledger` first and
+    /// holds `ops`.
     ///
-    /// Between changes the backend keeps each row's pads level with its seat on its own: live
-    /// before [`Self::start`] runs anything of the seat's, parked once [`Self::stop`] or a
-    /// failure ends it ([`Self::reconcile`]), the desk's again after [`Self::remove`].
+    /// Between such changes the backend keeps each row's pads in step with the row's seat by
+    /// itself:
+    ///
+    /// - live before [`Self::start`] runs anything of the seat's
+    /// - parked once [`Self::stop`] or a failure ends the seat ([`Self::reconcile`])
+    /// - the desk's again after [`Self::remove`]
     fn settle_pads(&self, _ledger: &Ledger, _keys: &[String]) -> Result<(), BackendError> {
         Err(no_lending())
     }
 
-    /// Bring the box's copy of the owner's library level with it now; `true` when the copy
-    /// changed. A platform whose box host lists the library it writes keeps no copy.
-    fn level_library(&self) -> Result<bool, BackendError> {
+    /// Copies the owner's library into the box's library copy now. `true` when the copy
+    /// changed. A platform whose box host lists the library it writes itself keeps no copy.
+    fn sync_library(&self) -> Result<bool, BackendError> {
         Ok(false)
     }
 }

@@ -1,29 +1,32 @@
-//! What seats share and what each keeps: the games folder, the trust copy and the Steam clone.
+//! The supervisor's state directory: what the seats share, and what each seat keeps to itself.
 //!
-//! Under the supervisor's state directory ([`super::STATE_DIR`]), root's alone:
+//! Everything is under [`super::STATE_DIR`], which only root can change:
 //!
-//! - `games/steamapps/{common,compatdata,shadercache,downloading}` is one library every seat
-//!   writes. `compatdata`, `shadercache` and `downloading` are covered per seat by bind mounts
-//!   (`session.rs`), so Wine prefixes and download state never cross.
-//! - `seats/<id>/` holds the seat user's home, those three private directories, and the box
-//!   owner's libraries as the seat sees them (`libraries.rs`).
-//! - `trust/<id>/` is a read-only copy of the box's pairing store and profiles from the door's
-//!   directory, so a seat user can read what it needs and nothing else there. A seat on a
-//!   person's own account gets only the pairing records of the devices its row admits, and so
-//!   does a locked profile's seat, with its lock and no PIN. A seat other than the owner's also
-//!   finds the box's library there, with its own profile's layer and no other.
-//! - `library/` is the box's library: a copy of the owner's, which the owner's host writes, with
-//!   every profile's layer, the plugins' grants and the firmware they staged. The door serves it
-//!   to every client, and each seat's trust copy takes it from here.
-//! - `seats/hosts/<id>/mgmt-token` is the token the box presents to that seat host's loopback
-//!   API. It belongs to the `punktfunk` user, not the seat group: every seat user is a member.
+//! - `games/steamapps/{common,compatdata,shadercache,downloading}`: one Steam library that every
+//!   seat writes. Each seat gets its own `compatdata`, `shadercache` and `downloading` mounted
+//!   over the shared ones (`session.rs`), so Wine prefixes and downloads never mix.
+//! - `seats/<id>/`: the seat user's home, those three private folders, and the box owner's
+//!   libraries as the seat sees them (`libraries.rs`).
+//! - `trust/<id>/`: the seat's trust copy, a read-only copy of the box's pairing store and
+//!   profiles from the door's directory. The seat's user can read what the seat needs and
+//!   nothing else of the door's. A seat on a person's own account gets only the pairing records
+//!   of the devices its row lets on. So does the seat of a locked profile, with the lock and
+//!   without the PIN. Every seat but the owner's also finds the box's library here, with its own
+//!   profile's layer and no other profile's.
+//! - `library/`: the box's library copy. The owner's host writes the library in the owner's
+//!   home. The supervisor copies it here, with every profile's layer, the plugins' grants and the
+//!   firmware the plugins staged. The door serves it to every client, and each seat's trust copy
+//!   takes it from here.
+//! - `seats/hosts/<id>/mgmt-token`: the token the box presents to that seat host's loopback
+//!   API. It belongs to the `punktfunk` user and not to the seat group, because every seat user
+//!   is in that group.
 
 use super::accounts::{is_ordinary, Passwd};
 use super::session::PRIVATE_DIRS;
 use super::{err, run, safe_open};
 use crate::backend::BackendError;
-use crate::locks;
 use crate::model::SeatId;
+use crate::profile_locks;
 use rustix::fs::{AtFlags, Mode, OFlags, XattrFlags};
 use rustix::io::Errno;
 use std::collections::{BTreeSet, HashSet};
@@ -227,15 +230,20 @@ fn check_owned(path: &Path, forbidden: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The shared games library: group `punktfunk-games`, setgid, with a default ACL so a file one
-/// seat creates is writable by the others. Every seat writes in it, so each folder is opened
-/// through the one above it without following a link, and changed through its own handle;
-/// `setfacl` gets each as `/proc/<pid>/fd/<n>`, which names that folder whatever its path holds.
+/// Prepares the shared games library. It has the group `punktfunk-games`, is setgid, and has a
+/// default ACL, so a file that one seat creates is writable by the other seats.
 ///
-/// `games` is sticky, so a seat can't replace `steamapps`, and closed to other users: only the
-/// group reads the tree. A link or file a seat leaves where a bind target belongs is removed.
-/// Run at each seat start: a unit's `BindPaths=` names the targets, and a planted link would send
-/// the mount somewhere else.
+/// Every seat writes in this tree, so root trusts no path in it. Each folder is opened through
+/// the folder above it, without following a link, and is changed through its own handle.
+/// `setfacl` gets each folder as `/proc/<pid>/fd/<n>`, which names that folder whatever its
+/// path holds.
+///
+/// - `games` is sticky, so a seat can't replace `steamapps`. It is closed to other users: only
+///   the group reads the tree.
+/// - A link or a file that a seat left where a bind target belongs is removed.
+///
+/// This runs at each seat start. A unit's `BindPaths=` names the targets, and a planted link
+/// would send the mount somewhere else.
 pub(super) fn ensure_games(state: &Path, gid: u32) -> Result<(), BackendError> {
     let io = |what: &str, e| io_err("games_dir", what, e);
     let top = safe_open::dir(state).map_err(|e| io("open the state directory", e))?;
@@ -483,11 +491,14 @@ pub(super) fn ensure_person_dirs(
         .map_err(|e| io("set the mode of", &config, e))
 }
 
-/// The seat's private directories, owned by its user and in place before its unit starts: a
-/// missing bind source fails the unit with `226/NAMESPACE`. Then `saves/out` and `saves/in`,
-/// where its saves cross to and from the owner's plugins: the seat user's, `0770`, with an ACL
-/// entry and a default one for the box owner's uid `owner`, so no other seat reaches them. What
-/// is in any of them stays.
+/// Makes the seat's private directories, owned by the seat's user. They must exist before the
+/// seat's unit starts: a missing bind source fails the unit with `226/NAMESPACE`.
+///
+/// Then makes `saves/out` and `saves/in`, where the seat's saves cross to and from the owner's
+/// plugins. Both belong to the seat's user, mode `0770`, with an ACL entry and a default ACL
+/// entry for `owner`, the box owner's uid. So no other seat reaches them.
+///
+/// Whatever is already in any of these directories stays.
 pub(super) fn ensure_seat_dirs(
     state: &Path,
     id: &SeatId,
@@ -797,8 +808,8 @@ fn sync_trust(
             let written = match copy {
                 Some(copy) => serde_json::to_vec_pretty(&copy)
                     .map_err(std::io::Error::other)
-                    .and_then(|bytes| put_file(&dst, locks::FILE, &bytes, reader)),
-                None => unlink(&dst, locks::FILE),
+                    .and_then(|bytes| put_file(&dst, profile_locks::FILE, &bytes, reader)),
+                None => unlink(&dst, profile_locks::FILE),
             };
             note(written, "write the profile locks");
             admitted
@@ -967,10 +978,15 @@ fn seat_profile(box_dir: &Path, id: &SeatId) -> Option<String> {
     lock_holder(box_dir, id, false).flatten()
 }
 
-/// The profile whose lock seat `id` follows, from the door's `profiles.json` as
-/// [`seat_profile`] reads it: its own, or with `owner` the owner's, the first on the box's own
-/// session, whose lock every profile sharing that desktop opens with. `None` when the file
-/// doesn't read; `Some(None)` when no profile with a valid id plays there.
+/// The profile whose lock seat `id` follows. It comes from the door's `profiles.json`, read as
+/// [`seat_profile`] reads it.
+///
+/// - Without `owner`: the seat's own profile.
+/// - With `owner`: the owner's profile, which is the first profile on the box's own session.
+///   Every profile that shares that desktop opens with that profile's lock.
+///
+/// Returns `None` when the file can't be read, and `Some(None)` when no profile with a valid id
+/// plays there.
 fn lock_holder(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Option<String>> {
     #[derive(serde::Deserialize)]
     struct File {
@@ -992,24 +1008,27 @@ fn lock_holder(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Option<String
     Some(id.map(str::to_owned))
 }
 
-/// What the door's lock file ([`locks::FILE`]) gives seat `id` at `now`: the devices its pairing
-/// list admits, `None` for every paired one, and the lock copy its host reads, without any PIN,
-/// `None` for none. A lock file that is there and doesn't read admits nobody, and so does a
-/// `profiles.json` that doesn't read while anything is locked.
+/// What the door's lock file ([`profile_locks::FILE`]) means for seat `id` at `now`. Two values:
+///
+/// - the devices that the seat's pairing list lets on, or `None` for every paired device
+/// - the copy of the lock that the seat's host reads, without any PIN, or `None` for no lock
+///
+/// A lock file that exists and can't be read lets nobody on. So does a `profiles.json` that
+/// can't be read while anything is locked.
 fn lock_filter(
     box_dir: &Path,
     id: &SeatId,
     owner: bool,
     now: i64,
-) -> (Option<BTreeSet<String>>, Option<locks::Locks>) {
-    let read = match safe_open::read(&box_dir.join(locks::FILE), MAX_TRUST_BYTES) {
+) -> (Option<BTreeSet<String>>, Option<profile_locks::Locks>) {
+    let read = match safe_open::read(&box_dir.join(profile_locks::FILE), MAX_TRUST_BYTES) {
         Ok(None) => return (None, None),
-        Ok(Some((bytes, _))) => locks::Locks::parse(&bytes),
+        Ok(Some((bytes, _))) => profile_locks::Locks::parse(&bytes),
         Err(_) => None,
     };
-    let closed = locks::Locks {
+    let closed = profile_locks::Locks {
         unreadable: true,
-        ..locks::Locks::default()
+        ..profile_locks::Locks::default()
     };
     let Some(read) = read else {
         return (Some(BTreeSet::new()), Some(closed));
@@ -1462,7 +1481,7 @@ pub(super) fn provision_steam(
     if let Err(error) = link_steam(passwd) {
         tracing::warn!(%error, "seat's steam links not made");
     }
-    if let Err(error) = write_library_folders(&steam) {
+    if let Err(error) = write_library_folders(passwd) {
         tracing::warn!(%error, "steam library list not written");
     }
     let local = passwd.home.join(".local");
@@ -1553,24 +1572,50 @@ fn clone_names(src: &SteamSource) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// Lists the seat's own Steam, then the shared games folder as the seat sees it. Steam keeps
-/// entry `0` for its own install and drops a folder listed there at sign-in.
-/// Written once; Steam owns the file afterwards, and [`super::libraries::register`] adds the
-/// games folder if it goes.
-fn write_library_folders(steam: &Path) -> std::io::Result<()> {
-    let dir = steam.join("steamapps");
-    let file = dir.join("libraryfolders.vdf");
-    if file.exists() {
-        return Ok(());
+/// Folder `name` in `at`, made the seat's when absent. A link there is refused.
+pub(super) fn seat_folder(at: &OwnedFd, name: &str, seat: &Passwd) -> std::io::Result<OwnedFd> {
+    let made = match rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o755)) {
+        Ok(()) => true,
+        Err(Errno::EXIST) => false,
+        Err(e) => return Err(e.into()),
+    };
+    let dir = safe_open::dir_at(at, name)?.ok_or(std::io::ErrorKind::NotFound)?;
+    if made {
+        std::os::unix::fs::fchown(&dir, Some(seat.uid), Some(seat.gid))?;
     }
-    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Writes the seat's first Steam library list: its own Steam, then the shared games folder as
+/// the seat sees it. Steam keeps entry `0` for its own install and drops a folder listed there
+/// at sign-in. Steam owns the file afterwards, and [`super::libraries::register`] adds the games
+/// folder if it goes.
+///
+/// The folder was copied from another user's Steam, so root goes down by handle and creates the
+/// file only where nothing is. A link at any step is never followed or written through.
+fn write_library_folders(seat: &Passwd) -> std::io::Result<()> {
+    let steam = seat.home.join(SEAT_STEAMS[0]);
+    let mut dir = safe_open::dir(&seat.home)?;
+    for name in SEAT_STEAMS[0].split('/').chain(["steamapps"]) {
+        dir = seat_folder(&dir, name, seat)?;
+    }
+    let create =
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mode = Mode::from_raw_mode(0o644);
+    let file = match rustix::fs::openat(&dir, "libraryfolders.vdf", create, mode) {
+        Ok(file) => file,
+        Err(Errno::EXIST) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
     let folders = [
         steam.to_string_lossy().into_owned(),
         super::libraries::games_view()
             .to_string_lossy()
             .into_owned(),
     ];
-    std::fs::write(file, crate::steam::library_folders_vdf(&folders))
+    let mut file = std::fs::File::from(file);
+    file.write_all(crate::steam::library_folders_vdf(&folders).as_bytes())?;
+    std::os::unix::fs::fchown(&file, Some(seat.uid), Some(seat.gid))
 }
 
 #[cfg(test)]
@@ -1808,8 +1853,10 @@ mod tests {
     #[test]
     fn a_new_seat_lists_its_own_steam_first() {
         let temp = tempfile::tempdir().unwrap();
-        let steam = temp.path().join("home/Steam");
-        write_library_folders(&steam).unwrap();
+        let seat = seat_at(&temp.path().join("home"));
+        std::fs::create_dir(&seat.home).unwrap();
+        let steam = seat.home.join(".local/share/Steam");
+        write_library_folders(&seat).unwrap();
         let file = steam.join("steamapps/libraryfolders.vdf");
         let listed = crate::steam::library_paths(&std::fs::read_to_string(&file).unwrap());
         assert_eq!(
@@ -1820,8 +1867,40 @@ mod tests {
             ]
         );
         std::fs::write(&file, "steam's own").unwrap();
-        write_library_folders(&steam).unwrap();
+        write_library_folders(&seat).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "steam's own");
+    }
+
+    /// The first library list is written only where nothing is. A link planted in the cloned
+    /// folder is not written through, and a linked `steamapps` is refused.
+    #[test]
+    fn the_first_library_list_never_goes_through_a_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        let seat = seat_at(&temp.path().join("home"));
+        let apps = seat.home.join(".local/share/Steam/steamapps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let list = apps.join("libraryfolders.vdf");
+        std::os::unix::fs::symlink(outside.join("planted"), &list).unwrap();
+        write_library_folders(&seat).unwrap();
+        assert!(!outside.join("planted").exists(), "written through a link");
+        std::fs::remove_dir_all(&apps).unwrap();
+        std::os::unix::fs::symlink(&outside, &apps).unwrap();
+        assert!(write_library_folders(&seat).is_err());
+        let made = std::fs::read_dir(&outside).unwrap().count();
+        assert_eq!(made, 0, "nothing made through a linked folder");
+    }
+
+    /// A seat whose home is `home`, on the account the tests run as.
+    fn seat_at(home: &Path) -> Passwd {
+        Passwd {
+            name: "pf-seat-1".into(),
+            uid: rustix::process::getuid().as_raw(),
+            gid: rustix::process::getgid().as_raw(),
+            gecos: String::new(),
+            home: home.into(),
+        }
     }
 
     #[test]
@@ -2068,7 +2147,7 @@ mod tests {
     /// with. A lock file that doesn't read admits nobody.
     #[test]
     fn a_locked_profile_s_seat_admits_only_its_devices() {
-        use crate::locks::{Lock, Locks, PinHash};
+        use crate::profile_locks::{Lock, Locks, PinHash};
         let temp = tempfile::tempdir().unwrap();
         let box_dir = temp.path();
         let state_temp = tempfile::tempdir().unwrap();
@@ -2089,7 +2168,7 @@ mod tests {
                 .collect()
         };
         let copy = |seat: &SeatId| {
-            let bytes = std::fs::read(trust_dir(state, seat).join(locks::FILE)).ok()?;
+            let bytes = std::fs::read(trust_dir(state, seat).join(profile_locks::FILE)).ok()?;
             Some(Locks::parse(&bytes).unwrap())
         };
         let lock = |fp: &str| {
@@ -2107,7 +2186,7 @@ mod tests {
         };
         let write = |locks: &Locks| {
             let bytes = serde_json::to_vec(locks).unwrap();
-            std::fs::write(box_dir.join(locks::FILE), bytes).unwrap();
+            std::fs::write(box_dir.join(profile_locks::FILE), bytes).unwrap();
         };
 
         refresh_trust(box_dir, state, &id(), reader).unwrap();
@@ -2123,7 +2202,10 @@ mod tests {
         let anna = copy(&id()).unwrap();
         assert_eq!(anna.profiles.keys().collect::<Vec<_>>(), [ANNA]);
         assert!(anna.profiles[ANNA].locked && anna.profiles[ANNA].pin.is_none());
-        assert_eq!(mode(&trust_dir(state, &id()).join(locks::FILE)), 0o640);
+        assert_eq!(
+            mode(&trust_dir(state, &id()).join(profile_locks::FILE)),
+            0o640
+        );
         refresh_owner_trust(box_dir, state, &owner, reader).unwrap();
         let own = admitted(&owner);
         assert_eq!(own, std::slice::from_ref(&phone), "the owner's own list");
@@ -2149,13 +2231,13 @@ mod tests {
         refresh_trust(box_dir, state, &id(), reader).unwrap();
         assert_eq!(admitted(&id()), [tv.clone(), phone.clone()], "open again");
 
-        std::fs::write(box_dir.join(locks::FILE), "not a lock file").unwrap();
+        std::fs::write(box_dir.join(profile_locks::FILE), "not a lock file").unwrap();
         for (seat, owner) in [(id(), false), (owner.clone(), true)] {
             sync_trust(box_dir, state, &seat, reader, Who::Seat { owner }).unwrap();
             assert!(admitted(&seat).is_empty(), "{seat}");
             assert!(copy(&seat).unwrap().unreadable);
         }
-        std::fs::remove_file(box_dir.join(locks::FILE)).unwrap();
+        std::fs::remove_file(box_dir.join(profile_locks::FILE)).unwrap();
         refresh_trust(box_dir, state, &id(), reader).unwrap();
         assert_eq!(admitted(&id()), [tv, phone]);
         assert!(copy(&id()).is_none());
@@ -2241,8 +2323,9 @@ mod tests {
         assert!(listing(&trust).is_empty());
     }
 
-    /// A link, a file where a folder belongs, a name that is no profile id, and a store that is
-    /// a link, a folder or over its cap never cross; the rest of the layer still follows.
+    /// These never cross into the copy: a link, a file where a folder belongs, a name that is not
+    /// a profile id, and a store that is a link, a folder or over its size cap. The rest of the
+    /// layer is still copied.
     #[test]
     fn hostile_profile_entries_are_not_copied() {
         let temp = tempfile::tempdir().unwrap();

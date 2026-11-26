@@ -1,11 +1,11 @@
 import {
 	QueryClientProvider,
 	useMutation,
-	useQueries,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { toast } from "@unom/ui/toast";
-import { History } from "lucide-react";
+import { History, Plus } from "lucide-react";
 import { motion } from "motion/react";
 import type { FC } from "react";
 import { inSeat } from "@/api/fetcher";
@@ -14,11 +14,9 @@ import {
 	useGetHostInfo,
 	useGetStatus,
 } from "@/api/gen/host/host";
-import {
-	getGetLibraryPageQueryKey,
-	getLibraryPage,
-} from "@/api/gen/library/library";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
+import type { CaptureMeta } from "@/api/gen/model/captureMeta";
+import type { HostInfo } from "@/api/gen/model/hostInfo";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import type { SessionRow } from "@/api/gen/model/sessionRow";
@@ -35,18 +33,19 @@ import {
 	stopSession,
 	useEndGame,
 	useGetRecentSessions,
-	useRequestIdr,
-	useRequestSessionIdr,
 	useSetSessionAccess,
 	useSetSessionAudio,
 	useSetSessionPlayer,
 	useStopOneSession,
 	useStopSession,
 } from "@/api/gen/session/session";
+import { useStatsRecordingsList } from "@/api/gen/stats/stats";
+import { useLibraryEntries } from "@/api/library";
 import { isFullSeat, seatClient } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import type { AvatarProfile } from "@/components/profile-avatar";
 import { ROW_GAP, staggerProps } from "@/components/stagger";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiErrorMessage } from "@/lib/errors";
 import { seatDetail } from "@/lib/host-messages";
@@ -54,11 +53,14 @@ import { useLocale } from "@/lib/i18n";
 import { usePerson } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 import { ActivityCard } from "@/sections/Activity";
+import { connectLink } from "@/sections/Host/ConnectQr";
+import { CopyRow } from "@/sections/Host/CopyRow";
 import { PersonHome } from "@/sections/Person/Home";
 import { Attention } from "./Attention";
 import {
 	GameRowView,
 	RecentSessionRow,
+	recordingOf,
 	SeatRowView,
 	type SessionActions,
 	SessionRowView,
@@ -71,10 +73,11 @@ const failed = (fallback: string) => (e: unknown) =>
 /** How many past sessions Home shows; the host keeps only a handful anyway. */
 const RECENT_MAX = 5;
 
-/** The last few sessions, newest first. */
-export const RecentSessionsCard: FC<{ sessions: SessionSummary[] }> = ({
-	sessions,
-}) => (
+/** The last few sessions, newest first, each linked to the performance recording it left. */
+export const RecentSessionsCard: FC<{
+	sessions: SessionSummary[];
+	recordings?: CaptureMeta[];
+}> = ({ sessions, recordings = [] }) => (
 	<Card>
 		<CardHeader>
 			<CardTitle className="flex items-center gap-2">
@@ -85,7 +88,11 @@ export const RecentSessionsCard: FC<{ sessions: SessionSummary[] }> = ({
 		<CardContent>
 			<motion.ul {...staggerProps(ROW_GAP)} className="flex flex-col divide-y">
 				{sessions.slice(0, RECENT_MAX).map((s) => (
-					<RecentSessionRow key={`${s.id}:${s.started_unix}`} session={s} />
+					<RecentSessionRow
+						key={`${s.id}:${s.started_unix}`}
+						session={s}
+						recording={recordingOf(s, recordings)?.id}
+					/>
 				))}
 			</motion.ul>
 		</CardContent>
@@ -103,9 +110,7 @@ function useSessionActions(active: number): SessionActions {
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
 	const stopAll = useStopSession();
-	const idrAll = useRequestIdr();
 	const stopOne = useStopOneSession();
-	const idrOne = useRequestSessionIdr();
 	const mute = useSetSessionAudio();
 	const access = useSetSessionAccess();
 	const player = useSetSessionPlayer();
@@ -136,13 +141,6 @@ function useSessionActions(active: number): SessionActions {
 				},
 			);
 		},
-		onIdr: (row) =>
-			row.id != null
-				? idrOne.mutate(
-						{ id: row.id },
-						{ onError: failed(m.action_idr_failed()) },
-					)
-				: idrAll.mutate(undefined, { onError: failed(m.action_idr_failed()) }),
 		onMute: (row, muted) =>
 			row.id != null &&
 			mute.mutate(
@@ -164,9 +162,7 @@ function useSessionActions(active: number): SessionActions {
 			),
 		busy:
 			stopAll.isPending ||
-			idrAll.isPending ||
 			stopOne.isPending ||
-			idrOne.isPending ||
 			mute.isPending ||
 			access.isPending ||
 			player.isPending,
@@ -268,6 +264,25 @@ const SeatSessions: FC<{
 	);
 };
 
+/** Nothing streams: the address a device types, its QR code, and pairing a new device. */
+const IdleConnect: FC<{ host: HostInfo }> = ({ host }) => (
+	<div className="flex flex-wrap items-end gap-3">
+		<div className="min-w-0 max-w-md flex-1 basis-64">
+			<CopyRow
+				label={m.connect_address()}
+				value={host.local_ip}
+				qr={connectLink(host)}
+			/>
+		</div>
+		<Button asChild variant="outline">
+			<Link to="/devices" search={{ pair: true }}>
+				<Plus className="size-4" />
+				{m.pairing_native_title()}
+			</Link>
+		</Button>
+	</div>
+);
+
 /** Home: the operator's, or in a person's own console, their own page. */
 export const SectionHome: FC = () => {
 	const me = usePerson();
@@ -300,6 +315,7 @@ const OperatorHome: FC = () => {
 		},
 	});
 	const recent = useGetRecentSessions({ query: { retry: false } });
+	const recordings = useStatsRecordingsList({ query: { retry: false } });
 	const actions = useSessionActions(status.data?.active_sessions ?? 0);
 	const endGame = useEndGame();
 	// A door's leftover game is a seat's, so its host ends it, or stops the session it runs in.
@@ -322,23 +338,12 @@ const OperatorHome: FC = () => {
 		onError: failed(m.profiles_seat_failed()),
 	});
 
-	// Box art for the games left without a stream. One title each: a library runs to thousands.
-	const appIds = [
-		...new Set(
-			(status.data?.games ?? []).flatMap((g) => (g.app_id ? [g.app_id] : [])),
-		),
-	].sort();
-	const covers = useQueries({
-		queries: appIds.map((id) => ({
-			queryKey: getGetLibraryPageQueryKey({ id, limit: 1 }),
-			queryFn: ({ signal }: { signal: AbortSignal }) =>
-				getLibraryPage({ id, limit: 1 }, { signal }),
-			staleTime: 5 * 60_000,
-		})),
-	});
-	const library = covers.flatMap((r) => r.data?.items ?? []);
+	// Box art for every game on the host, streamed or left running.
+	const entryOf = useLibraryEntries(
+		(status.data?.games ?? []).map((g) => g.app_id),
+	);
 	const coverOf = (g: ActiveGame) => {
-		const e = g.app_id ? library.find((x) => x.id === g.app_id) : undefined;
+		const e = entryOf(g.app_id);
 		return e?.art.portrait ?? e?.art.header ?? undefined;
 	};
 
@@ -415,6 +420,7 @@ const OperatorHome: FC = () => {
 			attention={<Attention audio={s?.audio} />}
 			status={status}
 			live={live}
+			idle={host.data && <IdleConnect host={host.data} />}
 			now={
 				s && (
 					<>
@@ -473,7 +479,10 @@ const OperatorHome: FC = () => {
 			}
 			sessions={
 				recent.data && recent.data.sessions.length > 0 ? (
-					<RecentSessionsCard sessions={recent.data.sessions} />
+					<RecentSessionsCard
+						sessions={recent.data.sessions}
+						recordings={recordings.data}
+					/>
 				) : null
 			}
 			recent={<ActivityCard />}

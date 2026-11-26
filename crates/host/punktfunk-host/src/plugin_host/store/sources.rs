@@ -1,13 +1,13 @@
 //! Catalog sources: one URL, one signed index (design `plugin-store.md`).
 //!
-//! The official source is compiled in (slug, URL, two key slots) and is not
+//! The official source is compiled in (slug, URL, key slots) and is not
 //! stored in config, so a hand-edited file cannot remove it. Operator sources
 //! live in `<config_dir>/plugin-sources.json`.
 //!
 //! Official entries may show Verified. Operator sources get attribution only;
 //! a third-party curator does not inherit tarball review.
 
-use super::index::PublicKey;
+use super::index::{Alg, PublicKey};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -21,9 +21,13 @@ pub(crate) const OFFICIAL_NAME: &str = "unom";
 pub(crate) const OFFICIAL_URL: &str =
     "https://git.unom.io/unom/punktfunk-plugin-index/raw/branch/main/v1/index.json";
 
-/// Official signing keys. Two slots so rotation can overlap; an empty slot is ignored.
-pub(crate) const OFFICIAL_KEYS: [&str; 2] = [
+/// Official signing keys. The index needs a signature from each algorithm named here. Two
+/// slots per algorithm so rotation can overlap; an empty slot is ignored. The index repo
+/// holds a copy of the ML-DSA-65 key file.
+pub(crate) const OFFICIAL_KEYS: [&str; 4] = [
     "ed25519:V7KKMg8sq2A2TW7D/GFWaM0ruAvigpld9r93JdWcQHw=",
+    "", // rotation slot
+    include_str!("official-mldsa65.pub"),
     "", // rotation slot
 ];
 
@@ -36,9 +40,9 @@ const MAX_SOURCES: usize = 32;
 pub(crate) struct Source {
     /// Slug (`[a-z][a-z0-9-]*`, ≤32). Cache file name and console attribution.
     pub name: String,
-    /// `https://` index URL. Signature is fetched from `<url>.sig`.
+    /// `https://` index URL. A signature is fetched from [`Source::sig_url`].
     pub url: String,
-    /// Pinned ed25519 key. Missing ⇒ unsigned: still listed, entries inherit the marker.
+    /// Pinned key. Missing ⇒ unsigned: still listed, entries inherit the marker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_key: Option<String>,
 }
@@ -78,9 +82,10 @@ impl Source {
         !self.keys().is_empty()
     }
 
-    /// `{url}.sig`. Derived, not stored, so a record cannot retarget the signature.
-    pub(crate) fn sig_url(&self) -> String {
-        format!("{}.sig", self.url)
+    /// The signature file of `alg`: the index URL and [`Alg::sig_suffix`]. Derived, not stored,
+    /// so a record cannot retarget a signature.
+    pub(crate) fn sig_url(&self, alg: Alg) -> String {
+        format!("{}{}", self.url, alg.sig_suffix())
     }
 
     fn validate(&self) -> Result<()> {
@@ -189,11 +194,14 @@ mod tests {
         let s = Source::official();
         assert!(s.is_official());
         assert!(s.is_signed(), "the built-in source must carry a pinned key");
-        assert_eq!(s.sig_url(), format!("{OFFICIAL_URL}.sig"));
+        assert_eq!(s.sig_url(Alg::Ed25519), format!("{OFFICIAL_URL}.sig"));
+        // The official index needs both signatures.
+        let both = [Alg::Ed25519, Alg::MlDsa65];
+        assert_eq!(super::super::index::pinned_algs(&s.keys()), both);
         // `keys()` ignores the record field; config cannot swap the official key.
         let mut forged = Source::official();
         forged.public_key = Some("ed25519:AAAA".into());
-        assert_eq!(forged.keys().len(), 1);
+        assert_eq!(forged.keys().len(), 2);
     }
 
     #[test]
@@ -255,6 +263,10 @@ mod tests {
             url: "https://e.org/v1/index.json".into(),
             public_key: None,
         };
-        assert_eq!(s.sig_url(), "https://e.org/v1/index.json.sig");
+        assert_eq!(s.sig_url(Alg::Ed25519), "https://e.org/v1/index.json.sig");
+        assert_eq!(
+            s.sig_url(Alg::MlDsa65),
+            "https://e.org/v1/index.json.mldsa65.sig"
+        );
     }
 }

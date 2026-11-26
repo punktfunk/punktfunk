@@ -1,13 +1,20 @@
-//! Desk pads lent to a seat on Windows: which session each lent USB controller is fenced to.
+//! Desk pads lent to a seat on Windows: which session may open each lent USB controller.
 //!
-//! The ledger says which row holds a pad and the supervisor says which session each seat runs
-//! in. [`Lent`] turns the two into one [`Holder`] per USB device and has the service's
-//! [`Hardware`] make it so: the seat's session while it runs, [`Holder::Parked`] while it
-//! doesn't, the desk once no row holds it. A change of holder restarts the device, which ends
-//! what the last holder had open. Only a parked pad going live changes in place: nobody could
-//! list it. A key is the device's USB ids and the serial or port id Windows names it by, so it
-//! names the same pad after a replug and a reboot. What may be lent is the hardware's reading,
-//! never the caller's. No OS types here, so the tables run on every target.
+//! The ledger says which row holds a pad. The supervisor says which session each seat runs in.
+//! [`Lent`] combines the two into one [`Holder`] per USB device and has the service's
+//! [`Hardware`] apply it:
+//!
+//! - the seat's session while the seat runs,
+//! - [`Holder::Parked`] while it doesn't,
+//! - the desk once no row holds the pad.
+//!
+//! A change of holder restarts the device, which closes whatever the last holder had open. One
+//! change happens in place: a parked pad going live, because nobody could list a parked pad.
+//!
+//! A pad's key is its USB ids plus the serial or port id Windows names it by, so the key names
+//! the same pad after a replug and after a reboot. Which pads may be lent is read from the
+//! hardware, never taken from the caller. Nothing here uses an OS type, so the tests run on
+//! every target.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -248,10 +255,15 @@ fn hex4(text: &str) -> bool {
     text.len() == 4 && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The key of the USB device `instance`, `USB\VID_vvvv&PID_pppp\<tail>`: its ids, then `s` and
-/// the tail when that is a serial a key can carry, else `p` and the port id Windows made, its
-/// `&` written `.`. A tail that is neither has no key. The tail is upper-cased: Windows
-/// reports one id in either case and finds it by both.
+/// The key of the USB device `instance`, which has the form `USB\VID_vvvv&PID_pppp\<tail>`. The
+/// key is the device's ids, followed by one of:
+///
+/// - `s` and the tail, when the tail is a serial that a key can carry
+/// - `p` and the tail, when the tail is the port id that Windows made. Each `&` in it is
+///   written as `.`.
+///
+/// A tail that is neither gives no key. The tail is upper-cased, because Windows reports one id
+/// in either case and finds it by both.
 fn key_of(instance: &str) -> Option<String> {
     let mut parts = instance.split('\\');
     let (bus, ids, tail) = (parts.next()?, parts.next()?, parts.next()?);

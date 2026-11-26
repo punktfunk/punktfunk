@@ -1,12 +1,17 @@
-//! A seat's USB/IP pads (`design/seat-pad-broker.md` §1.2). A pad server the supervisor starts
-//! serves the device; the supervisor attaches its connected socket to a vhci port, records
-//! whose the port is, and udev's fence ([`fence`]) maps every node under it to that seat.
+//! A seat's USB/IP pads (`design/seat-pad-broker.md` §1.2): controllers that reach the box as
+//! USB devices on a port of the kernel's virtual host controller, vhci.
 //!
-//! [`MAP`] holds one file per seat's port: `<account> <sockfd>`, the socket number `attach`
-//! took, as vhci's `status` shows it. A row whose port is free or holds another socket is
-//! stale. While the supervisor runs with the udev fence rule installed, a new vhci interface
-//! starts unauthorized: the fence authorizes a seat's only when [`interface_allowed`] takes
-//! what the kernel parsed.
+//! The supervisor starts a pad server, which serves the device. The supervisor attaches the pad
+//! server's connected socket to a vhci port and records which seat the port belongs to. The udev
+//! helper ([`node_owner`]) then gives every device node under that port to that seat.
+//!
+//! [`MAP`] holds one file per port a seat has, with the content `<account> <sockfd>`. The socket
+//! number is the one `attach` took, as vhci's `status` file shows it. A record whose port is
+//! free, or holds another socket, is stale.
+//!
+//! While the supervisor runs with the udev rule for seat pads installed, a new vhci interface
+//! starts unauthorized. The udev helper authorizes a seat's interface only when
+//! [`interface_allowed`] accepts what the kernel parsed from it.
 
 use anyhow::{Context, Result};
 use pf_inject::usbip;
@@ -31,9 +36,10 @@ fn lock() -> MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// At the supervisor's start: makes the map, drops stale rows (attachments outlive a restart,
-/// the kernel holds their sockets) and, when the udev fence rule is installed, starts every new
-/// vhci interface unauthorized.
+/// Runs at the supervisor's start. It makes the map directory and drops stale records. Other
+/// records stay: an attachment outlives a restart, because the kernel holds its socket. When
+/// the udev rule for seat pads is installed, it also makes every new vhci interface start
+/// unauthorized.
 pub fn prepare() {
     let _held = lock();
     let dir = Path::new(MAP);
@@ -41,18 +47,18 @@ pub fn prepare() {
         tracing::warn!(%error, dir = MAP, "vhci port map not made");
     }
     prune(dir, &usbip::vhci_used_rows());
-    // The fence rule is the only thing that authorizes a gated interface; without it the gate
+    // The udev rule for seat pads is the only thing that authorizes a gated interface; without it the gate
     // stays open, or the owner's own virtual Deck never binds.
-    let ruled = pf_seats::linux::fence::rule_installed();
+    let ruled = pf_seats::linux::node_owner::rule_installed();
     if !ruled {
-        tracing::warn!("seat USB interfaces are not gated: the udev fence rule is missing");
+        tracing::warn!("seat USB interfaces are not gated: the udev rule for seat pads is missing");
     }
     set_gate(ruled);
 }
 
 /// Opens the gate again at the supervisor's stop (`ExecStopPost=`): no seat attaches while it
 /// is down. A seat that still holds a port keeps it shut, or its device could re-configure into
-/// an interface the kernel binds before the fence runs.
+/// an interface the kernel binds before the udev helper runs.
 pub fn ungate() {
     let dir = Path::new(MAP);
     prune(dir, &usbip::vhci_used_rows());
@@ -81,7 +87,7 @@ fn set_gate(gated: bool) {
 }
 
 /// Attach `sock` as `devid` at `speed` for `account`: the port it took, `None` when [`grants`]
-/// refuses. The row is written before `attach`, so the fence always finds it.
+/// refuses. The row is written before `attach`, so the udev helper always finds it.
 pub fn attach(account: &str, sock: BorrowedFd<'_>, devid: u32, speed: u32) -> Result<Option<u16>> {
     let _held = lock();
     let dir = Path::new(MAP);
@@ -151,13 +157,13 @@ pub fn account_at(port: u16) -> Option<String> {
 /// authorizes and probes its device's interfaces ([`authorize`]): a seat's only as
 /// [`seat_may_bind`] says. A later event can come after the seat's row is gone, mid-teardown,
 /// and must not read the device as nobody's.
-pub fn fence(devpath: &str) -> bool {
+pub fn node_owner(devpath: &str) -> bool {
     let Some(busid) = busid_of(devpath) else {
         return false;
     };
     let account = seat_of(&busid);
     if let Some(account) = &account {
-        pf_seats::linux::fence::print_for(account);
+        pf_seats::linux::node_owner::print_for(account);
     }
     let added = std::env::var("ACTION").as_deref() == Ok("add");
     if added && std::env::var("DEVTYPE").as_deref() == Ok("usb_interface") {
@@ -169,9 +175,10 @@ pub fn fence(devpath: &str) -> bool {
     true
 }
 
-/// Authorizes each of `device`'s interfaces that may bind, then probes those still unbound:
-/// the kernel probes none it made unauthorized, and a driver that claims a sibling at probe
-/// (`cdc_acm`, `snd-usb-audio`) is refused an unauthorized one.
+/// Authorizes each interface of `device` that may bind, then probes the interfaces that are
+/// still unbound. The probe is needed because the kernel probes no interface that it made
+/// unauthorized. All are authorized before any is probed because a driver that claims a sibling
+/// interface at probe (`cdc_acm`, `snd-usb-audio`) is refused an unauthorized one.
 fn authorize(device: &Path, seat: bool) {
     let Some(prefix) = device
         .file_name()
@@ -366,7 +373,7 @@ mod tests {
         }
     }
 
-    /// The fence finds the port's device under the vhci hub, hub-attached or not.
+    /// The udev helper finds the port's device under the vhci hub, hub-attached or not.
     #[test]
     fn a_vhci_devpath_names_its_device() {
         assert_eq!(

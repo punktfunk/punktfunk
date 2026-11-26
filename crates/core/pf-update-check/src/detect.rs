@@ -21,7 +21,8 @@ pub enum Product {
 }
 
 impl Product {
-    /// First word = kind (`apt`|`dnf`|`pacman`), optional second = channel (`stable`|`canary`).
+    /// First word = kind (`apt`|`dnf`|`zypper`|`pacman`), optional second = channel
+    /// (`stable`|`canary`).
     ///
     /// Separate files: a box can carry both packages, and two packages owning one path is a
     /// packaging conflict. The client file is in its own directory because the host RPM
@@ -66,6 +67,7 @@ pub enum InstallKind {
     RpmOstree,
     Apt,
     Dnf,
+    Zypper,
     Pacman,
     SteamosSource,
     Nix,
@@ -82,6 +84,7 @@ impl InstallKind {
             InstallKind::RpmOstree => "rpm-ostree",
             InstallKind::Apt => "apt",
             InstallKind::Dnf => "dnf",
+            InstallKind::Zypper => "zypper",
             InstallKind::Pacman => "pacman",
             InstallKind::SteamosSource => "steamos-source",
             InstallKind::Nix => "nix",
@@ -264,6 +267,7 @@ pub fn parse_marker(text: &str, ostree_booted: bool) -> Option<(InstallKind, Cha
         // Ostree consumed the RPM by layering; `dnf upgrade` is not the update path.
         "dnf" if ostree_booted => InstallKind::RpmOstree,
         "dnf" => InstallKind::Dnf,
+        "zypper" => InstallKind::Zypper,
         "pacman" => InstallKind::Pacman,
         _ => return None,
     };
@@ -276,9 +280,9 @@ pub fn parse_marker(text: &str, ostree_booted: bool) -> Option<(InstallKind, Cha
 
 /// One-line, copy-pastable "how to update" hint. No placeholders.
 ///
-/// The apt and dnf hints refresh the repo metadata, then upgrade every installed `punktfunk*`
-/// package, the set pf-update's one-click apply upgrades, so the console and plugin runner move
-/// with the host. A cached repo list can predate the release the check saw.
+/// The apt, dnf and zypper hints refresh the repo metadata, then upgrade every installed
+/// `punktfunk*` package, the set pf-update's one-click apply upgrades, so the console and plugin
+/// runner move with the host. A cached repo list can predate the release the check saw.
 pub fn update_command(kind: InstallKind, product: Product) -> String {
     let bin = product.binary();
     match (kind, product) {
@@ -309,6 +313,9 @@ pub fn update_command(kind: InstallKind, product: Product) -> String {
             r"sudo apt update && sudo apt install --only-upgrade $(dpkg-query -W -f='${Package}\n' 'punktfunk*')".into()
         }
         (InstallKind::Dnf, _) => "sudo dnf upgrade --refresh 'punktfunk*'".into(),
+        (InstallKind::Zypper, _) => {
+            "sudo zypper refresh && sudo zypper update 'punktfunk*'".into()
+        }
         (InstallKind::Pacman, _) => "sudo pacman -Syu".into(),
         (InstallKind::SteamosSource, _) => {
             "bash ~/punktfunk/scripts/steamdeck/update.sh --pull".into()
@@ -448,6 +455,7 @@ mod tests {
             ("apt canary", false, InstallKind::Apt, Channel::Canary),
             ("dnf stable", false, InstallKind::Dnf, Channel::Stable),
             ("dnf stable", true, InstallKind::RpmOstree, Channel::Stable),
+            ("zypper canary", false, InstallKind::Zypper, Channel::Canary),
             ("pacman canary", false, InstallKind::Pacman, Channel::Canary),
         ] {
             let mut p = host_probe();
@@ -557,6 +565,10 @@ mod tests {
             assert_eq!(
                 update_command(InstallKind::Dnf, product),
                 "sudo dnf upgrade --refresh 'punktfunk*'"
+            );
+            assert_eq!(
+                update_command(InstallKind::Zypper, product),
+                "sudo zypper refresh && sudo zypper update 'punktfunk*'"
             );
         }
         assert!(update_command(InstallKind::Flatpak, Product::Client).contains("flatpak update"));

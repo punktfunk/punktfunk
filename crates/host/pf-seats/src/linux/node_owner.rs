@@ -1,13 +1,22 @@
-//! `punktfunk-seats fence`: udev's `IMPORT{program}` for a seat's pad
-//! (`packaging/linux/65-punktfunk-seats.rules`). A node whose device carries a seat's stamp in
-//! `phys` goes to the seat the supervisor's record names for that exact device ([`vouch`]). A
-//! stamped node without one prints `PF_SEAT_REFUSED`, and the rule makes it root's alone. A node
-//! without a stamp prints nothing and keeps the distro's rules. A device under a vhci port is the
-//! binary's to map, by the port the supervisor recorded. A seat's uinput proxy carries its
-//! account in its name. A node of a desk pad lent to a seat goes as its record says
-//! ([`judge_lent`]).
+//! `punktfunk-seats node-owner`: tells udev which user owns a controller's device node.
+//!
+//! udev runs it for each device node, through `IMPORT{program}` in
+//! `packaging/linux/65-punktfunk-seats.rules`. It prints `PF_SEAT_USER` lines, which give the node
+//! to one seat's user, or `PF_SEAT_REFUSED`, which makes the node root-only, or nothing, which
+//! leaves the distro's rules in charge. How it decides:
+//!
+//! - The supervisor stamps the `phys` of every pad it makes with `punktfunk-seat:`. A stamped
+//!   node goes to a seat only when the supervisor recorded that exact device ([`made_devices`]).
+//!   A stamped node with no record is refused, because anyone can write a stamp.
+//! - A node with no stamp is left alone, unless it belongs to a desk pad lent to a seat
+//!   ([`judge_lent`]).
+//! - A device under a USB/IP port is decided in the daemon binary, by the port the supervisor
+//!   recorded for the seat.
+//! - A seat's `/dev/uinput` stand-in carries the seat's account in its device name.
+//!
+//! A node that udev classes as a keyboard or a mouse never goes to a seat ([`InputId::desk`]).
 
-pub mod vouch;
+pub mod made_devices;
 
 use super::{accounts, lent, session};
 use crate::ipc::{Diagnostic, DiagnosticLevel};
@@ -28,14 +37,14 @@ const RULE_DIRS: [&str; 5] = [
     "/usr/local/lib/udev/rules.d",
 ];
 
-/// Whether udev has the fence rule. Without it a seat's pads keep the distro's permissions.
+/// Whether udev has the udev rule for seat pads. Without it a seat's pads keep the distro's permissions.
 pub fn rule_installed() -> bool {
     RULE_DIRS
         .iter()
         .any(|dir| Path::new(dir).join(RULE).exists())
 }
 
-/// Whether the fence rule udev reads first runs the helper on a lent desk pad's nodes.
+/// Whether the udev rule for seat pads udev reads first runs the helper on a lent desk pad's nodes.
 fn lends_installed() -> bool {
     let rule = RULE_DIRS
         .iter()
@@ -45,9 +54,12 @@ fn lends_installed() -> bool {
         .is_some_and(|text| text.contains("pads/lent"))
 }
 
-/// The doctor's rows for seat pads: the fence rule and its line for lent desk pads, the broker's
-/// socket, and `/dev/cuse`, which a seat's uinput proxy is made through and which must be root's
-/// alone: whoever opens it can serve a seat's node first.
+/// The doctor's rows for seat pads:
+///
+/// - the udev rule for seat pads, and its line for lent desk pads
+/// - the pad broker's socket
+/// - `/dev/cuse`, through which a seat's uinput proxy is made. It must be root's alone, because
+///   whoever can open it can serve a seat's node before the supervisor does.
 pub fn diagnostics() -> Vec<Diagnostic> {
     let row = |ok: bool, code: &str, good: &str, bad: &str| Diagnostic {
         level: if ok {
@@ -131,7 +143,7 @@ pub fn run() {
         return;
     }
     let sys = Path::new("/sys");
-    let verdict = match judge(sys, vouch::trusted(), devpath) {
+    let verdict = match judge(sys, made_devices::trusted(), devpath) {
         Verdict::Nobody => {
             let records = Path::new(lent::DIR);
             let trusted = lent::trusted(records).then_some(records);
@@ -141,13 +153,13 @@ pub fn run() {
     };
     let lines = match verdict {
         Verdict::Nobody => return,
-        Verdict::Seat(account) => seat_lines(&account),
+        Verdict::Seat(account) => lines_for(&account, InputId::from_env()),
         Verdict::Refused => None,
     };
     print!("{}", lines.as_deref().unwrap_or(REFUSED));
 }
 
-/// What the fence decides for a node.
+/// What the udev helper decides for a node.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// No seat's stamp and no lend: the distro's rules stand.
@@ -175,16 +187,26 @@ impl InputId {
             joystick: set("ID_INPUT_JOYSTICK"),
         }
     }
+
+    /// Whether udev classes the node as a keyboard or a mouse and not as a joystick. Such a node
+    /// never goes to a seat, whichever record names its device: whoever can write it types into
+    /// the kernel's own keyboard, SysRq and pointer handlers, which serve the box's console.
+    pub fn desk(self) -> bool {
+        (self.keyboard || self.mouse) && !self.joystick
+    }
 }
 
-/// The lend records' rule for the node at `devpath`, with sysfs at `sys` and the records in
-/// `records` (`None` when they can't be trusted). A node on a real USB bus whose device a
-/// record names by either of its keys, and not a twin of it, goes to the live holder's account.
-/// A parked pad's node,
-/// and a keyboard or mouse node of any lent pad, is root's alone: a boot keyboard or mouse
-/// interface, or input udev classes as keyboard or mouse and not as joystick. So is the
-/// device's own node, which speaks raw USB: its holder could take a keyboard interface from the
-/// kernel through it.
+/// The verdict from the lend records for the node at `devpath`. `sys` is sysfs. `records` holds
+/// the lend records, or is `None` when they can't be trusted.
+///
+/// - A node on a real USB bus goes to the live holder's account when a record names its device
+///   by either of the device's keys, and the device is not a twin of the recorded one.
+/// - A parked pad's node is root's alone.
+/// - A keyboard or mouse node of any lent pad is root's alone. That is a boot keyboard or boot
+///   mouse interface, or an input node that udev classes as keyboard or mouse and not as
+///   joystick.
+/// - The device's own node is root's alone too. It speaks raw USB, and through it the holder
+///   could take a keyboard interface from the kernel.
 pub fn judge_lent(sys: &Path, records: Option<&Path>, devpath: &str, input: InputId) -> Verdict {
     let Some(records) = records else {
         return Verdict::Nobody;
@@ -198,27 +220,36 @@ pub fn judge_lent(sys: &Path, records: Option<&Path>, devpath: &str, input: Inpu
     let Some(class) = interface else {
         return Verdict::Refused;
     };
-    let desk_input =
-        lent::boot_input(class) || ((input.keyboard || input.mouse) && !input.joystick);
+    let desk_input = lent::boot_input(class) || input.desk();
     match plain(&holder) {
         Some(account) if holder != lent::PARKED && !desk_input => Verdict::Seat(account),
         _ => Verdict::Refused,
     }
 }
 
-/// The fence's rule for the node at `devpath`, with sysfs at `sys` and the supervisor's records
-/// in `records` (`None` when they can't be trusted). A stamped node is a seat's only when its
-/// device is one a record names: a uinput device by its kernel name, a uhid pad by the token in
-/// its stamp, bound to the first HID device that carries it. The stamp never names the seat.
+/// The udev helper's verdict for the node at `devpath`. `sys` is sysfs. `records` holds the
+/// supervisor's device records, or is `None` when they can't be trusted.
+///
+/// A stamped node goes to a seat only when a record names its device:
+///
+/// - a uinput device, by its kernel name
+/// - a uhid pad, by the token in its stamp, bound to the first HID device that carries the token
+///
+/// The stamp itself never names the seat.
 pub fn judge(sys: &Path, records: Option<&Path>, devpath: &str) -> Verdict {
     if !stamped(&sys.join(devpath.trim_start_matches('/'))) {
         return Verdict::Nobody;
     }
-    let account = records.and_then(|dir| match device_under(devpath, vouch::UINPUT_DEVICES) {
-        Some(input) if vouch::is_input(input) => vouch::account(dir, &format!("@{input}")),
-        Some(_) => None,
-        None => uhid_account(sys, dir, device_under(devpath, vouch::UHID_DEVICES)?),
-    });
+    let account =
+        records.and_then(
+            |dir| match device_under(devpath, made_devices::UINPUT_DEVICES) {
+                Some(input) if made_devices::is_input(input) => {
+                    made_devices::account(dir, &format!("@{input}"))
+                }
+                Some(_) => None,
+                None => uhid_account(sys, dir, device_under(devpath, made_devices::UHID_DEVICES)?),
+            },
+        );
     account.map_or(Verdict::Refused, Verdict::Seat)
 }
 
@@ -231,18 +262,22 @@ fn device_under<'a>(devpath: &'a str, under: &str) -> Option<&'a str> {
     rest.split('/').next().filter(|name| !name.is_empty())
 }
 
-/// The account a uhid pad's token names, when the HID device `hid` holds the token's bind: once
-/// bound, only that device does; until then, the first to ask that no lower-numbered HID device
-/// with the token precedes. The kernel numbers a HID device as it adds it, and a copy can read
-/// the token only once the real one is added.
+/// The account that a uhid pad's token names, when the HID device `hid` holds the bind of that
+/// token. Once the token is bound, only the bound device holds it. Until then the first device
+/// to ask holds it, provided no HID device with a lower number carries the same token.
+///
+/// The kernel numbers a HID device when it adds it, and a copy can read the token only after
+/// the real device is added. So the real device always has the lower number.
 fn uhid_account(sys: &Path, dir: &Path, hid: &str) -> Option<String> {
-    let devices = sys.join(vouch::UHID_DEVICES);
-    let number = vouch::hid_number(hid)?;
+    let devices = sys.join(made_devices::UHID_DEVICES);
+    let number = made_devices::hid_number(hid)?;
     let token = token_of(&devices.join(hid))?;
-    let account = vouch::account(dir, &token)?;
-    let ours = match vouch::bound(dir, &token).ok()? {
+    let account = made_devices::account(dir, &token)?;
+    let ours = match made_devices::bound(dir, &token).ok()? {
         Some(bound) => bound == hid,
-        None => !lower_twin(&devices, number, &token)? && vouch::bind(dir, &token, hid).ok()?,
+        None => {
+            !lower_twin(&devices, number, &token)? && made_devices::bind(dir, &token, hid).ok()?
+        }
     };
     ours.then_some(account)
 }
@@ -251,7 +286,7 @@ fn uhid_account(sys: &Path, dir: &Path, hid: &str) -> Option<String> {
 fn token_of(hid: &Path) -> Option<String> {
     let stamp = hid_phys(&std::fs::read_to_string(hid.join("uevent")).ok()?)?;
     let mark = stamp.trim().strip_prefix(PHYS_PREFIX)?.split('/').next()?;
-    vouch::is_token(mark).then(|| mark.to_owned())
+    made_devices::is_token(mark).then(|| mark.to_owned())
 }
 
 /// Whether a HID device numbered below `number` carries `token`.
@@ -260,29 +295,40 @@ fn lower_twin(devices: &Path, number: u64, token: &str) -> Option<bool> {
     Some(entries.flatten().any(|entry| {
         let name = entry.file_name();
         name.to_str()
-            .and_then(vouch::hid_number)
+            .and_then(made_devices::hid_number)
             .is_some_and(|n| n < number)
             && token_of(&entry.path()).as_deref() == Some(token)
     }))
 }
 
-/// Prints [`seat_lines`]: nothing for an account that is no seat's.
+/// Prints the rule's lines for a node the caller found to be `account`'s: a seat's uinput proxy,
+/// or a node under a seat's USB port. Prints nothing for an account that is no seat's.
 pub fn print_for(account: &str) {
-    if let Some(lines) = seat_lines(account) {
+    if let Some(lines) = lines_for(account, InputId::from_env()) {
         print!("{lines}");
     }
+}
+
+/// The rule's lines for a node of `account`'s device, which every seat verdict ends in. A
+/// keyboard or mouse node is refused here ([`InputId::desk`]): an emulated Steam Deck carries
+/// both beside its controller. `None` for an account that is no seat's.
+fn lines_for(account: &str, input: InputId) -> Option<String> {
+    if input.desk() {
+        return Some(REFUSED.to_owned());
+    }
+    seat_lines(account)
 }
 
 /// The rule's lines for `account`, when it is a seat's user or the owner's row's. Any other
 /// account, root's included, maps to nobody.
 fn seat_lines(account: &str) -> Option<String> {
     let user = accounts::lookup(account).ok()??;
-    (user.uid != 0 && fenced(&user, &session::env_path(account))).then(|| lines(account, user.uid))
+    (user.uid != 0 && has_row(&user, &session::env_path(account))).then(|| lines(account, user.uid))
 }
 
 /// Whether `user` has a ledger row: a seat's marker, or `unit_env`, the environment the
 /// supervisor writes for a row and that only the owner's row has without the marker.
-fn fenced(user: &accounts::Passwd, unit_env: &Path) -> bool {
+fn has_row(user: &accounts::Passwd, unit_env: &Path) -> bool {
     accounts::is_seat(user) || unit_env.exists()
 }
 
@@ -389,7 +435,7 @@ mod tests {
 
         /// A uinput device with `phys`, and its `event` node: the node's devpath.
         fn uinput(&self, input: &str, phys: &str) -> String {
-            let dev = format!("/{}/{input}", vouch::UINPUT_DEVICES);
+            let dev = format!("/{}/{input}", made_devices::UINPUT_DEVICES);
             let at = self.sys.join(&dev[1..]);
             std::fs::create_dir_all(at.join("event9")).unwrap();
             std::fs::write(at.join("phys"), format!("{phys}\n")).unwrap();
@@ -399,7 +445,7 @@ mod tests {
         /// A uhid HID device with `phys`, its hidraw node and its driver's input node with an
         /// empty `phys`, as hid-playstation leaves it: the two nodes' devpaths.
         fn uhid(&self, hid: &str, phys: &str) -> [String; 2] {
-            let dev = format!("/{}/{hid}", vouch::UHID_DEVICES);
+            let dev = format!("/{}/{hid}", made_devices::UHID_DEVICES);
             let at = self.sys.join(&dev[1..]);
             std::fs::create_dir_all(at.join("hidraw/hidraw3")).unwrap();
             std::fs::create_dir_all(at.join("input/input77/event5")).unwrap();
@@ -420,15 +466,15 @@ mod tests {
         Verdict::Seat(account.into())
     }
 
-    /// A uinput device is a seat's when the supervisor recorded its kernel name, whatever its
-    /// stamp says; a stamped one it didn't record is nobody's, and an unstamped one isn't the
-    /// fence's.
+    /// A uinput device belongs to a seat when the supervisor recorded its kernel name, whatever its
+    /// stamp says. A stamped device that the supervisor didn't record belongs to nobody. An
+    /// unstamped device is left to the distro's rules.
     #[test]
     fn a_uinput_device_passes_by_the_name_the_supervisor_recorded() {
         let tree = Tree::new();
-        let mut vouch = vouch::Vouch::new(&tree.dir, "pf-seat-1", false).unwrap();
+        let mut record = made_devices::DeviceRecord::new(&tree.dir, "pf-seat-1", false).unwrap();
         // Numbers no test box has: `made` refreshes the real device's nodes.
-        vouch.made("input900042").unwrap();
+        record.made("input900042").unwrap();
         let real = tree.uinput("input900042", "punktfunk-seat:pf-seat-1/steam/1");
         assert_eq!(tree.judge(&real), seat("pf-seat-1"));
         let forged = tree.uinput("input900041", "punktfunk-seat:pf-seat-1/steam/1");
@@ -446,18 +492,18 @@ mod tests {
             Verdict::Refused,
             "records that can't be trusted"
         );
-        drop(vouch);
+        drop(record);
         assert_eq!(tree.judge(&real), Verdict::Refused, "a withdrawn record");
     }
 
-    /// A uhid pad's token binds the first HID device that carries it, and only its nodes pass:
-    /// a copy numbered higher is refused before the bind and after, and so is a device that
-    /// carries the token once the bound one is gone.
+    /// A uhid pad's token is bound to the first HID device that carries it, and only that device's
+    /// nodes pass. A copy with a higher number is refused, before the bind and after it. So is any
+    /// device that carries the token after the bound device is gone.
     #[test]
     fn a_uhid_pad_passes_by_its_token_bound_to_the_lowest_device() {
         let tree = Tree::new();
-        let vouch = vouch::Vouch::new(&tree.dir, "pf-seat-1", true).unwrap();
-        let stamp = format!("punktfunk-seat:{}/dualsense/0", vouch.mark());
+        let record = made_devices::DeviceRecord::new(&tree.dir, "pf-seat-1", true).unwrap();
+        let stamp = format!("punktfunk-seat:{}/dualsense/0", record.mark());
         let [raw, input] = tree.uhid("0003:054C:0CE6.0014", &stamp);
         let [copy_raw, copy_input] = tree.uhid("0003:054C:0CE6.0015", &stamp);
         assert_eq!(
@@ -475,7 +521,7 @@ mod tests {
 
         let gone = tree
             .sys
-            .join(vouch::UHID_DEVICES)
+            .join(made_devices::UHID_DEVICES)
             .join("0003:054C:0CE6.0014");
         std::fs::remove_dir_all(gone).unwrap();
         let [later, _] = tree.uhid("0003:054C:0CE6.0016", &stamp);
@@ -486,13 +532,13 @@ mod tests {
         );
     }
 
-    /// A stamp without a record, with a record of another token, or in the old form that named
-    /// the account, is nobody's; an unstamped uhid device, such as a Bluetooth pad's, isn't the
-    /// fence's.
+    /// A stamped node belongs to nobody when its stamp has no record, has a record of another
+    /// token, or is in the old form that named the account. An unstamped uhid device, such as a
+    /// Bluetooth pad's, is left to the distro's rules.
     #[test]
     fn a_uhid_stamp_without_its_record_is_refused() {
         let tree = Tree::new();
-        let vouch = vouch::Vouch::new(&tree.dir, "pf-seat-1", true).unwrap();
+        let record = made_devices::DeviceRecord::new(&tree.dir, "pf-seat-1", true).unwrap();
         let unrecorded = format!("punktfunk-seat:{}/dualsense/0", "A".repeat(22));
         let [raw, _] = tree.uhid("0003:054C:0CE6.0001", &unrecorded);
         assert_eq!(tree.judge(&raw), Verdict::Refused);
@@ -503,7 +549,7 @@ mod tests {
         assert_eq!(tree.judge(&old), Verdict::Refused);
         let [bluetooth, _] = tree.uhid("0005:054C:0CE6.0003", "a0:b1:c2:d3:e4:f5");
         assert_eq!(tree.judge(&bluetooth), Verdict::Nobody);
-        assert!(vouch::is_token(vouch.mark()));
+        assert!(made_devices::is_token(record.mark()));
     }
 
     /// A stamped node that neither uinput nor uhid made is nobody's.
@@ -519,17 +565,17 @@ mod tests {
     /// A stamp maps only to a seat's account or the owner's row's; a person's account the
     /// supervisor wrote nothing for is nobody's.
     #[test]
-    fn only_a_seat_or_the_owners_row_is_fenced() {
+    fn only_a_seat_or_the_owner_s_row_gets_nodes() {
         let temp = tempfile::tempdir().unwrap();
         let env = temp.path().join("bob.env");
         let user = |gecos: &str| {
             accounts::parse_passwd(&format!("bob:x:1000:1000:{gecos}:/home/bob:/bin/sh")).unwrap()
         };
         let seat = user("punktfunk-seat=0123456789abcdef0123456789abcdef");
-        assert!(fenced(&seat, &env), "a seat's account");
-        assert!(!fenced(&user("Bob"), &env), "a person with no row");
+        assert!(has_row(&seat, &env), "a seat's account");
+        assert!(!has_row(&user("Bob"), &env), "a person with no row");
         std::fs::write(&env, "").unwrap();
-        assert!(fenced(&user("Bob"), &env), "the owner's row");
+        assert!(has_row(&user("Bob"), &env), "the owner's row");
     }
 
     #[test]
@@ -544,6 +590,32 @@ mod tests {
         ];
         for ((uid, gid, mode), only, what) in cases {
             assert_eq!(root_only(uid, gid, mode), only, "{what}");
+        }
+    }
+
+    /// A keyboard or mouse node is refused for any account, before the account is even looked
+    /// up. A joystick that also has keys, a touchpad and a hidraw node are not desk input.
+    #[test]
+    fn a_keyboard_or_mouse_node_never_goes_to_a_seat() {
+        let input = |keyboard, mouse, joystick| InputId {
+            keyboard,
+            mouse,
+            joystick,
+        };
+        for desk in [
+            input(true, false, false),
+            input(false, true, false),
+            input(true, true, false),
+        ] {
+            assert_eq!(lines_for("pf-seat-1", desk).as_deref(), Some(REFUSED));
+        }
+        for pad in [
+            input(false, false, true),
+            input(true, false, true),
+            input(false, true, true),
+            InputId::default(),
+        ] {
+            assert!(!pad.desk(), "{pad:?}");
         }
     }
 
@@ -634,7 +706,7 @@ mod tests {
         }
         let uhid = format!(
             "/{}/0003:28DE:1102.0001/hidraw/hidraw1",
-            vouch::UHID_DEVICES
+            made_devices::UHID_DEVICES
         );
         assert_eq!(
             judge_lent(&desk.sys(), Some(records), &uhid, none),

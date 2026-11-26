@@ -118,7 +118,7 @@ Trackpad and Direct pointer share these gestures:
 | Two-finger drag | Scroll |
 | Tap, then press and drag; or press and hold, then drag | Held left drag |
 | Three-finger tap | Cycle the [stats overlay](/docs/stats) |
-| Three-finger swipe up / down (Android, iPhone, iPad) | Show or hide the on-screen keyboard |
+| Three-finger swipe up / down (Android, iPhone, iPad) | Show or hide the [on-screen keyboard](#on-screen-keyboard) |
 | Two-finger twist | Open the [quick-action dial](/docs/shortcuts#the-quick-action-dial) |
 
 In **Off**, only the last three work.
@@ -136,6 +136,18 @@ Touch passthrough depends on the host:
 | macOS | As Sidecar does it: a tap clicks, a pan scrolls with momentum, a long press right-clicks and drags, two fingers scroll or pinch and rotate |
 | Sway, Hyprland, niri, Umbriel and other wlroots compositors | Not supported: the client uses Trackpad and says so |
 | gamescope | One finger, as an absolute pointer ([gamescope](/docs/gamescope)) |
+
+## On-screen keyboard
+
+Your device's keyboard types on the host. On an Android phone or tablet, a row of keys sits above
+it with the keys it lacks: **Esc**, **Tab**, **Ctrl**, **Alt**, **Shift**, **Win**, the arrows,
+**Del**, **Home**, **End**, **PgUp**, **PgDn** and **F1** to **F12**. Swipe the row sideways to
+reach them all. Press and hold a key to repeat it, such as an arrow. On Android 9 and 10 the row
+sits at the top of the screen.
+
+Tap **Ctrl**, **Alt**, **Shift** or **Win** to hold it for the next key, from the row or the
+keyboard: **Ctrl**, then **c**, sends Ctrl+C. Tap it again to let it go. Hiding the keyboard lets
+go of every held key.
 
 ## Controller mouse
 

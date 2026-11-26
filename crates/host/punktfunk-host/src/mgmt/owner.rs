@@ -245,6 +245,8 @@ pub(crate) trait Seats: Send + Sync {
         &self,
         command: pf_seats::ipc::Command,
     ) -> Result<pf_seats::ipc::CommandResult, pf_seats::ipc::ApiError>;
+    /// The seat the door sent `fp` to, while it holds the device there.
+    fn sent_to(&self, fp: &str) -> Option<String>;
 }
 
 /// The live seats, through the supervisor and each seat host's loopback API.
@@ -264,6 +266,10 @@ impl Seats for LiveSeats {
         command: pf_seats::ipc::Command,
     ) -> Result<pf_seats::ipc::CommandResult, pf_seats::ipc::ApiError> {
         crate::seats::call(command)
+    }
+
+    fn sent_to(&self, fp: &str) -> Option<String> {
+        crate::seats::sent::sent_to(fp).map(|sent| sent.seat)
     }
 
     fn call(&self, target: &Target, call: Forwarded) -> Answer {
@@ -388,16 +394,18 @@ impl Answer {
 /// axum's default request limit: a policy, a hook list, a PIN, a plugin page's form.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// The seat a device plays on: where its host lists it now, else its own profile's row while
-/// it opens that profile with nothing asked. A person's own Linux account is only ever the
-/// first: a device reaches it by unlocking.
-fn device_seat(st: &MgmtState, seats: &crate::seats::Snapshot, fp: &str) -> Option<String> {
-    let seen = seats.occupants.iter().find(|(_, who)| {
-        who.iter()
-            .any(|o| crate::session_status::is_client(&o.client, fp))
-    });
-    if let Some((id, _)) = seen {
-        return Some(id.clone());
+/// The seat a device plays on: `sent`, the one the door sent it to, else its own profile's row
+/// while it opens that profile with nothing asked. What a seat host lists never decides it: the
+/// player on a seat controls that host. A person's own Linux account is only ever the first: a
+/// device reaches it by unlocking.
+fn device_seat(
+    st: &MgmtState,
+    seats: &crate::seats::Snapshot,
+    sent: Option<String>,
+    fp: &str,
+) -> Option<String> {
+    if sent.is_some() {
+        return sent;
     }
     let profiles = st.app.profiles.get()?;
     let profile = profiles.resolve(Some(fp), None).ok()?;
@@ -461,13 +469,13 @@ pub(crate) async fn pass_on(
             if side == Side::Owner || (side == Side::Desk && local) {
                 Target::Owner
             } else {
-                let snapshot = {
-                    let seats = seats.clone();
-                    tokio::task::spawn_blocking(move || seats.snapshot())
+                let (snapshot, sent) = {
+                    let (seats, fp) = (seats.clone(), fp.clone());
+                    tokio::task::spawn_blocking(move || (seats.snapshot(), seats.sent_to(&fp)))
                         .await
                         .unwrap_or_default()
                 };
-                match device_seat(&st, &snapshot, &fp) {
+                match device_seat(&st, &snapshot, sent, &fp) {
                     Some(id) => Target::Seat(id),
                     None => return next.run(req).await,
                 }

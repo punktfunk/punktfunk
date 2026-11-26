@@ -64,7 +64,7 @@ that host answers, within two minutes, a supervisor that doesn't answer meanwhil
 any other door event a stopped owner's host misses.
 
 The door lists the box's copy of the library, so the owner's `library.changed` joins the bus
-after the door asked the supervisor for `level_library`: a client that re-reads on the event
+after the door asked the supervisor for `sync_library`: a client that re-reads on the event
 reads the change. The door waits 2 seconds for that answer, then sends the event anyway.
 
 A seat's `game.*` goes to the same route with its `seat` kept: the owner's plugins hear it, and
@@ -158,6 +158,12 @@ off whose files don't all arrive home still turns the door off and brings the ow
 console back, whose `GET /host` reports the failed off. It keeps the record and the box's files,
 and holds the door's units with `/var/lib/punktfunk-seats/door-hold`: the next on keeps those
 files, and the off after it hands them back.
+
+The owner's console loads the password file as an environment file, and SteamOS sources it in a
+shell. So an off hands back only the door's `PUNKTFUNK_UI_PASSWORD`, `PUNKTFUNK_UI_PASSWORD_HASH`
+and `PUNKTFUNK_UI_SECRET` lines, and only with a value of plain characters
+(letters, digits, `_.,:=+/@%^-`) or in single quotes with no quote inside, 255 characters at
+most. A file with no such line leaves the owner the password file they had.
 
 ## The box's ports
 

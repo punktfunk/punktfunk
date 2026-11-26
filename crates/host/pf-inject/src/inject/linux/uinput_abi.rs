@@ -544,8 +544,12 @@ impl Drop for UinputDevice {
 /// A `/dev/uinput` fd the seat supervisor replays a seat's own uinput requests onto (the
 /// `punktfunk-seats` uinput proxy). Only uinput's by-value and fixed-size requests pass, so
 /// nothing a seat sends reaches the kernel as a pointer; anything else is `EINVAL`. Drop
-/// destroys the device, though systemd's fd store may still hold the fd.
-pub struct ReplayUinput(File);
+/// destroys the device even while systemd's fd store holds a copy of the fd, unless
+/// [`keep_device`](Self::keep_device) ran first.
+pub struct ReplayUinput {
+    file: File,
+    keep_device: bool,
+}
 
 fn einval() -> std::io::Error {
     std::io::Error::from_raw_os_error(libc::EINVAL)
@@ -554,12 +558,24 @@ fn einval() -> std::io::Error {
 impl ReplayUinput {
     /// A fresh `/dev/uinput` fd, non-blocking.
     pub fn open() -> std::io::Result<ReplayUinput> {
-        uapi::open_nonblock("/dev/uinput").map(ReplayUinput)
+        uapi::open_nonblock("/dev/uinput").map(|file| ReplayUinput {
+            file,
+            keep_device: false,
+        })
     }
 
     /// An fd systemd's fd store kept across a restart.
     pub fn adopt(fd: OwnedFd) -> ReplayUinput {
-        ReplayUinput(File::from(fd))
+        ReplayUinput {
+            file: File::from(fd),
+            keep_device: false,
+        }
+    }
+
+    /// Leaves the device to the other copies of this fd: drop then closes this fd alone. The
+    /// kernel destroys the device when the last copy closes.
+    pub fn keep_device(&mut self) {
+        self.keep_device = true;
     }
 
     /// `UI_DEV_CREATE`, `UI_DEV_DESTROY`, or a `UI_SET_*BIT` (not `UI_SET_PHYS`) with `value`.
@@ -569,7 +585,7 @@ impl ReplayUinput {
         if !(bit || req == UI_DEV_CREATE || req == UI_DEV_DESTROY) {
             return Err(einval());
         }
-        uapi::ioctl_value(self.0.as_fd(), req, value.into()).map(drop)
+        uapi::ioctl_value(self.file.as_fd(), req, value.into()).map(drop)
     }
 
     /// A request that copies exactly `N` bytes in, out or both: `UI_DEV_SETUP`, `UI_ABS_SETUP`,
@@ -593,35 +609,37 @@ impl ReplayUinput {
         if !known || uapi::arg_size(req) != N {
             return Err(einval());
         }
-        uapi::ioctl_with(self.0.as_fd(), req, buf)
+        uapi::ioctl_with(self.file.as_fd(), req, buf)
     }
 
     /// `UI_SET_PHYS`, before `UI_DEV_CREATE`: the marker the udev fence reads.
     pub fn set_phys(&self, phys: &str) -> std::io::Result<()> {
         let phys = std::ffi::CString::new(phys).map_err(|_| einval())?;
-        uapi::ioctl_cstr(self.0.as_fd(), UI_SET_PHYS, &phys).map(drop)
+        uapi::ioctl_cstr(self.file.as_fd(), UI_SET_PHYS, &phys).map(drop)
     }
 
     /// Events the kernel queued for the device's creator, `EV_UINPUT` requests among them.
     pub fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
-        (&self.0).read(buf)
+        (&self.file).read(buf)
     }
 
     /// Events, or a legacy `uinput_user_dev` before `UI_DEV_CREATE`.
     pub fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
-        (&self.0).write(buf)
+        (&self.file).write(buf)
     }
 }
 
 impl AsFd for ReplayUinput {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
+        self.file.as_fd()
     }
 }
 
 impl Drop for ReplayUinput {
     fn drop(&mut self) {
-        let _ = uapi::ioctl_value(self.0.as_fd(), UI_DEV_DESTROY, 0);
+        if !self.keep_device {
+            let _ = uapi::ioctl_value(self.file.as_fd(), UI_DEV_DESTROY, 0);
+        }
     }
 }
 
