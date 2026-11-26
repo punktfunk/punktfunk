@@ -67,9 +67,12 @@ pub(super) fn dropin_dir(account: &str) -> PathBuf {
 }
 
 /// `KEY="value"`, the form `EnvironmentFile=` parses without word splitting. Inside double quotes
-/// only `\` and `"` need an escape; `$` and `%` are not expanded in an environment file.
+/// only `\` and `"` need an escape; `$` and `%` are not expanded in an environment file. A
+/// control character is dropped: some values come from the door's files, and a newline in one
+/// would start a line of its own for every reader that takes the file line by line.
 fn quoted(key: &str, value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    let plain: String = value.chars().filter(|c| !c.is_control()).collect();
+    let escaped = plain.replace('\\', "\\\\").replace('"', "\\\"");
     format!("{key}=\"{escaped}\"\n")
 }
 
@@ -652,6 +655,17 @@ pub(super) fn port_held_by(port: u16, uid: u32) -> bool {
 mod tests {
     use super::*;
     use crate::model::{RowKind, RuntimeStatus, Seat, SeatId};
+
+    /// A value stays on its own line whatever it holds, so it can't pose as another key or as
+    /// the token line.
+    #[test]
+    fn a_value_never_starts_a_line_of_its_own() {
+        let planted = format!("https://a\n{TOKEN_KEY}{}\r\n", "0".repeat(64));
+        let line = quoted("PUNKTFUNK_BROWSER_ORIGINS", &planted);
+        assert_eq!(line.lines().count(), 1, "{line:?}");
+        assert_eq!(token_in(&line), None);
+        assert_eq!(quoted("K", "a\\b\"c"), "K=\"a\\\\b\\\"c\"\n");
+    }
 
     fn seat(name: &str) -> Seat {
         Seat {
