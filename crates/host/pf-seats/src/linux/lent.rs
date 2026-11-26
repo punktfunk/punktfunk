@@ -1,13 +1,13 @@
 //! Desk pads lent to a seat: a USB game controller plugged into the box that only its holder's
 //! account opens. One record per lent key in [`DIR`], root's alone: the holder's account while
 //! its seat runs, [`PARKED`] while it doesn't. The directory exists only while a lend does, and
-//! udev's rule line runs [`super::fence`] on USB nodes only while it exists.
+//! udev's rule line runs [`super::node_owner`] on USB nodes only while it exists.
 //!
 //! A change of holder rewrites the record, then unbinds the device from its driver and binds
 //! it back: every open handle dies, raw USB too, and its nodes come back under the new record. What may be
 //! lent is read from sysfs and udev's database, never from the caller.
 
-use super::fence::vouch::put;
+use super::node_owner::made_devices::put;
 use crate::backend::{pad_handover, pad_not_a_controller, pad_not_present};
 use crate::backend::{BackendError, PresentPad};
 use crate::model::{pad_name, valid_pad_key, Ledger, LentPad, RuntimeState, Seat};
@@ -40,7 +40,7 @@ pub(super) fn runs(state: &RuntimeState) -> bool {
     matches!(state, RuntimeState::Running | RuntimeState::Starting)
 }
 
-/// Whether `dir` is a directory root's alone: the fence trusts no record anywhere else.
+/// Whether `dir` is a directory root's alone: the udev helper trusts no record anywhere else.
 pub(super) fn trusted(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir)
         .is_ok_and(|meta| meta.is_dir() && meta.uid() == 0 && meta.mode() & 0o077 == 0)

@@ -581,7 +581,7 @@ fn the_owner_s_cold_and_warm_start_run_exactly_these() {
 }
 
 /// A person's cold start with a key proof, which opens their session through systemd's own login:
-/// no login drop-in, no handover.
+/// no login drop-in, no password kept for a helper.
 #[test]
 #[ignore = "needs root: hands the row's folders to the person and writes under /run"]
 fn a_person_s_cold_start_runs_exactly_these() {
@@ -647,7 +647,7 @@ fn a_person_s_password_start_runs_exactly_these() {
     let _alone = RUN.lock().unwrap_or_else(|e| e.into_inner());
     clear_run("pfperson", PERSON_UID);
     let rig = rig();
-    rig.backend.login_socket(handover::Label::Off);
+    rig.backend.login_socket(login_password::Label::Off);
     let seat = row("pfperson", PERSON_ID, false, Some(PERSON_UID));
     let passwd = format!(
         "pfperson:x:{PERSON_UID}:{PERSON_UID}:Per:{}:/bin/bash\n",
@@ -694,7 +694,7 @@ fn a_person_s_password_start_runs_exactly_these() {
     assert_eq!(calls_from(0), expect(&expected, "pfperson", PERSON_UID));
     assert_eq!(*logins.lock().unwrap(), [true, false]);
     assert!(!left, "the drop-in went with the helper's start");
-    assert!(!rig.backend.inner.handover.waits("pfperson"));
+    assert!(!rig.backend.inner.login_passwords.waits("pfperson"));
 }
 
 /// The folders a made seat's provision leaves in its seat directory and in `saves`, each with its

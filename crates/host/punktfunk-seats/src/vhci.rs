@@ -1,11 +1,11 @@
 //! A seat's USB/IP pads (`design/seat-pad-broker.md` §1.2). A pad server the supervisor starts
 //! serves the device; the supervisor attaches its connected socket to a vhci port, records
-//! whose the port is, and udev's fence ([`fence`]) maps every node under it to that seat.
+//! whose the port is, and the udev helper ([`node_owner`]) maps every node under it to that seat.
 //!
 //! [`MAP`] holds one file per seat's port: `<account> <sockfd>`, the socket number `attach`
 //! took, as vhci's `status` shows it. A row whose port is free or holds another socket is
-//! stale. While the supervisor runs with the udev fence rule installed, a new vhci interface
-//! starts unauthorized: the fence authorizes a seat's only when [`interface_allowed`] takes
+//! stale. While the supervisor runs with the udev rule for seat pads installed, a new vhci interface
+//! starts unauthorized: the udev helper authorizes a seat's only when [`interface_allowed`] takes
 //! what the kernel parsed.
 
 use anyhow::{Context, Result};
@@ -32,7 +32,7 @@ fn lock() -> MutexGuard<'static, ()> {
 }
 
 /// At the supervisor's start: makes the map, drops stale rows (attachments outlive a restart,
-/// the kernel holds their sockets) and, when the udev fence rule is installed, starts every new
+/// the kernel holds their sockets) and, when the udev rule for seat pads is installed, starts every new
 /// vhci interface unauthorized.
 pub fn prepare() {
     let _held = lock();
@@ -41,18 +41,18 @@ pub fn prepare() {
         tracing::warn!(%error, dir = MAP, "vhci port map not made");
     }
     prune(dir, &usbip::vhci_used_rows());
-    // The fence rule is the only thing that authorizes a gated interface; without it the gate
+    // The udev rule for seat pads is the only thing that authorizes a gated interface; without it the gate
     // stays open, or the owner's own virtual Deck never binds.
-    let ruled = pf_seats::linux::fence::rule_installed();
+    let ruled = pf_seats::linux::node_owner::rule_installed();
     if !ruled {
-        tracing::warn!("seat USB interfaces are not gated: the udev fence rule is missing");
+        tracing::warn!("seat USB interfaces are not gated: the udev rule for seat pads is missing");
     }
     set_gate(ruled);
 }
 
 /// Opens the gate again at the supervisor's stop (`ExecStopPost=`): no seat attaches while it
 /// is down. A seat that still holds a port keeps it shut, or its device could re-configure into
-/// an interface the kernel binds before the fence runs.
+/// an interface the kernel binds before the udev helper runs.
 pub fn ungate() {
     let dir = Path::new(MAP);
     prune(dir, &usbip::vhci_used_rows());
@@ -81,7 +81,7 @@ fn set_gate(gated: bool) {
 }
 
 /// Attach `sock` as `devid` at `speed` for `account`: the port it took, `None` when [`grants`]
-/// refuses. The row is written before `attach`, so the fence always finds it.
+/// refuses. The row is written before `attach`, so the udev helper always finds it.
 pub fn attach(account: &str, sock: BorrowedFd<'_>, devid: u32, speed: u32) -> Result<Option<u16>> {
     let _held = lock();
     let dir = Path::new(MAP);
@@ -151,13 +151,13 @@ pub fn account_at(port: u16) -> Option<String> {
 /// authorizes and probes its device's interfaces ([`authorize`]): a seat's only as
 /// [`seat_may_bind`] says. A later event can come after the seat's row is gone, mid-teardown,
 /// and must not read the device as nobody's.
-pub fn fence(devpath: &str) -> bool {
+pub fn node_owner(devpath: &str) -> bool {
     let Some(busid) = busid_of(devpath) else {
         return false;
     };
     let account = seat_of(&busid);
     if let Some(account) = &account {
-        pf_seats::linux::fence::print_for(account);
+        pf_seats::linux::node_owner::print_for(account);
     }
     let added = std::env::var("ACTION").as_deref() == Ok("add");
     if added && std::env::var("DEVTYPE").as_deref() == Ok("usb_interface") {
@@ -366,7 +366,7 @@ mod tests {
         }
     }
 
-    /// The fence finds the port's device under the vhci hub, hub-attached or not.
+    /// The udev helper finds the port's device under the vhci hub, hub-attached or not.
     #[test]
     fn a_vhci_devpath_names_its_device() {
         assert_eq!(

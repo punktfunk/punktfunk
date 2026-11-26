@@ -462,7 +462,7 @@ fn the_login_shell_is_the_passwd_row_s_last_field() {
 /// start whose login socket doesn't carry PID 1's context.
 #[test]
 fn only_a_password_start_goes_through_the_login_helper() {
-    use handover::Label;
+    use login_password::Label;
     let password = Secret::new("hunter2 Bärbel".into());
     let init = "system_u:system_r:init_t:s0".to_owned();
     let labelled = Label::Init(init.clone());
@@ -569,7 +569,7 @@ fn a_failed_start_leaves_no_login_drop_in() {
         "the start ran with the drop-in"
     );
     assert!(!left, "the drop-in went with the failed start");
-    assert!(!rig.backend.inner.handover.waits("jdoe"));
+    assert!(!rig.backend.inner.login_passwords.waits("jdoe"));
 }
 
 /// PAM refusing in the helper what the gate admitted falls back to the plain start, and the

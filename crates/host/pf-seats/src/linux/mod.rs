@@ -17,23 +17,24 @@
 //! What must be up while a unit runs (copied files, lent pads, the uinput stand-in, the pad
 //! broker, present devices) is started and stopped in one function, [`Inner::apply_change`], from
 //! the table in [`resources`]. Every writer of a seat's copied files takes
-//! [`copy_lock::CopyLock`]. [`fence`] tells udev which user owns each pad's device nodes.
+//! [`copy_lock::CopyLock`]. [`node_owner`] tells udev which user owns each pad's device nodes.
 
 mod accounts;
 mod copy_lock;
 mod devices;
-pub mod door;
+pub mod door_switch;
 #[cfg(test)]
 mod fake;
-pub mod fence;
 mod firefox;
 mod flatpak;
-pub mod handover;
 pub mod lent;
 mod libraries;
 pub mod login;
+pub mod login_password;
 mod logind;
 pub mod loopback;
+pub mod mount_share;
+pub mod node_owner;
 mod pam;
 #[cfg(test)]
 mod person_tests;
@@ -44,7 +45,6 @@ mod session;
 mod shared;
 mod shortcuts;
 pub mod socket;
-pub mod stage;
 #[cfg(test)]
 mod start_tests;
 #[cfg(test)]
@@ -94,15 +94,15 @@ pub fn recorded_owner() -> Option<String> {
 /// Whether an off's hold stands under [`STATE_DIR`]: an off that began and didn't finish. An on
 /// removes it before anything else and never sets it.
 pub fn off_held() -> bool {
-    Path::new(STATE_DIR).join(door::HOLD).exists()
+    Path::new(STATE_DIR).join(door_switch::HOLD).exists()
 }
 
 /// Whether `account` may switch the door `on` or off now, by the record root keeps
-/// ([`door::admit`]). The owner's host asks before it starts a switch; the error's code says
+/// ([`door_switch::admit`]). The owner's host asks before it starts a switch; the error's code says
 /// which rule refused it.
 pub fn check_owner(account: &str, on: bool) -> Result<(), BackendError> {
     let recorded = recorded_owner();
-    door::admit(on, account, recorded.as_deref(), accounts::switchable).map(drop)
+    door_switch::admit(on, account, recorded.as_deref(), accounts::switchable).map(drop)
 }
 
 /// A seat has this long to bring up its compositor and open the host's management port.
@@ -185,12 +185,12 @@ struct Inner {
     /// The lock every writer of a seat's copied files takes, and the device lists it guards.
     copy_lock: CopyLock,
     /// The password of a start through the login helper, while it waits for the helper.
-    handover: handover::Handover,
+    login_passwords: login_password::LoginPasswords,
     /// Set once a login helper tripped ([`LOGIN_TRIPPED`]): no helper until the supervisor
     /// restarts.
     helper_off: AtomicBool,
     /// What the login socket carries, once the binary bound it ([`LinuxBackend::login_socket`]).
-    login_label: OnceLock<handover::Label>,
+    login_label: OnceLock<login_password::Label>,
     /// The desk pads lent to rows, and the hardware they name.
     lent: lent::Lent,
 }
@@ -621,7 +621,7 @@ impl LinuxBackend {
             hook: OnceLock::new(),
             checks: Mutex::new(None),
             copy_lock: CopyLock::default(),
-            handover: handover::Handover::default(),
+            login_passwords: login_password::LoginPasswords::default(),
             helper_off: AtomicBool::new(false),
             login_label: OnceLock::new(),
             lent: lent::Lent::under(Path::new("/")),
@@ -651,7 +651,7 @@ impl LinuxBackend {
                 hook: OnceLock::new(),
                 checks: Mutex::new(None),
                 copy_lock: CopyLock::default(),
-                handover: handover::Handover::default(),
+                login_passwords: login_password::LoginPasswords::default(),
                 helper_off: AtomicBool::new(false),
                 login_label: OnceLock::new(),
                 lent: lent::Lent::under(state),
@@ -659,9 +659,9 @@ impl LinuxBackend {
         }
     }
 
-    /// Records what the login socket the binary bound carries ([`handover::bind`]), which
+    /// Records what the login socket the binary bound carries ([`login_password::bind`]), which
     /// decides whether a start may go through the login helper. The first call wins.
-    pub fn login_socket(&self, label: handover::Label) {
+    pub fn login_socket(&self, label: login_password::Label) {
         let _ = self.inner.login_label.set(label);
     }
 
@@ -1279,7 +1279,7 @@ impl PlatformBackend for LinuxBackend {
 
     fn doctor(&self, ledger: &Ledger) -> Result<Vec<Diagnostic>, BackendError> {
         let mut out = self.recheck();
-        out.extend(fence::diagnostics());
+        out.extend(node_owner::diagnostics());
         for seat in &ledger.seats {
             let found = accounts::lookup(&seat.account)?;
             let kind = SeatAccount::of(&seat.kind);
@@ -1595,9 +1595,9 @@ impl LinuxBackend {
             let _ = run("systemctl_failed", "systemctl", &["stop", &manager]);
         }
         let _ = run("systemctl_failed", "systemctl", &["reset-failed", &unit]);
-        let handover = &self.inner.handover;
+        let passwords = &self.inner.login_passwords;
         let offer =
-            password.map(|password| handover.offer(&seat.account, password, Instant::now()));
+            password.map(|password| passwords.offer(&seat.account, password, Instant::now()));
         run("systemctl_failed", "systemctl", &["start", &unit])?;
         if let Some(offer) = offer {
             offer.wait(|| session::state(&seat.account).is_ok_and(|s| s.live()));
@@ -1634,15 +1634,15 @@ impl LinuxBackend {
 
     /// How a person's cold start opens their session ([`login_with`]): the login drop-in written,
     /// or removed, and its guard, made first so a failed write still removes it. The password
-    /// comes back only when the drop-in is written, for the helper to take through [`handover`].
+    /// comes back only when the drop-in is written, for the helper to take through [`login_password`].
     fn person_login<'s, 'p>(
         &self,
         seat: &'s Seat,
         password: Option<&'p Secret>,
     ) -> Result<(Option<LoginDropin<'s>>, Option<&'p Secret>), BackendError> {
         let label =
-            (self.inner.login_label.get().cloned()).unwrap_or_else(handover::Label::unbound);
-        if label == handover::Label::Missing && password.is_some() {
+            (self.inner.login_label.get().cloned()).unwrap_or_else(login_password::Label::unbound);
+        if label == login_password::Label::Missing && password.is_some() {
             tracing::warn!(account = %seat.account,
                 cause = "the login socket doesn't carry PID 1's SELinux context",
                 "seat started without the wallet login");
@@ -1878,17 +1878,17 @@ fn acl_due(dirty: bool, seat_up: bool, since: Duration) -> bool {
 /// it. With SELinux on, the helper runs in PID 1's context, the one systemd's own PAM child
 /// has: pam_selinux computes the session's context from the caller's, so every user gets what
 /// the plain start gives them, a confined one included. That needs the login socket to carry the
-/// context too ([`handover::Label::Init`]); without it, the plain start. A switch for the wallet
+/// context too ([`login_password::Label::Init`]); without it, the plain start. A switch for the wallet
 /// login goes here.
 fn login_with<'a>(
     password: Option<&'a Secret>,
-    label: &handover::Label,
+    label: &login_password::Label,
     off: bool,
 ) -> Option<(&'a Secret, Option<String>)> {
     let context = match label {
-        handover::Label::Off => None,
-        handover::Label::Init(context) => Some(context.clone()),
-        handover::Label::Missing => return None,
+        login_password::Label::Off => None,
+        login_password::Label::Init(context) => Some(context.clone()),
+        login_password::Label::Missing => return None,
     };
     password
         .filter(|_| !off)

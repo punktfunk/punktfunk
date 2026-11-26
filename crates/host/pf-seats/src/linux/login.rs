@@ -3,7 +3,7 @@
 //!
 //! It is the main process of `punktfunk-seat@<account>.service` for a cold start the person
 //! proved with their password (the drop-in of `session::render_login`), and runs as root. It
-//! takes the password once from the supervisor ([`super::handover`]), runs one transaction on
+//! takes the password once from the supervisor ([`super::login_password`]), runs one transaction on
 //! the `punktfunk-seat` PAM service ([`pam::Login`]: authenticate, account, credentials,
 //! session), then forks a child that drops to the person and execs `seat-session`. The root
 //! parent forwards the stop signals, closes the session when the child ends and exits with its
@@ -89,7 +89,7 @@ fn session_code(code: Option<i32>, signal: Option<i32>) -> u8 {
 }
 
 /// `punktfunk-seats login <account>`, as the unit runs it: the password from
-/// [`super::handover::SOCKET_PATH`], then `seat-session` beside this binary.
+/// [`super::login_password::SOCKET_PATH`], then `seat-session` beside this binary.
 #[cfg(target_os = "linux")]
 pub fn run(account: &str) -> u8 {
     crate::logging::to_stderr();
@@ -98,7 +98,7 @@ pub fn run(account: &str) -> u8 {
         tracing::error!("seat-session not found beside the login helper");
         return NO_SESSION;
     };
-    let socket = Path::new(super::handover::SOCKET_PATH);
+    let socket = Path::new(super::login_password::SOCKET_PATH);
     run_in(account, SERVICE, socket, &program)
 }
 
@@ -157,7 +157,7 @@ fn run_in(account: &str, service: &str, socket: &Path, program: &Path) -> u8 {
         tracing::error!(service = ?service, "login service not installed");
         return NO_SERVICE;
     }
-    let password = match super::handover::fetch(socket, account) {
+    let password = match super::login_password::fetch(socket, account) {
         Ok(password) => password,
         Err(cause) => {
             tracing::error!(account, %cause, "login helper got no password");
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     #[ignore = "needs root, libpam, the login service and a built punktfunk-seats; makes the account pfwallet"]
     fn the_helper_opens_one_session_as_the_person() {
-        use super::super::handover::{self, Handover};
+        use super::super::login_password::{self, LoginPasswords};
         use super::super::pam::tests::{run, seats_binary};
         use crate::secret::Secret;
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -537,7 +537,7 @@ mod tests {
         const GROUP: &str = "pfwalletg";
         const PASSWORD: &str = "wallet pass-7 Ü";
         let pam_file = Path::new("/etc/pam.d").join(SERVICE);
-        let socket = Path::new(handover::SOCKET_PATH);
+        let socket = Path::new(login_password::SOCKET_PATH);
         let runtime = super::super::session::runtime_dir(ACCOUNT);
         for taken in [
             &pam_file,
@@ -608,9 +608,9 @@ mod tests {
         std::fs::write(&program, script).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let (listener, _) = handover::bind(socket).unwrap();
+        let (listener, _) = login_password::bind(socket).unwrap();
         listener.set_nonblocking(true).unwrap();
-        let handover = Handover::default();
+        let handover = LoginPasswords::default();
         let root_only = |stream: &std::os::unix::net::UnixStream, _: &str| {
             let cred = rustix::net::sockopt::socket_peercred(stream).map_err(|e| e.to_string())?;
             cred.uid
@@ -634,7 +634,7 @@ mod tests {
                         match listener.accept() {
                             Ok((stream, _)) => {
                                 stream.set_nonblocking(false).unwrap();
-                                return handover::hand(&handover, stream, root_only);
+                                return login_password::hand(&handover, stream, root_only);
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 std::thread::sleep(Duration::from_millis(20));

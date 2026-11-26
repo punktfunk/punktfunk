@@ -3,8 +3,8 @@
 //! each open onto a real `/dev/uinput` of its own. A seat never holds the real node: a device it
 //! made there would sit on seat0, and a keyboard or mouse reaches the VT's SysRq and
 //! `/dev/input/mice` whoever owns its node. So only gamepad capabilities pass ([`allowed`]), the
-//! supervisor stamps `phys` itself and records each device it makes for the udev fence
-//! ([`vouch_made`]), and a seat holds at most [`MAX_OPENS`].
+//! supervisor stamps `phys` itself and records each device it makes for the udev helper
+//! ([`record_device`]), and a seat holds at most [`MAX_OPENS`].
 //!
 //! A caller may be 32-bit: the kernel marks its ioctls, and its `input_event` and FF upload
 //! layouts are translated. The CUSE fd and each open's uinput fd sit in systemd's fd store, so a
@@ -12,7 +12,7 @@
 
 use crate::cuse::{self, Request};
 use pf_inject::pad_broker::{self, ReplayUinput};
-use pf_seats::linux::fence::vouch::{self, Vouch};
+use pf_seats::linux::node_owner::made_devices::{self, DeviceRecord};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::io::Errno;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -226,7 +226,7 @@ struct Open<U> {
     /// Its name in systemd's fd store.
     stored: Option<String>,
     /// The record that vouches for its device, dropped after the device.
-    vouch: Option<Vouch>,
+    device_record: Option<DeviceRecord>,
 }
 
 impl<U> Open<U> {
@@ -238,7 +238,7 @@ impl<U> Open<U> {
             notify: false,
             reads: VecDeque::new(),
             stored: None,
-            vouch: None,
+            device_record: None,
         }
     }
 }
@@ -423,7 +423,7 @@ fn sysname<U: Uinput>(dev: &U, call: &Ioctl<'_>) -> Answer {
 fn replay<U: Uinput>(dev: &U, call: &Ioctl<'_>, phys: &str) -> Answer {
     let nr = call.cmd & 0xff;
     match call.cmd {
-        // The supervisor's stamp, not the seat's, is what the udev fence reads.
+        // The supervisor's stamp, not the seat's, is what the udev helper reads.
         UI_SET_PHYS | UI_SET_PHYS_COMPAT => Answer::Done(0, Vec::new()),
         UI_DEV_CREATE => done(
             dev.set_phys(phys)
@@ -454,15 +454,15 @@ fn replay<U: Uinput>(dev: &U, call: &Ioctl<'_>, phys: &str) -> Answer {
     }
 }
 
-/// The record for the device `dev` made, by the name the kernel gave it: what the fence hands
+/// The record for the device `dev` made, by the name the kernel gave it: what the udev helper hands
 /// to the seat. Anything else carrying the seat's stamp, a copy included, goes to nobody.
-fn vouch_made<U: Uinput>(dev: &U, dir: &Path, account: &str) -> io::Result<Vouch> {
+fn record_device<U: Uinput>(dev: &U, dir: &Path, account: &str) -> io::Result<DeviceRecord> {
     let mut name = [0u8; 64];
     dev.ioctl_buffer(UI_GET_SYSNAME_0 | (64 << 16), &mut name)?;
     let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
-    let mut vouch = Vouch::new(dir, account, false)?;
-    vouch.made(&String::from_utf8_lossy(&name[..len]))?;
-    Ok(vouch)
+    let mut device_record = DeviceRecord::new(dir, account, false)?;
+    device_record.made(&String::from_utf8_lossy(&name[..len]))?;
+    Ok(device_record)
 }
 
 /// Whether `fd` has something to read now.
@@ -506,8 +506,8 @@ pub struct Proxy<U> {
     next_fh: u64,
     /// `(nr, code)` already logged as refused.
     refused: HashSet<(u32, u32)>,
-    /// Where the records that vouch for its devices go ([`vouch::DIR`]).
-    vouched: PathBuf,
+    /// Where the records that device_record for its devices go ([`made_devices::DIR`]).
+    records_dir: PathBuf,
 }
 
 impl<U: Uinput> Proxy<U> {
@@ -525,7 +525,7 @@ impl<U: Uinput> Proxy<U> {
             opens: kept.into_iter().collect(),
             next_fh,
             refused: HashSet::new(),
-            vouched: PathBuf::from(vouch::DIR),
+            records_dir: PathBuf::from(made_devices::DIR),
         }
     }
 
@@ -651,7 +651,7 @@ impl<U: Uinput> Proxy<U> {
         }
     }
 
-    /// Replays `call` on `fh`'s device. A device made is recorded for the fence; one destroyed
+    /// Replays `call` on `fh`'s device. A device made is recorded for the udev helper; one destroyed
     /// loses its record.
     fn ioctl(&mut self, unique: u64, fh: u64, compat: bool, call: &Ioctl<'_>) -> Vec<u8> {
         let phys = pad_broker::seat_phys(&self.account, &format!("steam/{fh}"));
@@ -664,14 +664,14 @@ impl<U: Uinput> Proxy<U> {
         let answer = replay(&open.dev, call, &phys);
         match (call.cmd, &answer) {
             (UI_DEV_CREATE, Answer::Done(..)) => {
-                open.vouch = vouch_made(&open.dev, &self.vouched, &self.account)
+                open.device_record = record_device(&open.dev, &self.records_dir, &self.account)
                     .inspect_err(|error| {
                         tracing::warn!(%error, account = self.account,
-                            "seat uinput device not recorded: the fence refuses it");
+                            "seat uinput device not recorded: the udev helper refuses it");
                     })
                     .ok();
             }
-            (UI_DEV_DESTROY, _) => open.vouch = None,
+            (UI_DEV_DESTROY, _) => open.device_record = None,
             _ => {}
         }
         if learned {
@@ -980,7 +980,7 @@ fn root_only(uid: u32, mode: u32) -> bool {
 }
 
 /// Makes `/dev/cuse` root's alone. Whoever else can open it can register a node under the name a
-/// seat's unit binds, and the fence then hands that node to the seat's user.
+/// seat's unit binds, and the udev helper then hands that node to the seat's user.
 fn close_cuse(node: &Path) -> io::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
     let meta = std::fs::metadata(node)?;
@@ -1059,7 +1059,7 @@ fn spawn(account: &str, chan: File, kept: Vec<(u64, Open<ReplayUinput>)>) -> Opt
 }
 
 /// Serves again every proxy systemd kept across a supervisor restart, with its devices, each
-/// device recorded for the fence again: the supervisor that made it may have written no record.
+/// device recorded for the udev helper again: the supervisor that made it may have written no record.
 /// A kept fd no proxy claims leaves the store.
 pub fn resume(kept: Vec<(String, OwnedFd)>) {
     let mut chans = HashMap::new();
@@ -1082,15 +1082,16 @@ pub fn resume(kept: Vec<(String, OwnedFd)>) {
                 open.notify = kh.is_some();
                 open.stored = Some(name);
                 // An open whose device isn't made answers ENOENT.
-                open.vouch = match vouch_made(&open.dev, Path::new(vouch::DIR), &account) {
-                    Ok(vouch) => Some(vouch),
-                    Err(error) if error.raw_os_error() == Some(ENOENT) => None,
-                    Err(error) => {
-                        tracing::warn!(%error, account,
-                            "kept seat uinput device not recorded: the fence refuses it");
-                        None
-                    }
-                };
+                open.device_record =
+                    match record_device(&open.dev, Path::new(made_devices::DIR), &account) {
+                        Ok(device_record) => Some(device_record),
+                        Err(error) if error.raw_os_error() == Some(ENOENT) => None,
+                        Err(error) => {
+                            tracing::warn!(%error, account,
+                            "kept seat uinput device not recorded: the udev helper refuses it");
+                            None
+                        }
+                    };
                 opens.entry(account).or_default().push((fh, open));
             }
             None => pad_broker::forget_fd(&name),
@@ -1476,8 +1477,8 @@ mod tests {
         });
         let chan = File::from(ours);
         let mut proxy = Proxy::new(chan, "pf-seat-1", opener, Vec::new());
-        let records = std::env::temp_dir().join(format!("pf-vouched-{}", std::process::id()));
-        proxy.vouched = records.clone();
+        let records = std::env::temp_dir().join(format!("pf-records_dir-{}", std::process::id()));
+        proxy.records_dir = records.clone();
         let record = records.join("@input987650");
         let (stop, theirs) = UnixStream::pair().unwrap();
         let thread = std::thread::spawn(move || serve(proxy, theirs));

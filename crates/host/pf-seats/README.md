@@ -51,9 +51,9 @@ Root does a few jobs in short-lived helpers instead of in the daemon, each for o
 |---|---|---|
 | `pam-check` | root, empty environment | Keeps libpam out of the daemon |
 | `login` | root, then the person | Must be the unit's main process to open a real login session |
-| `stage` | root, in PID 1's mount namespace | The daemon has no `CAP_SYS_ADMIN`; mounts happen here |
+| `mount-share` | root, in PID 1's mount namespace | The daemon has no `CAP_SYS_ADMIN`; mounts happen here |
 | `loopback` | root | Attaches the per-seat loopback address after the unit starts |
-| `fence` | root, from udev | udev runs it for each device node |
+| `node-owner` | root, from udev | udev runs it for each device node |
 | `serve-usb` | root, in a scope of its own | A seat's USB pad survives a daemon restart |
 | `door on\|off\|ports` | root | Works while the daemon is stopped |
 
@@ -112,10 +112,10 @@ actions out. `windows/supervisor.rs` performs the actions. Start with `step.rs`.
 | `linux/session.rs` | Everything systemd reads for a seat: environment file, drop-ins |
 | `linux/accounts.rs` | Seat users: created, checked by their marker, removed |
 | `linux/shared.rs` | The state directory: games folder, trust copies, library copy |
-| `linux/libraries.rs`, `stage.rs` | The owner's Steam libraries, mounted into a seat |
-| `linux/fence.rs`, `lent.rs` | Which account owns a controller's device nodes |
-| `linux/pam.rs`, `login.rs`, `handover.rs` | A person's password: checked, then used for one login |
-| `linux/door.rs` | The root verb that switches the door on and off |
+| `linux/libraries.rs`, `mount_share.rs` | The owner's Steam libraries, mounted into a seat |
+| `linux/node_owner.rs`, `lent.rs` | Which user owns a controller's device nodes |
+| `linux/pam.rs`, `login.rs`, `login_password.rs` | A person's password: checked, then used for one login |
+| `linux/door_switch.rs` | The root verb that switches the door on and off |
 | `linux/safe_open.rs` | How root reads files in a folder another user can write |
 | `linux/copy_lock.rs` | The lock every writer of a seat's copied files takes |
 | `windows/step.rs`, `supervisor.rs` | A Windows seat's lifecycle: the rule, and the OS side |

@@ -1,16 +1,22 @@
-//! The door switch: who may switch the door now ([`admit`]), which of the owner's port lines the
-//! door takes ([`port_lines`]), and the switch itself ([`main`]), the one-shot root verb
-//! `punktfunk-seats door on|off|ports <user>` that `door-helper` execs. It needs no supervisor
-//! and never rides the seat socket: an off stops the supervisor.
+//! Switching the door on and off: the root verb `punktfunk-seats door on|off|ports <user>`,
+//! which `door-helper` runs.
 //!
-//! No root code here opens a path in a home or in the box directory. Such a path is a
-//! [`hands::Theirs`], which only [`hands::Cmd::by`] turns into an argument, behind
-//! `runuser -u <side> --`; their bytes pass root's process in two places only: the port lines,
-//! and the password line spliced back into `web.env`. Root writes only its own files in the
-//! state directory: the record, the mark, the hold and the port file. Every program runs
-//! through [`hands::pipe`], which the tests fake, so each path is a table and each step can fail:
-//! `the_door_s_on_runs_exactly_these` and its twins, `a_failed_step_puts_the_box_back`,
-//! `no_door_step_touches_their_path_as_root`.
+//! With the door off, the box's host runs as the owner. With the door on, it runs as the
+//! `punktfunk` system user and the owner plays on a seat. A switch moves the box's identity,
+//! pairing store and console password between the owner's folder and the door's directory, and
+//! starts or stops the door's units. [`admit`] decides who may switch now, [`port_lines`] which
+//! of the owner's port settings the door takes, and [`main`] runs the switch. It needs no running
+//! supervisor and does not use the supervisor's socket: an off stops the supervisor.
+//!
+//! Root never opens a path in the owner's home or in the door's directory. Such a path is a
+//! [`hands::Theirs`], and all that can be done with one is to pass it to a command that runs as
+//! that side (`runuser -u <side> --`, [`hands::Cmd::by`]). Their bytes pass through root in two
+//! places, the port lines and the password lines, and root filters both. Root writes only its own
+//! files in the state directory: the owner record, the door-on mark, the hold and the port file.
+//!
+//! Every program runs through [`hands::pipe`], which the tests replace. So each switch is a table
+//! of commands and each step can be made to fail: see `the_door_s_on_runs_exactly_these`,
+//! `a_failed_step_puts_the_box_back` and `no_door_step_touches_their_path_as_root`.
 
 use super::accounts::{Passwd, Switchable};
 use super::err;
