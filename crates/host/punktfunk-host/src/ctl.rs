@@ -81,7 +81,9 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             Ok(())
         }
         "stop-session" => {
-            let v = Client::one_shot()?.delete("/api/v1/session")?;
+            let c = Client::one_shot()?;
+            let v = c.delete("/api/v1/session")?;
+            wait_for_stop(&c);
             out(json, &v, |_| println!("session stopped"));
             Ok(())
         }
@@ -444,6 +446,28 @@ fn display(args: &[&str], json: bool) -> Result<()> {
         Some(other) => Err(Failure::usage(format!(
             "display: expected status | preset | release, got '{other}'"
         ))),
+    }
+}
+
+/// Whether a `GET /display/state` answer lists a display a session still streams.
+fn any_streaming(state: &Value) -> bool {
+    state["displays"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().any(|d| d["state"] == "active"))
+}
+
+/// The stop route answers when the stop is asked for, and the sessions end a moment later.
+/// Returns once no display streams, 5 s at most: a `display release` that follows then finds
+/// the display kept, where a streaming one would be skipped.
+fn wait_for_stop(c: &Client) {
+    for _ in 0..50 {
+        if !c
+            .get("/api/v1/display/state")
+            .is_ok_and(|s| any_streaming(&s))
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -1253,6 +1277,19 @@ mod tests {
         write_stub(&dir, "https://localhost:47992/_auth/handoff?t=2.c.d").unwrap();
         let page = std::fs::read_to_string(&path).unwrap();
         assert!(!page.contains("t=1.a.b"), "the spent ticket is gone");
+    }
+
+    /// `stop-session` waits on this: a kept display is free to release, a streaming one isn't.
+    #[test]
+    fn only_an_active_display_still_streams() {
+        let rows = |states: &[&str]| {
+            let rows: Vec<Value> = states.iter().map(|s| json!({ "state": s })).collect();
+            json!({ "displays": rows })
+        };
+        assert!(any_streaming(&rows(&["pinned", "active"])));
+        assert!(!any_streaming(&rows(&["pinned", "lingering"])));
+        assert!(!any_streaming(&rows(&[])));
+        assert!(!any_streaming(&json!({})), "a host with no display backend");
     }
 
     #[test]
