@@ -139,19 +139,28 @@ Touch passthrough depends on the host:
 
 ## On-screen keyboard
 
-Your device's keyboard types on the host. On an Android phone or tablet, a row of buttons sits
-above it. It starts with the keys the keyboard lacks: **Esc**, **Tab**, **Ctrl**, **Alt**,
-**Shift**, **Win**, the arrows, **Del**, **Home**, **End**, **PgUp**, **PgDn** and **F1** to
-**F12**. Swipe the row sideways to reach them all. Press and hold a key to repeat it, such as an
-arrow. On Android 9 and 10 the row sits at the top of the screen.
+Your device's keyboard types on the host. On an Android phone or tablet, an iPhone or an iPad, a
+row of buttons sits above it. It starts with the keys the keyboard lacks: **Esc**, **Tab**,
+**Ctrl**, **Alt**, **Shift**, **Win**, the arrows, **Del**, **Home**, **End**, **PgUp**, **PgDn**
+and **F1** to **F12**. Swipe the row sideways to reach them all. Press and hold a key to repeat
+it, such as an arrow.
 
 Tap **Ctrl**, **Alt**, **Shift** or **Win** to hold it for the next key, from the row or the
 keyboard: **Ctrl**, then **c**, sends Ctrl+C. Tap it again to let it go. Hiding the keyboard lets
 go of every held key.
 
+On Android 9 and 10 the row sits at the top of the screen. On an iPad with a keyboard attached,
+showing the keyboard brings up the row alone, along the bottom of the screen.
+
 To choose the row's buttons, open **Quick actions** in settings, then **Keyboard row**. A button
-is a key or any [quick action](/docs/shortcuts#the-quick-action-dial). Tap one to change or
-remove it, hold one and drag it onto another to move it, and tap **+** to add one.
+is a key or any [quick action](/docs/shortcuts#the-quick-action-dial).
+
+| | Android | iPhone and iPad |
+|---|---|---|
+| Change a button | Tap it | Tap it |
+| Move a button | Hold it, then drag it onto another | Tap **Edit**, then drag it |
+| Remove a button | Tap it, then **Remove** | Swipe it away |
+| Add a button | Tap **+** | Tap **Add** |
 
 ## Controller mouse
 

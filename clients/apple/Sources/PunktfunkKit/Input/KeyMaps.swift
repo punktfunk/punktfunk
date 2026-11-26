@@ -156,12 +156,12 @@ extension InputCapture {
     #endif
 }
 
-#if os(iOS) || os(visionOS)
 /// US-layout character → Windows VK for the on-screen keyboard (`StreamLayerUIView`'s
 /// UIKeyInput). Unlike every other key source, `insertText` delivers CHARACTERS, not key
 /// positions, so this is the inverse of a US layout: `shift` means "wrap in VK_LSHIFT so the
 /// host types the shifted symbol". Same contract as `hidToVK`: emit only VKs the host's
-/// vk_to_evdev knows; anything unmapped is dropped by the caller.
+/// vk_to_evdev knows; anything unmapped is dropped by the caller. Built on every platform, so
+/// the keyboard row's rules (`KeyRowEngine`) test on the Mac.
 enum SoftKeyMap {
     static func vk(for ch: Character) -> (vk: UInt32, shift: Bool)? {
         guard let ascii = ch.asciiValue else { return nil }
@@ -195,4 +195,3 @@ enum SoftKeyMap {
         "(": (0x39, true), ")": (0x30, true),
     ]
 }
-#endif

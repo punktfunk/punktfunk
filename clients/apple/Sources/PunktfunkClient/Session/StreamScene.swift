@@ -106,6 +106,20 @@ struct StreamScene: View {
             },
             endToEndMeter: model.endToEnd
         )
+        #if os(iOS)
+        // The keyboard row draws each quick action as the ring does and runs it as a shortcut does.
+        .keyRow(KeyRowClient(
+            face: { [weak model, ring] slot in
+                guard let model, let conn = model.connection else {
+                    return KeyRowClient.Face(label: slot.id, enabled: false)
+                }
+                let s = spec(slot, model.ringConfig, model.ringActions(conn, ring: ring))
+                return KeyRowClient.Face(symbol: s.icon, label: s.label, enabled: s.enabled)
+            },
+            fire: { [weak model, ring] action, phase in
+                model?.runShortcut(action, phase, pad: nil, ring: ring, confirmEndStream: true)
+            }))
+        #endif
         #if os(visionOS)
         // One path for the whole session: the presenter always draws the texture, which shows
         // flat here or bent on the curve. The stream view under it keeps the window's input.
@@ -339,9 +353,14 @@ extension SessionModel {
 
     /// A shortcut fired (design/client-shortcuts.md §4) on wire pad `pad`, `nil` for the keyboard
     /// or a captured Steam Controller. It runs as the dial's slot would, at once: only the host's
-    /// danger actions and End game ask for a second press. A held key-like action stays down on
-    /// the host until its `.up`. An open ring redraws, so a toggled slot shows its new state.
-    func runShortcut(_ action: Shortcuts.Action, _ phase: Shortcuts.Phase, pad: UInt32?, ring: RingState) {
+    /// danger actions and End game ask for a second press. End stream asks too where
+    /// `confirmEndStream` says a stray tap could reach it: the keyboard row. A held key-like
+    /// action stays down on the host until its `.up`. An open ring redraws, so a toggled slot
+    /// shows its new state.
+    func runShortcut(
+        _ action: Shortcuts.Action, _ phase: Shortcuts.Phase, pad: UInt32?, ring: RingState,
+        confirmEndStream: Bool = false
+    ) {
         guard let conn = connection, self.phase == .streaming else { return }
         guard case .slot(let slot) = action else {
             if action == .ring { pad == nil ? ring.toggleCentred() : ring.chordToggle(pad: pad) }
@@ -360,7 +379,8 @@ extension SessionModel {
         }
         let s = spec(slot, cfg, a)
         guard s.enabled else { return }
-        if s.armed, slot != .endStream, !confirmShortcut(s.id, prompt: confirmHint(s)) { return }
+        if s.armed, confirmEndStream || slot != .endStream,
+           !confirmShortcut(s.id, prompt: confirmHint(s)) { return }
         perform(slot, cfg, a, ring, pad: pad)
         // The ring reads slot state through closures it doesn't observe. A poke redraws it and
         // leaves its hint alone, so an armed slot keeps its question.

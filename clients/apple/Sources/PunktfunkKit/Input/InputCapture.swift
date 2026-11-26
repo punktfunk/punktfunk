@@ -143,6 +143,9 @@ public final class InputCapture {
     /// monitor runs before the Stream menu, which carries no key equivalents elsewhere. Main queue.
     public var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
 
+    /// A forwarded key that is no modifier lifted on the host. Main queue.
+    public var onKeyLifted: (() -> Void)?
+
     /// Fired on ⌃⌘F (macOS) — toggle the streaming window in/out of fullscreen. Detected in the
     /// monitor only WHILE FORWARDING with `inhibit_shortcuts` off: a captured stream view swallows
     /// keys, so the Stream menu's identical ⌃⌘F equivalent never reaches it. With the setting on,
@@ -528,7 +531,11 @@ public final class InputCapture {
     private func emitKey(_ vk: UInt32, down: Bool) {
         let layout = ModifierLayout(rawValue: connection.settings.modifierLayout) ?? .mac
         connection.send(.key(Self.applyModifierLayout(vk, layout), down: down))
+        if !down, !Self.modifierKeyVKs.contains(vk) { onKeyLifted?() }
     }
+
+    /// Shift, Ctrl, Alt and Win, left and right: a lift of one is no key typed.
+    private static let modifierKeyVKs: Set<UInt32> = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C]
 
     /// Release any held MOUSE buttons host-side, leaving keyboard state untouched. Used when
     /// the iPad pointer lock drops while a GCMouse button is held: by then the GCMouse release

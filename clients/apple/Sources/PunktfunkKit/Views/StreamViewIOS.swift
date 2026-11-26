@@ -74,6 +74,9 @@ public struct StreamView: UIViewControllerRepresentable {
     #if os(visionOS)
     private var curveTarget: CurveTarget?
     #endif
+    #if os(iOS)
+    private var keyRowClient: KeyRowClient?
+    #endif
 
     /// `onShortcut` (main queue) is a keyboard shortcut that fired on an iPad keyboard, as on
     /// the macOS StreamView.
@@ -110,6 +113,15 @@ public struct StreamView: UIViewControllerRepresentable {
     }
     #endif
 
+    #if os(iOS)
+    /// The session behind the keyboard row's quick actions: how each looks and what runs it.
+    public func keyRow(_ client: KeyRowClient?) -> StreamView {
+        var view = self
+        view.keyRowClient = client
+        return view
+    }
+    #endif
+
     public func makeUIViewController(context: Context) -> StreamViewController {
         let controller = StreamViewController()
         #if os(visionOS)
@@ -122,6 +134,9 @@ public struct StreamView: UIViewControllerRepresentable {
         controller.endToEndMeter = endToEndMeter
         controller.onResizeTarget = onResizeTarget
         controller.onDecodedSize = onDecodedSize
+        #if os(iOS)
+        controller.keyRowClient = keyRowClient
+        #endif
         controller.start(connection: connection, onFrame: onFrame, onSessionEnd: onSessionEnd)
         return controller
     }
@@ -136,6 +151,9 @@ public struct StreamView: UIViewControllerRepresentable {
         controller.onDecodedSize = onDecodedSize
         #if os(visionOS)
         controller.setCurve(curveTarget)
+        #endif
+        #if os(iOS)
+        controller.keyRowClient = keyRowClient
         #endif
         if controller.connection !== connection {
             controller.start(connection: connection, onFrame: onFrame, onSessionEnd: onSessionEnd)
@@ -240,6 +258,13 @@ public final class StreamViewController: StreamViewControllerBase {
     var onCaptureChange: ((Bool) -> Void)?
     /// A keyboard shortcut that fired (see `StreamView.init`).
     var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Void)?
+    #if os(iOS)
+    /// The session behind the keyboard row's quick actions. SwiftUI hands a fresh one whenever
+    /// the scene's state changed, which is when a button's face may have.
+    var keyRowClient: KeyRowClient? {
+        didSet { if isViewLoaded { streamView.keyRowClient = keyRowClient } }
+    }
+    #endif
     /// The two-finger twist turning the quick-action ring (forwarded from the stream view).
     var onDial: ((DialEvent) -> Void)?
     /// Resize-overlay START: forwarded to the Match-window follower so a scene resize drives the
@@ -485,6 +510,10 @@ public final class StreamViewController: StreamViewControllerBase {
         capture.onPreempted = { [weak self] in
             self?.setCaptured(false)
         }
+        #if os(iOS)
+        // A hardware key is the next key to a modifier the keyboard row holds.
+        capture.onKeyLifted = { [weak self] in self?.streamView.hostKeyLifted() }
+        #endif
         capture.onKeyboardReposted = { on in FullKeyboardAccess.proven = on }
         streamView.onFullKeyboardAccess = { [weak self] in
             self?.inputCapture?.gameControllerFellSilent()
@@ -574,6 +603,9 @@ public final class StreamViewController: StreamViewControllerBase {
     /// The stream view's touch, Pencil, pointer and scroll sinks for `connection`'s session.
     private func wireTouchSurface(_ connection: PunktfunkConnection) {
         streamView.settings = connection.settings
+        #if os(iOS)
+        streamView.keyRowClient = keyRowClient
+        #endif
         // The letterbox must follow an accepted requestMode() mid-stream, so this stays a live
         // read — but behind a short TTL: the pencil path maps every coalesced sample through
         // here (≤8 per event at panel rate, main thread), and a per-sample FFI read re-takes
@@ -775,7 +807,7 @@ public final class StreamViewController: StreamViewControllerBase {
                 return
             }
             #endif
-            self.streamView.setSoftKeyboardVisible(show ?? !self.streamView.isFirstResponder)
+            self.streamView.setSoftKeyboardVisible(show ?? !self.streamView.softKeyboardUp)
         })
         #if os(iOS)
         // The scroll inversion changed, and with it whether core takes touchpad contacts.
@@ -1627,11 +1659,85 @@ final class StreamLayerUIView: UIView {
     override var canBecomeFirstResponder: Bool { true }
 
     func setSoftKeyboardVisible(_ visible: Bool) {
+        #if os(iOS)
+        summonKeyRow(visible)
+        // First responder already, beside a hardware keyboard: only the row comes and goes, and
+        // the view keeps the key chain it holds for Full Keyboard Access.
+        if isFirstResponder, visible || inInputMode {
+            reloadInputViews()
+            return
+        }
+        #endif
         if visible {
             becomeFirstResponder()
+            #if os(iOS)
+            // Refused, the keyboard is not up: the next ask must show it, not hide it.
+            if !isFirstResponder { summonKeyRow(false) }
+            #endif
         } else if isFirstResponder {
             resignFirstResponder()
         }
+    }
+
+    #if os(iOS)
+    /// The session behind the row's quick actions (`StreamView.keyRow`).
+    var keyRowClient: KeyRowClient? {
+        didSet { keyRow?.client = keyRowClient }
+    }
+    /// The keyboard row, while the player has the keyboard up and the row has buttons.
+    private var keyRow: KeyRowView?
+    /// The player asked for the keyboard. First responder does not say so: under Full Keyboard
+    /// Access the view holds the key chain beside a hardware keyboard with no keyboard asked for.
+    private var keyboardSummoned = false
+
+    /// The system docks it on the keyboard it shows, or alone at the screen's bottom while a
+    /// hardware keyboard keeps the soft one away.
+    override var inputAccessoryView: UIView? { keyRow }
+
+    /// The keyboard is coming: build the row from the session's quick actions. The keyboard is
+    /// going: release every key the row holds on the host, then drop the row.
+    private func summonKeyRow(_ visible: Bool) {
+        keyboardSummoned = visible
+        keyRow?.releaseAll()
+        keyRow = nil
+        let buttons = OverlayConfig.parse(settings.overlayActions).rowButtons
+        guard visible, !buttons.isEmpty else { return }
+        let row = KeyRowView(buttons: buttons)
+        row.client = keyRowClient
+        row.sendKey = { [weak self] vk, down in self?.onTouchEvent?(.key(vk, down: down)) }
+        row.sendText = { [weak self] text in
+            text.unicodeScalars.forEach { self?.onTouchEvent?(.text($0)) }
+        }
+        row.hide = { [weak self] in self?.setSoftKeyboardVisible(false) }
+        keyRow = row
+    }
+
+    /// The keyboard can go without `setSoftKeyboardVisible`, by its own hide key: the row goes
+    /// with it either way.
+    @discardableResult
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { summonKeyRow(false) }
+        return resigned
+    }
+    #endif
+
+    /// A key the row did not send lifted on the host, from a hardware keyboard
+    /// (`InputCapture.onKeyLifted`) or typed on the system one. It was the next key to any
+    /// modifier the row holds.
+    func hostKeyLifted() {
+        #if os(iOS)
+        keyRow?.keyLifted()
+        #endif
+    }
+
+    /// Whether the keyboard the Keyboard action toggles is up.
+    var softKeyboardUp: Bool {
+        #if os(iOS)
+        keyboardSummoned
+        #else
+        isFirstResponder
+        #endif
     }
     #endif
 
@@ -2182,6 +2288,11 @@ extension StreamLayerUIView: UIKeyInput {
         // UIKeyInput insertions while we're first responder — forwarding both would double
         // every character, so the HID path owns keys whenever a hardware keyboard is attached.
         guard GCKeyboard.coalesced == nil else { return }
+        #if os(iOS)
+        // Text carries no modifiers: under one the keyboard row holds, the row sends this.
+        if textInputEnabled, keyRow?.typed(text) == true { return }
+        #endif
+        var sentKey = false
         for ch in text {
             let control = ch.asciiValue.map { $0 < 0x20 } ?? false // Return, Tab
             if textInputEnabled, !control {
@@ -2193,13 +2304,16 @@ extension StreamLayerUIView: UIKeyInput {
             onTouchEvent?(.key(key.vk, down: true))
             onTouchEvent?(.key(key.vk, down: false))
             if key.shift { onTouchEvent?(.key(0xA0, down: false)) }
+            sentKey = true
         }
+        if sentKey { hostKeyLifted() }
     }
 
     func deleteBackward() {
         guard GCKeyboard.coalesced == nil else { return } // see insertText
         onTouchEvent?(.key(0x08, down: true)) // VK_BACK
         onTouchEvent?(.key(0x08, down: false))
+        hostKeyLifted()
     }
 }
 #endif
