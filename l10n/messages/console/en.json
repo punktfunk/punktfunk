@@ -340,6 +340,7 @@
 	"console_webos_stop_confirm": "Stop streaming",
 	"console_webos_audio_failed": "Couldn't start audio: {error}",
 	"console_webos_decoder_failed": "Video decoder failed — session ended",
+	"console_webos_decoder_blocked": "This TV blocks the app from its video decoder. The fix is in the app's README.",
 	"console_overlay_present_frames": "present: {frames} frames, {missed} missed",
 	"console_overlay_holding_keyframe": "holding for a keyframe",
 	"console_switch_applet_mode": "Opened from the Album, Punktfunk has little memory and may close — hold {button} while starting a game to open it with full memory.",
