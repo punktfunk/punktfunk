@@ -14,7 +14,6 @@ import {
 	seatClient,
 } from "@/api/seat";
 import { SeatScopeView } from "@/components/seat-scope";
-import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { m } from "@/paraglide/messages";
 import { AutomationHere } from "@/sections/Automation";
@@ -260,23 +259,19 @@ const SOURCES: ScannerInfo[] = [
 export const AnnasSources: Story = {
 	render: () => (
 		<Page tab="sources">
-			<Card>
-				<CardContent className="space-y-8">
-					<SourcesCard
-						sources={SOURCES}
-						available={[]}
-						running={new Set(["steam", "lutris", "heroic"])}
-						busyId={null}
-						installBusy={false}
-						activeFilter={null}
-						onToggle={noop}
-						onFilter={noop}
-						onSettings={noop}
-						onInstall={noop}
-						profile={{ name: "Anna", ownerName: "Enrico" }}
-					/>
-				</CardContent>
-			</Card>
+			<SourcesCard
+				sources={SOURCES}
+				available={[]}
+				running={new Set(["steam", "lutris", "heroic"])}
+				busyId={null}
+				installBusy={false}
+				activeFilter={null}
+				onToggle={noop}
+				onFilter={noop}
+				onSettings={noop}
+				onInstall={noop}
+				profile={{ name: "Anna", ownerName: "Enrico" }}
+			/>
 		</Page>
 	),
 };
