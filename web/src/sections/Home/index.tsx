@@ -4,8 +4,9 @@ import {
 	useQueries,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { toast } from "@unom/ui/toast";
-import { History } from "lucide-react";
+import { History, Plus } from "lucide-react";
 import { motion } from "motion/react";
 import type { FC } from "react";
 import { inSeat } from "@/api/fetcher";
@@ -19,6 +20,7 @@ import {
 	getLibraryPage,
 } from "@/api/gen/library/library";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
+import type { HostInfo } from "@/api/gen/model/hostInfo";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import type { SessionRow } from "@/api/gen/model/sessionRow";
@@ -45,6 +47,7 @@ import { isFullSeat, seatClient } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import type { AvatarProfile } from "@/components/profile-avatar";
 import { ROW_GAP, staggerProps } from "@/components/stagger";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiErrorMessage } from "@/lib/errors";
 import { seatDetail } from "@/lib/host-messages";
@@ -52,6 +55,8 @@ import { useLocale } from "@/lib/i18n";
 import { usePerson } from "@/lib/person";
 import { m } from "@/paraglide/messages";
 import { ActivityCard } from "@/sections/Activity";
+import { connectLink } from "@/sections/Host/ConnectQr";
+import { CopyRow } from "@/sections/Host/CopyRow";
 import { PersonHome } from "@/sections/Person/Home";
 import { Attention } from "./Attention";
 import {
@@ -255,6 +260,25 @@ const SeatSessions: FC<{
 	);
 };
 
+/** Nothing streams: the address a device types, its QR code, and pairing a new device. */
+const IdleConnect: FC<{ host: HostInfo }> = ({ host }) => (
+	<div className="flex flex-wrap items-end gap-3">
+		<div className="min-w-0 max-w-md flex-1 basis-64">
+			<CopyRow
+				label={m.connect_address()}
+				value={host.local_ip}
+				qr={connectLink(host)}
+			/>
+		</div>
+		<Button asChild variant="outline">
+			<Link to="/devices" search={{ pair: true }}>
+				<Plus className="size-4" />
+				{m.pairing_native_title()}
+			</Link>
+		</Button>
+	</div>
+);
+
 /** Home: the operator's, or in a person's own console, their own page. */
 export const SectionHome: FC = () => {
 	const me = usePerson();
@@ -402,6 +426,7 @@ const OperatorHome: FC = () => {
 			attention={<Attention audio={s?.audio} />}
 			status={status}
 			live={live}
+			idle={host.data && <IdleConnect host={host.data} />}
 			now={
 				s && (
 					<>

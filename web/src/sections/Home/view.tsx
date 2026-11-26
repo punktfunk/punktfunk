@@ -13,18 +13,20 @@ import { m } from "@/paraglide/messages";
  * stories fill the same slots.
  *
  * `attention` sits above the status query on purpose: a host whose `/status` fails is exactly
- * when its health checks are worth reading. With nothing live, *Now* says so; the past sessions
- * are a card of their own.
+ * when its health checks are worth reading. With nothing live, *Now* says so and offers `idle`,
+ * the way in for a device; the past sessions are a card of their own.
  */
 export const HomeView: FC<{
 	attention?: ReactNode;
 	status: Loadable<RuntimeStatus>;
 	live: boolean;
 	now: ReactNode;
+	/** Under "Nothing is streaming": how a device connects. */
+	idle?: ReactNode;
 	/** The last few sessions, as a card; absent while the host remembers none. */
 	sessions?: ReactNode;
 	recent?: ReactNode;
-}> = ({ attention, status, live, now, sessions, recent }) => (
+}> = ({ attention, status, live, now, idle, sessions, recent }) => (
 	<Section maxWidth={false}>
 		<div className="flex flex-col gap-card">
 			<h1 className="text-2xl font-semibold">{m.nav_home()}</h1>
@@ -48,9 +50,12 @@ export const HomeView: FC<{
 								{now}
 							</motion.ul>
 						) : (
-							<p className="text-sm text-muted-foreground">
-								{m.home_now_empty()}
-							</p>
+							<div className="space-y-4">
+								<p className="text-sm text-muted-foreground">
+									{m.home_now_empty()}
+								</p>
+								{idle}
+							</div>
 						)}
 					</QueryState>
 				</CardContent>

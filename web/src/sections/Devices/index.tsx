@@ -1,5 +1,6 @@
+import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { KeyRound, Plus, Smartphone } from "lucide-react";
-import { type FC, useCallback, useState } from "react";
+import { type FC, useCallback, useEffect, useState } from "react";
 import { useGetHostInfo, useGetStatus } from "@/api/gen/host/host";
 import { useGetPairingStatus } from "@/api/gen/pairing/pairing";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,8 @@ import { PendingRow, usePendingDevices, WaitingRow } from "./PendingDevices";
 import { isStreaming } from "./pairedRows";
 import { DevicesView } from "./view";
 
+const route = getRouteApi("/devices");
+
 /**
  * Devices: pair a device, see what is paired. One list, one Pair sheet; the approve, access and
  * display dialogs mount once here.
@@ -26,6 +29,12 @@ export const SectionDevices: FC = () => {
 	const clearBound = useCallback(() => setBoundTo(null), []);
 	const native = useNativePairing(boundTo, clearBound);
 	const [sheet, setSheet] = useState<"app" | "moonlight" | null>(null);
+	// Arriving with `?pair` opens the sheet; closing it drops the flag, so a reload does not reopen.
+	const { pair } = route.useSearch();
+	const navigate = useNavigate();
+	useEffect(() => {
+		if (pair) setSheet("app");
+	}, [pair]);
 	// Moonlight pairs only while the host runs the compat planes (`--gamestream`, off by default).
 	const host = useGetHostInfo();
 	const gamestream = host.data?.gamestream === true;
@@ -126,6 +135,8 @@ export const SectionDevices: FC = () => {
 				onOpenChange={(open) => {
 					if (open) return;
 					setSheet(null);
+					if (pair)
+						void navigate({ to: "/devices", search: {}, replace: true });
 					// A bound window that was never armed has nothing left to name.
 					if (!native.pin) clearBound();
 				}}
