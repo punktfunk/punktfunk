@@ -38,8 +38,6 @@ pub(crate) struct Restart<'a> {
     pub release: bool,
     /// Dial at the mode the connector ended on: a mid-session reconfigure lives only there.
     pub connector_mode: bool,
-    /// The player had the mic muted: the next session starts with it, before its uplink runs.
-    pub keep_mic_muted: bool,
     /// The console's `Reconnecting` line.
     pub phase: &'a str,
 }
@@ -50,7 +48,6 @@ pub(crate) struct RestartFacts {
     pub redials: u32,
     /// The player cancelled the dial from the console.
     pub canceled: bool,
-    pub keep_mic_muted: bool,
     /// The params' settle window, set once a wake re-dial opened it.
     pub settle_until: Option<Instant>,
     /// The codecs the params already exclude.
@@ -63,7 +60,6 @@ impl RestartFacts {
         RestartFacts {
             redials: st.redials,
             canceled: st.canceled,
-            keep_mic_muted: st.handle.mic.muted(),
             settle_until: st.params.settle_until,
             exclude_codecs: st.params.exclude_codecs,
             now: Instant::now(),
@@ -94,7 +90,6 @@ pub(crate) fn restart_for<'a>(ev: &'a SessionEvent, f: &RestartFacts) -> Option<
                 },
                 release: lost,
                 connector_mode: true,
-                keep_mic_muted: f.keep_mic_muted,
                 phase: pf_l10n::client::notice_reconnecting(),
             })
         }
@@ -104,7 +99,6 @@ pub(crate) fn restart_for<'a>(ev: &'a SessionEvent, f: &RestartFacts) -> Option<
             },
             release: true,
             connector_mode: false,
-            keep_mic_muted: f.keep_mic_muted,
             phase: pf_l10n::client::notice_host_not_ready_retry(),
         }),
         // Widened, never replaced: a second fallback must not re-offer what the first ruled out.
@@ -119,7 +113,6 @@ pub(crate) fn restart_for<'a>(ev: &'a SessionEvent, f: &RestartFacts) -> Option<
             },
             release: true,
             connector_mode: true,
-            keep_mic_muted: f.keep_mic_muted,
             phase: msg,
         }),
         _ => None,
@@ -150,7 +143,6 @@ mod tests {
         let at = |redials| RestartFacts {
             redials,
             canceled: false,
-            keep_mic_muted: false,
             settle_until: None,
             exclude_codecs: 0,
             now,
@@ -167,7 +159,6 @@ mod tests {
                 },
                 release,
                 connector_mode: true,
-                keep_mic_muted: false,
                 phase: LOST,
             })
         };
@@ -176,7 +167,6 @@ mod tests {
                 dial: Dial::Wake { settle_until },
                 release: true,
                 connector_mode: false,
-                keep_mic_muted: false,
                 phase: WAKE,
             })
         };
@@ -185,7 +175,6 @@ mod tests {
                 dial: Dial::Fallback { exclude },
                 release: true,
                 connector_mode: true,
-                keep_mic_muted: false,
                 phase: FELL_BACK,
             })
         };
@@ -203,10 +192,6 @@ mod tests {
         };
         let open = now + s(3);
         let late = now + WAKE_SETTLE + s(5);
-        let muted = RestartFacts {
-            keep_mic_muted: true,
-            ..at(0)
-        };
 
         let rows = [
             (
@@ -289,15 +274,6 @@ mod tests {
                 &codec,
                 cancelled(0),
                 None,
-            ),
-            (
-                "a muted mic rides the restart",
-                &lost,
-                muted,
-                redial(0, 1, true).map(|r| Restart {
-                    keep_mic_muted: true,
-                    ..r
-                }),
             ),
         ];
         for (name, ev, facts, want) in rows {

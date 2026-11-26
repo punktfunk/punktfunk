@@ -76,7 +76,8 @@ struct LaunchHoldTarget: Equatable {
 }
 
 /// The values the views read for one session, each documented on its `SessionModel` property.
-/// `disconnect` assigns a fresh one, so the next session starts with no hold, hint or mute.
+/// `disconnect` assigns a fresh one, so the next session starts with no hold or hint. The mic
+/// mute is the exception: `beginStreaming` reads it back from `DefaultsKey.micMuted`.
 struct SessionUI {
     var phase: SessionPhase = .idle
     var launchHold: LaunchHoldTarget?
@@ -219,8 +220,9 @@ final class SessionModel: ObservableObject {
     /// HUD's "click to capture" / "⌘⎋ releases" hint).
     var mouseCaptured: Bool { get { ui.mouseCaptured } set { ui.mouseCaptured = newValue } }
     /// The USER's in-stream mic mute (the HUD button, the Stream menu's ⌃⌥⇧A, the captured-state
-    /// chord, the iOS mic disc) — session state, deliberately NOT persisted: a mute is for the
-    /// people in the room right now, so every new session starts live if the mic is on at all.
+    /// chord, the iOS mic disc). `setMicMuted` saves each change as `DefaultsKey.micMuted` and
+    /// `beginStreaming` starts the next session from it, so a player who muted stays muted on
+    /// this device until they unmute.
     /// One of the two inputs to the effective mute; `isBackgrounded` is the other, and
     /// `applyMicMute` composes them — a user mute survives a trip through the background, and the
     /// background's privacy mute never clears the user's choice. Local and instant: it gates
@@ -704,7 +706,7 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    // MARK: - Microphone mute (in-stream, per session)
+    // MARK: - Microphone mute (in-stream, remembered)
 
     /// Whether this session has a mic uplink there is any point in muting (`SessionMic`): drives
     /// whether the mute control is offered.
@@ -715,17 +717,18 @@ final class SessionModel: ObservableObject {
     }
 
     /// Flip the user's mute. The in-stream surfaces (HUD button, Stream menu, ⌃⌥⇧A while
-    /// captured, the iOS mic disc, the dial) all land here.
+    /// captured, the iOS mic disc, the dial) all land here, and so reach `setMicMuted`'s save.
     func toggleMicMute() {
         setMicMuted(!micMuted)
     }
 
-    /// Set the user's mute, and say so for a moment in either direction. Ignored when the
-    /// session has no microphone, so a stale surface can't raise a "muted" notice over a
-    /// session that was never sending anything.
+    /// Set the user's mute, save it for the next session, and say so for a moment in either
+    /// direction. Ignored when the session has no microphone, so a stale surface can't raise a
+    /// "muted" notice over a session that was never sending anything, nor save a mute for it.
     func setMicMuted(_ muted: Bool) {
         guard micAvailable, micMuted != muted else { return }
         micMuted = muted
+        UserDefaults.standard.set(muted, forKey: DefaultsKey.micMuted)
         applyMicMute()
         flash(\.micMute, muted)
     }
@@ -1228,6 +1231,11 @@ final class SessionModel: ObservableObject {
         // Devices and the mic switch come from the session's resolved settings ("" = system
         // default), so a preset that turns the mic on applies to the uplink too.
         let audio = SessionAudio(connection: conn)
+        // The saved mute reaches the UI and the engine's latch before any engine exists, so no
+        // audio leaves ahead of it, and the mic permission prompt can answer whenever.
+        micMuted = micAvailable && UserDefaults.standard.bool(forKey: DefaultsKey.micMuted)
+        audio.setMicMuted(SessionMic.muted(user: micMuted, backgrounded: isBackgrounded))
+        if micMuted { flash(\.micMute, true) }
         audio.start(
             speakerUID: settings.speakerUID,
             micUID: settings.micUID,

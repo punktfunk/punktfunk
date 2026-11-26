@@ -626,8 +626,8 @@ object NativeBridge {
      *
      * Sticky for the SESSION — the flag lives on the handle, not on the capture — so the mic
      * restart a surface recreate performs comes back muted, with no window for an unmuted frame to
-     * escape; a fresh session always starts unmuted. Nothing here is persisted. No-op on `0`.
-     * Cheap (one atomic store); UI-safe.
+     * escape. A fresh handle starts unmuted; the app sets the mute the player last left before it
+     * starts the mic. Nothing here is persisted. No-op on `0`. Cheap (one atomic store); UI-safe.
      *
      * One honest consequence of keeping the stream open: the platform's own recording indicator
      * stays lit while muted, because the mic really is still open. What stops is the encode and the

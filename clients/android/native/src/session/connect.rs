@@ -833,7 +833,7 @@ fn connect(req: ConnectRequest, prompts_unlock: bool, unlock: Option<ProfileUnlo
                 mic: Default::default(),
                 #[cfg(target_os = "android")]
                 pad_audio: Default::default(),
-                // A fresh session is never muted (mute is per-session UI state, not a setting).
+                // The app seeds the mute the player last left (`nativeSetMicMuted`) before the capture opens.
                 mic_muted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 access_seq: std::sync::atomic::AtomicU32::new(0),
                 // Reported by Kotlin at `surfaceCreated` and on every resize after it.

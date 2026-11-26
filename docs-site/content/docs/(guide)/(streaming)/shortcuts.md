@@ -59,9 +59,9 @@ for Alt+Tab. **Ctrl+Space** reaches the host from Android 13 on.
 
 ### Muting your microphone
 
-The mute lasts for the current stream and stops only the sending, so unmuting is instant. Each
-switch shows **Microphone muted** or **Microphone live** over the stream for a few seconds, with
-the stats overlay on or off.
+The mute stays until you unmute, and the next stream on this device starts as you left it. It
+stops only the sending, so unmuting is instant. Each switch shows **Microphone muted** or
+**Microphone live** over the stream for a few seconds, with the stats overlay on or off.
 
 - Keyboard: the shortcut in the [table above](#keyboard-shortcuts).
 - Controller on Android: **Select + Y**, or a DualSense's own **Mute** button.

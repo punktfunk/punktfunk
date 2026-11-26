@@ -330,8 +330,9 @@ struct Shell {
     /// Last audio-mute mask drawn and when it changed: a local mute's badge is timed off it.
     audio_mute_at: Instant,
     audio_mute_seen: u8,
-    /// The microphone's mute as last drawn, and when the player switched it in this stream.
-    /// `None` until they do: a stream starts unmuted and says nothing.
+    /// The microphone's mute as last drawn, and when it last changed in this stream. `None`
+    /// until it does: a stream that starts live says nothing, and one that starts muted (the
+    /// player's saved mute) says so once its uplink runs.
     mic_muted_seen: bool,
     mic_muted_at: Option<Instant>,
     /// The pad whose shortcut opened the ring; `None` for a keyboard, touch or closed ring.

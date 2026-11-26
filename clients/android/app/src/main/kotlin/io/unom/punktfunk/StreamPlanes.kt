@@ -120,7 +120,7 @@ internal class StreamPlanes(
                     // Whether a capture opened, not the setting, puts the mute control on
                     // screen. A restart comes back muted if the player muted: the flag lives
                     // on the session handle.
-                    ui.micRunning = NativeBridge.nativeMicActive(handle)
+                    ui.micStarted(NativeBridge.nativeMicActive(handle))
                 }
             }
         }
@@ -170,7 +170,7 @@ internal class StreamPlanes(
     fun stopMic() {
         releaseMicEffects()
         NativeBridge.nativeStopMic(handle)
-        ui.micRunning = false
+        ui.micStopped()
     }
 
     /** Leaving the stream: stops the mic, audio and decode threads for good. The caller closes after. */

@@ -581,10 +581,6 @@ impl Shell {
         self.end_stream(stream, SessionPhase::Reconnecting(r.phase));
         let mut next = self.start_stream(params, force_software, None);
         next.redials = redials;
-        // The player's mute rides along: its uplink reads the flag once it runs.
-        if r.keep_mic_muted {
-            next.handle.mic.set_muted(true);
-        }
         *stream = Some(next);
     }
 
@@ -1085,7 +1081,14 @@ impl Shell {
                 self.capture_off();
             }
             RingCommand::ToggleMic => {
-                st.handle.mic.toggle();
+                // The one toggle: every ring slot, shortcut and pad chord lands here, and the
+                // next session starts from the mute it saves.
+                if let Some(muted) = st.handle.mic.toggle() {
+                    pf_client_core::trust::Settings::update(|s| {
+                        s.set_mic_muted(muted);
+                        true
+                    });
+                }
             }
             RingCommand::ToggleScrollInvert => {
                 if let Some(c) = st

@@ -145,6 +145,8 @@ fun StreamScreen(
         StreamUi(
             handle, initialAccess, initialSettings.statsVerbosity, initialSettings.invertScroll,
             readTouchpad = { HostTouchpad.read(handle) },
+            initialMicMuted = MicMuteMemory.muted(context),
+            keepMicMuted = { MicMuteMemory.keep(context, it) },
         ).also { it.seed() }
     }
 
