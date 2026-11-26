@@ -110,6 +110,10 @@ public enum DefaultsKey {
     /// sends. The row shows it as the rate it needs, never as bits per pixel.
     public static let pyrowaveBpp = "punktfunk.pyrowaveBpp"
     public static let micEnabled = "punktfunk.micEnabled"
+    /// The in-stream mic mute as the player last left it, on this device. Not a setting: the mute
+    /// button writes it and a new session with the mic on starts from it, so a player who muted
+    /// does not have to mute again. "Stream microphone" off still sends no mic at all.
+    public static let micMuted = "punktfunk.micMuted"
     /// visionOS: the room places the stream's audio at its window (on, the platform's own
     /// default); off plays the game's mix straight to the ears. This device's, never a preset's.
     public static let spatialAudio = "punktfunk.spatialAudio"
@@ -433,7 +437,8 @@ public enum SettingDefault {
 
     /// What Reset removes, so each key reads as its default again: every setting, and the
     /// legacy overlay switch the tier migrates from. Hosts, presets, the default host, the
-    /// last pad, the library's place and the muted VRR notice are records and stay.
+    /// last pad, the last mic mute, the library's place and the muted VRR notice are records and
+    /// stay.
     public static let resetKeys: [String] = [
         DefaultsKey.streamWidth, DefaultsKey.streamHeight, DefaultsKey.streamHz,
         DefaultsKey.matchWindow, DefaultsKey.renderScale, DefaultsKey.videoFit,

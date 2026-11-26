@@ -60,9 +60,10 @@ pub struct FrameCtx<'a> {
     pub access: Option<&'a str>,
     /// Transient access toast. Occupies the hint slot while up; the run loop owns timing.
     pub notice: Option<&'a str>,
-    /// The player just muted the microphone (`true`) or opened it again
-    /// ([`punktfunk_core::client::mic_mute_notice`]); `None` otherwise. Independent of the
-    /// stats tier, so it still shows with chrome off.
+    /// The microphone just became muted (`true`) or open again
+    /// ([`punktfunk_core::client::mic_mute_notice`]), by the player or by a saved mute at the
+    /// session's start; `None` otherwise. Independent of the stats tier, so it still shows with
+    /// chrome off.
     pub mic_notice: Option<bool>,
     /// The stream's mute sentence ([`punktfunk_core::client::audio_mute_notice`]); `None`
     /// while it is audible, or once a local mute has been read. A host mute stands.

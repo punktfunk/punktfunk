@@ -427,9 +427,9 @@ pub fn codec_fallbacks() -> u64 {
 
 /// In-stream microphone mute, shared by the embedder's toggle and the capture
 /// callback. Two flags: `live` is raised only once the uplink is running, so the
-/// indicator tracks a real mute surface. Per session and never persisted — a mute
-/// is a moment, not a preference; a session the player starts begins unmuted, and
-/// a dial the client makes on the player's behalf carries the mute through [`Self::set_muted`].
+/// indicator tracks a real mute surface. [`start`] seeds `muted` from the mute the
+/// player last left ([`Settings::mic_muted`](crate::trust::Settings::mic_muted)); the embedder
+/// saves each toggle there.
 #[derive(Clone, Default)]
 pub struct MicControl {
     muted: Arc<AtomicBool>,
@@ -456,7 +456,7 @@ impl MicControl {
         Some(next)
     }
 
-    /// The mute a redial carries in: written before the uplink runs, read by it once it
+    /// The mute a session starts from: written before the uplink runs, read by it once it
     /// does. `muted` keeps reporting `false` until then, as the indicator should.
     pub fn set_muted(&self, muted: bool) {
         self.muted.store(muted, Ordering::Relaxed);
@@ -493,6 +493,8 @@ pub fn start(params: SessionParams) -> SessionHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_w = stop.clone();
     let mic = MicControl::default();
+    // Before the session thread exists, so no frame leaves ahead of the player's mute.
+    mic.set_muted(crate::trust::Settings::load().mic_muted());
     let mic_w = mic.clone();
     let thread = std::thread::Builder::new()
         .name("punktfunk-session".into())
@@ -2485,9 +2487,9 @@ mod tests {
         assert_eq!(mic.toggle(), None);
     }
 
-    /// A redial carries the player's mute in before its uplink runs; the uplink reads it.
+    /// A session starts from the player's saved mute before its uplink runs; the uplink reads it.
     #[test]
-    fn a_carried_mute_waits_for_the_uplink() {
+    fn a_saved_mute_waits_for_the_uplink() {
         let mic = MicControl::default();
         mic.set_muted(true);
         assert!(!mic.muted(), "nothing live, nothing to show");

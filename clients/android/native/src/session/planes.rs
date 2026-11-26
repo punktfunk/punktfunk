@@ -852,9 +852,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStopPadAudi
 /// relaxed load per frame there, and takes effect on the very next 10 ms boundary.
 ///
 /// Sticky for the SESSION (the flag lives on the handle, not on the capture), so the mic restart a
-/// surface recreate performs comes back muted with no window for an unmuted frame to escape; a
-/// fresh session always starts unmuted. No-op on `0`. Not android-gated — pure `jni` + an atomic
-/// store, so it links on the host build too.
+/// surface recreate performs comes back muted with no window for an unmuted frame to escape. The
+/// app seeds it at session start from the mute the player last left. No-op on `0`. Not
+/// android-gated — pure `jni` + an atomic store, so it links on the host build too.
 ///
 /// One honest consequence of keeping the stream open: the platform's own recording indicator stays
 /// lit while muted, because the mic really is still open. What stops is the encode and the send —

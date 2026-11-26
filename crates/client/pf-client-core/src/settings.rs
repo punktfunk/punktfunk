@@ -438,10 +438,12 @@ pub const GAMEPAD_UI_KEY: &str = "gamepad_ui_enabled";
 pub const GAMEPAD_UI_MODE_KEY: &str = "gamepad_ui_mode";
 
 /// [`Settings::extra`] records rather than settings, which [`Settings::reset_to_defaults`] keeps:
-/// the GTK window's size, the library shelf it last showed, and each host's favorites.
+/// the GTK window's size, the library shelf it last showed, each host's favorites, and the mic
+/// mute the player last left ([`Settings::mic_muted`]).
 pub const SHELL_WINDOW_KEY: &str = "shell_window";
 pub const LIBRARY_SHELF_KEY: &str = "library_shelf";
 pub const FAVORITES_PREFIX: &str = "favorites.";
+pub const MIC_MUTED_KEY: &str = "mic_muted";
 
 /// The rate Fixed stores under PyroWave, kbps. The host pins the session at the quality, so
 /// only "not zero" counts. If the host picks another codec the session is Automatic
@@ -706,6 +708,18 @@ impl Settings {
         }
     }
 
+    /// The in-stream mic mute as the player last left it on this device. Not a setting: the
+    /// toggle saves it ([`set_mic_muted`](Self::set_mic_muted)) and a new session starts from it.
+    /// With `mic_enabled` off the session has no mic, whatever this holds.
+    pub fn mic_muted(&self) -> bool {
+        self.extra_bool(MIC_MUTED_KEY, false)
+    }
+
+    pub fn set_mic_muted(&mut self, muted: bool) {
+        self.extra
+            .insert(MIC_MUTED_KEY.into(), serde_json::Value::Bool(muted));
+    }
+
     pub fn set_gamepad_ui_enabled(&mut self, on: bool) {
         self.extra
             .insert(GAMEPAD_UI_KEY.into(), serde_json::Value::Bool(on));
@@ -722,7 +736,8 @@ impl Settings {
     /// trust and presets live in other files.
     pub fn reset_to_defaults(&mut self) {
         let record = |k: &str| {
-            k.starts_with(FAVORITES_PREFIX) || k == SHELL_WINDOW_KEY || k == LIBRARY_SHELF_KEY
+            k.starts_with(FAVORITES_PREFIX)
+                || [SHELL_WINDOW_KEY, LIBRARY_SHELF_KEY, MIC_MUTED_KEY].contains(&k)
         };
         let mut extra = std::mem::take(&mut self.extra);
         extra.retain(|k, _| record(k));
@@ -869,7 +884,7 @@ impl Default for Settings {
 impl Settings {
     fn path() -> Result<PathBuf> {
         // GTK settings file on Linux, WinUI on Windows. Desktop shells and the session
-        // console write it; a plain `--connect` stream only reads.
+        // console write it; a plain `--connect` stream only reads, bar the mic mute it saves.
         #[cfg(windows)]
         return Ok(config_dir()?.join("client-windows-settings.json"));
         #[cfg(not(windows))]
@@ -1254,6 +1269,7 @@ mod tests {
         changed.set_fullscreen_always(true);
         changed.set_gamepad_ui_enabled(false);
         changed.set_gamepad_ui_always(true);
+        changed.set_mic_muted(true);
         for (key, value) in [
             ("host_sort", "name".into()),
             ("frob_mode", "fancy".into()),
@@ -1276,6 +1292,10 @@ mod tests {
             Some(serde_json::json!([1200, 800, 0]))
         );
         assert_eq!(kept(LIBRARY_SHELF_KEY), Some("ab12".into()));
+        assert!(
+            reset.mic_muted(),
+            "the last mute is a record, not a setting"
+        );
         let fresh = Settings {
             default_host: Some("desk".into()),
             last_window_w: 1600,
@@ -1284,10 +1304,30 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(reset, fresh, "every setting is back to its default");
-        assert_eq!(reset.extra.len(), 3, "the extra settings are gone");
+        assert_eq!(reset.extra.len(), 4, "the extra settings are gone");
         assert!(!reset.fullscreen_always());
         assert_eq!(reset.gamepad_ui(), GamepadUi::WithController);
         assert_eq!(load_json_or_default::<Settings>(&path), reset, "and saved");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The mic mute a session starts from is the one the last toggle saved: unmuted on a store
+    /// that never held one, and read back through the file.
+    #[test]
+    fn the_saved_mic_mute_reads_back() {
+        let _guard = crate::trust::store_health_lock();
+        let path = crate::presets::tests::scratch_dir("settings-mic-muted").join("settings.json");
+        assert!(!Settings::default().mic_muted(), "a fresh store is live");
+        Settings::update_at(&path, |s| {
+            s.set_mic_muted(true);
+            true
+        });
+        assert!(load_json_or_default::<Settings>(&path).mic_muted());
+        Settings::update_at(&path, |s| {
+            s.set_mic_muted(false);
+            true
+        });
+        assert!(!load_json_or_default::<Settings>(&path).mic_muted());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

@@ -22,6 +22,11 @@ internal class StreamUi(
     private val applyInvertScroll: (Boolean) -> Boolean = { NativeBridge.nativeSetInvertScroll(handle, it) },
     /** The stream passes [HostTouchpad.read]; without it no source sends frames. */
     private val readTouchpad: () -> HostTouchpad = { HostTouchpad.NONE },
+    /** The mute the player left last time ([MicMuteMemory]); the session starts from it. */
+    initialMicMuted: Boolean = false,
+    private val applyMicMuted: (Boolean) -> Unit = { NativeBridge.nativeSetMicMuted(handle, it) },
+    /** Saves each mute change for the next session. */
+    private val keepMicMuted: (Boolean) -> Unit = {},
 ) {
     var invertScroll by mutableStateOf(initialInvertScroll)
         private set
@@ -31,10 +36,15 @@ internal class StreamUi(
     var touchpad by mutableStateOf(HostTouchpad.NONE)
         private set
 
-    /** Session start: the invert flag reaches core, then the touchpad is read. */
+    /**
+     * Session start: the invert flag reaches core, then the touchpad is read. A saved mute
+     * reaches the native flag here, before [StreamPlanes] opens the capture, so no audio leaves
+     * ahead of it.
+     */
     fun seed() {
         applyInvertScroll(invertScroll)
         touchpad = readTouchpad()
+        if (micMuted) applyMicMuted(true)
     }
 
     fun setScrollInverted(inverted: Boolean) {
@@ -52,15 +62,36 @@ internal class StreamUi(
     var accessRemaining by mutableIntStateOf(initialAccess?.getOrNull(1) ?: 0)
 
     /**
-     * In-stream mic mute. Per SESSION and never persisted: a new stream always starts unmuted. The
-     * authoritative flag lives on the native handle, which is why a mute survives the mic
-     * stop/start a surface recreate performs — this is the UI's mirror of it.
+     * In-stream mic mute. [mute] saves each change as [MicMuteMemory] and the next session starts
+     * from it. The authoritative flag lives on the native handle, which is why a mute survives the
+     * mic stop/start a surface recreate performs — this is the UI's mirror of it.
      */
-    var micMuted by mutableStateOf(false)
+    var micMuted by mutableStateOf(initialMicMuted)
         private set
 
     /** Whether a capture is actually RUNNING, not merely wanted — from what nativeMicActive reports. */
     var micRunning by mutableStateOf(false)
+        private set
+
+    /** Whether this session has told the player its saved mute; a surface recreate reopens the mic. */
+    private var toldSavedMute = false
+
+    /**
+     * A capture start's outcome. The session's first running capture under a saved mute shows the
+     * mute hint once, as a toggle would.
+     */
+    fun micStarted(running: Boolean) {
+        micRunning = running
+        if (running && micMuted && !toldSavedMute) {
+            toldSavedMute = true
+            micHint = R.string.notice_mic_muted
+        }
+    }
+
+    /** The capture stopped; the mute stays on the native handle. */
+    fun micStopped() {
+        micRunning = false
+    }
 
     /** Transient confirmation of a mic toggle, whichever control made it: a string resource, or null for nothing. */
     var micHint by mutableStateOf<Int?>(null)
@@ -103,12 +134,13 @@ internal class StreamUi(
     var audioMute by mutableIntStateOf(0)
 
     /**
-     * The one place mute is toggled: Compose state, the native flag and the hint that says so,
-     * always together. The chord and the dial both come through here.
+     * The one place mute is toggled: Compose state, the native flag, the saved mute and the hint
+     * that says so, always together. The chord and the dial both come through here.
      */
     fun mute(muted: Boolean) {
         micMuted = muted
-        NativeBridge.nativeSetMicMuted(handle, muted)
+        applyMicMuted(muted)
+        keepMicMuted(muted)
         micHint = if (muted) R.string.notice_mic_muted else R.string.notice_mic_live
     }
 
@@ -145,3 +177,21 @@ internal class StreamUi(
 /** The Access chip's time left in the app's language: "1 h 58 min", "12 min", "45 s". */
 internal fun Context.accessRemaining(secs: Int): String =
     SessionAccess.remaining(secs).let { getString(it.message, *it.args.toTypedArray()) }
+
+/**
+ * The in-stream mic mute as the player last left it, on this device. Not a setting: [StreamUi.mute]
+ * writes it and a new stream starts from it. Stream microphone off still opens no capture.
+ */
+internal object MicMuteMemory {
+    private const val PREFS = "punktfunk_mic_mute"
+    private const val MUTED = "muted"
+
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun muted(context: Context): Boolean = prefs(context).getBoolean(MUTED, false)
+
+    fun keep(context: Context, muted: Boolean) {
+        prefs(context).edit().putBoolean(MUTED, muted).apply()
+    }
+}

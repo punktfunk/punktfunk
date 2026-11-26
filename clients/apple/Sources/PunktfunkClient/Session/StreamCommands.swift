@@ -74,8 +74,8 @@ struct StreamCommands: Commands {
             .keyboardShortcut(chord("q"))
             .disabled(session?.isStreaming != true)
             // Mic mute: local and instant, it gates capture on this device and never asks the host.
-            // Per session, so it starts off every time. Greyed when the session sends no microphone
-            // (mic off in Settings, or a preset that turns it off).
+            // The next session starts as this leaves it. Greyed when the session sends no
+            // microphone (mic off in Settings, or a preset that turns it off).
             Button(session?.micMuted == true ? L10n.appleMenuUnmuteMicrophone : L10n.appleMenuMuteMicrophone) {
                 session?.toggleMicMute()
             }
