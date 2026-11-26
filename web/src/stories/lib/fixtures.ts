@@ -516,6 +516,7 @@ export const nativeClients: NativeClient[] = [
 		granted_unix: accessNowUnix - 30 * 86400,
 		expires_unix: null,
 		until_disconnect: false,
+		last_seen_unix: accessNowUnix - 2 * 3600,
 	},
 	{
 		name: "living-room-tv",
@@ -527,6 +528,7 @@ export const nativeClients: NativeClient[] = [
 		// 1 h 58 min out — renders as the design's "Controller · 2 h left".
 		expires_unix: accessNowUnix + 7080,
 		until_disconnect: false,
+		last_seen_unix: accessNowUnix - 3 * 86400,
 	},
 	// A guest admitted for the evening: no deadline, the record goes when they do.
 	{
@@ -538,6 +540,7 @@ export const nativeClients: NativeClient[] = [
 		granted_unix: accessNowUnix - 900,
 		expires_unix: null,
 		until_disconnect: true,
+		last_seen_unix: accessNowUnix - 840,
 	},
 ];
 

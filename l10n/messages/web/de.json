@@ -295,6 +295,7 @@
 	"pairing_native_devices": "Gekoppelte Geräte",
 	"devices_col_device": "Gerät",
 	"devices_col_access": "Zugriff",
+	"devices_last_seen": "Zuletzt verbunden {when}",
 	"devices_col_display": "Bildschirm",
 	"pairing_native_empty": "Noch keine Geräte gekoppelt.",
 	"pairing_native_unpair_confirm": "Dieses Gerät entkoppeln?",

@@ -24,6 +24,7 @@ import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { fmtAgo } from "@/lib/format";
 import { widensAccess } from "@/lib/password-gates";
 import { m } from "@/paraglide/messages";
 import {
@@ -305,7 +306,8 @@ export function usePairedDevices() {
 	};
 }
 /**
- * One paired device. Its protocol and fingerprint ride the details line. What can be changed is
+ * One paired device. Its details line says how it pairs and when it last connected, or its
+ * fingerprint where the host has no time for it; the full fingerprint is the line's tooltip. What can be changed is
  * what you click, each with a pencil: the name (a Moonlight device's, whose certificate carries
  * none), the access chip, the display line. Unpair is the row's one button. A Moonlight row
  * carries no access fields and reads "Full (ungoverned)".
@@ -340,11 +342,19 @@ export const PairedRowView: FC<{
 			<Setting label={m.action_rename()} disabled={busy} onClick={onRename}>
 				<span className="truncate font-medium">{r.name || "—"}</span>
 			</Setting>
-			<div className="truncate text-xs text-muted-foreground">
+			<div
+				className="truncate text-xs text-muted-foreground"
+				title={r.fingerprint}
+			>
 				{r.protocol === "native"
 					? m.pairing_protocol_native()
 					: m.pairing_protocol_moonlight()}{" "}
-				· <span className="font-mono">{r.fingerprint.slice(0, 16)}…</span>
+				·{" "}
+				{r.lastSeenUnix ? (
+					m.devices_last_seen({ when: fmtAgo(r.lastSeenUnix, nowUnix) })
+				) : (
+					<span className="font-mono">{r.fingerprint.slice(0, 16)}…</span>
+				)}
 			</div>
 		</div>
 		<div className="order-2 justify-self-end md:order-5">
