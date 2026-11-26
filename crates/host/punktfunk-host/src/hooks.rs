@@ -32,6 +32,10 @@ fn default_timeout_s() -> u32 {
     DEFAULT_TIMEOUT_S
 }
 
+/// The kinds a hook may hold: the launch, which plugins hold too
+/// ([`crate::plugin_host::registry::STAGES`]), and the sleep ([`crate::sleep_watch`]).
+const HOLD_KINDS: &[&str] = &["game.launching", "host.sleeping"];
+
 /// Operator hook config: `hooks.json` and the `/api/v1/hooks` body.
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug, Default)]
 pub struct HooksConfig {
@@ -58,7 +62,8 @@ pub struct HookEntry {
     /// Minimum interval between firings, in milliseconds. 0 = fire every time. A `hold` ignores it.
     #[serde(default)]
     pub debounce_ms: u64,
-    /// The launch waits for this hook, up to `timeout_s`. Only with `on: game.launching`.
+    /// What `on` names waits for this hook, up to `timeout_s`: the launch for `game.launching`,
+    /// the machine's sleep for `host.sleeping`. No other kind takes it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hold: bool,
     /// Windows: `run` gets the signed-in administrator's full token, with no UAC prompt. Runs
@@ -171,10 +176,10 @@ impl HooksConfig {
             if h.timeout_s == 0 || h.timeout_s > MAX_TIMEOUT_S {
                 return Err(at(&format!("`timeout_s` must be 1–{MAX_TIMEOUT_S}")));
             }
-            if h.hold && !crate::holds::STAGES.contains(&h.on.as_str()) {
+            if h.hold && !HOLD_KINDS.contains(&h.on.as_str()) {
                 return Err(at(&format!(
                     "`hold` needs `on` set to one of: {}",
-                    crate::holds::STAGES.join(", ")
+                    HOLD_KINDS.join(", ")
                 )));
             }
             if h.elevated && h.run.as_deref().is_none_or(|r| r.trim().is_empty()) {
@@ -467,7 +472,7 @@ fn dispatch(
     let kind = ev.kind.name();
     let cfg = runnable();
     for h in &cfg.hooks {
-        // The launch stage runs a hold itself ([`hold`]); firing it here too would run it twice.
+        // Whoever waits on the kind runs its holds ([`hold`]); firing one here would run it twice.
         if h.hold || !crate::events::kind_matches(&h.on, kind) {
             continue;
         }
@@ -531,7 +536,7 @@ pub(crate) fn hold(h: &HookEntry, ev: &crate::events::HostEvent) {
         match exec_path_check(cmd) {
             Err(e) => tracing::error!(cmd = %label, reason = %e, "hook command refused"),
             Ok(()) => {
-                tracing::info!(cmd = %label, kind = ev.kind.name(), "hook: holding the launch");
+                tracing::info!(cmd = %label, kind = ev.kind.name(), "hook: holding");
                 run_hook_process(cmd, &json, &flatten_env(ev), timeout, h.elevated);
             }
         }
@@ -1320,6 +1325,11 @@ mod tests {
         assert!(bad.validate().is_err(), "hold on a kind nothing waits for");
         bad.hooks[0].on = "game.launching".into();
         assert!(bad.validate().is_ok(), "hold on the launch stage");
+        bad.hooks[0].on = "host.sleeping".into();
+        assert!(bad.validate().is_ok(), "hold on the sleep");
+        // A plugin's stage a hook couldn't hold would never run its hook.
+        let plugin_stages = crate::plugin_host::registry::STAGES;
+        assert!(plugin_stages.iter().all(|s| HOLD_KINDS.contains(s)));
 
         let mut elevated = ok.clone();
         elevated.hooks[0].elevated = true;

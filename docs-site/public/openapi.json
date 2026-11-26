@@ -15088,6 +15088,21 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "The machine is about to sleep. A hook that holds this kind finishes first, for as long\nas the OS waits: 5 s on Linux unless raised, about 2 s on Windows, 30 s on macOS.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "host.sleeping"
+                ]
+              }
+            }
           }
         ],
         "description": "Internally tagged `\"kind\": \"<domain>.<verb>\"`, flattened into [`HostEvent`].\nAdditive-only within [`SCHEMA_VERSION`]."
@@ -15963,7 +15978,7 @@
           },
           "hold": {
             "type": "boolean",
-            "description": "The launch waits for this hook, up to `timeout_s`. Only with `on: game.launching`."
+            "description": "What `on` names waits for this hook, up to `timeout_s`: the launch for `game.launching`,\nthe machine's sleep for `host.sleeping`. No other kind takes it."
           },
           "on": {
             "type": "string",

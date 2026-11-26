@@ -92,7 +92,7 @@ punktfunk-host ctl approve 3
 | `rename <FP> <NAME>` | Name a device. |
 | `access <FP> <PRESET>` | `full`, `controller` or `view` — see [Access levels](/docs/access-levels). |
 | `unpair <FP>` | Remove one device. `unpair --all` removes every device on both planes; it asks first, or takes `--yes`. |
-| `stop-session` | Stop the active session. |
+| `stop-session` | Stop the active session. Returns once its display stops streaming, 5 s at most, so `display release` can follow it. |
 | `end-game` | End the launched game. A game [at the desk](/docs/play-on-this-device) stays: it ends only when named, from an app or the web console. |
 | `launch <ID>` | Start a library title on the host's own screen, with no stream: `launch steam:570`. |
 | `display` | The virtual-display policy, every preset, and the live and kept displays. |

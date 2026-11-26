@@ -14,9 +14,6 @@ use std::collections::BTreeMap;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-// `crate::hooks` checks a hook's stage against the same list.
-pub use crate::plugin_host::registry::STAGES;
-
 /// How long a seat's launch waits for its release: the longest plugin hold, plus 10 s for the
 /// relay there and back.
 pub const RELAYED_HOLD: Duration =

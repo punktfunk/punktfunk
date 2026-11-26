@@ -16,8 +16,8 @@ an **event** for each of these, and you react with:
 event stream.
 
 Hooks only observe. They can't veto or delay a connection, a stream or a pairing, and they never
-run in the streaming path. The one exception is a launch: a hook with `hold` set on
-`game.launching` runs before the game starts, and the game waits for it.
+run in the streaming path. Two things wait for a hook with `hold` set: a launch
+(`game.launching`) and the machine's sleep (`host.sleeping`).
 
 ## Hooks
 
@@ -55,7 +55,7 @@ didn't set.
 | `filter` | Optional exact matches, all of which must hold: `fingerprint` (the device), `client` (its name), `plane` (`native`, `gamestream`, `web`, `local`), `app`, `preset` (its name or id), `profile` (its id). |
 | `timeout_s` | Seconds before a command is killed with everything it started. 1–600, default 30. |
 | `debounce_ms` | Minimum gap between firings of this hook. Default 0. |
-| `hold` | Only with `on: game.launching`: the game waits for this hook, up to `timeout_s`. |
+| `hold` | Only with `on: game.launching` or `on: host.sleeping`: the launch or the sleep waits for this hook, up to `timeout_s`. |
 | `elevated` | Windows: runs `run` as administrator. See [Run as administrator](#run-as-administrator). |
 | `hmac_secret_file` | Signs webhooks with `X-Punktfunk-Signature: sha256=<hex HMAC-SHA256 of the body>`. |
 
@@ -141,6 +141,30 @@ own. A launch at the desk is held the same way.
 ```
 
 Plugins hold the same stage: see [Plugin recipes](/docs/developers/writing-plugins/recipes#hold-a-launch).
+
+### Before the host sleeps
+
+A hook on `host.sleeping` with `hold` set runs before the machine sleeps, and the sleep waits for
+it. It fires for every sleep: a power menu, a closed lid, an idle timer, or
+[Sleep host](/docs/host-power) from a device. In the console, pick **Host going to sleep** under
+**When**; **Hold the sleep until this finishes** is ticked for you.
+
+This hook ends the stream and releases a screen
+[kept until released](/docs/virtual-displays#keep-alive) each time the host sleeps:
+
+```json
+{ "on": "host.sleeping", "hold": true,
+  "run": "punktfunk-host ctl stop-session && punktfunk-host ctl display release" }
+```
+
+The operating system limits the wait. Past it the machine sleeps anyway, and the hook finishes
+after the wake.
+
+| Host | The sleep waits |
+|---|---|
+| Linux | 5 s. For more, raise `InhibitDelayMaxSec` in `/etc/systemd/logind.conf`. |
+| Windows | about 2 s |
+| macOS | 30 s |
 
 ### A hook that doesn't fire
 

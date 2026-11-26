@@ -41,6 +41,7 @@ const CONCRETE = {
 	"action.invoked": () => m.activity_action_invoked(),
 	"host.started": () => m.activity_host_started(),
 	"host.stopping": () => m.activity_host_stopping(),
+	"host.sleeping": () => m.activity_host_sleeping(),
 } satisfies Record<HostEventKind, () => string>;
 
 /** Every kind the host publishes. */

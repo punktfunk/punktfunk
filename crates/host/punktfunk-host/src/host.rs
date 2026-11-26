@@ -378,6 +378,10 @@ pub fn serve(
                 crate::seats::events::fan_in("&kinds=game.*,library.changed");
             }
             tokio::spawn(crate::hooks::runner());
+            // The box sleeps once, so the host of the box announces it, never a seat's.
+            if !pf_paths::seat::role().is_seat_host() {
+                crate::sleep_watch::spawn();
+            }
         }
         // A Linux seat answers "Return to Gaming Mode" itself, so the box's login is never asked.
         #[cfg(target_os = "linux")]
