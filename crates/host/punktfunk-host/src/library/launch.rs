@@ -218,6 +218,24 @@ pub(crate) fn epic_launch_uri(value: &str) -> Option<String> {
     ))
 }
 
+/// `<runner>:<appName>` → `heroic://launch?…`, the link every OS's Heroic launch opens. `None`
+/// for another runner, or an appName that would not stay one URI token (Epic/Amazon alnum, GOG
+/// digits).
+pub(crate) fn heroic_launch_uri(value: &str) -> Option<String> {
+    let (runner, app) = value.split_once(':')?;
+    if !matches!(runner, "legendary" | "gog" | "nile") {
+        return None;
+    }
+    if app.is_empty()
+        || !app
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(format!("heroic://launch?appName={app}&runner={runner}"))
+}
+
 /// Ubisoft Connect game id, interpolated into `uplay://launch/<id>/0`: digits only.
 pub(crate) fn valid_uplay_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 16 && value.bytes().all(|b| b.is_ascii_digit())
@@ -367,6 +385,23 @@ mod tests {
         assert!(epic_launch_uri("bad part:x:y").is_none());
         assert!(epic_launch_uri("Fortnite' ; touch x").is_none());
         assert!(epic_launch_uri("").is_none());
+    }
+    #[test]
+    fn heroic_launch_uri_names_the_runner_and_guards() {
+        assert_eq!(
+            heroic_launch_uri("nile:amzn1.adg.product.abc-123").as_deref(),
+            Some("heroic://launch?appName=amzn1.adg.product.abc-123&runner=nile")
+        );
+        for bad in [
+            "sideload:x",
+            "legendary:bad name",
+            "gog:1&runner=legendary",
+            "gog:1\" & calc",
+            "gog:",
+            "Quail",
+        ] {
+            assert!(heroic_launch_uri(bad).is_none(), "{bad}");
+        }
     }
     #[test]
     fn rockstar_uninstall_entries_name_their_title() {
