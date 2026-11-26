@@ -4,7 +4,7 @@
 // renders one row each. A setting that host.env or a command-line flag pins is shown locked with
 // its source named, never as a control that saves and does nothing.
 
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import Section from "@unom/ui/section";
 import { Lock, RotateCcw, Search } from "lucide-react";
 import {
@@ -165,7 +165,12 @@ export const HostSettingsView: FC<{
 	/** Above the settings: who this host is, and what needs doing about its updates. */
 	top?: ReactNode;
 }> = ({ state, pending, onSet, playingApps, banner, extra = {}, top }) => {
-	const [query, setQuery] = useState("");
+	// `?q` (the command palette's settings) starts the search at that setting.
+	const { q: asked } = useSearch({ strict: false }) as { q?: string };
+	const [query, setQuery] = useState(asked ?? "");
+	useEffect(() => {
+		if (asked) setQuery(asked);
+	}, [asked]);
 	const [advanced, setAdvanced] = useAdvanced();
 	const q = query.trim().toLowerCase();
 
