@@ -720,8 +720,10 @@ internal class ShortcutArm(var id: String? = null, var at: Long = 0L)
 /**
  * A shortcut fired [action] outside the dial (design/client-shortcuts.md §4, D9): the slot's own
  * effect behind the ring's gate. A dimmed slot [tell]s why; a host danger action or End game asks
- * for a second press within [ARM_MS] in the ring's words, and End stream fires at once. A key
- * combination goes down and up by [phase]; Quick actions opens the ring through [openRing].
+ * for a second press within [ARM_MS] in the ring's words. End stream fires at once from a
+ * shortcut, whose press is deliberate, and asks too where [confirmEndStream] says a stray tap
+ * could reach it: the key row. A key combination goes down and up by [phase]; Quick actions
+ * opens the ring through [openRing].
  */
 internal fun fireShortcut(
     action: Shortcuts.Action,
@@ -733,6 +735,7 @@ internal fun fireShortcut(
     ctx: Context,
     arm: ShortcutArm,
     openRing: () -> Unit,
+    confirmEndStream: Boolean = false,
     tell: (String) -> Unit,
 ) {
     val slot = when (action) {
@@ -756,7 +759,8 @@ internal fun fireShortcut(
     }
     if (phase == Shortcuts.Phase.UP) return
     val now = SystemClock.uptimeMillis()
-    if (s.armed && slot != SlotId.EndStream && (arm.id != s.id || now - arm.at > ARM_MS)) {
+    val asks = s.armed && (confirmEndStream || slot != SlotId.EndStream)
+    if (asks && (arm.id != s.id || now - arm.at > ARM_MS)) {
         arm.id = s.id
         arm.at = now
         tell(confirmText(ctx, slot, s.label))

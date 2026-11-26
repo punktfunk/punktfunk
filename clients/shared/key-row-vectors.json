@@ -1,0 +1,85 @@
+{
+  "$comment": "How the keyboard row's buttons behave, replayed by the Android KeyRowTest and the Apple KeyRowTests. A button is a row id of the overlay_actions blob. Each case runs `steps` on a fresh row and expects `out` in order. Steps: [\"tap\", id]; [\"hold\", id] a long press begins; [\"lift\", id] that finger is gone; [\"type\", text] typed on the system keyboard toward a host that takes text, while a modifier is latched; [\"release\"] the keyboard hid or the stream ended. Out: \"+11\" and \"-11\" are a key down and up by its virtual-key code in hex; \"text:hello\" is committed text; \"fire:<phase>:<id>\" hands a quick action to the client's shortcut path, phase once, tap, down or up. `typed` maps a character to the key it presses under a latched modifier, null for one that goes as text. Hand-written: a new rule adds a case here first.",
+  "cases": [
+    {
+      "name": "a modifier holds until the next key lifts",
+      "steps": [["tap", "key:ctrl"], ["tap", "key:tab"]],
+      "out": ["+11", "+09", "-09", "-11"]
+    },
+    {
+      "name": "a second tap lets the modifier go",
+      "steps": [["tap", "key:alt"], ["tap", "key:alt"]],
+      "out": ["+12", "-12"]
+    },
+    {
+      "name": "release lets every modifier go once",
+      "steps": [["tap", "key:ctrl"], ["tap", "key:shift"], ["release"], ["release"]],
+      "out": ["+11", "+10", "-11", "-10"]
+    },
+    {
+      "name": "a long press holds a key until the finger lifts",
+      "steps": [["tap", "key:ctrl"], ["hold", "key:left"], ["lift", "key:left"], ["lift", "key:left"]],
+      "out": ["+11", "+25", "-25", "-11"]
+    },
+    {
+      "name": "a tapped key goes down and up, and a lift after a tap sends nothing",
+      "steps": [["tap", "key:tab"], ["lift", "key:tab"]],
+      "out": ["+09", "-09"]
+    },
+    {
+      "name": "a long-pressed modifier latches like a tapped one",
+      "steps": [["hold", "key:alt"], ["lift", "key:alt"], ["tap", "key:f4"]],
+      "out": ["+12", "+73", "-73", "-12"]
+    },
+    {
+      "name": "a key name is read as key_vk reads it, alias and case",
+      "steps": [["tap", "key:Esc"], ["tap", "key:control"], ["tap", "key:cmd"], ["tap", "key:pagedown"]],
+      "out": ["+1B", "-1B", "+11", "+5B", "+22", "-22", "-11", "-5B"]
+    },
+    {
+      "name": "a character typed under a modifier goes as its key",
+      "steps": [["tap", "key:ctrl"], ["type", "c"]],
+      "out": ["+11", "+43", "-43", "-11"]
+    },
+    {
+      "name": "a capital typed under a modifier is the same key, with no shift",
+      "steps": [["tap", "key:ctrl"], ["tap", "key:alt"], ["type", "T"]],
+      "out": ["+11", "+12", "+54", "-54", "-11", "-12"]
+    },
+    {
+      "name": "tab typed under a modifier is the tab key, never text",
+      "steps": [["tap", "key:ctrl"], ["type", "\t"]],
+      "out": ["+11", "+09", "-09", "-11"]
+    },
+    {
+      "name": "text with no key goes as text once the modifier is up",
+      "steps": [["tap", "key:win"], ["type", "é"], ["tap", "key:ctrl"], ["type", "hello"]],
+      "out": ["+5B", "-5B", "text:é", "+11", "-11", "text:hello"]
+    },
+    {
+      "name": "a key combination is the next key",
+      "steps": [["tap", "key:shift"], ["tap", "shortcut:s1"]],
+      "out": ["+10", "fire:tap:shortcut:s1", "-10"]
+    },
+    {
+      "name": "a held key combination comes up with the finger and lets the modifier go",
+      "steps": [["tap", "key:ctrl"], ["hold", "shortcut:s1"], ["lift", "shortcut:s1"], ["lift", "shortcut:s1"]],
+      "out": ["+11", "fire:down:shortcut:s1", "fire:up:shortcut:s1", "-11"]
+    },
+    {
+      "name": "any other action fires once and leaves the modifier held",
+      "steps": [["tap", "key:ctrl"], ["tap", "stats"], ["hold", "mic"], ["lift", "mic"], ["tap", "host:power.sleep"], ["release"]],
+      "out": ["+11", "fire:once:stats", "fire:once:mic", "fire:once:host:power.sleep", "-11"]
+    },
+    {
+      "name": "the guide button holds like a key and is no key to a modifier",
+      "steps": [["tap", "key:alt"], ["tap", "guide"], ["hold", "qam"], ["lift", "qam"], ["release"]],
+      "out": ["+12", "fire:tap:guide", "fire:down:qam", "fire:up:qam", "-12"]
+    }
+  ],
+  "typed": [
+    ["a", "41"], ["A", "41"], ["z", "5A"], ["5", "35"], [" ", "20"], ["\n", "0D"], ["\r", "0D"],
+    ["\t", "09"],
+    ["/", "BF"], ["-", "BD"], ["`", "C0"], ["é", null], ["!", null], ["?", null], ["€", null]
+  ]
+}
