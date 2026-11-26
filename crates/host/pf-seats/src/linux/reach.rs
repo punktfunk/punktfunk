@@ -2,7 +2,7 @@
 //!
 //! At each library load, Steam's `content_log.txt` names every listed folder it couldn't open:
 //! `Install folder <path> not mounted.` The check reads that log in every Steam folder of the
-//! seat's home ([`shared::STEAM_ROOTS`]) and takes the last load of the unit's current run.
+//! seat's home ([`steam_home::STEAM_ROOTS`]) and takes the last load of the unit's current run.
 //!
 //! For each of our folders that Steam missed, the check tries to open the folder the way that
 //! Steam does: as its user, with its groups, in its mount namespace. For the `steamrt64` client
@@ -12,7 +12,7 @@
 //! check can't find is logged together with what the seat's user runs.
 
 use super::accounts::Passwd;
-use super::{libraries, output, run, safe_open, shared};
+use super::{libraries, output, run, safe_open, steam_home};
 use crate::model::SeatId;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::Path;
@@ -41,9 +41,9 @@ pub(super) struct Missed {
 }
 
 impl Missed {
-    /// Whether that Steam is one the seat's library list reaches ([`shared::SEAT_STEAMS`]).
+    /// Whether that Steam is one the seat's library list reaches ([`steam_home::SEAT_STEAMS`]).
     pub(super) fn listed(&self) -> bool {
-        shared::SEAT_STEAMS.contains(&self.root)
+        steam_home::SEAT_STEAMS.contains(&self.root)
     }
 }
 
@@ -54,7 +54,7 @@ pub(super) fn missed(home: &Path) -> Option<Missed> {
     let ours = |folder: &str| Path::new(folder).starts_with(libraries::VIEW);
     let mut last: Option<Missed> = None;
     // `.steam/steam` is a link to one of the others, which `safe_open` doesn't follow.
-    for root in shared::STEAM_ROOTS
+    for root in steam_home::STEAM_ROOTS
         .into_iter()
         .filter(|root| *root != ".steam/steam")
     {

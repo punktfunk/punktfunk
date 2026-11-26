@@ -20,6 +20,7 @@
 //! [`copy_lock::CopyLock`]. [`node_owner`] tells udev which user owns each pad's device nodes.
 
 mod accounts;
+mod acl;
 mod copy_lock;
 mod devices;
 pub mod door_switch;
@@ -27,8 +28,10 @@ pub mod door_switch;
 mod fake;
 mod firefox;
 mod flatpak;
+mod layout;
 pub mod lent;
 mod libraries;
+mod library_copy;
 pub mod login;
 pub mod login_password;
 mod logind;
@@ -42,16 +45,17 @@ mod reach;
 mod resources;
 mod safe_open;
 mod session;
-mod shared;
 mod shortcuts;
 pub mod socket;
 #[cfg(test)]
 mod start_tests;
+mod steam_home;
+mod trust_copy;
 #[cfg(test)]
 mod unlock_tests;
 
+pub use layout::ledger_root;
 pub use pam::{run_check as pam_check, CHECK_VERB as PAM_CHECK_VERB};
-pub use shared::ledger_root;
 pub use socket::SOCKET_PATH;
 
 use crate::backend::{Adopted, BackendError, PlatformBackend, PresentPad};
@@ -77,7 +81,7 @@ pub const STATE_DIR: &str = "/var/lib/punktfunk-seats";
 /// A seat's save exchange: `out` holds what its host exported for the owner's plugins, `in`
 /// what the owner's host hands back. The same path inside the seat's unit.
 pub fn saves_dir(id: &SeatId) -> PathBuf {
-    shared::seat_dir(Path::new(STATE_DIR), id).join("saves")
+    layout::seat_dir(Path::new(STATE_DIR), id).join("saves")
 }
 
 /// The systemd unit that runs `account`'s seat. `*` names every seat's.
@@ -259,7 +263,7 @@ impl SeatAccount {
 struct Tracked {
     kind: SeatAccount,
     /// Who reads the seat's trust copy.
-    reader: shared::Reader,
+    reader: trust_copy::Reader,
     /// The row and the account, for a seat on the owner's or a person's own account. The sync
     /// thread stops such a seat's unit when its user logs in at the machine, and keeps its
     /// environment file in step with the box's Seat defaults.
@@ -273,10 +277,10 @@ impl Tracked {
     fn of(seat: &Seat, passwd: &accounts::Passwd) -> Self {
         let kind = SeatAccount::of(&seat.kind);
         let (reader, own_account) = if kind.made() {
-            (shared::Reader::group(passwd.gid), None)
+            (trust_copy::Reader::group(passwd.gid), None)
         } else {
             (
-                shared::Reader::person(passwd.uid, passwd.gid),
+                trust_copy::Reader::person(passwd.uid, passwd.gid),
                 Some((seat.clone(), passwd.clone())),
             )
         };
@@ -299,8 +303,8 @@ impl Tracked {
 ///
 /// A seat that has started has a token directory. One that can't be read counts as there.
 fn reapable(state: &Path, id: &SeatId) -> bool {
-    let here = matches!(shared::seat_dir(state, id).try_exists(), Ok(true));
-    let started = !matches!(shared::host_dir(state, id).try_exists(), Ok(false));
+    let here = matches!(layout::seat_dir(state, id).try_exists(), Ok(true));
+    let started = !matches!(layout::host_dir(state, id).try_exists(), Ok(false));
     here && !started
 }
 
@@ -339,7 +343,7 @@ fn edit_devices(
         edit(&mut next, now);
         if next != held.list {
             held.commit(&inner.state, id, next.clone())?;
-            shared::rewrite_admitted(&inner.box_dir, &inner.state, id, &next.admitted())?;
+            trust_copy::rewrite_admitted(&inner.box_dir, &inner.state, id, &next.admitted())?;
         }
         Ok(next)
     })
@@ -357,7 +361,7 @@ fn person_trust(
     inner: &Inner,
     guard: &mut CopyGuard<'_>,
     id: &SeatId,
-    reader: shared::Reader,
+    reader: trust_copy::Reader,
 ) -> Result<bool, BackendError> {
     with_devices(inner, guard, id, |held, now| {
         let mut next = held.list.clone();
@@ -365,7 +369,7 @@ fn person_trust(
             held.commit(&inner.state, id, next.clone())?;
         }
         let admitted = next.admitted();
-        shared::refresh_person_trust(&inner.box_dir, &inner.state, id, reader, &admitted)
+        trust_copy::refresh_person_trust(&inner.box_dir, &inner.state, id, reader, &admitted)
     })
 }
 
@@ -476,17 +480,17 @@ impl Inner {
         }
         self.copy_lock.with(held, |guard| match kind {
             SeatAccount::Made => {
-                shared::refresh_trust(box_dir, state, id, reader)?;
-                shared::refresh_seat_library(box_dir, state, id, reader)?;
+                trust_copy::refresh_trust(box_dir, state, id, reader)?;
+                library_copy::refresh_seat_library(box_dir, state, id, reader)?;
                 Ok(false)
             }
             SeatAccount::Person => {
                 person_trust(self, guard, id, reader)?;
-                shared::refresh_seat_library(box_dir, state, id, reader)?;
+                library_copy::refresh_seat_library(box_dir, state, id, reader)?;
                 Ok(false)
             }
             SeatAccount::Owner => {
-                shared::refresh_owner_trust(box_dir, state, id, reader)?;
+                trust_copy::refresh_owner_trust(box_dir, state, id, reader)?;
                 *self.owner.lock().unwrap_or_else(|e| e.into_inner()) = Some(passwd.clone());
                 if let Err(error) = refresh_box_library(self) {
                     tracing::warn!(account = %seat.account, %error, "box library not copied");
@@ -523,11 +527,11 @@ impl Inner {
     /// user's when there is one.
     fn write_token(&self, seat: &Seat, token: &str) -> Result<(), BackendError> {
         let door = accounts::lookup("punktfunk")?;
-        shared::write_host_token(
+        layout::write_host_token(
             &self.state,
             &seat.id,
             &session::token_line(token),
-            shared::token_owner(door.as_ref()),
+            layout::token_owner(door.as_ref()),
         )
     }
 }
@@ -568,7 +572,7 @@ fn user_host(account: &str, verb: &str) {
 }
 
 /// The door's group, which reads the box's library. `None` while there is no such group.
-fn door_reader(inner: &Inner) -> Option<shared::Reader> {
+fn door_reader(inner: &Inner) -> Option<trust_copy::Reader> {
     let gid = match inner.door_gid.get() {
         Some(gid) => *gid,
         None => {
@@ -576,7 +580,7 @@ fn door_reader(inner: &Inner) -> Option<shared::Reader> {
             *inner.door_gid.get_or_init(|| gid)
         }
     };
-    Some(shared::Reader::group(gid))
+    Some(trust_copy::Reader::group(gid))
 }
 
 /// Copies the owner's library into the box's library copy, once the owner's row is known.
@@ -590,7 +594,7 @@ fn refresh_box_library(inner: &Inner) -> Result<bool, BackendError> {
         .map(|owner| owner.home.clone());
     let Some(home) = home else { return Ok(false) };
     match door_reader(inner) {
-        Some(reader) => shared::refresh_box_library(&home, &inner.state, reader),
+        Some(reader) => library_copy::refresh_box_library(&home, &inner.state, reader),
         None => Ok(false),
     }
 }
@@ -610,7 +614,7 @@ impl LinuxBackend {
         state: PathBuf,
         steam_source: Option<PathBuf>,
     ) -> Result<Self, BackendError> {
-        shared::ensure_layout(&state)
+        layout::ensure_layout(&state)
             .map_err(|e| err("state_dir", format!("prepare {}: {e}", state.display())))?;
         std::fs::create_dir_all(session::ENV_DIR)
             .map_err(|e| err("run_dir", format!("create {}: {e}", session::ENV_DIR)))?;
@@ -684,7 +688,7 @@ impl LinuxBackend {
     pub fn open_service(self) -> Result<SeatService<Self>, StoreError> {
         let root = ledger_root(&self.inner.state);
         let store = LedgerStore::open(&root)?;
-        shared::make_dir(&root, 0o711)?;
+        layout::make_dir(&root, 0o711)?;
         let service = SeatService::with_store(store, self)?;
         service.backend().reap_orphans(&service.ledger());
         service.backend().load_devices(&service.ledger());
@@ -702,7 +706,7 @@ impl LinuxBackend {
             let mut guard = self.inner.copy_lock.lock();
             let written = with_devices(&self.inner, &mut guard, &seat.id, |held, _| {
                 let admitted = held.list.admitted();
-                shared::rewrite_admitted(
+                trust_copy::rewrite_admitted(
                     &self.inner.box_dir,
                     &self.inner.state,
                     &seat.id,
@@ -765,13 +769,13 @@ impl LinuxBackend {
 
     /// The Steam a seat clones and shows: `--steam-source` when given, else the box owner's, as
     /// their row records them. Only a box with no owner row looks for the lowest-uid user's.
-    fn steam_source(&self) -> Option<shared::SteamSource> {
+    fn steam_source(&self) -> Option<steam_home::SteamSource> {
         if let Some(root) = &self.inner.steam_source {
-            return shared::SteamSource::owned(root.clone());
+            return steam_home::SteamSource::owned(root.clone());
         }
         match self.owner() {
-            Some(owner) => shared::steam_source_of(&owner),
-            None => shared::find_steam_source(&accounts::all().ok()?),
+            Some(owner) => steam_home::steam_source_of(&owner),
+            None => steam_home::find_steam_source(&accounts::all().ok()?),
         }
     }
 
@@ -891,7 +895,7 @@ impl LinuxBackend {
             }
             accounts::delete(account, id)?;
         }
-        shared::remove_seat_dirs(&self.inner.state, id)?;
+        layout::remove_seat_dirs(&self.inner.state, id)?;
         let _ = std::fs::remove_file(session::env_path(account));
         let dropin = session::dropin_dir(account);
         if dropin.exists() {
@@ -1048,11 +1052,11 @@ impl PlatformBackend for LinuxBackend {
         accounts::check_seat_name(&seat.account)?;
         let state = &self.inner.state;
         let gid = accounts::ensure_group(accounts::GAMES_GROUP)?;
-        shared::ensure_games(state, gid)?;
+        layout::ensure_games(state, gid)?;
         let passwd = accounts::ensure(seat, state)?;
         accounts::close_home(&passwd.home)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
-        shared::provision_steam(state, &seat.id, &passwd, self.steam_source().as_ref());
+        layout::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
+        steam_home::provision_steam(state, &seat.id, &passwd, self.steam_source().as_ref());
         Ok(())
     }
 
@@ -1092,9 +1096,9 @@ impl PlatformBackend for LinuxBackend {
     /// release has nothing of it to take back, and a refusal leaves nothing behind.
     fn adopt_account(&self, seat: &Seat, _password: &Secret) -> Result<Adopted, BackendError> {
         let passwd = accounts::require_person(seat)?;
-        let made = shared::ensure_person_dirs(&self.inner.state, &seat.id, &passwd);
+        let made = layout::ensure_person_dirs(&self.inner.state, &seat.id, &passwd);
         if made.is_err() {
-            let _ = shared::remove_seat_dirs(&self.inner.state, &seat.id);
+            let _ = layout::remove_seat_dirs(&self.inner.state, &seat.id);
         }
         made.map(|()| Adopted::default())
     }
@@ -1178,7 +1182,7 @@ impl PlatformBackend for LinuxBackend {
             {
                 *owner = None;
                 drop(owner);
-                shared::remove_box_library(&self.inner.state)
+                library_copy::remove_box_library(&self.inner.state)
                     .map_err(|e| err("box_library", format!("remove the box library: {e}")))?;
             }
         }
@@ -1262,19 +1266,19 @@ impl PlatformBackend for LinuxBackend {
     /// A root-owned copy of the certificate the seat's host serves, for the service to pin: from
     /// `~/.config/punktfunk`, or for a person's row from the row's own config directory. Either
     /// is a user's, which root doesn't own, so the copy is taken through directory handles and
-    /// never waits on what is there ([`shared::copy_pin`]).
+    /// never waits on what is there ([`trust_copy::copy_pin`]).
     fn host_config_dir(&self, seat: &Seat) -> Option<PathBuf> {
         let state = &self.inner.state;
-        let dir = shared::pin_dir(state, &seat.id);
+        let dir = trust_copy::pin_dir(state, &seat.id);
         let copied = match SeatAccount::of(&seat.kind) {
             SeatAccount::Owner => {
-                shared::copy_pin(&accounts::require_owner(&seat.account).ok()?.home, &dir)
+                trust_copy::copy_pin(&accounts::require_owner(&seat.account).ok()?.home, &dir)
             }
             SeatAccount::Person => {
                 accounts::require_person(seat).ok()?;
-                shared::copy_person_pin(state, &seat.id, &dir)
+                trust_copy::copy_person_pin(state, &seat.id, &dir)
             }
-            SeatAccount::Made => shared::copy_pin(&accounts::require(seat).ok()?.home, &dir),
+            SeatAccount::Made => trust_copy::copy_pin(&accounts::require(seat).ok()?.home, &dir),
         };
         if let Err(error) = copied {
             tracing::debug!(seat = %seat.id, %error, "seat host's certificate not read");
@@ -1475,7 +1479,7 @@ impl LinuxBackend {
                 if owner_at_desk(&seat.account) {
                     return self.start_at_desk(seat, asked);
                 }
-                shared::ensure_person_dirs(state, &seat.id, &passwd)?;
+                layout::ensure_person_dirs(state, &seat.id, &passwd)?;
                 passwd
             }
         };
@@ -1549,7 +1553,7 @@ impl LinuxBackend {
             Ok(false) => {}
             Ok(true) => {
                 tracing::info!(account = %passwd.name, "seat user moved to a group of its own");
-                let _ = std::fs::remove_dir_all(shared::trust_dir(state, &seat.id));
+                let _ = std::fs::remove_dir_all(layout::trust_dir(state, &seat.id));
                 passwd = accounts::require(seat)?;
             }
             Err(error) => {
@@ -1561,9 +1565,9 @@ impl LinuxBackend {
         if let Err(error) = accounts::join_groups(&passwd.name) {
             tracing::warn!(account = %passwd.name, %error, "seat user's groups not restored");
         }
-        shared::ensure_games(state, games)?;
-        shared::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
-        if let Err(error) = shared::link_steam(&passwd) {
+        layout::ensure_games(state, games)?;
+        layout::ensure_seat_dirs(state, &seat.id, &passwd, self.owner_uid())?;
+        if let Err(error) = steam_home::link_steam(&passwd) {
             tracing::warn!(account = %passwd.name, %error, "seat's steam links not made");
         }
         Ok(passwd)
@@ -1852,14 +1856,14 @@ fn refresh_copies(
     let (box_dir, state, reader) = (&inner.box_dir, &inner.state, tracked.reader);
     match tracked.kind {
         SeatAccount::Person => person_trust(inner, guard, id, reader)?,
-        SeatAccount::Owner => shared::refresh_owner_trust(box_dir, state, id, reader)?,
-        SeatAccount::Made => shared::refresh_trust(box_dir, state, id, reader)?,
+        SeatAccount::Owner => trust_copy::refresh_owner_trust(box_dir, state, id, reader)?,
+        SeatAccount::Made => trust_copy::refresh_trust(box_dir, state, id, reader)?,
     };
     if let Some((seat, passwd)) = &tracked.own_account {
         rewrite_env(inner, seat, tracked.kind, passwd)?;
     }
     if tracked.kind != SeatAccount::Owner {
-        shared::refresh_seat_library(box_dir, state, id, reader)?;
+        library_copy::refresh_seat_library(box_dir, state, id, reader)?;
     }
     Ok(())
 }
@@ -1891,7 +1895,7 @@ fn repair_acl(inner: &Inner, seats: &[(SeatId, Tracked)], acl_at: &mut Instant) 
     let dirty = inner.acl_dirty.swap(false, Ordering::SeqCst);
     if acl_due(dirty, seat_up, acl_at.elapsed()) {
         *acl_at = Instant::now();
-        if let Err(error) = shared::fix_acl(&inner.state) {
+        if let Err(error) = acl::fix_acl(&inner.state) {
             tracing::warn!(%error, "games ACL mask not repaired");
         }
     }
@@ -2048,9 +2052,9 @@ mod tests {
         let (gone, stopped_create, started) =
             (SeatId::random(), SeatId::random(), SeatId::random());
         for id in [&stopped_create, &started] {
-            std::fs::create_dir_all(super::shared::seat_dir(state.path(), id)).unwrap();
+            std::fs::create_dir_all(super::layout::seat_dir(state.path(), id)).unwrap();
         }
-        std::fs::create_dir_all(super::shared::host_dir(state.path(), &started)).unwrap();
+        std::fs::create_dir_all(super::layout::host_dir(state.path(), &started)).unwrap();
         assert!(!super::reapable(state.path(), &gone), "no seat directory");
         assert!(super::reapable(state.path(), &stopped_create));
         assert!(!super::reapable(state.path(), &started), "it has run");
@@ -2208,7 +2212,7 @@ mod tests {
         let (box_dir, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let backend = backend(box_dir.path(), state.path());
         let (id, tracked) = made_tracked();
-        let trust = shared::trust_dir(state.path(), &id);
+        let trust = layout::trust_dir(state.path(), &id);
         let mut failing = HashSet::new();
         assert!(!sync_seat(&backend.inner, &id, &tracked, &mut failing));
         assert!(!trust.exists(), "a removed seat's copy stays gone");
@@ -2250,7 +2254,7 @@ mod tests {
         let mut failing = HashSet::new();
         assert!(sync_seat(&backend.inner, &seat.id, &tracked, &mut failing));
         assert!(failing.is_empty());
-        assert!(shared::trust_dir(state.path(), &seat.id).is_dir());
+        assert!(layout::trust_dir(state.path(), &seat.id).is_dir());
         assert!(backend
             .inner
             .copy_lock
@@ -2267,7 +2271,7 @@ mod tests {
         let backend = backend(box_dir.path(), state.path());
         let (id, tracked) = made_tracked();
         backend.track(&id, tracked.clone());
-        let trust = shared::trust_dir(state.path(), &id);
+        let trust = layout::trust_dir(state.path(), &id);
         std::fs::create_dir_all(trust.parent().unwrap()).unwrap();
         let mut failing = HashSet::new();
         let mut tick = |broken: bool| {

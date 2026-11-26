@@ -11,7 +11,7 @@
 //! A socket file left by a crashed supervisor is replaced. One that a live supervisor holds
 //! makes [`bind`] fail.
 
-use super::shared::{
+use super::acl::{
     acl_bytes, ACL_ACCESS, ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ,
 };
 use super::{accounts, LinuxBackend};

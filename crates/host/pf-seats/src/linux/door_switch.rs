@@ -21,7 +21,7 @@
 
 use super::accounts::{Passwd, Switchable};
 use super::err;
-use super::shared::MAX_TRUST_BYTES;
+use super::trust_copy::MAX_TRUST_BYTES;
 use crate::backend::BackendError;
 use std::ffi::OsStr;
 use std::io::Read;

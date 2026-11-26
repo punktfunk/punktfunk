@@ -112,7 +112,11 @@ actions out. `windows/supervisor.rs` performs the actions. Start with `step.rs`.
 | `linux/resources.rs` | The table of what must be up while a seat's unit runs, and when it starts and stops |
 | `linux/session.rs` | Everything systemd reads for a seat: environment file, drop-ins |
 | `linux/accounts.rs` | Seat users: created, checked by their marker, removed |
-| `linux/shared.rs` | The state directory: games folder, trust copies, library copy |
+| `linux/layout.rs` | Where each folder under the state directory is, and how it is made |
+| `linux/acl.rs` | POSIX ACL bytes, and the walk that keeps the games folder writable |
+| `linux/trust_copy.rs` | A seat's trust copy of the box's pairing store, and the copy of its host's certificate |
+| `linux/library_copy.rs` | The box library, and each seat's copy of it |
+| `linux/steam_home.rs` | A seat's Steam in its home: cloned, linked, given a library list |
 | `linux/libraries.rs`, `mount_share.rs` | The owner's Steam libraries, mounted into a seat |
 | `linux/node_owner.rs`, `lent.rs` | Which user owns a controller's device nodes |
 | `linux/pam.rs`, `login.rs`, `login_password.rs` | A person's password: checked, then used for one login |
