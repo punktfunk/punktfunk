@@ -645,10 +645,10 @@ pub(super) fn seat_error(e: SeatError) -> Refusal {
         ErrorCode::Conflict => StatusCode::CONFLICT,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
-        ErrorCode::Backend => backend_status(&e.message),
+        ErrorCode::Backend => backend_status(e.refusal_code()),
         _ => StatusCode::SERVICE_UNAVAILABLE,
     };
-    let sentence = sentence_of(&e.message);
+    let sentence = e.sentence().to_owned();
     let error = match e.said {
         Some(code) => ApiError {
             params: (!e.params.is_empty()).then_some(e.params),
@@ -659,11 +659,11 @@ pub(super) fn seat_error(e: SeatError) -> Refusal {
     (status, error)
 }
 
-/// A backend refusal's status, by the code its message leads with: the person can fix a password
-/// or a key proof (400), wait out too many wrong ones (429), or pick another account, sign out at
-/// the machine or unlock with the password first (409); anything else is the box's (503).
-fn backend_status(message: &str) -> StatusCode {
-    match message.split_once(": ").map(|(code, _)| code) {
+/// A backend refusal's status, by its code: the person can fix a password or a key proof (400),
+/// wait out too many wrong ones (429), or pick another account, sign out at the machine or
+/// unlock with the password first (409); anything else is the box's (503).
+fn backend_status(code: Option<&str>) -> StatusCode {
+    match code {
         Some("unlock_locked_out") => StatusCode::TOO_MANY_REQUESTS,
         Some(
             "credential_wrong"
@@ -692,18 +692,6 @@ fn backend_status(message: &str) -> StatusCode {
             | "pads_unsupported",
         ) => StatusCode::CONFLICT,
         _ => StatusCode::SERVICE_UNAVAILABLE,
-    }
-}
-
-/// A supervisor message without the `<code>: ` a backend refusal leads with.
-fn sentence_of(message: &str) -> &str {
-    match message.split_once(": ") {
-        Some((code, sentence))
-            if !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') =>
-        {
-            sentence
-        }
-        _ => message,
     }
 }
 
@@ -2106,6 +2094,7 @@ mod tests {
     use super::*;
     use crate::seats::Occupant;
     use pf_seats::model::RowKind;
+    use pf_seats::BackendError;
 
     const ID: &str = "0123456789abcdef0123456789abcdef";
 
@@ -2203,90 +2192,81 @@ mod tests {
     }
 
     /// A backend refusal reaches the console as its sentence, under a status the person can act
-    /// on when its code says so; any other message stays whole.
+    /// on when its code says so; any other message stays whole. An answer from an older
+    /// supervisor, with the code only in its message, reads the same.
     #[test]
     fn a_supervisor_refusal_loses_its_code_before_the_console() {
-        let refusal = seat_error(SeatError::new(
-            ErrorCode::Backend,
-            "credential_wrong: That isn't Ben's Windows password.",
-        ));
-        assert_eq!(
-            refusal,
-            (
-                StatusCode::BAD_REQUEST,
-                ApiError::plain("That isn't Ben's Windows password.")
-            )
-        );
-        let locked_out = seat_error(SeatError::new(
-            ErrorCode::Backend,
-            "unlock_locked_out: Too many wrong passwords. Try again in 12 minutes.",
-        ));
-        assert_eq!(
-            locked_out,
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                ApiError::plain("Too many wrong passwords. Try again in 12 minutes.")
-            )
-        );
-        let coded = seat_error(
-            SeatError::new(ErrorCode::Backend, "account_taken: Another profile.")
-                .said("account_taken"),
-        );
-        assert_eq!(coded.0, StatusCode::CONFLICT);
-        assert_eq!(
-            coded.1,
-            ApiError::coded("account_taken", "Another profile.")
-        );
-        for (message, status) in [
-            ("account_locked: Wait ten minutes.", StatusCode::BAD_REQUEST),
-            (
-                "unlock_locked_out: Try again in 12 minutes.",
-                StatusCode::TOO_MANY_REQUESTS,
-            ),
-            ("account_missing: No such account.", StatusCode::BAD_REQUEST),
-            ("account_is_owner: Use the owner.", StatusCode::CONFLICT),
-            ("account_taken: Another profile.", StatusCode::CONFLICT),
-            ("account_not_ordinary: A system user.", StatusCode::CONFLICT),
-            (
-                "pam_unavailable: No login service.",
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
-            ("account_signed_in: Sign Ben out.", StatusCode::CONFLICT),
-            ("account_at_console: Sign Ben out.", StatusCode::CONFLICT),
-            (
-                "credential_wrong: That isn't jdoe's.",
-                StatusCode::BAD_REQUEST,
-            ),
-            ("proof_invalid: Type the password.", StatusCode::BAD_REQUEST),
-            ("unlock_required: Needs its password.", StatusCode::CONFLICT),
-            (
-                "account_at_desk: jdoe is at the desk.",
-                StatusCode::CONFLICT,
-            ),
-            (
-                "challenge_random: draw a challenge",
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
-            (
-                "lsa_failed: LsaAddAccountRights",
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
-            (
-                "seats run on a Windows Server",
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
+        let both = |code: &str, sentence: &str| {
+            [
+                SeatError::from(BackendError::new(code, sentence)),
+                SeatError::new(ErrorCode::Backend, format!("{code}: {sentence}")),
+            ]
+        };
+        for refusal in both("credential_wrong", "That isn't Ben's Windows password.") {
+            assert_eq!(
+                seat_error(refusal),
+                (
+                    StatusCode::BAD_REQUEST,
+                    ApiError::plain("That isn't Ben's Windows password.")
+                )
+            );
+        }
+        let wait = "Too many wrong passwords. Try again in 12 minutes.";
+        for locked_out in both("unlock_locked_out", wait) {
+            assert_eq!(
+                seat_error(locked_out),
+                (StatusCode::TOO_MANY_REQUESTS, ApiError::plain(wait))
+            );
+        }
+        for taken in both("account_taken", "Another profile.") {
+            assert_eq!(
+                seat_error(taken.said("account_taken")),
+                (
+                    StatusCode::CONFLICT,
+                    ApiError::coded("account_taken", "Another profile.")
+                )
+            );
+        }
+        for (code, status) in [
+            ("account_locked", StatusCode::BAD_REQUEST),
+            ("unlock_locked_out", StatusCode::TOO_MANY_REQUESTS),
+            ("account_missing", StatusCode::BAD_REQUEST),
+            ("account_is_owner", StatusCode::CONFLICT),
+            ("account_taken", StatusCode::CONFLICT),
+            ("account_not_ordinary", StatusCode::CONFLICT),
+            ("pam_unavailable", StatusCode::SERVICE_UNAVAILABLE),
+            ("account_signed_in", StatusCode::CONFLICT),
+            ("account_at_console", StatusCode::CONFLICT),
+            ("credential_wrong", StatusCode::BAD_REQUEST),
+            ("proof_invalid", StatusCode::BAD_REQUEST),
+            ("unlock_required", StatusCode::CONFLICT),
+            ("account_at_desk", StatusCode::CONFLICT),
+            ("challenge_random", StatusCode::SERVICE_UNAVAILABLE),
+            ("lsa_failed", StatusCode::SERVICE_UNAVAILABLE),
         ] {
-            assert_eq!(backend_status(message), status, "{message}");
+            for error in both(code, "Words.") {
+                let expected = (status, ApiError::plain("Words."));
+                assert_eq!(seat_error(error), expected, "{code}");
+            }
         }
         for whole in [
-            "seat 0123 does not exist",
-            "duplicate account 'pf_seat1'",
+            "seats run on a Windows Server",
             "Turn seats on: then try again",
             "pf-seat: not a code",
             ": no code",
         ] {
-            assert_eq!(sentence_of(whole), whole);
+            let error = SeatError::new(ErrorCode::Backend, whole);
+            let expected = (StatusCode::SERVICE_UNAVAILABLE, ApiError::plain(whole));
+            assert_eq!(seat_error(error), expected);
         }
+        let gone = SeatError::new(ErrorCode::NotFound, "seat 0123 does not exist");
+        assert_eq!(
+            seat_error(gone),
+            (
+                StatusCode::NOT_FOUND,
+                ApiError::plain("seat 0123 does not exist")
+            )
+        );
     }
 
     #[test]

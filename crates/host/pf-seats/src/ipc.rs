@@ -382,6 +382,9 @@ impl Response {
 pub struct ApiError {
     pub code: ErrorCode,
     pub message: String,
+    /// A backend refusal's own code, such as `credential_wrong`; `message` leads with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
     /// A backend refusal's [`BackendError::said`](crate::BackendError::said).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
@@ -394,6 +397,7 @@ impl ApiError {
         Self {
             code,
             message: message.into(),
+            refusal: None,
             said: None,
             params: BTreeMap::new(),
         }
@@ -403,6 +407,28 @@ impl ApiError {
     pub fn said(mut self, code: &str) -> Self {
         self.said = Some(code.to_string());
         self
+    }
+
+    /// The code the backend refused with: `refusal`, else for a backend error the code
+    /// `message` leads with. `None` for any other error.
+    pub fn refusal_code(&self) -> Option<&str> {
+        if let Some(code) = &self.refusal {
+            return Some(code);
+        }
+        if self.code != ErrorCode::Backend {
+            return None;
+        }
+        // Reads an older peer's answer, which carries the code only in `message`.
+        let (code, _) = self.message.split_once(": ")?;
+        (!code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+            .then_some(code)
+    }
+
+    /// `message` without the `<refusal>: ` it leads with.
+    pub fn sentence(&self) -> &str {
+        self.refusal_code()
+            .and_then(|code| self.message.strip_prefix(code)?.strip_prefix(": "))
+            .unwrap_or(&self.message)
     }
 }
 
@@ -1081,11 +1107,7 @@ mod tests {
         ] {
             let error = refuse(command);
             assert_eq!(error.code, ErrorCode::Backend);
-            assert!(
-                error.message.starts_with("platform_unavailable"),
-                "{}",
-                error.message
-            );
+            assert_eq!(error.refusal_code(), Some("platform_unavailable"));
         }
         let error = refuse(Command::Disable {
             keep_accounts: false,
@@ -1148,5 +1170,61 @@ mod tests {
             panic!("no platform installs Flatpaks here")
         };
         assert_eq!(error.code, ErrorCode::Backend);
+    }
+
+    /// A backend refusal's code is a field of its own on the wire. An answer without the field
+    /// parses, and any other error leaves it out.
+    #[test]
+    fn a_refusal_s_code_travels_as_its_own_field() {
+        let error = ApiError::from(crate::BackendError::new("credential_wrong", "Wrong."));
+        assert_eq!(error.refusal.as_deref(), Some("credential_wrong"));
+        assert_eq!(error.message, "credential_wrong: Wrong.");
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["refusal"], "credential_wrong");
+        assert_eq!(serde_json::from_value::<ApiError>(json).unwrap(), error);
+
+        let other = serde_json::to_value(ApiError::new(ErrorCode::NotFound, "gone")).unwrap();
+        assert!(other.get("refusal").is_none());
+        let older = r#"{"code":"backend","message":"credential_wrong: Wrong."}"#;
+        let older: ApiError = serde_json::from_str(older).unwrap();
+        assert_eq!(older.refusal, None);
+    }
+
+    /// The code and the sentence come from the field, else for a backend error from the text
+    /// before the first `": "`. No other error has a code, and no other message loses a word.
+    #[test]
+    fn a_refusal_s_code_and_sentence_come_from_its_field_or_an_older_message() {
+        let backend = |code, sentence| ApiError::from(crate::BackendError::new(code, sentence));
+        let current = backend("account_taken", "Another profile.");
+        assert_eq!(current.refusal_code(), Some("account_taken"));
+        assert_eq!(current.sentence(), "Another profile.");
+        let nested = backend("pam_failed", "pam: bad");
+        assert_eq!(nested.sentence(), "pam: bad");
+
+        let older = ApiError::new(ErrorCode::Backend, "account_taken: Another profile.");
+        assert_eq!(older.refusal_code(), Some("account_taken"));
+        assert_eq!(older.sentence(), "Another profile.");
+
+        let elsewhere = ApiError::new(ErrorCode::Conflict, "account_taken: Another profile.");
+        assert_eq!(elsewhere.refusal_code(), None);
+        assert_eq!(elsewhere.sentence(), "account_taken: Another profile.");
+
+        for whole in [
+            "seats run on a Windows Server",
+            "Turn seats on: then try again",
+            "pf-seat: not a code",
+            ": no code",
+        ] {
+            let error = ApiError::new(ErrorCode::Backend, whole);
+            assert_eq!(error.refusal_code(), None, "{whole}");
+            assert_eq!(error.sentence(), whole);
+        }
+
+        let bare = ApiError {
+            refusal: Some("account_taken".into()),
+            ..ApiError::new(ErrorCode::Backend, "Another profile.")
+        };
+        assert_eq!(bare.refusal_code(), Some("account_taken"));
+        assert_eq!(bare.sentence(), "Another profile.");
     }
 }

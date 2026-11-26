@@ -24,7 +24,9 @@ Each connection carries one request, and at most eight are served at once. A fra
 big-endian length, then JSON, 64 KiB at most. A request is
 `{"schema_version": 1, "command": {"type": "<command>", …}}`; the answer is
 `{"status": "success", "schema_version": 1, "result": {"kind": "<result>", …}}`, or
-`"status": "error"` with `error: {code, message}`. The types are `Request`, `Command` and
+`"status": "error"` with `error: {code, message}`. A refusal from the platform backend also
+carries its own code, such as `credential_wrong`, as `error.refusal`, and `message` leads with
+`<refusal>: `. A reader that finds no field takes the code from the start of `message`. The types are `Request`, `Command` and
 `Response` in `crates/host/pf-seats/src/ipc.rs`. A request carries no credential of its own:
 `adopt`, `adopt_user`, `credential` and `unlock` carry an account's password, which the supervisor
 seals (Windows) or checks once (Linux) and forgets. On Linux a peer or command the socket refuses
