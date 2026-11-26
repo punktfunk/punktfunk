@@ -12,10 +12,12 @@
 //! These run anywhere: a person's warm start, every yield, the owner's release, and the stop of
 //! the owner's or a person's row. A made seat's stop and delete need `/proc`.
 
+use super::sync::yield_to_the_desk;
 use super::*;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::os::unix::fs::PermissionsExt as _;
+use std::sync::atomic::Ordering;
 
 const INACTIVE: &str = "ActiveState=inactive\nSubState=dead\nResult=success\n";
 const ACTIVE: &str = "ActiveState=active\nSubState=running\nResult=success\n";

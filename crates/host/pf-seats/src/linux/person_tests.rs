@@ -2,6 +2,7 @@
 //! against [`fake`], which records every program it asks for, so a test names exactly what a
 //! stop, a delete or a refused start did to the machine.
 
+use super::start::{login_dropin, login_with, unit_ended, LOGIN_FALLBACK, LOGIN_TRIPPED};
 use super::*;
 use crate::model::CreateSeat;
 use std::os::unix::fs::PermissionsExt as _;

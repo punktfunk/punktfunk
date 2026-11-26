@@ -5,6 +5,8 @@
 //! open. So `Warm` runs the real start only in the one case where the start refuses, at the
 //! desk. In every other case `Warm` brings the unit up itself.
 
+use super::presence::unix_now;
+use super::sync::yield_to_the_desk;
 use super::*;
 use crate::ipc::{
     ApiError, Command, CommandResult, Device, DeviceKind, ErrorCode, KeyAlg, Needs, Proof,
@@ -16,7 +18,7 @@ use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING};
 use std::collections::BTreeSet;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use std::sync::atomic::{AtomicU32, AtomicUsize};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 /// The machine the fake answers for.
 #[derive(Default)]

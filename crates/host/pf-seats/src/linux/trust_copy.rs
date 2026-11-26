@@ -354,7 +354,7 @@ fn sync_trust(
     let admitted = match who {
         Who::Person(admitted) => Some(admitted.clone()),
         Who::Seat { owner } => {
-            let (admitted, copy) = lock_filter(box_dir, id, owner, super::unix_now());
+            let (admitted, copy) = lock_filter(box_dir, id, owner, super::presence::unix_now());
             let written = match copy {
                 Some(copy) => serde_json::to_vec_pretty(&copy)
                     .map_err(std::io::Error::other)
@@ -858,7 +858,7 @@ pub(super) mod tests {
                 fingerprint: fp.to_string(),
                 name: "TV".into(),
             };
-            assert!(lock.admit(&device, super::super::unix_now(), true));
+            assert!(lock.admit(&device, super::super::presence::unix_now(), true));
             lock
         };
         let write = |locks: &Locks| {

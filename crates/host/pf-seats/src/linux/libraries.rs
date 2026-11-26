@@ -381,7 +381,7 @@ pub(super) fn share(
     owner: Option<&Passwd>,
 ) -> Option<Shares> {
     let [Some(nsenter), Some(mount), Some(umount)] =
-        ["nsenter", "mount", "umount"].map(super::which)
+        ["nsenter", "mount", "umount"].map(super::checks::which)
     else {
         tracing::warn!("nsenter, mount or umount not found; no library shown");
         return None;

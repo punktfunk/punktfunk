@@ -2,7 +2,7 @@
 //! sits at the machine.
 //!
 //! The owner's headless session never has a logind seat. So a session of the owner's that has
-//! one is a physical login, and the physical login wins (`mod.rs`).
+//! one is a physical login, and the physical login wins (`start.rs`, `sync.rs`).
 
 use super::run;
 use crate::backend::BackendError;
