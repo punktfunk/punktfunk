@@ -1,9 +1,11 @@
-//! A seat's own Steam client: what of the box's install it copies and how it starts.
+//! A seat's own Steam client: what it copies from the box's install, and how it starts.
 //!
-//! On Windows, Steam runs once per IPC name on a machine: a second start under the default name
-//! closes whoever runs it, in any session and from any folder. So each Windows seat gets a copy
-//! of the box's client in its own profile and starts it only under [`ipc_name`]; the box keeps
-//! the default. The games stay the box's: the copy lists the box's library folders after its own.
+//! On Windows, one Steam runs per IPC name on a machine. A second start under the default name
+//! closes the Steam that runs under it, in any session and from any folder. So each Windows seat
+//! gets a copy of the box's client in its own profile and starts it only under [`ipc_name`].
+//! The box keeps the default name.
+//!
+//! The games stay the box's: the copy lists the box's library folders after its own.
 
 pub mod shortcuts;
 

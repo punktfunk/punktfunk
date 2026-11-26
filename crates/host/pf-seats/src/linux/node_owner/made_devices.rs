@@ -1,15 +1,19 @@
-//! The supervisor's record of each seat device it makes, in [`DIR`], root's alone. The fence
-//! hands a stamped node to a seat only on a record here: anyone who can open `/dev/uinput` or
-//! `/dev/uhid` can write the stamp itself.
+//! The supervisor's records of the devices it made for seats, in [`DIR`], which only root can
+//! write. The udev helper gives a stamped node to a seat only when a record here names the
+//! device. A stamp alone proves nothing: anyone who can open `/dev/uinput` or `/dev/uhid` can
+//! write one.
 //!
-//! - `@<inputN>`: a uinput device the supervisor made, by the name its own fd gives. The kernel
-//!   numbers input devices once, so the name never names another device.
+//! One file per device, and each holds the seat's account:
+//!
+//! - `@<inputN>`: a uinput device the supervisor made, under the kernel name its own file
+//!   descriptor reports. The kernel uses each input number once, so the name can never come to
+//!   mean another device.
 //! - `<token>`: a uhid pad about to be made, whose stamp carries the token. The first HID device
-//!   that carries it binds it, `<token>.bound`, a link to the device's name; only that device
-//!   passes afterwards.
+//!   that carries the token is bound to it by a link, `<token>.bound`, to that device's name.
+//!   From then on only that device passes.
 //!
-//! Each file holds the seat's account. A [`Vouch`] removes its files when it drops, and
-//! [`prune`] removes what a stopped supervisor left.
+//! A [`DeviceRecord`] removes its files when it is dropped. [`prune`] removes the files that a
+//! stopped supervisor left behind.
 
 use std::io::{self, ErrorKind, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
@@ -24,18 +28,18 @@ const TOKEN_LEN: usize = 22;
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// What the supervisor holds for one device it makes for a seat; dropping it withdraws the record.
-pub struct Vouch {
+pub struct DeviceRecord {
     dir: PathBuf,
     account: String,
     token: Option<String>,
     instance: Option<String>,
 }
 
-impl Vouch {
+impl DeviceRecord {
     /// For a device `account` is about to get. A uhid pad (`token`) is recorded now, under a
     /// fresh token its stamp carries; a uinput device once [`made`](Self::made) names it.
-    pub fn new(dir: &Path, account: &str, token: bool) -> io::Result<Vouch> {
-        let mut vouch = Vouch {
+    pub fn new(dir: &Path, account: &str, token: bool) -> io::Result<DeviceRecord> {
+        let mut record = DeviceRecord {
             dir: dir.to_owned(),
             account: account.to_owned(),
             token: None,
@@ -44,9 +48,9 @@ impl Vouch {
         if token {
             let minted = mint();
             put(dir, &minted, account)?;
-            vouch.token = Some(minted);
+            record.token = Some(minted);
         }
-        Ok(vouch)
+        Ok(record)
     }
 
     /// What follows the stamp's prefix: the token, else the account.
@@ -55,7 +59,7 @@ impl Vouch {
     }
 
     /// Records the uinput device made as `instance`, the name its own fd gives, and has udev
-    /// apply its rules to the device's nodes again: the fence may have run before the record.
+    /// apply its rules to the device's nodes again: the udev helper may have run before the record.
     pub fn made(&mut self, instance: &str) -> io::Result<()> {
         if !is_input(instance) {
             return Err(io::Error::other(format!("{instance:?} is no input device")));
@@ -67,7 +71,7 @@ impl Vouch {
     }
 }
 
-impl Drop for Vouch {
+impl Drop for DeviceRecord {
     fn drop(&mut self) {
         let token = self
             .token
@@ -167,7 +171,7 @@ pub(super) fn bind(dir: &Path, token: &str, hid: &str) -> io::Result<bool> {
     }
 }
 
-/// [`DIR`], when it is a directory root's alone: the fence trusts no record anywhere else.
+/// [`DIR`], when it is a directory root's alone: the udev helper trusts no record anywhere else.
 pub fn trusted() -> Option<&'static Path> {
     use std::os::unix::fs::MetadataExt as _;
     let meta = std::fs::symlink_metadata(DIR).ok()?;
@@ -176,7 +180,7 @@ pub fn trusted() -> Option<&'static Path> {
 
 /// Removes every record no live device holds: one for a uinput device that is gone, a token
 /// whose HID device is gone, and a token that never bound. At the supervisor's start only,
-/// before it makes a uhid pad, whose token waits unbound for the fence.
+/// before it makes a uhid pad, whose token waits unbound for the udev helper.
 pub fn prune(dir: &Path, sys: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -223,13 +227,13 @@ mod tests {
     use std::os::unix::fs::MetadataExt as _;
 
     /// A uhid pad's record stands before the pad exists, root's alone, under a token that fits
-    /// its stamp; dropping the vouch takes it and its bind back.
+    /// its stamp; dropping the record takes it and its bind back.
     #[test]
     fn a_uhid_pads_record_is_written_first_and_withdrawn_on_drop() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("pads/vouched");
-        let vouch = Vouch::new(&dir, "pf-seat-1", true).unwrap();
-        let token = vouch.mark().to_owned();
+        let record = DeviceRecord::new(&dir, "pf-seat-1", true).unwrap();
+        let token = record.mark().to_owned();
         assert!(is_token(&token), "{token}");
         let longest = format!("punktfunk-seat:{token}/dualsense-edge/255");
         assert!(longest.len() < 64, "uhid's phys holds {longest}");
@@ -238,8 +242,11 @@ mod tests {
         assert_eq!(mode(&dir), 0o700);
         assert_eq!(mode(&dir.join(&token)), 0o600);
         assert!(bind(&dir, &token, "0003:054C:0CE6.0014").unwrap());
-        assert_ne!(Vouch::new(&dir, "pf-seat-1", true).unwrap().mark(), token);
-        drop(vouch);
+        assert_ne!(
+            DeviceRecord::new(&dir, "pf-seat-1", true).unwrap().mark(),
+            token
+        );
+        drop(record);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
     }
 
@@ -248,17 +255,17 @@ mod tests {
     #[test]
     fn a_uinput_devices_record_is_its_kernel_name() {
         let temp = tempfile::tempdir().unwrap();
-        let mut vouch = Vouch::new(temp.path(), "pf-seat-2", false).unwrap();
-        assert_eq!(vouch.mark(), "pf-seat-2");
+        let mut record = DeviceRecord::new(temp.path(), "pf-seat-2", false).unwrap();
+        assert_eq!(record.mark(), "pf-seat-2");
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
-        assert!(vouch.made("event3").is_err());
-        assert!(vouch.made("input../x").is_err());
-        vouch.made("input987654").unwrap();
+        assert!(record.made("event3").is_err());
+        assert!(record.made("input../x").is_err());
+        record.made("input987654").unwrap();
         assert_eq!(
             account(temp.path(), "@input987654").as_deref(),
             Some("pf-seat-2")
         );
-        drop(vouch);
+        drop(record);
         assert_eq!(account(temp.path(), "@input987654"), None);
     }
 

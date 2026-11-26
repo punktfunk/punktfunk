@@ -1,13 +1,15 @@
-//! The password a person's cold start was proved with, kept for the login helper in that row's
-//! unit (`super::login`) and handed to it once.
+//! How a person's password gets from the supervisor to the login helper, once.
 //!
-//! The supervisor keeps it only for a start through the helper, for at most [`LIFETIME`], and
-//! wipes it when it is handed out, when it expires and when the start stops waiting for it. The
-//! helper asks on [`SOCKET_PATH`], a socket only root can open; the door's socket has no request
-//! that answers with a password. A request names its account and uses up that account's
-//! password whether it is served or not, and only a peer that is root inside that account's
-//! seat unit is served. With SELinux on, the socket carries PID 1's context ([`Label`]), the
-//! one the helper runs in.
+//! A person opens their seat with their password. When the seat then has to start, the login
+//! helper in the seat's unit (`super::login`) needs that same password to open a real login
+//! session. The supervisor keeps the password for that one start, for at most [`LIFETIME`]. It
+//! wipes it when it hands it out, when it expires and when the start stops waiting.
+//!
+//! The helper asks for it on [`SOCKET_PATH`], a socket only root can open. The door's socket has
+//! no request that returns a password. A request names its account and uses up that account's
+//! password whether the request is served or not. Only a peer that is root inside that account's
+//! seat unit is served. With SELinux on, the socket carries PID 1's context ([`Label`]), which
+//! is the context the helper runs in.
 
 use super::LinuxBackend;
 use crate::ipc::{read_frame_bytes, write_frame_bytes};
@@ -29,7 +31,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The passwords waiting for their helper, by account.
 #[derive(Default)]
-pub(super) struct Handover {
+pub(super) struct LoginPasswords {
     waiting: Mutex<HashMap<String, Waiting>>,
 }
 
@@ -38,7 +40,7 @@ struct Waiting {
     until: Instant,
 }
 
-impl Handover {
+impl LoginPasswords {
     /// Keeps a copy of `password` for `account`'s helper from `now`. The copy goes when the
     /// returned [`Offer`] drops, if nothing took it first.
     pub(super) fn offer(&self, account: &str, password: &Secret, now: Instant) -> Offer<'_> {
@@ -49,7 +51,7 @@ impl Handover {
         };
         self.lock().insert(account.to_owned(), waiting);
         Offer {
-            handover: self,
+            passwords: self,
             account: account.to_owned(),
             until,
         }
@@ -74,7 +76,7 @@ impl Handover {
 
 /// A password offered to a helper; dropping it wipes the password if it still waits.
 pub(super) struct Offer<'a> {
-    handover: &'a Handover,
+    passwords: &'a LoginPasswords,
     account: String,
     until: Instant,
 }
@@ -83,7 +85,7 @@ impl Offer<'_> {
     /// Returns once the helper took the password, the password expired, or `live` says the unit
     /// is no longer up to ask for it.
     pub(super) fn wait(&self, live: impl Fn() -> bool) {
-        while self.handover.waits(&self.account) && Instant::now() < self.until && live() {
+        while self.passwords.waits(&self.account) && Instant::now() < self.until && live() {
             std::thread::sleep(Duration::from_millis(200));
         }
     }
@@ -91,7 +93,7 @@ impl Offer<'_> {
 
 impl Drop for Offer<'_> {
     fn drop(&mut self) {
-        self.handover.lock().remove(&self.account);
+        self.passwords.lock().remove(&self.account);
     }
 }
 
@@ -204,10 +206,10 @@ pub(super) fn selinux_context(raw: &[u8]) -> Option<String> {
 
 /// Serves `listener` until the process ends, one request at a time.
 pub fn serve(listener: UnixListener, service: Arc<SeatService<LinuxBackend>>) {
-    let handover = &service.backend().inner.handover;
+    let passwords = &service.backend().inner.login_passwords;
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => hand(handover, stream, peer_in_unit),
+            Ok(stream) => hand(passwords, stream, peer_in_unit),
             Err(error) => tracing::warn!(%error, "login socket did not accept a connection"),
         }
     }
@@ -216,7 +218,7 @@ pub fn serve(listener: UnixListener, service: Arc<SeatService<LinuxBackend>>) {
 /// Answers one request on `stream`: the account it names, then that account's password if
 /// `in_unit` vouches for the peer. A refused peer gets no answer.
 pub(super) fn hand(
-    handover: &Handover,
+    passwords: &LoginPasswords,
     mut stream: UnixStream,
     in_unit: impl Fn(&UnixStream, &str) -> Result<(), String>,
 ) {
@@ -230,7 +232,7 @@ pub(super) fn hand(
         tracing::warn!("login socket got a malformed request");
         return;
     };
-    let password = handover.take(&account, Instant::now());
+    let password = passwords.take(&account, Instant::now());
     if let Err(cause) = in_unit(&stream, &account) {
         tracing::warn!(%account, %cause, "login socket refused a peer");
         return;
@@ -447,9 +449,9 @@ mod tests {
         Secret::new("hunter2 Bärbel".into())
     }
 
-    /// Asks `handover` for `account`'s password over a socket pair, as the helper does, with the
+    /// Asks `passwords` for `account`'s password over a socket pair, as the helper does, with the
     /// peer vouched for or not.
-    fn ask(handover: &Handover, account: &str, vouched: bool) -> Result<Vec<u8>, String> {
+    fn ask(passwords: &LoginPasswords, account: &str, vouched: bool) -> Result<Vec<u8>, String> {
         let (mut helper, supervisor) = UnixStream::pair().unwrap();
         write_frame_bytes(&mut helper, account.as_bytes()).unwrap();
         let in_unit = |_: &UnixStream, _: &str| {
@@ -459,7 +461,7 @@ mod tests {
                 Err("not in the unit".to_owned())
             }
         };
-        hand(handover, supervisor, in_unit);
+        hand(passwords, supervisor, in_unit);
         read_frame_bytes(&mut helper)
             .map(|bytes| bytes.to_vec())
             .map_err(|e| e.to_string())
@@ -468,57 +470,60 @@ mod tests {
     /// The helper gets the password once; a second ask gets an empty answer, and nothing is left.
     #[test]
     fn the_password_is_handed_out_once() {
-        let handover = Handover::default();
-        let offer = handover.offer(ACCOUNT, &secret(), Instant::now());
+        let passwords = LoginPasswords::default();
+        let offer = passwords.offer(ACCOUNT, &secret(), Instant::now());
         assert_eq!(
-            ask(&handover, ACCOUNT, true).unwrap(),
+            ask(&passwords, ACCOUNT, true).unwrap(),
             secret().expose().as_bytes()
         );
-        assert!(!handover.waits(ACCOUNT));
-        assert_eq!(ask(&handover, ACCOUNT, true).unwrap(), b"");
+        assert!(!passwords.waits(ACCOUNT));
+        assert_eq!(ask(&passwords, ACCOUNT, true).unwrap(), b"");
         drop(offer);
-        assert!(handover.lock().is_empty());
+        assert!(passwords.lock().is_empty());
     }
 
     /// A peer the unit check refuses gets no answer at all, and its request still uses the
     /// password up, so the real helper finds none.
     #[test]
     fn a_refused_peer_gets_nothing_and_ends_the_handover() {
-        let handover = Handover::default();
-        let _offer = handover.offer(ACCOUNT, &secret(), Instant::now());
-        assert!(ask(&handover, ACCOUNT, false).is_err(), "closed unanswered");
-        assert!(!handover.waits(ACCOUNT));
-        assert_eq!(ask(&handover, ACCOUNT, true).unwrap(), b"");
+        let passwords = LoginPasswords::default();
+        let _offer = passwords.offer(ACCOUNT, &secret(), Instant::now());
+        assert!(
+            ask(&passwords, ACCOUNT, false).is_err(),
+            "closed unanswered"
+        );
+        assert!(!passwords.waits(ACCOUNT));
+        assert_eq!(ask(&passwords, ACCOUNT, true).unwrap(), b"");
     }
 
     /// A request for another account, or a malformed one, leaves the waiting password alone and
     /// is answered with nothing.
     #[test]
     fn only_the_named_account_s_password_is_handed_out() {
-        let handover = Handover::default();
-        let _offer = handover.offer(ACCOUNT, &secret(), Instant::now());
-        assert_eq!(ask(&handover, "alice", true).unwrap(), b"");
-        assert!(ask(&handover, "../jdoe", true).is_err());
-        assert!(ask(&handover, &"a".repeat(65), true).is_err());
-        assert!(handover.waits(ACCOUNT));
+        let passwords = LoginPasswords::default();
+        let _offer = passwords.offer(ACCOUNT, &secret(), Instant::now());
+        assert_eq!(ask(&passwords, "alice", true).unwrap(), b"");
+        assert!(ask(&passwords, "../jdoe", true).is_err());
+        assert!(ask(&passwords, &"a".repeat(65), true).is_err());
+        assert!(passwords.waits(ACCOUNT));
     }
 
     /// Past its lifetime a password is wiped, not handed out; dropping the offer wipes one that
     /// was never asked for.
     #[test]
     fn a_password_expires_and_goes_with_its_offer() {
-        let handover = Handover::default();
+        let passwords = LoginPasswords::default();
         let start = Instant::now();
-        let offer = handover.offer(ACCOUNT, &secret(), start);
-        assert!(handover.take(ACCOUNT, start + LIFETIME).is_none());
-        assert!(!handover.waits(ACCOUNT));
+        let offer = passwords.offer(ACCOUNT, &secret(), start);
+        assert!(passwords.take(ACCOUNT, start + LIFETIME).is_none());
+        assert!(!passwords.waits(ACCOUNT));
         drop(offer);
-        let offer = handover.offer(ACCOUNT, &secret(), start);
-        assert!(handover.waits(ACCOUNT));
+        let offer = passwords.offer(ACCOUNT, &secret(), start);
+        assert!(passwords.waits(ACCOUNT));
         drop(offer);
-        assert!(!handover.waits(ACCOUNT));
-        let _offer = handover.offer(ACCOUNT, &secret(), start);
-        let early = handover.take(ACCOUNT, start + LIFETIME - Duration::from_millis(1));
+        assert!(!passwords.waits(ACCOUNT));
+        let _offer = passwords.offer(ACCOUNT, &secret(), start);
+        let early = passwords.take(ACCOUNT, start + LIFETIME - Duration::from_millis(1));
         assert_eq!(early, Some(secret()));
     }
 
@@ -528,9 +533,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("login.sock");
         let (listener, _) = bind(&path).unwrap();
-        let handover = Arc::new(Handover::default());
-        let _offer = handover.offer(ACCOUNT, &secret(), Instant::now());
-        let served = Arc::clone(&handover);
+        let passwords = Arc::new(LoginPasswords::default());
+        let _offer = passwords.offer(ACCOUNT, &secret(), Instant::now());
+        let served = Arc::clone(&passwords);
         let server = std::thread::spawn(move || {
             for _ in 0..2 {
                 let (stream, _) = listener.accept().unwrap();
@@ -550,12 +555,12 @@ mod tests {
     /// The wait ends at once when the unit is down, and once the helper took the password.
     #[test]
     fn the_start_stops_waiting_when_the_unit_is_down_or_the_password_taken() {
-        let handover = Handover::default();
-        let offer = handover.offer(ACCOUNT, &secret(), Instant::now());
+        let passwords = LoginPasswords::default();
+        let offer = passwords.offer(ACCOUNT, &secret(), Instant::now());
         let started = Instant::now();
         offer.wait(|| false);
-        assert!(handover.waits(ACCOUNT), "the drop wipes it, not the wait");
-        handover.take(ACCOUNT, Instant::now());
+        assert!(passwords.waits(ACCOUNT), "the drop wipes it, not the wait");
+        passwords.take(ACCOUNT, Instant::now());
         offer.wait(|| true);
         assert!(started.elapsed() < Duration::from_secs(5));
     }

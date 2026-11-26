@@ -1,6 +1,6 @@
-//! A stand-in for the programs the backend runs (`systemctl`, `loginctl`, `getent`, …): a test
-//! installs one, and each call is recorded and answered without running anything, so a test can
-//! say exactly what the backend asked of the machine.
+//! A stand-in for the programs the backend runs (`systemctl`, `loginctl`, `getent`, …). A test
+//! installs one. Each call is then recorded and answered without running anything, so the test
+//! can say exactly what the backend asked of the machine.
 
 use std::cell::RefCell;
 use std::os::unix::process::ExitStatusExt as _;

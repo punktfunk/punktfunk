@@ -9,7 +9,7 @@
 use super::profiles::{edit_error, no_profiles, person_seat, SignedInDevice};
 use super::shared::*;
 use crate::profiles::Profiles;
-use pf_seats::locks::{Lock, PinHash};
+use pf_seats::profile_locks::{Lock, PinHash};
 
 /// A profile's lock, as the profile list shows it.
 #[derive(Serialize, ToSchema)]
@@ -297,7 +297,7 @@ pub(crate) async fn lock_profile(
     }
     if pin
         .as_deref()
-        .is_some_and(|p| !pf_seats::locks::valid_pin(p))
+        .is_some_and(|p| !pf_seats::profile_locks::valid_pin(p))
     {
         return pin_invalid();
     }
@@ -407,7 +407,7 @@ pub(crate) async fn set_profile_pin(
     Path(id): Path<String>,
     Json(body): Json<ProfilePin>,
 ) -> Response {
-    if !pf_seats::locks::valid_pin(&body.pin) {
+    if !pf_seats::profile_locks::valid_pin(&body.pin) {
         return pin_invalid();
     }
     match hashed(body.pin).await {

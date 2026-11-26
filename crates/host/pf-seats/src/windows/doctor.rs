@@ -1,9 +1,9 @@
-//! The Windows seat doctor's rows, decided from facts the shell has already read.
+//! The rows of the Windows seat check, the doctor, decided from facts that were already read.
 //!
-//! `WindowsBackend::doctor_report` probes the box (registry, services, files, ports) into
-//! one [`BoxFacts`] and one [`SeatFacts`] per seat. [`report_rows`] and [`seat_rows`] turn
-//! them into [`Diagnostic`]s: no I/O and no OS types, so the tables run on every target.
-//! Every row is one plain sentence; a problem names the next move.
+//! `WindowsBackend::doctor_report` probes the box (registry, services, files, ports) and fills
+//! one [`BoxFacts`] and, per seat, one [`SeatFacts`]. [`report_rows`] and [`seat_rows`] turn
+//! those into [`Diagnostic`]s. Nothing here does I/O or uses an OS type, so the tests run on
+//! every target. Every row is one plain sentence, and a row about a problem names the next move.
 
 use crate::backend::BackendError;
 use crate::ipc::{Diagnostic, DiagnosticLevel};

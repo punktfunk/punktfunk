@@ -1,20 +1,23 @@
-//! One Windows seat's lifecycle as a pure step function.
+//! One Windows seat's lifecycle, as a pure step function.
 //!
 //! [`State`] is everything a seat's worker and its callers know. [`State::step`] takes one
-//! [`Observation`] and the time, moves the state and answers the [`Action`]s the worker
-//! performs. No I/O and no OS types, so the tests run on every target; `supervisor.rs`
-//! probes what [`State::look`] names and performs.
+//! [`Observation`] and the time, updates the state and returns the [`Action`]s for the worker
+//! to perform. Nothing here does I/O or uses an OS type, so the tests run on every target.
+//! `supervisor.rs` probes what [`State::look`] names and performs the actions.
 //!
-//! A cycle is one keeper and its session: sign in, pass the display gate, start the host,
-//! watch both. The gate is owed once per seat start. A host that exits starts again in the
-//! same session. A fault ends the cycle, and the next one signs in again unless the fault is
-//! permanent ([`Code::permanent`]) or a stop was asked. The wait before it grows with each
-//! cycle in a row: one that ended after its session was active counts apart from one that
-//! never signed in.
+//! A cycle is one keeper and its session: sign in, pass the display gate, start the host, watch
+//! both.
 //!
-//! A [`BackendError`]'s code is a string on the wire. [`Fault::from`] is the one place it is
-//! compared: the retry rule and the console's sentence match on [`Code`]. [`marked_session`]
-//! decides which leftover session of a person's own account a cycle of ours signed in.
+//! - The gate is owed once per seat start.
+//! - A host that exits is started again in the same session.
+//! - A fault ends the cycle. The next cycle signs in again, unless the fault is permanent
+//!   ([`Code::permanent`]) or a stop was asked.
+//! - The wait before the next cycle grows with each cycle in a row. A cycle that ended after its
+//!   session was active counts apart from one that never signed in.
+//!
+//! On the wire, a [`BackendError`]'s code is a string. [`Fault::from`] is the one place that
+//! compares it: the retry rule and the console's sentence match on [`Code`]. [`marked_session`]
+//! decides which leftover session of a person's own account was signed in by a cycle of ours.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]

@@ -24,7 +24,7 @@ pub(crate) mod locks;
 /// Take-turns profiles: a profile bound to a Windows account that takes the console in turn.
 pub(crate) mod take_turns;
 
-pub(crate) use pf_seats::locks::Opens;
+pub(crate) use pf_seats::profile_locks::Opens;
 
 /// Bumped on a breaking change to a field's meaning; `serde(default)` covers additions.
 pub const PROFILES_SCHEMA_VERSION: u32 = 1;
@@ -297,7 +297,10 @@ impl Profiles {
         let (file, unparsed) = read(&path);
         let legacy = legacy_index(&file);
         Profiles {
-            locks: locks::LockStore::open(path.with_file_name(pf_seats::locks::FILE), false),
+            locks: locks::LockStore::open(
+                path.with_file_name(pf_seats::profile_locks::FILE),
+                false,
+            ),
             state: Mutex::new(State {
                 path,
                 file,
@@ -316,7 +319,7 @@ impl Profiles {
     pub fn load_box(path: PathBuf, seat: Option<String>) -> Profiles {
         let (file, unparsed) = parse(&path, std::fs::read(&path).ok());
         Profiles {
-            locks: locks::LockStore::open(path.with_file_name(pf_seats::locks::FILE), true),
+            locks: locks::LockStore::open(path.with_file_name(pf_seats::profile_locks::FILE), true),
             state: Mutex::new(State {
                 stamp: mtime(&path),
                 legacy: legacy_index(&file),

@@ -1,13 +1,17 @@
-//! Pinned IronRDP keeper and credential-free trust handshake.
+//! The keeper's RDP connection, pinned to one certificate, and the trust handshake, which sends
+//! no credential. Both use IronRDP.
 //!
-//! Both roles connect only to `127.0.0.2`, on the port [`keeper::rdp_port`] names, or on
-//! [`keeper::RDP_PORT`] when the seat listener refuses (`connect`). They advertise CredSSP/NLA
-//! without legacy TLS login, and require a HYBRID security selection. `trust` stops
-//! immediately after RDP negotiation and the TLS handshake, before CredSSP, and
-//! reports the observed SHA-256 leaf pin. Runtime TLS verifies that exact pin
-//! before `connect_finalize` can serialize credentials. The keeper requests a
-//! 640x480 desktop, processes protocol responses, discards decoded pixels, and
-//! remains connected until its job is closed or the server disconnects it.
+//! - Both connect only to `127.0.0.2`: on the port [`keeper::rdp_port`] names, or on
+//!   [`keeper::RDP_PORT`] when the seat listener refuses (`connect`).
+//! - Both offer CredSSP/NLA and no legacy TLS login, and require the server to select HYBRID
+//!   security.
+//! - `trust` stops right after RDP negotiation and the TLS handshake, before CredSSP, and
+//!   reports the SHA-256 pin of the leaf certificate it saw.
+//! - At runtime, TLS verifies that exact pin before `connect_finalize` can serialize
+//!   credentials.
+//!
+//! The keeper requests a 640x480 desktop, processes the protocol's responses and discards the
+//! decoded pixels. It stays connected until its job is closed or the server disconnects it.
 
 use ironrdp::connector::{
     self, ClientConnector, ClientConnectorState, ConnectionResult, ConnectorErrorKind, Credentials,

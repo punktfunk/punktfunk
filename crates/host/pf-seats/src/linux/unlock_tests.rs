@@ -1,7 +1,9 @@
-//! A person's row unlocked through the service, against [`fake`]. The backend is the real Linux
-//! one, with its device list, trust copy and box pin, behind [`Warm`]: a real start writes into
-//! `/run` and waits on a port the person's host would open, so `Warm` runs the real start only
-//! where it refuses, at the desk, and otherwise brings the unit up itself.
+//! Tests that unlock a person's row through the service, against [`fake`].
+//!
+//! The backend is the real Linux one, with its device list, trust copy and box pin, wrapped in
+//! [`Warm`]. A real start writes into `/run` and waits on a port that the person's host would
+//! open. So `Warm` runs the real start only in the one case where the start refuses, at the
+//! desk. In every other case `Warm` brings the unit up itself.
 
 use super::*;
 use crate::ipc::{

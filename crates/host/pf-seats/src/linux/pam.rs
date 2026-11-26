@@ -1,14 +1,18 @@
-//! PAM for a person's account: the password check, and the login helper's transaction.
+//! PAM for a person's account: the password check, and the login helper's PAM transaction.
 //!
-//! The check's stack is the `login` service's, which `punktfunk-seat@.service` runs its unit
-//! under (`PAMName=login`), so an account that stack would refuse to log in is refused here:
-//! `pam_authenticate` takes the password, `pam_acct_mgmt` a locked, expired or must-change
-//! account. The daemon never loads libpam: [`check`] runs its own binary as
-//! `punktfunk-seats pam-check <account>` ([`run_check`]), hands it the password on stdin and
-//! reads one code back, and kills it after [`CHECK_TIMEOUT`]. The child's environment is empty
-//! and its argv holds the account alone. Nothing is kept: each side holds the password in one
-//! wiped buffer for the length of the check. [`Login`] is the login helper's whole transaction
-//! (`super::login`), in that process only.
+//! **The check** uses the PAM stack of the `login` service. `punktfunk-seat@.service` runs its
+//! unit under the same stack (`PAMName=login`), so an account that this stack would refuse to
+//! log in is refused here too. `pam_authenticate` checks the password. `pam_acct_mgmt` refuses
+//! an account that is locked, expired, or must change its password.
+//!
+//! The daemon never loads libpam. [`check`] runs the daemon's own binary as
+//! `punktfunk-seats pam-check <account>` ([`run_check`]), hands it the password on stdin, reads
+//! one code back, and kills it after [`CHECK_TIMEOUT`]. The child's environment is empty and
+//! its argv holds only the account. Nothing is kept: each side holds the password in one wiped
+//! buffer for the length of the check.
+//!
+//! **[`Login`]** is the whole PAM transaction of the login helper (`super::login`). It runs in
+//! the helper's process only.
 #![allow(unsafe_code)]
 
 use crate::backend::BackendError;
@@ -909,10 +913,13 @@ pub(super) mod tests {
         assert!(status.unwrap().success(), "{program} {args:?}");
     }
 
-    /// Against the box's own `login` stack, in this process and through the `pam-check` child of
-    /// the built `punktfunk-seats`, which must agree: the right password passes, a wrong one is
-    /// refused with the wrong-password code, and a locked, an expired and a must-change account
-    /// are each refused. Makes and removes the account `pfpamcheck`, so it needs root.
+    /// Checks a password against the box's own `login` stack in two ways, which must agree: in this
+    /// process, and through the `pam-check` child of the built `punktfunk-seats`.
+    ///
+    /// The right password passes. A wrong one is refused with the wrong-password code. A locked
+    /// account, an expired account and an account that must change its password are each refused.
+    ///
+    /// It makes and removes the account `pfpamcheck`, so it needs root.
     #[test]
     #[ignore = "needs root, libpam, the login service and a built punktfunk-seats; makes the account pfpamcheck"]
     fn the_login_stack_decides() {

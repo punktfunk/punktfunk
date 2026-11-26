@@ -4,7 +4,7 @@
 //! from one Ed25519-signed per-channel manifest. Being wrong here is a
 //! security bug, so the check lives once:
 //!
-//! * [`sig`] — detached Ed25519 against pinned keys.
+//! * [`sig`] — detached signatures against pinned keys.
 //! * [`floor`] — the per-channel serial that refuses a replayed older manifest.
 //! * [`manifest`] — schema and fail-closed validation.
 //! * [`feed`] — fetch; verify the post-redirect bytes.

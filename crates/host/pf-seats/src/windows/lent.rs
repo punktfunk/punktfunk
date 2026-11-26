@@ -1,13 +1,20 @@
-//! Desk pads lent to a seat on Windows: which session each lent USB controller is fenced to.
+//! Desk pads lent to a seat on Windows: which session may open each lent USB controller.
 //!
-//! The ledger says which row holds a pad and the supervisor says which session each seat runs
-//! in. [`Lent`] turns the two into one [`Holder`] per USB device and has the service's
-//! [`Hardware`] make it so: the seat's session while it runs, [`Holder::Parked`] while it
-//! doesn't, the desk once no row holds it. A change of holder restarts the device, which ends
-//! what the last holder had open. Only a parked pad going live changes in place: nobody could
-//! list it. A key is the device's USB ids and the serial or port id Windows names it by, so it
-//! names the same pad after a replug and a reboot. What may be lent is the hardware's reading,
-//! never the caller's. No OS types here, so the tables run on every target.
+//! The ledger says which row holds a pad. The supervisor says which session each seat runs in.
+//! [`Lent`] combines the two into one [`Holder`] per USB device and has the service's
+//! [`Hardware`] apply it:
+//!
+//! - the seat's session while the seat runs,
+//! - [`Holder::Parked`] while it doesn't,
+//! - the desk once no row holds the pad.
+//!
+//! A change of holder restarts the device, which closes whatever the last holder had open. One
+//! change happens in place: a parked pad going live, because nobody could list a parked pad.
+//!
+//! A pad's key is its USB ids plus the serial or port id Windows names it by, so the key names
+//! the same pad after a replug and after a reboot. Which pads may be lent is read from the
+//! hardware, never taken from the caller. Nothing here uses an OS type, so the tests run on
+//! every target.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]

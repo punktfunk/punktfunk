@@ -1,13 +1,19 @@
-//! Desk pads lent to a seat: a USB game controller plugged into the box that only its holder's
-//! account opens. One record per lent key in [`DIR`], root's alone: the holder's account while
-//! its seat runs, [`PARKED`] while it doesn't. The directory exists only while a lend does, and
-//! udev's rule line runs [`super::fence`] on USB nodes only while it exists.
+//! Desk pads lent to a seat: a USB game controller plugged into the box, which only the account
+//! that holds it can open.
 //!
-//! A change of holder rewrites the record, then unbinds the device from its driver and binds
-//! it back: every open handle dies, raw USB too, and its nodes come back under the new record. What may be
-//! lent is read from sysfs and udev's database, never from the caller.
+//! [`DIR`] holds one record file per lent controller, and only root can write there. A record
+//! names the holder's account while that account's seat runs, and [`PARKED`] while it doesn't.
+//! The directory exists only while something is lent, and the udev rule runs
+//! [`super::node_owner`] on USB nodes only while it exists.
+//!
+//! When the holder changes, the record is rewritten first. Then the device is unbound from its
+//! driver and bound again. That closes every open handle, raw USB handles too, and the device's
+//! nodes come back owned as the new record says.
+//!
+//! Which controllers may be lent is read from sysfs and udev's database, never taken from the
+//! caller.
 
-use super::fence::vouch::put;
+use super::node_owner::made_devices::put;
 use crate::backend::{pad_handover, pad_not_a_controller, pad_not_present};
 use crate::backend::{BackendError, PresentPad};
 use crate::model::{pad_name, valid_pad_key, Ledger, LentPad, RuntimeState, Seat};
@@ -40,7 +46,7 @@ pub(super) fn runs(state: &RuntimeState) -> bool {
     matches!(state, RuntimeState::Running | RuntimeState::Starting)
 }
 
-/// Whether `dir` is a directory root's alone: the fence trusts no record anywhere else.
+/// Whether `dir` is a directory root's alone: the udev helper trusts no record anywhere else.
 pub(super) fn trusted(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir)
         .is_ok_and(|meta| meta.is_dir() && meta.uid() == 0 && meta.mode() & 0o077 == 0)
@@ -449,7 +455,7 @@ impl Lent {
 
     /// Every record as `ledger` has it, live by each row's state, then a cycle of each plugged-in
     /// device one of `keys` names whose record changed. A record already as the ledger has it
-    /// was leveled, and its device cycled, by a list that ran in between.
+    /// was set live or parked, and its device cycled, by a list that ran in between.
     pub(super) fn settle(&self, ledger: &Ledger, keys: &[String]) -> Result<(), BackendError> {
         let _held = self.hold();
         let want: BTreeMap<&str, Record> = ledger
@@ -489,7 +495,7 @@ impl Lent {
     /// Brings each of `seat`'s lent pads live or parked; a record that already says so changes
     /// nothing. At `starting`, a parked pad going live has udev's rules re-run: only root held
     /// its nodes. Any other change cycles the device. A failure is logged, never returned.
-    pub(super) fn level(&self, seat: &Seat, live: bool, starting: bool) {
+    pub(super) fn set_live(&self, seat: &Seat, live: bool, starting: bool) {
         if seat.lent.is_empty() {
             return;
         }
@@ -846,7 +852,7 @@ mod tests {
         assert_eq!(fresh.code, "pad_not_present", "a serial two devices share");
         assert!(desk.lent.lendable_pad(twin, &lends).is_ok());
 
-        desk.lent.level(&row, false, false);
+        desk.lent.set_live(&row, false, false);
         assert!(desk.cycled(&a.dev), "the lent pad parks");
         assert!(!desk.cycled(&b.dev), "the desk's twin is left alone");
         desk.lent
@@ -1014,21 +1020,21 @@ mod tests {
         let parked = Some(PARKED.to_owned());
         let live = Some("pf-seat-1".to_owned());
 
-        lent.level(&row, false, false);
+        lent.set_live(&row, false, false);
         assert_eq!(
             (held(), desk.cycled(&pad.dev)),
             (parked.clone(), true),
             "no record yet"
         );
         let at = written();
-        lent.level(&row, false, false);
+        lent.set_live(&row, false, false);
         assert_eq!(
             (written(), desk.cycled(&pad.dev)),
             (at, false),
             "parked again"
         );
 
-        lent.level(&row, true, true);
+        lent.set_live(&row, true, true);
         let started = (held(), desk.cycled(&pad.dev), desk.refreshed(&pad));
         assert_eq!(
             started,
@@ -1036,13 +1042,13 @@ mod tests {
             "a start from parked re-runs the rules"
         );
         let at = written();
-        lent.level(&row, true, false);
+        lent.set_live(&row, true, false);
         let again = (written(), desk.cycled(&pad.dev), desk.refreshed(&pad));
         assert_eq!(again, (at, false, false), "running, as recorded");
 
-        lent.level(&row, false, false);
+        lent.set_live(&row, false, false);
         assert_eq!((held(), desk.cycled(&pad.dev)), (parked, true), "stopped");
-        lent.level(&row, true, false);
+        lent.set_live(&row, true, false);
         let found = (held(), desk.cycled(&pad.dev), desk.refreshed(&pad));
         assert_eq!(found, (live.clone(), true, false), "found running");
 
@@ -1050,7 +1056,7 @@ mod tests {
         assert!(!desk.records().exists() && desk.cycled(&pad.dev), "removed");
         lent.release(&row);
         assert!(!desk.cycled(&pad.dev), "removed again");
-        lent.level(&row, true, true);
+        lent.set_live(&row, true, true);
         assert_eq!(
             (held(), desk.cycled(&pad.dev)),
             (live, true),

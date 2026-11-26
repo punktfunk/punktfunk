@@ -1,17 +1,22 @@
-//! The box owner's Steam shortcuts in a made seat's own Steam ([`shortcuts`]).
+//! Puts the box owner's Steam shortcuts into a made seat's own Steam ([`shortcuts`]).
 //!
-//! A shortcut reaches a seat when the box's catalog lists it from a source left on, its program
-//! lies in its start folder, and that folder is the owner's, lies deeper than directly in their
-//! home, and passes a granted root's fence ([`libraries::fenced`]). The seat sees the folder at
-//! `/run/media/punktfunk/shortcuts/<key>` as an [`Overlay`]: a game that saves beside itself
-//! keeps each person's saves apart, and the owner's folder never changes. A custom Proton tool such a shortcut maps comes the same way and
-//! is linked into the seat's `compatibilitytools.d`. Launch options that still name the owner's
-//! home after the move keep a shortcut on the owner's desktop: the seat can't see there.
+//! A shortcut reaches a seat when all of these hold:
 //!
-//! Root writes the seat's records through directory handles while its session is down: each
-//! signed-in account's `shortcuts.vdf` and grid art, and the Proton rows of `config/config.vdf`.
-//! The appids go into the box's [`shortcuts::SEAT_FILE`], for the door, and the seat's own copy,
-//! which is also the ledger of what the box put there.
+//! - The box's catalog lists it, from a source that is left on.
+//! - Its program is inside its start folder.
+//! - The start folder belongs to the owner, is deeper than directly in the owner's home, and
+//!   passes the limits of a granted root ([`libraries::shareable`]).
+//!
+//! The seat sees the folder at `/run/media/punktfunk/shortcuts/<key>` as an [`Overlay`]. A game
+//! that saves beside itself then keeps each person's saves apart, and the owner's folder never
+//! changes. A custom Proton tool that such a shortcut maps arrives the same way and is linked
+//! into the seat's `compatibilitytools.d`. If a shortcut's launch options still name the owner's
+//! home after the move, the shortcut stays on the owner's desktop: a seat can't see there.
+//!
+//! Root writes the seat's Steam records through directory handles while the seat's session is
+//! down: each signed-in account's `shortcuts.vdf` and grid art, and the Proton rows of
+//! `config/config.vdf`. The appids are written twice: to the box's [`shortcuts::SEAT_FILE`], for
+//! the door, and to the seat's own copy, which also records what the box put there.
 
 use super::accounts::Passwd;
 use super::libraries::{self, Library, Overlay, VIEW};
@@ -121,7 +126,7 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
         tracing::info!(shortcut = %name, reason, "owner's shortcut not shared with seats");
     };
     let home = std::fs::canonicalize(&owner.home).unwrap_or_else(|_| owner.home.clone());
-    // Each listed entry with its art, its folder as stored, and that folder past the fence.
+    // Each listed entry with its art, its folder as stored, and that folder once it passed those limits.
     let mut found = Vec::new();
     let mut seen = BTreeSet::new();
     for config in account_configs(&steam) {
@@ -142,7 +147,7 @@ fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[L
                 skip(&entry, "it starts in no absolute folder");
                 continue;
             };
-            let folder = match libraries::fenced(Path::new(&stored), state, owner, libraries) {
+            let folder = match libraries::shareable(Path::new(&stored), state, owner, libraries) {
                 Ok(folder) if in_home_itself(&folder, &home) => {
                     skip(&entry, "it starts in a folder directly in the owner's home");
                     continue;
@@ -236,7 +241,7 @@ fn tools(
             continue;
         }
         let path = root.join(TOOLS).join(&name);
-        match libraries::fenced(&path, state, owner, libraries) {
+        match libraries::shareable(&path, state, owner, libraries) {
             Ok(tool) if owns(&tool, owner.uid) => found.push((name, tool)),
             Ok(_) => tracing::info!(tool = %name, "owner's proton tool isn't theirs; not shared"),
             Err(reason) => tracing::info!(tool = %name, reason, "owner's proton tool not shared"),
