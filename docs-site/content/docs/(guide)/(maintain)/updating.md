@@ -11,8 +11,10 @@ The top of **Host** in the [web console](/docs/web-console) shows the version yo
 it is current; **Check for update** checks right away. Once a newer release exists, the Updates
 card unfolds below it with the channel you follow, how the host was installed, and either an
 **Update now** button or the command that updates this install. The host checks a signed feed on
-`git.unom.io` while the console is open. The host also fires `update.available`
-and `update.applied` on the [event stream](/docs/host-events#the-event-stream).
+`git.unom.io` every six hours while the console is open or the tray icon runs. Once a newer
+release exists, the tray icon's menu shows **Update to** and the version, which opens this card.
+The host also fires `update.available` and `update.applied` on the
+[event stream](/docs/host-events#the-event-stream).
 
 The channel comes from the repository you installed from (on a Steam Deck, the branch
 `~/punktfunk` follows), and the card never switches it — see [Release Channels](/docs/channels).

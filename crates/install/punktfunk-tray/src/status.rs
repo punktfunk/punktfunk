@@ -43,6 +43,9 @@ pub struct Summary {
     /// Lingering/pinned virtual displays; 0 when omitted.
     #[serde(default)]
     pub kept_displays: u32,
+    /// A newer host this install can update to. Absent when current or from an older host.
+    #[serde(default)]
+    pub update_version: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
@@ -130,7 +133,18 @@ impl TrayStatus {
             n => Some(tools::tray_release_displays(u64::from(n))),
         }
     }
+
+    /// The update menu entry, `None` when the host offers none. It opens [`UPDATE_PAGE`].
+    pub fn update_label(&self) -> Option<String> {
+        match self {
+            TrayStatus::Running(s) => s.update_version.as_deref().map(tools::tray_update_to),
+            _ => None,
+        }
+    }
 }
+
+/// The console page whose Updates card applies an update.
+pub const UPDATE_PAGE: &str = "host";
 
 /// Always shown: a dead console changes the label, never hides the row.
 pub fn console_label(responding: bool) -> &'static str {
@@ -517,6 +531,7 @@ mod tests {
             pin_pending: false,
             pending_approvals: 0,
             kept_displays: 0,
+            update_version: None,
         }
     }
 
@@ -660,6 +675,19 @@ mod tests {
         assert_eq!(with(1).as_deref(), Some("Release kept display…"));
         assert_eq!(with(3).as_deref(), Some("Release 3 kept displays…"));
         assert_eq!(TrayStatus::Stopped.release_label(), None);
+    }
+
+    /// A host that predates the field offers nothing; so does a tray with no summary.
+    #[test]
+    fn update_label_names_the_offered_version() {
+        assert_eq!(TrayStatus::Running(summary(false)).update_label(), None);
+        let mut s = summary(true);
+        s.update_version = Some("0.49.0".into());
+        assert_eq!(
+            TrayStatus::Running(s).update_label().as_deref(),
+            Some("Update to 0.49.0…")
+        );
+        assert_eq!(TrayStatus::Degraded.update_label(), None);
     }
 
     #[test]

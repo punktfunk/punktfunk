@@ -597,6 +597,10 @@ pub(crate) struct LocalSummary {
     pending_approvals: u32,
     /// Lingering or pinned virtual displays with no live session. Active (in-use) displays are not counted.
     kept_displays: u32,
+    /// The newer host version the last update check offers this install. Absent when current,
+    /// unchecked, or checks are off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_version: Option<String>,
     /// Other GameStream hosts on this machine, detected at startup. Running one alongside is unsupported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     conflicts: Vec<String>,
@@ -1178,6 +1182,7 @@ pub(crate) async fn get_local_summary(State(st): State<Arc<MgmtState>>) -> Json<
             .iter()
             .filter(|d| d.state == "lingering" || d.state == "pinned")
             .count() as u32,
+        update_version: crate::update::offered_version(),
         // Startup cache (empty if nothing detected / never scanned); not a per-poll process scan.
         conflicts: crate::detect::summary_labels(crate::detect::snapshot()),
         games: crate::session_status::games()

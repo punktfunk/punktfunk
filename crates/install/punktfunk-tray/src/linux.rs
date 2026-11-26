@@ -109,6 +109,7 @@ impl ksni::Tray for HostTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
         let release = self.status.release_label();
+        let update = self.status.update_label();
         let mut items = vec![
             StandardItem {
                 label: self.status.headline(),
@@ -134,6 +135,13 @@ impl ksni::Tray for HostTray {
                 visible: release.is_some(),
                 label: release.unwrap_or_default(),
                 activate: Box::new(|t: &mut Self| t.open_console("displays")),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                visible: update.is_some(),
+                label: update.unwrap_or_default(),
+                activate: Box::new(|t: &mut Self| t.open_console(status::UPDATE_PAGE)),
                 ..Default::default()
             }
             .into(),
