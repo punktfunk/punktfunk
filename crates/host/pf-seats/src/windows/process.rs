@@ -6,8 +6,11 @@
 //!   [`ChildProcess`] is dropped, and when the cycle logs the session off.
 //! - **The RDP bootstrap** reaches the keeper through one inherited anonymous stdin pipe, never
 //!   through argv or the environment.
-//! - **Handles.** A child inherits only the handles its [`Inherit`] list names, whatever another
-//!   seat's spawn has made inheritable in the meantime.
+//! - **Handles.** A child this module starts inherits only the handles its [`Inherit`] list
+//!   names, whatever another seat's spawn has made inheritable in the meantime. A spawn elsewhere
+//!   in the service that names no list, such as the console host's, can inherit the bootstrap
+//!   pipe's read end while the keeper starts; it runs as LocalSystem too, so no boundary is
+//!   crossed.
 //! - **Session children** run on a duplicate of the LocalSystem primary token, retargeted with
 //!   `TokenSessionId`, on the `winsta0\default` desktop.
 //! - **The host's environment** is an allow-listed system base plus the seat's exact variables,

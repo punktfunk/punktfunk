@@ -138,10 +138,13 @@ A failed check changes nothing: the answer is 200 with `enabled: false` and the 
    off writes it back. With `allow_rdp_from_network` the inbound rules on port 3389 are
    enabled if they were off; Shadow stays as it is. The service limits them again each time
    it starts.
-4. Adds the seat listener `punktfunk-tcp`: a copy of `RDP-Tcp` on port 3390 whose sessions load
-   `pf_seat_audio.dll`, with port 3390 blocked from every address but loopback. The x64 build goes
-   to `System32\punktfunk` and the x86 build to `SysWOW64\punktfunk`. Every seat start brings
-   them up to date. Not on ARM64.
+4. Blocks port 3390 from every address but loopback with two firewall rules, then adds the seat
+   listener `punktfunk-tcp`: a copy of `RDP-Tcp` on port 3390 whose sessions load
+   `pf_seat_audio.dll`. The rules go first because TermService opens the port as soon as the
+   listener is written. When the rules can't be added the listener isn't written, a listener
+   already in place is disabled, and seats use port 3389. The x64 build goes to
+   `System32\punktfunk` and the x86 build to `SysWOW64\punktfunk`. Every seat start brings them
+   up to date. Not on ARM64.
 5. Records the Remote Desktop certificate, as `punktfunk-seat-keeper trust --replace` does.
 
 The keeper connects to 3390 when it listens, else to 3389. TermService opens and closes a listener

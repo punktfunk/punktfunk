@@ -426,12 +426,14 @@ pub(super) fn rdp_local_chosen() -> bool {
 }
 
 /// A local or Group Policy firewall rule, in any group, lets an address other than this PC's
-/// reach Remote Desktop ([`switch::reaches_rdp_from_network`]). For the doctor.
+/// reach Remote Desktop, or the seat listener while it is configured
+/// ([`switch::reaches_rdp_from_network`]). For the doctor.
 pub(super) fn rdp_reachable() -> bool {
+    let seat_listener = super::seat_listener::configured().then_some(keeper::SEAT_LISTENER_PORT);
     [FIREWALL_RULES, POLICY_RULES]
         .iter()
         .flat_map(|store| firewall_rules(store))
-        .any(|rule| switch::reaches_rdp_from_network(&rule))
+        .any(|rule| switch::reaches_rdp_from_network(&rule, seat_listener))
 }
 
 /// Narrows Remote Desktop's firewall rules again when the operator keeps Remote Desktop on this

@@ -6,7 +6,8 @@
 //! [`configured`], and to port 3389 otherwise.
 //!
 //! TermService opens a listener when its registry key appears and closes it when the key goes,
-//! so nothing has to restart.
+//! so nothing has to restart. That makes the order matter: the firewall rules that block the
+//! port from every address but loopback go in first, and the listener is written once they are.
 //!
 //! The DLL loads into every process of a seat session, at that process's bitness. The x64 build
 //! goes to `System32\punktfunk` and the x86 build to `SysWOW64\punktfunk`, under one name, which
@@ -40,18 +41,39 @@ const RULES: [(&str, &str); 2] = [
 const NOT_LOOPBACK: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,\
     ::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
 
-/// Bring the DLLs, the listener and its firewall rules up to date with `host_path`'s install.
-/// Writes nothing that already matches, so live seat sessions see no change.
+/// Bring the DLLs, the firewall rules and the listener up to date with `host_path`'s install.
+/// The rules go in before the listener is written, because its port opens at once. When they
+/// can't, no listener is written, a listener already in place is disabled, and [`configured`]
+/// is false. Writes nothing that already matches, so live seat sessions see no change.
 pub(super) fn ensure(host_path: &Path) -> Result<(), String> {
     if !cfg!(target_arch = "x86_64") {
         // Windows 11 on ARM64 would need an ARM64X build for its emulated x64 processes.
         return Ok(());
     }
     let dll = deploy(host_path)?;
+    if let Err(cause) = block_network() {
+        disable_listener();
+        return Err(cause);
+    }
     write_listener(&dll).map_err(|e| format!("write the {LISTENER} listener: {e}"))?;
     sweep(&native_dir(), Some(&dll));
     sweep(&wow_dir(), Some(&dll));
-    block_network()
+    Ok(())
+}
+
+/// Switch off the listener already in place, whose block rules are missing and can't be added.
+/// A listener without [`MARKER`] is not ours and stays.
+fn disable_listener() {
+    let ours = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(
+        format!(r"{WINSTATIONS}\{LISTENER}"),
+        KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+    );
+    if let Ok(ours) = ours
+        && ours.get_value::<u32, _>(MARKER).ok() == Some(1)
+        && let Err(error) = ours.set_value("fEnableWinStation", &0_u32)
+    {
+        tracing::warn!(%error, "seat listener stays enabled without its rules");
+    }
 }
 
 /// The listener [`ensure`] wrote is in place and enabled on [`LISTENER_PORT`]. Never on ARM64,
@@ -74,7 +96,8 @@ pub(super) fn configured() -> bool {
             })
 }
 
-/// Remove the listener, its rules and the DLLs. A DLL still loaded goes at the next restart.
+/// Remove the listener, then its rules and the DLLs. A listener whose key doesn't go keeps both,
+/// so its port never stays open without the rules. A DLL still loaded goes at the next restart.
 pub(super) fn remove() {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let ours = hklm
@@ -85,11 +108,12 @@ pub(super) fn remove() {
         .and_then(|key| key.get_value::<u32, _>(MARKER))
         .is_ok_and(|marker| marker == 1);
     if ours
-        && let Ok(stations) =
-            hklm.open_subkey_with_flags(WINSTATIONS, KEY_ALL_ACCESS | KEY_WOW64_64KEY)
-        && let Err(e) = stations.delete_subkey_all(LISTENER)
+        && let Err(e) = hklm
+            .open_subkey_with_flags(WINSTATIONS, KEY_ALL_ACCESS | KEY_WOW64_64KEY)
+            .and_then(|stations| stations.delete_subkey_all(LISTENER))
     {
         tracing::warn!(error = %e, "seat listener key did not go");
+        return;
     }
     for (name, _) in RULES {
         let _ = run(

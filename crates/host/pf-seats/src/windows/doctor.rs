@@ -53,7 +53,8 @@ pub(crate) struct BoxFacts {
     pub termservice: bool,
     /// The operator keeps Remote Desktop to this PC.
     pub rdp_local_only: bool,
-    /// An enabled firewall rule lets an address other than this PC's reach Remote Desktop.
+    /// An enabled firewall rule lets an address other than this PC's reach Remote Desktop, on its
+    /// own port or the seat listener's.
     pub rdp_reachable: bool,
     /// The first of the host and keeper executables that isn't on disk.
     pub missing_file: Option<PathBuf>,
