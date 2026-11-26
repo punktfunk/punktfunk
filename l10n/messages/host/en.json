@@ -217,7 +217,7 @@
 	"apierr_rdp_firewall_restore": "Couldn't restore Remote Desktop's firewall rules.",
 	"apierr_rdp_listener_off": "Couldn't turn Remote Desktop back off.",
 	"apierr_rdp_listener_on": "Couldn't turn on Remote Desktop.",
-	"apierr_rdp_pin_changed": "Remote Desktop's certificate has changed, so seats can't sign in. Turn seats off and on under Profiles → Seats to record the new one.",
+	"apierr_rdp_pin_changed": "Remote Desktop answered with a certificate that isn't this host's, so seats can't sign in. Close any other program that uses Remote Desktop's port, then try again.",
 	"apierr_rdp_trust": "Couldn't record this host's Remote Desktop certificate. Check that Remote Desktop is running, then try again.",
 	"apierr_recording_not_deleted": "Couldn't delete the recording",
 	"apierr_recording_not_read": "Couldn't read the recording",

@@ -210,7 +210,7 @@
 	"apierr_rdp_firewall_restore": "Impossibile ripristinare le regole firewall di Desktop remoto.",
 	"apierr_rdp_listener_off": "Impossibile disattivare di nuovo Desktop remoto.",
 	"apierr_rdp_listener_on": "Impossibile attivare Desktop remoto.",
-	"apierr_rdp_pin_changed": "Il certificato di Desktop remoto è cambiato, quindi le postazioni non possono accedere. Disattiva e riattiva le postazioni in Profili → Postazioni per registrare quello nuovo.",
+	"apierr_rdp_pin_changed": "Desktop remoto ha risposto con un certificato che non è di questo host, quindi le postazioni non possono accedere. Chiudi ogni altro programma che usa la porta di Desktop remoto, poi riprova.",
 	"apierr_rdp_trust": "Impossibile registrare il certificato Desktop remoto di questo host. Verifica che Desktop remoto sia in esecuzione, poi riprova.",
 	"apierr_recording_not_deleted": "Impossibile eliminare la registrazione",
 	"apierr_recording_not_read": "Impossibile leggere la registrazione",

@@ -36,8 +36,8 @@ const MY_STORE: &str = "MY";
 const NAMED_CERTIFICATE: &str = "SSLCertificateSHA1Hash";
 
 /// The console's sentence for a leaf that is no longer the recorded one.
-const PIN_CHANGED: &str = "Remote Desktop's certificate has changed, so seats can't sign in. \
-    Turn seats off and on under Profiles → Seats to record the new one.";
+const PIN_CHANGED: &str = "Remote Desktop answered with a certificate that isn't this host's, so \
+    seats can't sign in. Close any other program that uses Remote Desktop's port, then try again.";
 
 /// The pin a seat starts with: `pin`, unless TermService presents another leaf. A new leaf the
 /// machine holds replaces `pin` in `root`; any other refuses with `rdp_pin_changed`. A leaf that
