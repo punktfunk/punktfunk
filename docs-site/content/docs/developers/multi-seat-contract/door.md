@@ -158,7 +158,8 @@ the door is on for instead of asking. A switch it refuses or abandons sets
 `door_switch_failed` on the starting host's `GET /host`, and the console stops waiting. A first
 switch-on other than a takeover removes each box file the member lacks, avatars included. An
 off whose files don't all arrive home still turns the door off and brings the owner's host and
-console back, whose `GET /host` reports the failed off. It keeps the record and the box's files,
+console back, whose `GET /host` reports the failed off. A box file over 8 MiB, or an avatar
+listing over 1 MiB, counts as one that didn't arrive. The off keeps the record and the box's files,
 and holds the door's units with `/var/lib/punktfunk-seats/door-hold`: the next on keeps those
 files, and the off after it hands them back.
 

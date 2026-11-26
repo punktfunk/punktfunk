@@ -21,6 +21,7 @@
 
 use super::accounts::{Passwd, Switchable};
 use super::err;
+use super::shared::MAX_TRUST_BYTES;
 use crate::backend::BackendError;
 use std::ffi::OsStr;
 use std::io::Read;
@@ -35,6 +36,10 @@ const PORT_KEYS: [&str; 3] = [
 
 /// The most [`ports`] reads: the owner's two env files, theirs to make any size.
 const MAX_PORT_INPUT: u64 = 1 << 20;
+
+/// The most [`kept`] reads, such as an avatar listing that the door's account writes. 1 MiB is
+/// tens of thousands of names.
+const MAX_LISTING: u64 = 1 << 20;
 
 /// Whom a switch is for.
 #[derive(Debug, PartialEq, Eq)]
@@ -207,7 +212,8 @@ fn safe_lines(keys: &str, flags: &str) -> Cmd {
 }
 /// A write as one side: stdin beside `$1`, which [`hand_over`] moves over it or drops.
 const TO_DOOR: &str = r#"umask 077; cat >"$1.tmp""#;
-const TO_OWNER: &str = r#"umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp""#;
+/// The owner's write fails past `$2` bytes, so a file the door's account grew never moves home.
+const TO_OWNER: &str = r#"umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2""#;
 const MOVE: &str = r#"mv -f "$1.tmp" "$1""#;
 const DROP: &str = r#"rm -f "$1.tmp""#;
 /// `$1`, the owner's `web.env`, less its `$3` lines, then `$2`: the door's last password line.
@@ -458,13 +464,16 @@ fn must(stages: &[Cmd]) -> Result<(), Stop> {
     }
 }
 
-/// `$(cmd)`: its stdout less the trailing newlines.
-fn kept(cmd: Cmd) -> Vec<u8> {
-    let mut out = hands::pipe(&[cmd.kept(u64::MAX)]).1;
+/// `$(cmd)`: its stdout less the trailing newlines, or `None` past [`MAX_LISTING`] bytes.
+fn kept(cmd: Cmd) -> Option<Vec<u8>> {
+    let mut out = hands::pipe(&[cmd.kept(MAX_LISTING + 1)]).1;
+    if out.len() as u64 > MAX_LISTING {
+        return None;
+    }
     while out.last() == Some(&b'\n') {
         out.pop();
     }
-    out
+    Some(out)
 }
 
 /// Root's `rm -f`: every path is tried, and any failure but a missing file fails the whole.
@@ -638,14 +647,21 @@ fn take(owner: &Owner, name: &str, fresh: bool) -> Result<(), Stop> {
     )
 }
 
+/// `name` in the owner's folder, written from stdin as the owner. Past [`MAX_TRUST_BYTES`], the
+/// size the trust copy refuses for the same files, the write fails.
+fn to_owner(owner: &Owner, name: &str) -> Cmd {
+    let cap = MAX_TRUST_BYTES.to_string();
+    let (head, tail) = (["sh", "-c", TO_OWNER, "sh"], [OsStr::new(&cap)]);
+    Cmd::by(&owner.side(), &head, Some(&owner.file(name)), &tail)
+}
+
 /// `name` from the box directory back to the owner: read as the door, written as the owner, so
-/// neither side's links lead anywhere that side couldn't go.
+/// neither side's links lead anywhere that side couldn't go. A file too large fails the step.
 fn give(owner: &Owner, name: &str) -> Result<(), Stop> {
     if !door_test(name) {
         return Ok(());
     }
-    let to_owner = owner.cmd(&["sh", "-c", TO_OWNER, "sh"], name);
-    let stages = [as_door(&["cat", "--"], name), to_owner];
+    let stages = [as_door(&["cat", "--"], name), to_owner(owner, name)];
     hand_over(&stages, &owner.side(), &owner.file(name))
 }
 
@@ -680,8 +696,11 @@ fn give_password(owner: &Owner) -> Result<(), Stop> {
             eprintln!("door-helper: {BOX_DIR}/web-password holds no line safe to hand back");
             return Ok(());
         }
-        let to_owner = owner.cmd(&["sh", "-c", TO_OWNER, "sh"], "web-password");
-        let stages = [door(), safe_lines(keys, "-a"), to_owner];
+        let stages = [
+            door(),
+            safe_lines(keys, "-a"),
+            to_owner(owner, "web-password"),
+        ];
         return hand_over(&stages, &owner.side(), &owner.file("web-password"));
     }
     let stages = [
@@ -707,13 +726,15 @@ fn give_password(owner: &Owner) -> Result<(), Stop> {
     must(&[splice])
 }
 
-/// The names `ls -1` printed, split as the shell splits words, that [`safe_name`] keeps.
-fn avatars(listing: &[u8]) -> Vec<String> {
-    listing
+/// The names `ls -1` prints, split as the shell splits words, that [`safe_name`] keeps. A listing
+/// past [`MAX_LISTING`] ends the switch, as a file that can't be read does.
+fn avatars(ls: Cmd) -> Result<Vec<String>, Stop> {
+    let listing = kept(ls.quiet()).ok_or_else(|| die("the avatar listing runs past 1 MiB"))?;
+    Ok(listing
         .split(|b| matches!(b, b' ' | b'\t' | b'\n'))
         .filter(|name| safe_name(name))
         .map(|name| format!("profiles/{}", String::from_utf8_lossy(name)))
-        .collect()
+        .collect())
 }
 
 fn safe_name(name: &[u8]) -> bool {
@@ -730,16 +751,14 @@ fn take_avatars(owner: &Owner, fresh: bool) -> Result<(), Stop> {
         must(&[as_door(&["rm", "-rf"], "profiles")])?;
     }
     must(&[as_door(&["mkdir", "-p", "-m", "0700"], "profiles")])?;
-    let ls = owner.cmd(&["ls", "-1", "--"], "profiles");
-    for name in avatars(&kept(ls.quiet())) {
+    for name in avatars(owner.cmd(&["ls", "-1", "--"], "profiles"))? {
         take(owner, &name, false)?;
     }
     Ok(())
 }
 
 fn give_avatars(owner: &Owner) -> Result<(), Stop> {
-    let ls = as_door(&["ls", "-1", "--"], "profiles");
-    for name in avatars(&kept(ls.quiet())) {
+    for name in avatars(as_door(&["ls", "-1", "--"], "profiles"))? {
         give(owner, &name)?;
     }
     Ok(())
@@ -940,7 +959,7 @@ impl Door {
         }
         let step = |done: Result<(), Stop>| if strict { done } else { Ok(()) };
         step(ensure_group(DOOR_GROUP))?;
-        if kept(Cmd::root(&["id", "-gn", DOOR])) != DOOR_GROUP.as_bytes() {
+        if kept(Cmd::root(&["id", "-gn", DOOR])).as_deref() != Some(DOOR_GROUP.as_bytes()) {
             step(must(&[Cmd::root(&["usermod", "-g", DOOR_GROUP, DOOR])]))?;
         }
         // The door's own files only: a file another account left there stays as it is.
@@ -2168,6 +2187,37 @@ mod tests {
         assert!(ran.seats);
     }
 
+    /// A listing of the door's avatars past the cap ends the off as an unreadable file does: the
+    /// door stays off, and the record, the mark and the hold stay for the next off.
+    #[test]
+    fn an_avatar_listing_past_the_cap_ends_the_off() {
+        let flood = format!("profiles/{}", "a".repeat(MAX_LISTING as usize));
+        let mut scenario = off_owner();
+        let world = &mut scenario.world;
+        world.door.push((Box::leak(flood.into_boxed_str()), "png"));
+        let ran = switch(scenario);
+        assert_eq!(
+            (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
+            (1, Some("alice"), true, true)
+        );
+        assert!(ran.calls.ends_with(&stand_down()));
+    }
+
+    /// The owner's side of a hand-back writes at most the cap. A file past it fails the
+    /// hand-over, so nothing moves; a file at the cap arrives whole. Run for real.
+    #[test]
+    fn a_hand_back_past_the_cap_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("profiles/alice.png");
+        let to = to.to_str().unwrap();
+        let write = || Cmd::root(&["sh", "-c", TO_OWNER, "sh", to, "4"]);
+        let feed = |bytes| Cmd::root(&["printf", bytes]);
+        assert!(hands::pipe_held(&[feed("12345"), write()]).is_err());
+        assert!(hands::pipe_held(&[Cmd::root(&["yes"]), write()]).is_err());
+        assert_eq!(hands::pipe_held(&[feed("1234"), write()]), Ok(()));
+        assert_eq!(std::fs::read(format!("{to}.tmp")).unwrap(), b"1234");
+    }
+
     /// What an off runs once the files are home, a failed hand-back's too: the seats released,
     /// the units off, the owner's host and console back.
     fn stand_down() -> Vec<String> {
@@ -2456,25 +2506,25 @@ mod tests {
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-cert.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-cert.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-cert.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-key.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-key.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-key.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/uniqueid",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/uniqueid",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/uniqueid 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/punktfunk1-paired.json",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/punktfunk1-paired.json 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles.json",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-key",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-session-epoch",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/web-session-epoch 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-password",
@@ -2482,12 +2532,12 @@ mod tests {
         "grep -aq -E ^[[:blank:]]*PUNKTFUNK_UI_(PASSWORD(_HASH)?|SECRET)=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-password",
         "grep -a -E ^[[:blank:]]*PUNKTFUNK_UI_(PASSWORD(_HASH)?|SECRET)=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-password"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/web-password 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-password"#,
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles/alice.png",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/profiles/alice.png",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/profiles/alice.png 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
         "systemctl is-active --quiet punktfunk-seats.service",
         "punktfunk-seats stop-all",
@@ -2505,25 +2555,25 @@ mod tests {
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-cert.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-cert.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-cert.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-key.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-key.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-key.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/uniqueid",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/uniqueid",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/uniqueid 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/punktfunk1-paired.json",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/punktfunk1-paired.json 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles.json",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-key",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-session-epoch",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/web-session-epoch 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
@@ -2534,7 +2584,7 @@ mod tests {
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles/alice.png",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/profiles/alice.png",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/profiles/alice.png 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
         "systemctl is-active --quiet punktfunk-seats.service",
         "punktfunk-seats stop-all",
