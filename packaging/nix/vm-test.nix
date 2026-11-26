@@ -1,7 +1,8 @@
 # Boots the NixOS module with the real packages. The host, console and runner units come up from
 # the packages' own files plus the module's drop-ins, and the runner keeps the sandbox its shipped
-# unit declares. Then the door switches on and off through its helper and polkit rule. It builds
-# the host, so only the `ci:nix-rust` lane of nix.yml builds this.
+# unit declares. Then the door switches on and off through its helper and polkit rule, and its two
+# units serve under their sandbox. It builds the host, so only the `ci:nix-rust` lane of nix.yml
+# builds this.
 {
   testers,
   module,
@@ -88,6 +89,14 @@ testers.runNixOSTest {
     owner = machine.succeed(f"stat -c %U:%G {box}/native-key.pem").strip()
     assert owner == "punktfunk:punktfunk-door", owner
     machine.succeed(f"{seats} list | grep -q owner=true")
+
+    # Both door units work under their sandbox, not only start: the console answers a request,
+    # and the door answers on the management port the owner's host had.
+    machine.wait_for_unit("punktfunk-web-door.service")
+    machine.wait_for_open_port(47992)
+    machine.wait_for_open_port(47990)
+    machine.succeed("curl -fsk -o /dev/null https://127.0.0.1:47992/")
+    machine.succeed("curl -fsk https://127.0.0.1:47990/api/v1/health | grep -q '\"status\":\"ok\"'")
 
     # A repeat changes nothing, and another member can't take a door that is on.
     machine.succeed(switch("alice", "on"))
