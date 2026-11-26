@@ -2213,8 +2213,9 @@ mod tests {
     #[test]
     #[ignore = "needs root on Linux: hands the copy to other uids and reads its ACLs back"]
     fn an_account_s_copy_passes_to_root_and_a_planted_folder_is_left_alone() {
-        const READER: u32 = 3_999_999_940;
-        const STRANGER: u32 = 3_999_999_941;
+        // Ids no account has, below 65536: a container's user namespace maps only those.
+        const READER: u32 = 59_940;
+        const STRANGER: u32 = 59_941;
         let temp = tempfile::tempdir().unwrap();
         let (box_dir, state) = (temp.path().join("box"), temp.path().join("state"));
         std::fs::create_dir_all(box_dir.join("profiles")).unwrap();
