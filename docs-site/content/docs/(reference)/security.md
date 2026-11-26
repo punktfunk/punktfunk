@@ -123,6 +123,13 @@ one. The host streams the composed desktop, so a window hidden from recording to
 Run the Windows host on a gaming or dedicated PC, not on your work laptop or the box with your
 password vault.
 
+### Windows seats can change Steam's files
+
+Steam's installer gives every Windows account on the PC full control of Steam's folder. A seat's
+account can change Steam's own files there. It can also add a non-Steam game to the PC's Steam,
+which the other seats then find in theirs. Give a Windows seat only to someone you would let
+install software on the PC.
+
 ### The Linux host runs as your user
 
 The Linux host runs in your desktop session as your own account, not root, and its web console
