@@ -26,6 +26,10 @@ static ICONS: &[(&str, &[u8])] = &[
     ("gog", include_bytes!("../../assets/launchers/gog.png")),
     ("xbox", include_bytes!("../../assets/launchers/xbox.png")),
     ("hydra", include_bytes!("../../assets/launchers/hydra.png")),
+    (
+        "ubisoft",
+        include_bytes!("../../assets/launchers/ubisoft.png"),
+    ),
 ];
 
 /// The mark for an entry's `icon` token, or `None` — draw the launcher's name instead — when
