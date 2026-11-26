@@ -17214,6 +17214,13 @@
               }
             ]
           },
+          "update_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newer host version the last update check offers this install. Absent when current,\nunchecked, or checks are off."
+          },
           "version": {
             "type": "string",
             "description": "Host version (mirrors `/health`)."

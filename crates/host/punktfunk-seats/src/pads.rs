@@ -344,10 +344,28 @@ pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
 }
 
 /// At the supervisor's stop (`ungate`): without the socket, the box's own hidraw and joystick
-/// nodes open to everyone again, as the distro's rules have them.
+/// nodes open to everyone again, as the distro's rules have them. While a seat's unit runs the
+/// socket stays: a seat outlives a supervisor restart, and its user would open the owner's pads
+/// in the gap.
 pub fn unbind() {
+    if seat_units_up() {
+        tracing::warn!("pad socket stays: a seat's unit is up");
+        return;
+    }
     let _ = std::fs::remove_file(SOCKET_PATH);
     refresh_pad_nodes();
+}
+
+/// Whether any seat's unit is up, starting or stopping. A `systemctl` that gives no answer
+/// counts as yes.
+fn seat_units_up() -> bool {
+    let listed = Command::new("systemctl")
+        .args(["list-units", "--plain", "--no-legend"])
+        .args(["--state=active,activating,deactivating,reloading"])
+        .arg(pf_seats::linux::seat_unit("*"))
+        .stdin(Stdio::null())
+        .output();
+    listed.map_or(true, |out| !out.status.success() || !out.stdout.is_empty())
 }
 
 /// Has udev apply its rules to every hidraw and `js*` node again. `65-punktfunk-seats.rules`

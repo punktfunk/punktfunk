@@ -32,7 +32,9 @@ wait on it, and the account's uid is read again before the row lands.
 
 After a failed check a device waits 2 s × 2^failures, and 15 minutes after the
 fifth. Two failed checks for one account reach PAM in any 15 minutes, from every source together,
-so a stack that locks after three, such as `pam_faillock`, is never driven there. A refusal
+so a stack that locks after three, such as `pam_faillock`, is never driven there. That window
+doubles with every ten failed checks since the account's last right password, up to 24 hours,
+and a day without a failed check forgets them. A refusal
 answers `unlock_locked_out` with the wait in its sentence. A check that gave no verdict counts as
 failed.
 

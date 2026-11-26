@@ -159,6 +159,12 @@ console back, whose `GET /host` reports the failed off. It keeps the record and 
 and holds the door's units with `/var/lib/punktfunk-seats/door-hold`: the next on keeps those
 files, and the off after it hands them back.
 
+The owner's console loads the password file as an environment file, and SteamOS sources it in a
+shell. So an off hands back only the door's `PUNKTFUNK_UI_PASSWORD`, `PUNKTFUNK_UI_PASSWORD_HASH`
+and `PUNKTFUNK_UI_SECRET` lines, and only with a value of plain characters
+(letters, digits, `_.,:=+/@%^-`) or in single quotes with no quote inside, 255 characters at
+most. A file with no such line leaves the owner the password file they had.
+
 ## The box's ports
 
 The door binds the ports the owner's `host.env` names
