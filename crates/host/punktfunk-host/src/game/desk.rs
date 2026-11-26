@@ -1045,8 +1045,8 @@ pub(crate) mod lease_tests {
             .unwrap_or_else(|e| e.into_inner());
         let id = "custom:desk-held";
         let before = stats(id).totals;
-        // 15 s: the lease counts its launcher window from after the launch's synced write, so
-        // the game outlives that window plus a write that takes seconds on a busy disk.
+        // 15 s: the lease's watcher starts after the launch's synced write, which takes seconds
+        // on a busy disk, and the game must still be running then.
         launch(target(id, "sleep 15"));
         wait_for(id, Some("running"), SHIM_WINDOW + Duration::from_secs(5));
         assert!(

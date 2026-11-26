@@ -231,6 +231,9 @@ pub(crate) struct SpawnAt<'a> {
 pub(crate) struct Spawned {
     /// This session started the title (nested counts); `false` for an adoption or a failure.
     pub now: bool,
+    /// When the title started: stamped as the start returns, before the launch's synced
+    /// write. `None` when `now` is `false`.
+    pub started_at: Option<std::time::Instant>,
     /// Windows pid for the lease. `None` when nothing spawned, or the spawn only forwards.
     pub pid: Option<u32>,
     /// The launch child and whether it leads its process group: the liveness signal and the
@@ -246,7 +249,8 @@ pub(crate) struct Spawned {
 /// adopted a running copy, then settle the claim with the compositor the launch runs in. Once
 /// per launch; a rebuild never re-spawns. With no title, a client whose launch still runs gets
 /// that launch's workspace back, as an adoption does. Windows looks a library title up again in
-/// `view`.
+/// `view`. The start's instant is taken as the start returns, ahead of the launch's synced
+/// write, so the lease counts the launcher window from the start and not from its own open.
 pub(crate) fn spawn(
     target: Option<&LaunchTarget>,
     owner: &LaunchOwner,
@@ -291,6 +295,7 @@ pub(crate) fn spawn(
         };
         match launched {
             Ok(l) => {
+                out.started_at = Some(std::time::Instant::now());
                 out.pid = l.and_then(|l| l.tracked_pid());
                 out.now = true;
             }
@@ -307,6 +312,7 @@ pub(crate) fn spawn(
     if let Some(cmd) = t.command.as_deref().filter(|_| !adopt) {
         match crate::library::launch_mac_command(cmd) {
             Ok(child) => {
+                out.started_at = Some(std::time::Instant::now());
                 out.now = true;
                 out.child = Some((child, true));
             }
@@ -329,6 +335,8 @@ pub(crate) fn spawn(
         }
         Some(cmd) if at.nested_spawn => {
             tracing::info!(command = %cmd, "launch nested into the per-session gamescope");
+            // Gamescope started the title before this call, so this instant is later than that.
+            out.started_at = Some(std::time::Instant::now());
             out.now = true;
         }
         Some(cmd) => match crate::library::launch_session_command(
@@ -339,6 +347,7 @@ pub(crate) fn spawn(
             at.place,
         ) {
             Ok(mut spawned) => {
+                out.started_at = Some(std::time::Instant::now());
                 out.now = true;
                 out.workspace = spawned.workspace.take();
                 if spawned.steam_forwarder {
@@ -393,7 +402,8 @@ pub(crate) struct LeaseExtras {
 }
 
 /// Open the game lease for what [`spawn`] started, adopting against [`Prepared::stamp`], under
-/// `owner`'s device. `on_exit` fires once the game was seen running and is gone.
+/// `owner`'s device. The lease counts the launch from [`Spawned::started_at`]. `on_exit` fires
+/// once the game was seen running and is gone.
 pub(crate) fn lease(
     target: &LaunchTarget,
     owner: &LaunchOwner,
@@ -421,6 +431,7 @@ pub(crate) fn lease(
             launcher: target.launcher,
             child,
             spawned: spawned.pid,
+            started_at: spawned.started_at,
             launch_stamp: stamp,
             // An adoption keeps the original launch's slot across the handover.
             procs: claim.and_then(|c| c.procs()),

@@ -638,6 +638,7 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
             launcher: false,
             child: Some((child, true)),
             spawned: None,
+            started_at: None,
             launch_stamp,
             // Recorded: this is what makes the run count.
             procs: Some(std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))),
