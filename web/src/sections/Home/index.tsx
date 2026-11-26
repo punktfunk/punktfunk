@@ -35,8 +35,6 @@ import {
 	stopSession,
 	useEndGame,
 	useGetRecentSessions,
-	useRequestIdr,
-	useRequestSessionIdr,
 	useSetSessionAccess,
 	useSetSessionAudio,
 	useSetSessionPlayer,
@@ -103,9 +101,7 @@ function useSessionActions(active: number): SessionActions {
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
 	const stopAll = useStopSession();
-	const idrAll = useRequestIdr();
 	const stopOne = useStopOneSession();
-	const idrOne = useRequestSessionIdr();
 	const mute = useSetSessionAudio();
 	const access = useSetSessionAccess();
 	const player = useSetSessionPlayer();
@@ -136,13 +132,6 @@ function useSessionActions(active: number): SessionActions {
 				},
 			);
 		},
-		onIdr: (row) =>
-			row.id != null
-				? idrOne.mutate(
-						{ id: row.id },
-						{ onError: failed(m.action_idr_failed()) },
-					)
-				: idrAll.mutate(undefined, { onError: failed(m.action_idr_failed()) }),
 		onMute: (row, muted) =>
 			row.id != null &&
 			mute.mutate(
@@ -164,9 +153,7 @@ function useSessionActions(active: number): SessionActions {
 			),
 		busy:
 			stopAll.isPending ||
-			idrAll.isPending ||
 			stopOne.isPending ||
-			idrOne.isPending ||
 			mute.isPending ||
 			access.isPending ||
 			player.isPending,

@@ -22,7 +22,6 @@ import { Routed } from "./lib/routed";
 const noop = () => {};
 const actions = {
 	onStop: noop,
-	onIdr: noop,
 	onMute: noop,
 	onAccess: noop,
 	onPlayer: noop,
