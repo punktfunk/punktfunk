@@ -1082,6 +1082,17 @@ fn welcome(n: &Negotiation<'_>, t: &SessionTerms) -> Welcome {
     }
 }
 
+/// Whether a session on gamescope can move to a desktop mid-stream. A seat's own host follows
+/// its seat's switches. The box's host moves to the live session on a Gaming/Desktop switch or a
+/// capture loss, unless `PUNKTFUNK_COMPOSITOR` pins the backend.
+fn can_leave_gamescope() -> bool {
+    #[cfg(target_os = "linux")]
+    if crate::native::plays_seat_mode() {
+        return true;
+    }
+    pf_host_config::config().compositor.is_none()
+}
+
 /// The `ServerHello` around `welcome`. Settles the session's media suite, which keys the media,
 /// offers the native features this session can run, states its screen and role, and tells a
 /// joiner its screen is shared.
@@ -1109,11 +1120,12 @@ fn server_hello(n: &Negotiation<'_>, t: &SessionTerms, welcome: Welcome) -> Serv
             crate::inject::touchpad_supported() && uinput_reaches(t.compositor),
             crate::inject::touchpad_taps(),
         ));
-    // Further screens only where this session builds displays of its own on a compositor with
-    // more than one output: not gamescope.
+    // Further screens only where this session builds displays of its own. gamescope has one
+    // output: there the screen set holds them back until the session moves to a desktop, so a
+    // session that can never leave gamescope is not offered them.
     if matches!(n.source, Punktfunk1Source::Virtual)
         && t.compositor
-            .is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
+            .is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope || can_leave_gamescope())
         && t.tenure.offers_screens()
     {
         offered = offered.with(punktfunk_core::quic::v2::registry::FEATURE_SCREENS);
