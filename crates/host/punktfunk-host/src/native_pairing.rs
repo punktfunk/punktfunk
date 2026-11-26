@@ -494,8 +494,14 @@ impl NativePairing {
     }
 
     /// Hold a live-session count for `fp_hex` until the guard drops. Every admitted
-    /// session counts; only a "this session" record reads the total.
+    /// session counts; only a "this session" record reads the total. It also stamps the
+    /// record's last session; a seat host reads the box's store, and the box stamps it.
     pub fn session_started(self: &std::sync::Arc<Self>, fp_hex: &str) -> SessionCountGuard {
+        if !self.store.read_only() {
+            if let Err(e) = self.store.set_last_seen(fp_hex, crate::clock::unix_secs()) {
+                tracing::warn!(error = %format!("{e:#}"), "paired device's last session not saved");
+            }
+        }
         *self
             .live
             .lock()
@@ -878,6 +884,24 @@ mod tests {
         np.add("Second", "ab12").unwrap();
         assert_eq!(np.list().len(), 1, "re-add must replace, not duplicate");
         assert_eq!(np.list()[0].name, "Second");
+    }
+
+    #[test]
+    fn a_session_stamps_the_record_it_opened_on() {
+        let (_temp, p) = temp();
+        let np =
+            std::sync::Arc::new(NativePairing::load_with(Some(p.clone()), None, false).unwrap());
+        np.add("Deck", "AB12").unwrap();
+        assert_eq!(np.list()[0].last_seen_unix, None);
+        let before = crate::clock::unix_secs();
+        drop(np.session_started("ab12"));
+        drop(np.session_started("ffff"));
+        let seen = np.list()[0].last_seen_unix.expect("stamped");
+        assert!(seen >= before, "{seen} < {before}");
+        assert_eq!(np.list().len(), 1, "an unknown device gets no record");
+        // It is persisted, not only held in memory.
+        let reread = NativePairing::load_with(Some(p), None, false).unwrap();
+        assert_eq!(reread.list()[0].last_seen_unix, Some(seen));
     }
 
     #[test]

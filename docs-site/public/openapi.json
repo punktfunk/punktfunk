@@ -17601,6 +17601,14 @@
             "example": 1,
             "minimum": 0
           },
+          "last_seen_unix": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the device last opened a session, unix seconds. `null` until its first session\non a host that records it."
+          },
           "name": {
             "type": "string",
             "example": "Living Room iPad"

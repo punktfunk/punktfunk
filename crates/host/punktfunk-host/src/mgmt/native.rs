@@ -154,6 +154,9 @@ pub(crate) struct NativeClient {
     // `value_type`: an `Option<u8>` alone generates as `never` in the SDK.
     #[schema(value_type = u32, required = false)]
     preferred_pad_slot: Option<u8>,
+    /// When the device last opened a session, unix seconds. `null` until its first session
+    /// on a host that records it.
+    last_seen_unix: Option<i64>,
 }
 
 impl NativeClient {
@@ -170,6 +173,7 @@ impl NativeClient {
             granted_unix: c.granted_unix,
             until_disconnect: c.until_disconnect,
             preferred_pad_slot: c.preferred_pad_slot,
+            last_seen_unix: c.last_seen_unix,
         }
     }
 }
@@ -559,6 +563,7 @@ pub(crate) async fn update_native_client_access(
                     until_disconnect: access.until_disconnect,
                     preferred_pad_slot: current.preferred_pad_slot,
                     origin: current.origin,
+                    last_seen_unix: current.last_seen_unix,
                 });
             Json(NativeClient::from_record(stored)).into_response()
         }
