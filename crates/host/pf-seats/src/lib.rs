@@ -1,14 +1,22 @@
-//! The seat supervisor: a ledger of up to four seats and the platform work behind it.
+//! The seat supervisor: it creates, starts and stops the seats of one machine, up to four.
 //!
-//! The portable core owns the validated ledger, the crash-recoverable secret root, the control
-//! protocol and serialized command dispatch. Platform effects cross `PlatformBackend`, so
-//! portable tests use a fake. Windows adds account ownership, DPAPI credentials, NLA session
-//! keepers, WTS selection, job-contained supervision and the named pipe the punktfunk service
-//! serves. Linux adds users with their own logind session, one systemd unit per seat and the
-//! Unix socket the `punktfunk-seats` daemon serves.
+//! A seat is one player's own desktop: an OS account, a session and a `punktfunk-host serve` of
+//! its own. `README.md` beside this crate's `Cargo.toml` maps who runs as whom. `CONTEXT.md` at
+//! the repo root defines the words.
+//!
+//! The portable half is the saved list of seats ([`model`]), its crash-safe file
+//! ([`persistence`]), the commands ([`ipc`]) and their one-at-a-time dispatch ([`service`]).
+//! Everything that touches the machine goes through [`PlatformBackend`], so the portable tests
+//! run on a fake.
+//!
+//! - Linux (`linux`): one user, one logind session and one systemd unit per seat, run by the
+//!   root daemon `punktfunk-seats` behind a Unix socket.
+//! - Windows (`windows`): one local account and one loopback Remote Desktop session per seat,
+//!   run inside the punktfunk service behind a named pipe.
 
-// Allowed in `linux::pam` (libpam), `linux::login` (the login helper's signals and privilege
-// drop), `linux::handover`'s `SO_PEERPIDFD` read and `linux::loopback`'s `bpf(2)` call.
+// Off Windows, `unsafe` is allowed in four places only: `linux::pam` (libpam), `linux::login`
+// (signals and the privilege drop), the `SO_PEERPIDFD` read in `linux::handover` and the
+// `bpf(2)` call in `linux::loopback`.
 #![cfg_attr(not(windows), deny(unsafe_code))]
 
 pub mod attempts;

@@ -1,4 +1,4 @@
-# The seat supervisor (design/multi-seat-product.md). The core builds and tests on every
+# The seat supervisor. README.md maps it. The core builds and tests on every
 # platform. Windows runs it inside the punktfunk service behind a SYSTEM-only pipe and adds
 # accounts, credentials and job-contained seat hosts; the RDP keeper links IronRDP and builds
 # apart, in crates/host/pf-seat-keeper. Linux runs it as the root `punktfunk-seats` daemon behind a
