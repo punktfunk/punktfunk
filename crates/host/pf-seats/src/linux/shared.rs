@@ -1462,7 +1462,7 @@ pub(super) fn provision_steam(
     if let Err(error) = link_steam(passwd) {
         tracing::warn!(%error, "seat's steam links not made");
     }
-    if let Err(error) = write_library_folders(&steam) {
+    if let Err(error) = write_library_folders(passwd) {
         tracing::warn!(%error, "steam library list not written");
     }
     let local = passwd.home.join(".local");
@@ -1553,24 +1553,50 @@ fn clone_names(src: &SteamSource) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// Lists the seat's own Steam, then the shared games folder as the seat sees it. Steam keeps
-/// entry `0` for its own install and drops a folder listed there at sign-in.
-/// Written once; Steam owns the file afterwards, and [`super::libraries::register`] adds the
-/// games folder if it goes.
-fn write_library_folders(steam: &Path) -> std::io::Result<()> {
-    let dir = steam.join("steamapps");
-    let file = dir.join("libraryfolders.vdf");
-    if file.exists() {
-        return Ok(());
+/// Folder `name` in `at`, made the seat's when absent. A link there is refused.
+pub(super) fn seat_folder(at: &OwnedFd, name: &str, seat: &Passwd) -> std::io::Result<OwnedFd> {
+    let made = match rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o755)) {
+        Ok(()) => true,
+        Err(Errno::EXIST) => false,
+        Err(e) => return Err(e.into()),
+    };
+    let dir = safe_open::dir_at(at, name)?.ok_or(std::io::ErrorKind::NotFound)?;
+    if made {
+        std::os::unix::fs::fchown(&dir, Some(seat.uid), Some(seat.gid))?;
     }
-    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Writes the seat's first Steam library list: its own Steam, then the shared games folder as
+/// the seat sees it. Steam keeps entry `0` for its own install and drops a folder listed there
+/// at sign-in. Steam owns the file afterwards, and [`super::libraries::register`] adds the games
+/// folder if it goes.
+///
+/// The folder was copied from another user's Steam, so root goes down by handle and creates the
+/// file only where nothing is. A link at any step is never followed or written through.
+fn write_library_folders(seat: &Passwd) -> std::io::Result<()> {
+    let steam = seat.home.join(SEAT_STEAMS[0]);
+    let mut dir = safe_open::dir(&seat.home)?;
+    for name in SEAT_STEAMS[0].split('/').chain(["steamapps"]) {
+        dir = seat_folder(&dir, name, seat)?;
+    }
+    let create =
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mode = Mode::from_raw_mode(0o644);
+    let file = match rustix::fs::openat(&dir, "libraryfolders.vdf", create, mode) {
+        Ok(file) => file,
+        Err(Errno::EXIST) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
     let folders = [
         steam.to_string_lossy().into_owned(),
         super::libraries::games_view()
             .to_string_lossy()
             .into_owned(),
     ];
-    std::fs::write(file, crate::steam::library_folders_vdf(&folders))
+    let mut file = std::fs::File::from(file);
+    file.write_all(crate::steam::library_folders_vdf(&folders).as_bytes())?;
+    std::os::unix::fs::fchown(&file, Some(seat.uid), Some(seat.gid))
 }
 
 #[cfg(test)]
@@ -1808,8 +1834,10 @@ mod tests {
     #[test]
     fn a_new_seat_lists_its_own_steam_first() {
         let temp = tempfile::tempdir().unwrap();
-        let steam = temp.path().join("home/Steam");
-        write_library_folders(&steam).unwrap();
+        let seat = seat_at(&temp.path().join("home"));
+        std::fs::create_dir(&seat.home).unwrap();
+        let steam = seat.home.join(".local/share/Steam");
+        write_library_folders(&seat).unwrap();
         let file = steam.join("steamapps/libraryfolders.vdf");
         let listed = crate::steam::library_paths(&std::fs::read_to_string(&file).unwrap());
         assert_eq!(
@@ -1820,8 +1848,40 @@ mod tests {
             ]
         );
         std::fs::write(&file, "steam's own").unwrap();
-        write_library_folders(&steam).unwrap();
+        write_library_folders(&seat).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "steam's own");
+    }
+
+    /// The first library list is written only where nothing is. A link planted in the cloned
+    /// folder is not written through, and a linked `steamapps` is refused.
+    #[test]
+    fn the_first_library_list_never_goes_through_a_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        let seat = seat_at(&temp.path().join("home"));
+        let apps = seat.home.join(".local/share/Steam/steamapps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let list = apps.join("libraryfolders.vdf");
+        std::os::unix::fs::symlink(outside.join("planted"), &list).unwrap();
+        write_library_folders(&seat).unwrap();
+        assert!(!outside.join("planted").exists(), "written through a link");
+        std::fs::remove_dir_all(&apps).unwrap();
+        std::os::unix::fs::symlink(&outside, &apps).unwrap();
+        assert!(write_library_folders(&seat).is_err());
+        let made = std::fs::read_dir(&outside).unwrap().count();
+        assert_eq!(made, 0, "nothing made through a linked folder");
+    }
+
+    /// A seat whose home is `home`, on the account the tests run as.
+    fn seat_at(home: &Path) -> Passwd {
+        Passwd {
+            name: "pf-seat-1".into(),
+            uid: rustix::process::getuid().as_raw(),
+            gid: rustix::process::getgid().as_raw(),
+            gecos: String::new(),
+            home: home.into(),
+        }
     }
 
     #[test]

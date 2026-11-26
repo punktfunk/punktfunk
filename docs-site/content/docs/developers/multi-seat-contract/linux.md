@@ -158,6 +158,11 @@ becomes that seat user's, `0600`, on a seat of its own, so neither the box's own
 another seat sees it, and any other stamped node is root's. While the daemon runs, every other
 hidraw node keeps its group and seat0's ACL but loses `other` access.
 
+An input node that udev classes as a keyboard or a mouse, and not as a joystick, is root's alone
+whichever seat device it belongs to. An emulated Steam Deck carries a keyboard and a mouse
+beside its controller, and whoever can write such a node types into the kernel's own keyboard
+and pointer handlers, which serve the box's console.
+
 ## Lent controllers
 
 The operator lends a controller plugged into the box to a seat: the seat's

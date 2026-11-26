@@ -5,10 +5,13 @@
 //! A device, of a seat, an account or a profile, waits `2 s × 2^failures` after each failed check
 //! and [`LOCKOUT`] after the fifth. An account lets at most [`ACCOUNT_FAILURES`] failed checks
 //! through in any [`WINDOW`], over all its devices, so a login stack that locks an account after
-//! three (`pam_faillock`) is never driven there from here. A check in flight counts as failed
-//! until it settles, so concurrent attempts can't share one allowance. A refusal here is not a
-//! failure, a pass clears its device and account, and an entry goes once its last failure is a
-//! window old.
+//! three (`pam_faillock`) is never driven there from here. The account's window doubles with
+//! every [`ACCOUNT_STEP`] failures since its last pass, up to [`WINDOW_MAX`].
+//!
+//! A check in flight counts as failed until it settles, so concurrent attempts can't share one
+//! allowance. A refusal here is not a failure. A pass clears its device and account. A device's
+//! entry goes once its last failure is a [`WINDOW`] old, an account's once its last failure is
+//! a [`WINDOW_MAX`] old, so waiting out one window doesn't reset the doubling.
 
 use crate::backend::BackendError;
 use std::collections::HashMap;
@@ -18,9 +21,13 @@ const BACKOFF: Duration = Duration::from_secs(2);
 /// Failures after which a device waits [`LOCKOUT`].
 const DEVICE_FAILURES: u32 = 5;
 const LOCKOUT: Duration = Duration::from_secs(15 * 60);
-/// Failed checks an account takes in any [`WINDOW`].
+/// Failed checks an account takes in any window of its own ([`Account::window`]).
 const ACCOUNT_FAILURES: usize = 2;
 const WINDOW: Duration = Duration::from_secs(15 * 60);
+/// The failures since an account's last pass that double its window. A flat window lets one
+/// source try about 70,000 passwords a year; doubled to the cap, it is about 700.
+const ACCOUNT_STEP: u32 = 10;
+const WINDOW_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// What a check is for: `device`, a device of a seat, an account or a profile, and `account`, what
 /// the secret opens. A side that is `None` has no limit of its own.
@@ -65,6 +72,8 @@ struct Account {
     failed: Vec<Instant>,
     /// When each check in flight was admitted.
     pending: Vec<Instant>,
+    /// The failures since the last pass.
+    streak: u32,
 }
 
 impl Attempts {
@@ -113,8 +122,11 @@ impl Attempts {
                 entry.pending.swap_remove(at);
             }
             match outcome {
-                Outcome::Passed => entry.failed.clear(),
-                Outcome::Failed => entry.failed.push(now),
+                Outcome::Passed => *entry = Account::default(),
+                Outcome::Failed => {
+                    entry.failed.push(now);
+                    entry.streak = entry.streak.saturating_add(1);
+                }
                 Outcome::Unjudged => {}
             }
         }
@@ -128,22 +140,29 @@ impl Attempts {
             .device
             .and_then(|(of, device)| self.devices.get(&key(of, device)))
             .map_or(0, |d| d.failures);
+        let in_window = |a: &Account| {
+            let window = a.window();
+            let recent = |at: &&Instant| now.saturating_duration_since(**at) < window;
+            a.failed.iter().filter(recent).count()
+        };
         let account = target
             .account
             .and_then(|account| self.accounts.get(account))
-            .map_or(0, |a| a.failed.len());
+            .map_or(0, in_window);
         (device, account)
     }
 
-    /// Drops what is a window old. A check that never settled ages out as a failure would.
+    /// Drops what is a window old. A check that never settled ages out as a failure would. An
+    /// account keeps its failures, and with them its doubled window, for [`WINDOW_MAX`].
     fn expire(&mut self, now: Instant) {
-        let live = |at: &Instant| now.saturating_duration_since(*at) < WINDOW;
+        let within = |at: &Instant, window| now.saturating_duration_since(*at) < window;
+        let live = |at: &Instant| within(at, WINDOW);
         self.devices.retain(|_, d| {
             d.pending = d.pending.filter(live);
             d.pending.is_some() || d.last.is_some_and(|(at, _)| live(&at))
         });
         self.accounts.retain(|_, a| {
-            a.failed.retain(live);
+            a.failed.retain(|at| within(at, WINDOW_MAX));
             a.pending.retain(live);
             !a.failed.is_empty() || !a.pending.is_empty()
         });
@@ -164,15 +183,25 @@ impl Device {
 }
 
 impl Account {
-    /// Zero while fewer than [`ACCOUNT_FAILURES`] failures and checks in flight count, else until
-    /// all but one of them have left the window.
+    /// [`WINDOW`], doubled once for every [`ACCOUNT_STEP`] failures since the last pass, up to
+    /// [`WINDOW_MAX`].
+    fn window(&self) -> Duration {
+        let doubled = WINDOW.saturating_mul(1 << (self.streak / ACCOUNT_STEP).min(16));
+        doubled.min(WINDOW_MAX)
+    }
+
+    /// Zero while fewer than [`ACCOUNT_FAILURES`] failures and checks in flight count in the
+    /// account's window, else until all but one of them have left it.
     fn wait(&self, now: Instant) -> Duration {
-        let mut counted: Vec<Instant> = self.failed.iter().chain(&self.pending).copied().collect();
+        let window = self.window();
+        let mut counted: Vec<Instant> = (self.failed.iter().chain(&self.pending).copied())
+            .filter(|at| now.saturating_duration_since(*at) < window)
+            .collect();
         if counted.len() < ACCOUNT_FAILURES {
             return Duration::ZERO;
         }
         counted.sort_unstable();
-        (counted[counted.len() - ACCOUNT_FAILURES] + WINDOW).saturating_duration_since(now)
+        (counted[counted.len() - ACCOUNT_FAILURES] + window).saturating_duration_since(now)
     }
 }
 
@@ -400,7 +429,8 @@ mod tests {
         assert!(gate.accounts["uid:1500"].pending.is_empty());
     }
 
-    /// Entries go once their last failure is 15 minutes old, a check that never settled with them.
+    /// A device's entry goes once its last failure is 15 minutes old, a check that never settled
+    /// with it. An account's failure stays a day, so its doubled window does.
     #[test]
     fn entries_expire() {
         let mut gate = Attempts::default();
@@ -411,7 +441,65 @@ mod tests {
         gate.expire(t0 + WINDOW - SECOND);
         assert_eq!((gate.devices.len(), gate.accounts.len()), (2, 2));
         gate.expire(t0 + WINDOW);
-        assert!(gate.devices.is_empty() && gate.accounts.is_empty());
+        assert!(gate.devices.is_empty());
+        assert_eq!(gate.accounts.keys().collect::<Vec<_>>(), ["uid:1500"]);
+        gate.expire(t0 + WINDOW_MAX);
+        assert!(gate.accounts.is_empty());
+    }
+
+    /// An account's window doubles with every ten failures since its last pass, up to a day.
+    /// Waiting out one window doesn't reset it; a pass or a day without a failure does.
+    #[test]
+    fn an_account_s_window_doubles_under_sustained_guessing() {
+        let who = Target {
+            device: None,
+            account: Some("uid:1001"),
+        };
+        let mut gate = Attempts::default();
+        let mut now = Instant::now();
+        let fail = |gate: &mut Attempts, now: &mut Instant| {
+            let ticket = gate.admit(who, *now).unwrap_or_else(|wait| {
+                *now += wait;
+                gate.admit(who, *now).unwrap()
+            });
+            gate.settle(who, ticket, Outcome::Failed, *now);
+            *now += SECOND;
+        };
+        // Failures come two to a window, so every even count ends locked.
+        for _ in 0..8 {
+            fail(&mut gate, &mut now);
+        }
+        let wait = |gate: &mut Attempts, now| gate.admit(who, now).unwrap_err();
+        let first = wait(&mut gate, now);
+        assert!(first <= WINDOW, "eight failures: {first:?}");
+        for _ in 0..4 {
+            fail(&mut gate, &mut now);
+        }
+        let doubled = wait(&mut gate, now);
+        assert!(doubled > WINDOW && doubled <= WINDOW * 2, "{doubled:?}");
+        for _ in 0..80 {
+            fail(&mut gate, &mut now);
+        }
+        let capped = wait(&mut gate, now);
+        let half = WINDOW_MAX / 2;
+        assert!(capped > half && capped <= WINDOW_MAX, "{capped:?}");
+        // Idle for one first window: the doubling stands.
+        assert!(gate.admit(who, now + WINDOW).is_err());
+        // A day without a failure forgets the account.
+        assert!(gate.admit(who, now + WINDOW_MAX).is_ok());
+
+        // A pass forgets it at once: the next two failures wait the first window again.
+        let mut fresh = Attempts::default();
+        for _ in 0..12 {
+            fail(&mut fresh, &mut now);
+        }
+        now += WINDOW * 2;
+        let ticket = fresh.admit(who, now).unwrap();
+        fresh.settle(who, ticket, Outcome::Passed, now);
+        fail(&mut fresh, &mut now);
+        fail(&mut fresh, &mut now);
+        let again = wait(&mut fresh, now);
+        assert!(again <= WINDOW, "{again:?}");
     }
 
     #[test]
