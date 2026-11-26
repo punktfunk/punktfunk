@@ -1,11 +1,15 @@
-//! A Windows seat's Steam client, copied from the box's install into the seat's profile the first
-//! time the seat's session is up. [`crate::steam`] says why a seat needs its own.
+//! A Windows seat's Steam client. It is copied from the box's install into the seat's profile
+//! the first time the seat's session is up. [`crate::steam`] says why a seat needs a copy.
 //!
-//! Every usual way of opening Steam on a seat starts that copy under the seat's IPC name. The
-//! box's shared Desktop and Start menu shortcuts go through `punktfunk-tray --steam`, which reads
-//! the seat's `SeatSteam` key; the seat's `steam://` handler and autostart line name the copy.
-//! The seat can read those keys but not change them. Steam started any other way is the box's,
-//! whose start under the default name closes the Steam already running.
+//! Every usual way of opening Steam on a seat starts that copy, under the seat's IPC name:
+//!
+//! - The box's shared Desktop and Start menu shortcuts go through `punktfunk-tray --steam`,
+//!   which reads the seat's `SeatSteam` registry key.
+//! - The seat's `steam://` handler and its autostart line name the copy.
+//!
+//! The seat can read those keys but can't change them. A Steam started any other way is the
+//! box's install. It starts under the default name, and that start closes the Steam already
+//! running.
 
 use crate::persistence::{default_root, SecretRoot};
 use crate::steam;
@@ -307,9 +311,10 @@ pub(super) fn ensure_copy(session: u32, account: &str, seat_id: &str, share: boo
     }
 }
 
-/// Point every usual start of Steam on the seat at its copy `exe` under the seat's IPC name:
-/// the seat's `SeatSteam` key, which the box's shared shortcuts read through the tray, its
-/// autostart line, then its `steam://` handler, whose classes hive loads a moment after logon.
+/// Points every usual start of Steam on the seat at the seat's copy, `exe`, under the seat's IPC
+/// name. In order: the seat's `SeatSteam` key, which the box's shared shortcuts read through
+/// the tray, then the seat's autostart line, then the seat's `steam://` handler. The handler is
+/// written on a thread of its own: its classes hive loads a moment after logon.
 fn ensure_launchers(account: &str, seat_id: &str, exe: &Path) {
     let Some(sid) = accounts::sid_string(account) else {
         tracing::warn!(account, "seat account has no SID; steam launchers skipped");
@@ -548,7 +553,7 @@ pub(super) fn unwrap_box_shortcuts() -> std::io::Result<()> {
 /// The shortcuts the Seats key keeps, `path\ttarget\targs\tdir\ticon\tindex` per line.
 fn kept_links() -> Vec<(String, Link)> {
     RegKey::predef(HKEY_LOCAL_MACHINE)
-        .open_subkey_with_flags(super::SEATS_KEY, KEY_READ | KEY_WOW64_64KEY)
+        .open_subkey_with_flags(super::backend::SEATS_KEY, KEY_READ | KEY_WOW64_64KEY)
         .and_then(|key| key.get_value::<String, _>(KEPT_LINKS))
         .unwrap_or_default()
         .lines()
@@ -580,7 +585,7 @@ fn keep_links(kept: &[(String, Link)]) -> std::io::Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     RegKey::predef(HKEY_LOCAL_MACHINE)
-        .open_subkey_with_flags(super::SEATS_KEY, KEY_SET_VALUE | KEY_WOW64_64KEY)?
+        .open_subkey_with_flags(super::backend::SEATS_KEY, KEY_SET_VALUE | KEY_WOW64_64KEY)?
         .set_value(KEPT_LINKS, &text)
 }
 

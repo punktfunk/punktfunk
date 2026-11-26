@@ -1,21 +1,23 @@
-//! Ownership-safe provisioning for Windows local seat accounts.
+//! Makes, adopts and removes the Windows local accounts that seats run on. It changes an
+//! account only after proving the account is a seat's.
 //!
-//! A made account is identified only by its exact NetUser comment marker,
-//! which embeds the full seat ID. New accounts use a random persisted password,
-//! `USER_PRIV_USER`, direct membership in the localized Remote Desktop Users
-//! alias resolved from SID S-1-5-32-555 and in [`SEATS_GROUP`], and
-//! `SeDenyInteractiveLogonRight`.
-//! Existing accounts are accepted only after marker and password verification.
-//! An adopted account is a person's own, identified by the SID its row stores. It gets the
-//! same groups and right and the person's password, never a comment or a flag, and its
-//! release takes back only what adopt gave.
-//! Administrator membership and remote-interactive denial make a seat unusable;
-//! deletion requires the same exact identity and an explicit caller action. A made account
-//! goes with its profile, at the next service start if the profile won't go at once; an
-//! adopted one is never deleted.
+//! **A made account** is recognised only by its NetUser comment: an exact marker that contains
+//! the full seat ID. A new one gets a random password, which is stored, `USER_PRIV_USER`,
+//! direct membership in Remote Desktop Users (the localized alias, resolved from SID
+//! S-1-5-32-555) and in [`SEATS_GROUP`], and `SeDenyInteractiveLogonRight`. An existing account
+//! is accepted only after its marker and its password are verified.
+//!
+//! **An adopted account** is a person's own, recognised by the SID its row stores. It gets the
+//! same groups and the same right, with the person's password. It never gets a comment or a
+//! flag. Releasing it takes back only what adopting gave.
+//!
+//! Membership in Administrators, or a denied remote-interactive logon, makes a seat unusable.
+//! Deleting needs the same exact identity and an explicit action by the caller. A made account
+//! is deleted with its profile, at the next service start if the profile can't be removed at
+//! once. An adopted account is never deleted.
 
+use super::doctor::AccountInspection;
 use crate::backend::{Adopted, BackendError};
-use crate::doctor::AccountInspection;
 use crate::model::{Seat, SeatId};
 use crate::secret::Secret;
 use crate::windows::credentials::{Credential, CredentialStore};
@@ -290,13 +292,17 @@ impl AccountManager {
         self.credentials.store(&seat.id, &credential)
     }
 
-    /// Gives an adopted `seat`'s account back by `sid`, the row's SID, so a renamed account gets
-    /// it back too: the console deny off unless the account held it before adopt, out of
-    /// [`SEATS_GROUP`], out of Remote Desktop Users when adopt put it there, the blob gone, the
-    /// Steam launchers undone. Never deletes the account or its profile, and never acts by name.
-    /// Every step runs and treats "already gone" as done; the first failure is the answer, so
-    /// Remove can run again. When the name is gone or holds another account, the SID's steps
-    /// only warn.
+    /// Gives the account of an adopted `seat` back to its person. It acts by `sid`, the row's SID,
+    /// and never by name, so a renamed account is released too. The steps:
+    ///
+    /// - take the console deny off, unless the account had it before the adopt
+    /// - remove the account from [`SEATS_GROUP`]
+    /// - remove it from Remote Desktop Users, when the adopt put it there
+    /// - delete the password blob, and undo the Steam launchers
+    ///
+    /// It never deletes the account or its profile. Every step runs, and "already gone" counts as
+    /// done. The first failure is the answer, so Remove can run again. When the name is gone or
+    /// holds another account, a failure in the SID's steps only warns.
     fn release(&self, seat: &Seat, sid: &str) -> WinResult<()> {
         let present = sid_string(&seat.account).is_some_and(|found| found == sid);
         let mut results = with_sid(sid, |sid| {

@@ -1,12 +1,16 @@
-//! The seat listener: a copy of Remote Desktop's `RDP-Tcp` on loopback port 3390 whose
-//! sessions load `pf_seat_audio.dll`, the enumerator that gives each seat its pads' audio
-//! endpoints (`pf_driver_proto::seat_audio`). The keeper connects here when it is
-//! [`configured`], and to 3389 otherwise.
+//! The seat listener: a second Remote Desktop listener, on loopback port 3390, for seats.
 //!
-//! TermService opens and closes a listener as its key appears and goes, so nothing restarts.
-//! The DLL loads into every process of a seat session at that process's bitness: the x64 build
-//! goes to `System32\punktfunk` and the x86 one to `SysWOW64\punktfunk` under one name, which
-//! WOW64 redirects. A new build gets a new name, since a loaded one cannot be replaced.
+//! It is a copy of Remote Desktop's `RDP-Tcp` listener. Sessions that come in through it load
+//! `pf_seat_audio.dll`, the enumerator that gives each seat the audio endpoints of its pads
+//! (`pf_driver_proto::seat_audio`). The keeper connects here when the listener is
+//! [`configured`], and to port 3389 otherwise.
+//!
+//! TermService opens a listener when its registry key appears and closes it when the key goes,
+//! so nothing has to restart.
+//!
+//! The DLL loads into every process of a seat session, at that process's bitness. The x64 build
+//! goes to `System32\punktfunk` and the x86 build to `SysWOW64\punktfunk`, under one name, which
+//! WOW64 redirects. A new build gets a new name, because a loaded DLL can't be replaced.
 
 use super::enable::run;
 use pf_driver_proto::seat_audio::{LISTENER, LISTENER_PORT};

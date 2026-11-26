@@ -25,6 +25,12 @@ regexes = [
 ]
 
 [[allowlists]]
+description = "Made-up console password in the door switch tests"
+regexes = [
+  '''Ab3dEf9hIjKlMnOpQrSt''',
+]
+
+[[allowlists]]
 description = "Placeholder key in clients/shared/connect-request-vectors.json"
 regexes = [
   '''-----BEGIN PRIVATE KEY-----\\nMIIE\\n-----END PRIVATE KEY-----''',

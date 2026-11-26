@@ -312,7 +312,7 @@ in
             --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"
         done
         install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles "$out/lib/tmpfiles.d/punktfunk-seats.conf"
-        # A seat's pads: the rule runs `punktfunk-seats fence` from this store path.
+        # A seat's pads: the rule runs `punktfunk-seats node-owner` from this store path.
         install -Dm0644 packaging/linux/65-punktfunk-seats.rules "$out/lib/udev/rules.d/65-punktfunk-seats.rules"
         substituteInPlace "$out/lib/udev/rules.d/65-punktfunk-seats.rules" \
           --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"

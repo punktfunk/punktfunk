@@ -17214,6 +17214,13 @@
               }
             ]
           },
+          "update_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newer host version the last update check offers this install. Absent when current,\nunchecked, or checks are off."
+          },
           "version": {
             "type": "string",
             "description": "Host version (mirrors `/health`)."
@@ -21856,7 +21863,7 @@
           },
           "install_kind": {
             "type": "string",
-            "description": "`windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |\n`steamos-source` | `nix` | `source`."
+            "description": "`windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `zypper` |\n`pacman` | `steamos-source` | `nix` | `source`."
           },
           "job": {
             "oneOf": [

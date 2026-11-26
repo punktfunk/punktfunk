@@ -725,7 +725,7 @@ async fn the_console_locks_a_profile_for_the_devices_it_chooses() {
     let (status, body) = call(Method::PUT, "/lock/pin", serde_json::json!({"pin": "2468"})).await;
     assert_eq!((status, body), (StatusCode::OK, lock(true, true)));
     assert_eq!(profiles.opens(&owner, Some(&tv)), Opens::Pin);
-    let file = dir.join(pf_seats::locks::FILE);
+    let file = dir.join(pf_seats::profile_locks::FILE);
     let text = std::fs::read_to_string(&file).unwrap();
     // The PIN as a value of its own: the salt and hash are hex and may hold these digits.
     assert!(
@@ -794,7 +794,7 @@ async fn the_console_locks_a_profile_for_the_devices_it_chooses() {
 #[tokio::test]
 async fn an_unreadable_lock_file_refuses_every_change() {
     let dir = crate::test_support::scratch();
-    std::fs::write(dir.join(pf_seats::locks::FILE), "not a lock file").unwrap();
+    std::fs::write(dir.join(pf_seats::profile_locks::FILE), "not a lock file").unwrap();
     let state = test_state();
     let profiles = crate::profiles::Profiles::load_with(Some(dir.join("profiles.json")), None);
     profiles.ensure_owner("box").unwrap();
@@ -871,7 +871,9 @@ async fn the_picker_lists_what_the_device_may_open() {
     for (id, pin) in [(owner, true), (kid, false), (teen, true)] {
         let edited = profiles.locks().edit(id, |lock, now| {
             lock.locked = true;
-            lock.pin = pin.then(|| pf_seats::locks::PinHash::new("2468")).flatten();
+            lock.pin = pin
+                .then(|| pf_seats::profile_locks::PinHash::new("2468"))
+                .flatten();
             if id != teen {
                 assert!(lock.admit(&device, now, true));
             }
@@ -978,7 +980,7 @@ async fn a_device_with_a_key_gets_its_profile_s_challenge() {
     };
     let enrolled = profiles.locks().edit(FAMILY_OWNER, |lock, now| {
         lock.locked = true;
-        lock.pin = pf_seats::locks::PinHash::new("2468");
+        lock.pin = pf_seats::profile_locks::PinHash::new("2468");
         assert!(lock.enrol(&device, now - 700, (FAMILY_GUEST, key)));
         lock.list.left(&keyed, now - 700);
     });
@@ -1055,7 +1057,7 @@ async fn a_profile_sharing_the_owner_s_desktop_takes_no_lock() {
         assert_eq!(body["code"], "profile_lock_shared", "{method} {tail}");
         assert_eq!(body["params"]["owner"], "Enrico");
     }
-    assert!(profiles.locks().get(FAMILY_GUEST) == pf_seats::locks::Lock::default());
+    assert!(profiles.locks().get(FAMILY_GUEST) == pf_seats::profile_locks::Lock::default());
 }
 
 /// Enumerate marks the profile the asking device's old seat became, and only for that device.

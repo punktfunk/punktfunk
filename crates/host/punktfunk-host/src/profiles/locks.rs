@@ -1,17 +1,17 @@
-//! Each profile's lock, in `profile-locks.json` beside `profiles.json` (`pf_seats::locks`). The
+//! Each profile's lock, in `profile-locks.json` beside `profiles.json` (`pf_seats::profile_locks`). The
 //! box's own host, the plain host or the door, is its one writer, owner-only; a seat host follows
 //! the box's file read only, a Linux one through the supervisor's copy that holds no PIN.
 //!
 //! A file that is there and can't be read locks every profile, refuses every edit, and is logged.
 //! A file that isn't there locks nothing. Wrong PINs and key proofs count per device in memory,
 //! as an account password's do; wrong PINs also per profile in the file
-//! ([`pf_seats::locks::PIN_FAILURES`]), so a restart clears no profile's count. A key proof
+//! ([`pf_seats::profile_locks::PIN_FAILURES`]), so a restart clears no profile's count. A key proof
 //! answers a challenge from memory, as the seat supervisor's does.
 
 use super::{EditError, Profiles};
 use pf_seats::attempts::{Attempts, Outcome, Target};
 use pf_seats::ipc::{Device, UnlockKey};
-use pf_seats::locks::{Lock, Locks, Opens};
+use pf_seats::profile_locks::{Lock, Locks, Opens};
 use pf_seats::unlock::Challenges;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -218,7 +218,7 @@ impl LockStore {
         self.lock().locks.unreadable
     }
 
-    /// Wrong PINs for profile `id` in the last [`pf_seats::locks::PIN_WINDOW`], over all devices.
+    /// Wrong PINs for profile `id` in the last [`pf_seats::profile_locks::PIN_WINDOW`], over all devices.
     pub(crate) fn failures(&self, id: &str) -> usize {
         self.get(id).recent_wrong_pins(crate::clock::unix_secs())
     }
@@ -497,7 +497,7 @@ impl Drop for Presence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pf_seats::locks::PinHash;
+    use pf_seats::profile_locks::PinHash;
 
     const KID: &str = "c1d000000001";
 
@@ -510,7 +510,7 @@ mod tests {
 
     /// The box's store and its file in a dir of its own.
     fn store() -> (LockStore, PathBuf) {
-        let path = crate::test_support::scratch().join(pf_seats::locks::FILE);
+        let path = crate::test_support::scratch().join(pf_seats::profile_locks::FILE);
         (LockStore::open(path.clone(), false), path)
     }
 
@@ -555,7 +555,7 @@ mod tests {
             br#"{"profiles":{"x":{"devices":[{"fingerprint":"AB"}]}}}"#,
         ];
         for bytes in bad {
-            let path = crate::test_support::scratch().join(pf_seats::locks::FILE);
+            let path = crate::test_support::scratch().join(pf_seats::profile_locks::FILE);
             std::fs::write(&path, bytes).unwrap();
             let locks = LockStore::open(path.clone(), false);
             assert!(locks.unreadable() && locks.any_locked());
@@ -833,7 +833,7 @@ mod tests {
             "devices": [{"fingerprint": tv.fingerprint, "name": "TV", "key": key,
                 "added_unix": 1, "last_unix": 1}],
         }}});
-        let path = crate::test_support::scratch().join(pf_seats::locks::FILE);
+        let path = crate::test_support::scratch().join(pf_seats::profile_locks::FILE);
         std::fs::write(&path, file.to_string()).unwrap();
         let locks = LockStore::open(path, false);
         assert!(!locks.unreadable());

@@ -11,8 +11,8 @@
 //! tail starts and on each `library.changed` it sends ([`publish_own_titles`]).
 //!
 //! The door lists the box's copy of the owner's library, which the supervisor writes on a tick.
-//! The owner's `library.changed` goes out once that copy is level ([`level_library`]), so a
-//! client that re-reads on it reads the change.
+//! The owner's `library.changed` goes out once that copy has the change ([`sync_library`]),
+//! so a client that re-reads on the event reads the change.
 
 use crate::events::{EventKind, HostEvent};
 use std::collections::{BTreeSet, HashMap};
@@ -150,7 +150,7 @@ fn tail(
             continue;
         }
         if cfg!(target_os = "linux") && levels(&ev, seat.kind.is_owner()) {
-            level_library();
+            sync_library();
         }
         let ev = crate::events::bus().emit_from(ev.kind, Some(profile.clone()));
         if let (Take::HandOn, Some(games)) = (what, &games)
@@ -198,9 +198,9 @@ fn levels(ev: &HostEvent, from_owner: bool) -> bool {
 
 /// Has the supervisor copy the owner's library to the box now. One that doesn't answer in time
 /// copies it on its next tick, and the change goes out ahead of it.
-fn level_library() {
-    if let Err(error) = super::call(pf_seats::ipc::Command::LevelLibrary) {
-        tracing::debug!(code = ?error.code, error = %error.message, "box library not leveled ahead of its change");
+fn sync_library() {
+    if let Err(error) = super::call(pf_seats::ipc::Command::SyncLibrary) {
+        tracing::debug!(code = ?error.code, error = %error.message, "box library not synced ahead of its change");
     }
 }
 

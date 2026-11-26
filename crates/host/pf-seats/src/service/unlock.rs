@@ -1,12 +1,15 @@
-//! The commands of a seat on a person's own Linux account: the supervisor, never the door,
-//! decides which device opens the person's desktop. The multi-seat contract page lists the
-//! commands ("Who opens a person's seat"); the rules are in [`crate::unlock`].
+//! The commands for a seat on a person's own Linux account. The supervisor decides which device
+//! opens the person's desktop; the door never does. The multi-seat contract page lists the
+//! commands under "Who opens a person's seat". The rules are in [`crate::unlock`].
 //!
-//! A password goes through the attempt limits and the PAM child outside `ops`, then everything it
-//! rested on is read again under `ops`, where a stopped session is started through the same path
-//! as a `start` and the device is let on once it runs. A key proof costs its device's allowance
-//! alone and never reaches PAM. Every unlock writes one `punktfunk::audit` line; nothing in it,
-//! or in any other line, carries the secret.
+//! A password unlock runs in two parts. First, outside `ops`, the password passes the attempt
+//! limits and the PAM child checks it. Then, under `ops`, every fact the first part relied on is
+//! read again, a stopped session is started the same way `start` starts it, and the device is
+//! let on once the session runs.
+//!
+//! A key proof counts only against its own device's allowance and never reaches PAM. Every
+//! unlock writes one `punktfunk::audit` log line. No log line, that one included, carries a
+//! secret.
 
 use super::{not_found, SeatService};
 use crate::attempts::Target;

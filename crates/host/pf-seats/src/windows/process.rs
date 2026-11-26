@@ -1,15 +1,17 @@
-//! Suspended launch and per-seat job containment.
+//! Starts a seat's processes suspended, and keeps each seat's processes in one job object.
 //!
-//! Every seat cycle owns one unnamed `KILL_ON_JOB_CLOSE` job for its keeper,
-//! which starts suspended, enters the job and only then resumes. The quality gate
-//! and host run in the seat's session and join the cycle's job too, so they end with the
-//! service as well as when their [`ChildProcess`] drops and when the cycle logs the session
-//! off. The RDP bootstrap travels through one inherited anonymous stdin pipe, never argv or
-//! environment. A child inherits only the handles its [`Inherit`] list names, whatever another
-//! seat's spawn has made inheritable meanwhile. Session children use a duplicated LocalSystem
-//! primary token retargeted with `TokenSessionId` and the `winsta0\default` desktop. Host
-//! environment construction uses an allow-listed system base plus exact seat
-//! variables, so control credentials cannot leak through inheritance.
+//! - **One job per seat cycle.** Each cycle owns one unnamed `KILL_ON_JOB_CLOSE` job. The keeper
+//!   starts suspended, joins the job and only then resumes. The quality gate and the host run in
+//!   the seat's session and join the same job. So they end when the service ends, when their
+//!   [`ChildProcess`] is dropped, and when the cycle logs the session off.
+//! - **The RDP bootstrap** reaches the keeper through one inherited anonymous stdin pipe, never
+//!   through argv or the environment.
+//! - **Handles.** A child inherits only the handles its [`Inherit`] list names, whatever another
+//!   seat's spawn has made inheritable in the meantime.
+//! - **Session children** run on a duplicate of the LocalSystem primary token, retargeted with
+//!   `TokenSessionId`, on the `winsta0\default` desktop.
+//! - **The host's environment** is an allow-listed system base plus the seat's exact variables,
+//!   so control credentials can't leak through inheritance.
 
 use crate::bootstrap::RdpBootstrap;
 use crate::model::Seat;

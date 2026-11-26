@@ -1,12 +1,15 @@
-//! Hardened persistence below an explicit service-owned root.
+//! Safe file storage below one root directory that the service owns.
 //!
-//! `SecretRoot` rejects symbolic links, Unix hard links, and Windows reparse
-//! points before delegating modes and DACLs to `pf-paths`. Writes use an
-//! owner-only sibling temporary, sync it, and replace the live file. A backup
-//! plus the temporary file lets `LedgerStore` recover an interrupted replace.
-//! Ledger candidates are validated before use, and the highest generation
-//! wins. Only `default_root` picks a path of its own; every other helper works below the
-//! root it is given.
+//! - `SecretRoot` rejects symbolic links, Unix hard links and Windows reparse points. It leaves
+//!   file modes and DACLs to `pf-paths`.
+//! - A write goes to an owner-only temporary file beside the target, is synced, and then
+//!   replaces the live file.
+//! - `LedgerStore` keeps a backup too. With the backup and the temporary file it recovers from a
+//!   replace that was interrupted. Each candidate ledger is validated before use, and the one
+//!   with the highest generation wins.
+//!
+//! Only `default_root` picks a path of its own. Every other helper works below the root it is
+//! given.
 
 use crate::model::{Ledger, ValidationError};
 use std::io;

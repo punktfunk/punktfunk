@@ -1,13 +1,17 @@
-//! Pinned IronRDP keeper and credential-free trust handshake.
+//! The keeper's RDP connection, pinned to one certificate, and the trust handshake, which sends
+//! no credential. Both use IronRDP.
 //!
-//! Both roles connect only to `127.0.0.2`, on the port [`keeper::rdp_port`] names, or on
-//! [`keeper::RDP_PORT`] when the seat listener refuses (`connect`). They advertise CredSSP/NLA
-//! without legacy TLS login, and require a HYBRID security selection. `trust` stops
-//! immediately after RDP negotiation and the TLS handshake, before CredSSP, and
-//! reports the observed SHA-256 leaf pin. Runtime TLS verifies that exact pin
-//! before `connect_finalize` can serialize credentials. The keeper requests a
-//! 640x480 desktop, processes protocol responses, discards decoded pixels, and
-//! remains connected until its job is closed or the server disconnects it.
+//! - Both connect only to `127.0.0.2`: on the port [`keeper::rdp_port`] names, or on
+//!   [`keeper::RDP_PORT`] when the seat listener refuses (`connect`).
+//! - Both offer CredSSP/NLA and no legacy TLS login, and require the server to select HYBRID
+//!   security.
+//! - `trust` stops right after RDP negotiation and the TLS handshake, before CredSSP, and
+//!   reports the SHA-256 pin of the leaf certificate it saw.
+//! - At runtime, TLS verifies that exact pin before `connect_finalize` can serialize
+//!   credentials.
+//!
+//! The keeper requests a 640x480 desktop, processes the protocol's responses and discards the
+//! decoded pixels. It stays connected until its job is closed or the server disconnects it.
 
 use ironrdp::connector::{
     self, ClientConnector, ClientConnectorState, ConnectionResult, ConnectorErrorKind, Credentials,
@@ -69,16 +73,21 @@ const REATTACH_DELAY: Duration = Duration::from_secs(3);
 /// host's own drop whose mark the keeper missed.
 const HELD: Duration = Duration::from_secs(30);
 
-/// Hold the seat's session open, reattaching whenever the connection drops but the session does
-/// not. A neighbouring seat logging off knocks this connection over — the server reports its
-/// graphics subsystem in an error state — and the session survives as `Disconnected`, so exiting
-/// there would strand a seat that only needed reconnecting.
+/// Holds the seat's session open, and reconnects whenever the connection drops while the
+/// session still exists.
 ///
-/// The session's existence is the test, not the disconnect reason: a logoff removes it, anything
-/// recoverable leaves it. That needs no match on the server's English description. A drop the
-/// seat host marked as its own ([`keeper::host_disconnected`]) spends no attempt. A sign-in the
-/// server refuses ([`REFUSED`]) ends the keeper at once: every retry is one more bad logon
-/// toward the account's lockout, and the supervisor's next start names the changed password.
+/// When a neighbouring seat logs off, this connection drops too, and the server reports its
+/// graphics subsystem in an error state. The session survives as `Disconnected`. Exiting then
+/// would strand a seat that only needed a reconnect.
+///
+/// - The test is whether the session still exists, not the disconnect reason. A logoff removes
+///   the session, and anything recoverable leaves it. So nothing has to match the server's
+///   English description.
+/// - A drop that the seat host marked as its own ([`keeper::host_disconnected`]) spends no
+///   attempt.
+/// - A sign-in that the server refuses ([`REFUSED`]) ends the keeper at once. Every retry is
+///   one more bad logon toward the account's lockout. The supervisor's next start names the
+///   changed password.
 pub(crate) fn keep_from_stdin() -> WinResult<()> {
     let mut input = std::io::stdin().lock();
     let mut bootstrap = RdpBootstrap::read_from(&mut input)

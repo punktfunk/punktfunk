@@ -38,11 +38,16 @@ Not a poem. `// SAFETY:` is a proof, not how the bug was found.
   backstop, not the style. A four-line war story is still wrong.
 - Keep lifetime, weak-ref, why this number. One to three lines.
 - A comment never enforces a trust boundary.
+- A stranger can read it. Every possessive keeps its noun, every sentence its subject. A name
+  says what the thing is, not a figure of speech. One word, one meaning. A coined word is
+  defined in `CONTEXT.md` before it is used. Short never beats plain.
 
 Bad: `A v2 host never stamps the field, so a v3 driver would refuse every attach…`
 Good: `A host that leaves this field zero fails the bind.`
 Bad: `Field 2026-08-28, iPad Pro / iOS 27 over Tailscale: …`
 Good: `250 ms ≈ 30 refreshes at 120 Hz. A miss freezes the picture.`
+Bad: `A made seat's alone: a person's pads come from the broker.`
+Good: `Only a made seat has a uinput proxy. A person's seat gets its pads from the pad broker.`
 
 ### Error messages
 

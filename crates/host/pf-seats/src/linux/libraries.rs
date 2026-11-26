@@ -1,26 +1,26 @@
-//! The box owner's Steam libraries, shown to a seat in place.
+//! Shows the box owner's Steam libraries to a made seat, without copying them.
 //!
-//! Every library the owner's Steam lists appears in the seat at `/run/media/punktfunk/<key>`.
-//! Its `steamapps` arrives through an idmapped mount: on disk each file stays the owner's, in the
-//! seat it is the seat user's, so the seat's Steam plays, updates and runs Proton from it with no
-//! ACL. The folder itself is the seat's own on the library's drive ([`make_anchor`]), where Steam
-//! reads the free space an install needs. The seat's own `compatdata` and `shadercache` under
-//! `seats/<id>/private/<key>` cover the owner's, and the library's own path is inaccessible to the
-//! unit, so the owner's prefixes never reach a seat.
+//! Each library the owner's Steam lists appears in the seat at `/run/media/punktfunk/<key>`:
 //!
-//! The supervisor holds no `CAP_SYS_ADMIN`, so the seat unit's `ExecStartPre=+` mounts each
-//! library at a root-only stage under [`STAGE_ROOT`], through `nsenter` into PID 1's namespace:
-//! systemd gives even a `+` command a namespace of its own once the unit has one. That mount
-//! checks the folder again ([`super::stage`]), since its path may change after [`share`].
-//! `BindPaths=` then carries the stage, idmap and all, into the seat. The libraries are read at
-//! each start; a drive the owner mounts later reaches the seat on its next start.
+//! - Its `steamapps` folder comes through an id-mapped mount. On disk every file still belongs
+//!   to the owner. Inside the seat it belongs to the seat's user, so the seat's Steam can play,
+//!   update and run Proton from it with no ACL.
+//! - The folder around it is the seat's own, on the library's drive ([`make_anchor`]). Steam
+//!   reads the free space for an install from there.
+//! - The seat's own `compatdata` and `shadercache`, under `seats/<id>/private/<key>`, are mounted
+//!   over the owner's, and the library's real path is hidden from the unit. So the owner's Wine
+//!   prefixes never reach a seat.
 //!
-//! The box's `seat_library_writable` off (`library_writable` in [`DEFAULTS`]) mounts them
-//! read-only: a seat plays what is installed, and can't update, install or rewrite an
-//! appmanifest there. The few files a game needs to write get private copies ([`spots`]).
+//! The supervisor has no `CAP_SYS_ADMIN`, so it cannot mount. The seat's unit does it before each
+//! start: an `ExecStartPre=+` line runs [`super::mount_share`], which checks the folder again and
+//! mounts it on a root-only stage under [`STAGE_ROOT`]. The line goes through `nsenter` into PID
+//! 1's mount namespace, because systemd gives even a `+` command the unit's own namespace.
+//! `BindPaths=` then carries the stage into the seat. The libraries are read at each start, so a
+//! drive the owner mounts later reaches the seat on its next start.
 //!
-//! Every root the owner granted a plugin appears read-only at its own path ([`Rom`]) through a
-//! stage, idmapped where its filesystem takes it; a shared shortcut's folder as an [`Overlay`].
+//! With the box setting `seat_library_writable` off (`library_writable` in [`DEFAULTS`]) the
+//! mounts are read-only, and the few files a game must write get private copies ([`spots`]). A
+//! folder the owner granted a plugin is read-only ([`Rom`]); a shortcut's is an [`Overlay`].
 
 use super::accounts::Passwd;
 use super::shared::{self, make_dir};
@@ -41,7 +41,7 @@ pub(super) const PRIVATE: [&str; 4] = ["compatdata", "shadercache", "downloading
 /// there and renames it into `common`, which only works on one mount of one drive.
 const STAGING: [&str; 2] = ["downloading", "temp"];
 
-/// Root-only: each seat's stages wait here for its unit to bind them, and [`super::stage`] names
+/// Root-only: each seat's stages wait here for its unit to bind them, and [`super::mount_share`] names
 /// a scratch beside each that no one else can swap.
 pub(super) const STAGE_ROOT: &str = "/run/punktfunk/libraries";
 
@@ -114,7 +114,7 @@ pub(super) struct Overlay {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Shares {
     pub nsenter: PathBuf,
-    /// This binary, whose [`super::stage`] mounts each folder.
+    /// This binary, whose [`super::mount_share`] mounts each folder.
     pub seats: PathBuf,
     pub mount: PathBuf,
     pub umount: PathBuf,
@@ -300,10 +300,14 @@ fn folders(dir: &Path) -> Vec<String> {
     out
 }
 
-/// What a game still writes in a read-only `steamapps`, as found there: each Steam Linux
-/// Runtime's `var` and each of its `*_platform_*` folders' `files/.ref`, which pressure-vessel
-/// opens before a native game starts, and each Proton's `dist.lock`. Read-only, either fails the
-/// launch with EROFS. Links are never followed; a file that isn't there yet stays read-only.
+/// The few places a game still writes in a read-only `steamapps`, as they are found there:
+///
+/// - each Steam Linux Runtime's `var`, and `files/.ref` in each of the runtime's
+///   `*_platform_*` folders. pressure-vessel opens these before a native game starts.
+/// - each Proton's `dist.lock`
+///
+/// If one of these is read-only, the launch fails with EROFS. Links are never followed. A file
+/// that doesn't exist yet stays read-only.
 fn spots(steamapps: &Path) -> Vec<Spot> {
     let found = |spot: &Spot| {
         let meta = std::fs::symlink_metadata(steamapps.join(&spot.path));
@@ -502,23 +506,29 @@ fn granted_roms(
     };
     let home = std::fs::canonicalize(&owner.home).unwrap_or_else(|_| owner.home.clone());
     let state = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
-    let fence = Fence {
+    let off_limits = OffLimits {
         home: &home,
         state: &state,
         libraries,
     };
     let reads = |root: &Path| owner_reads(owner, root);
     let idmap = idmap((owner.uid, owner.gid), seat);
-    let roms: Vec<Rom> = roms(&granted(&text, &owner.home), &fence, reads, fstype, &idmap)
-        .into_iter()
-        .filter(|rom| {
-            let staged = make_stage(id, &rom.key).is_ok();
-            if !staged {
-                tracing::warn!(root = %rom.root.display(), "granted root's stage not made");
-            }
-            staged
-        })
-        .collect();
+    let roms: Vec<Rom> = roms(
+        &granted(&text, &owner.home),
+        &off_limits,
+        reads,
+        fstype,
+        &idmap,
+    )
+    .into_iter()
+    .filter(|rom| {
+        let staged = make_stage(id, &rom.key).is_ok();
+        if !staged {
+            tracing::warn!(root = %rom.root.display(), "granted root's stage not made");
+        }
+        staged
+    })
+    .collect();
     let home = Some(home).filter(|home| roms.iter().any(|rom| rom.root.starts_with(home)));
     (roms, home)
 }
@@ -554,7 +564,7 @@ fn granted(grants: &str, home: &Path) -> Vec<PathBuf> {
 
 /// What a granted root must keep clear of: the owner's home and the supervisor's state, both
 /// canonical, and the libraries a seat sees already.
-struct Fence<'a> {
+struct OffLimits<'a> {
     home: &'a Path,
     state: &'a Path,
     libraries: &'a [Library],
@@ -565,7 +575,7 @@ struct Fence<'a> {
 /// themselves, never one that holds their home or the seats' own folders.
 fn rom_root(
     path: &Path,
-    fence: &Fence<'_>,
+    off_limits: &OffLimits<'_>,
     reads: &impl Fn(&Path) -> bool,
 ) -> Result<PathBuf, &'static str> {
     let root = std::fs::canonicalize(path).map_err(|_| "not found")?;
@@ -575,13 +585,13 @@ fn rom_root(
     if !root.to_str().is_some_and(unit_safe) {
         return Err("its path has characters a unit file can't carry");
     }
-    if fence.home.starts_with(&root)
-        || fence.state.starts_with(&root)
-        || root.starts_with(fence.state)
+    if off_limits.home.starts_with(&root)
+        || off_limits.state.starts_with(&root)
+        || root.starts_with(off_limits.state)
     {
         return Err("it holds the owner's home or the seats' own folders");
     }
-    if fence
+    if off_limits
         .libraries
         .iter()
         .any(|l| root.starts_with(&l.steamapps))
@@ -594,9 +604,9 @@ fn rom_root(
     Ok(root)
 }
 
-/// The folder at `path` as a seat may be shown it, or why not: a granted root's fence
-/// ([`rom_root`]) around `owner`'s home, the seats' `state` and `libraries`.
-pub(super) fn fenced(
+/// The folder at `path` as a seat may be shown it, or why not. The limits are those of a
+/// granted root ([`rom_root`]): clear of `owner`'s home, the seats' `state` and `libraries`.
+pub(super) fn shareable(
     path: &Path,
     state: &Path,
     owner: &Passwd,
@@ -604,26 +614,26 @@ pub(super) fn fenced(
 ) -> Result<PathBuf, &'static str> {
     let home = std::fs::canonicalize(&owner.home).unwrap_or_else(|_| owner.home.clone());
     let state = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
-    let fence = Fence {
+    let off_limits = OffLimits {
         home: &home,
         state: &state,
         libraries,
     };
-    rom_root(path, &fence, &|root: &Path| owner_reads(owner, root))
+    rom_root(path, &off_limits, &|root: &Path| owner_reads(owner, root))
 }
 
 /// The roots at `paths` a seat can see, each once and none inside another, idmapped by `idmap`
 /// where `fstype` takes one.
 fn roms(
     paths: &[PathBuf],
-    fence: &Fence<'_>,
+    off_limits: &OffLimits<'_>,
     reads: impl Fn(&Path) -> bool,
     fstype: impl Fn(&Path) -> Option<String>,
     idmap: &str,
 ) -> Vec<Rom> {
     let mut roots: Vec<PathBuf> = paths
         .iter()
-        .filter_map(|path| match rom_root(path, fence, &reads) {
+        .filter_map(|path| match rom_root(path, off_limits, &reads) {
             Ok(root) => Some(root),
             Err(reason) => {
                 tracing::info!(root = %path.display(), reason, "granted root not shown to seats");
@@ -721,9 +731,10 @@ fn remove_empty_dirs(root: &Path) {
     let _ = std::fs::remove_dir(root);
 }
 
-/// Every directory a library's binds name, and the seat's copy of each of its [`Spot`]s, before
-/// the unit starts: a missing one fails it with `226/NAMESPACE`, and none can be made inside the
-/// idmapped mount, where root has no id. Sets the library's [`make_anchor`] folder.
+/// Makes, before the unit starts, every directory that a library's binds name, and the seat's
+/// copy of each of the library's [`Spot`]s. A missing directory fails the unit with
+/// `226/NAMESPACE`. None can be made inside the idmapped mount, where root has no id. Also sets
+/// the library's [`make_anchor`] folder.
 fn prepare(
     state: &Path,
     id: &SeatId,
@@ -917,14 +928,19 @@ fn make_spots(private: &Path, spots: &[Spot], seat: &Passwd) -> std::io::Result<
     Ok(())
 }
 
-/// The drop-in lines that show `shares` to seat `id`: stage each library before the unit starts,
-/// read-only if the box says so, and unmount it after; the same for the seat's folder on its
-/// drive. Both must still be the Steam owner's where they are mounted. Bind the seat's folder, on
-/// that drive or [`root_dir`], at the library's [`VIEW`] path. Hide the library's own path, bind
-/// the stage, the seat's private folders ([`STAGING`] only while read-only) and its spots' copies
-/// over it, and keep the owner's library list there read-only. A folder not mounted leaves the
-/// seat an empty library, not a failed start. Then each granted root ([`rom_lines`]) and each
-/// overlay ([`overlay_lines`]).
+/// The drop-in lines that show `shares` to seat `id`. For each library:
+///
+/// 1. Stage the library before the unit starts, read-only if the box says so, and unmount it
+///    after the unit stops. Do the same for the seat's folder on the library's drive. Both must
+///    still belong to the owner of that Steam where they are mounted.
+/// 2. Bind the seat's folder, the one on that drive or else [`root_dir`], at the library's
+///    [`VIEW`] path.
+/// 3. Hide the library's own path, and bind the stage at the view's `steamapps`. Over that,
+///    bind the seat's private folders ([`STAGING`] only while read-only) and the seat's copies
+///    of the library's spots. Keep the owner's library list there read-only.
+///
+/// A folder that isn't mounted leaves the seat an empty library, not a failed start. After the
+/// libraries come each granted root ([`rom_lines`]) and each overlay ([`overlay_lines`]).
 pub(super) fn unit_lines(state: &Path, id: &SeatId, shares: &Shares) -> String {
     let host = format!("{} -t 1 -m --", shares.nsenter.display());
     let ro = if shares.read_only { "ro," } else { "" };
@@ -1063,7 +1079,7 @@ fn rom_lines(id: &SeatId, shares: &Shares, host: &str) -> String {
 }
 
 /// The lines that mount `source` at `stage` before each start, judged by `check` where it is
-/// mounted ([`super::stage`]), below an overlay into `upper` when given, and unmount it after.
+/// mounted ([`super::mount_share`]), below an overlay into `upper` when given, and unmount it after.
 fn stage_lines(
     shares: &Shares,
     host: &str,
@@ -1086,7 +1102,7 @@ fn stage_lines(
         "ExecStartPre=-+{host} \"{}\" {} {check} {} \"{options}\" \"{}\" {stage}{upper}\n\
          ExecStopPost=-+{host} {umount} -l {stage}\n{lower}",
         shares.seats.display(),
-        super::stage::VERB,
+        super::mount_share::VERB,
         shares.mount.display(),
         source.display(),
     )
@@ -1371,9 +1387,9 @@ mod tests {
         assert_eq!(found[0].steamapps, root.join("drive/steamapps"));
     }
 
-    /// How a drop-in line starts the [`super::super::stage`] helper.
+    /// How a drop-in line starts the [`super::super::mount_share`] helper.
     const STAGE: &str = "ExecStartPre=-+/usr/bin/nsenter -t 1 -m -- \
-                         \"/usr/libexec/punktfunk/punktfunk-seats\" stage";
+                         \"/usr/libexec/punktfunk/punktfunk-seats\" mount-share";
 
     fn shares(read_only: bool, spots: Vec<Spot>) -> Shares {
         Shares {
@@ -1470,14 +1486,14 @@ mod tests {
             spots: Vec::new(),
             anchor: None,
         }];
-        let fence = Fence {
+        let off_limits = OffLimits {
             home: &home,
             state: &state,
             libraries: &libraries,
         };
         let closed = dir("closed");
         let reads = |root: &Path| root != closed;
-        let reason = |path: &Path| rom_root(path, &fence, &reads);
+        let reason = |path: &Path| rom_root(path, &off_limits, &reads);
 
         assert_eq!(reason(&dir("home/enrico/ROMs")), Ok(home.join("ROMs")));
         assert_eq!(
@@ -1521,7 +1537,13 @@ mod tests {
             base.join("mnt/roms/../roms"),
         ];
         let fstype = |path: &Path| Some(if path == card { "exfat" } else { "ext4" }.to_owned());
-        let shown = roms(&paths, &fence, reads, fstype, "u:1000:987:1 g:1000:956:1");
+        let shown = roms(
+            &paths,
+            &off_limits,
+            reads,
+            fstype,
+            "u:1000:987:1 g:1000:956:1",
+        );
         let idmap = Some("u:1000:987:1 g:1000:956:1".to_owned());
         let rom = |root: PathBuf, idmap: Option<String>| Rom {
             key: key(&root),
@@ -1586,9 +1608,10 @@ mod tests {
         assert!(unit_lines(Path::new("/b"), &id(), &without).is_empty());
     }
 
-    /// The unit stages each library idmapped for the Steam's owner, hides the owner's own path,
-    /// binds the stage and the seat's prefixes and caches into the seat, leaves the staging
-    /// folders the owner's and keeps the owner's list read-only. `/run/media` stays hidden.
+    /// What the unit does with each library. It stages the library idmapped for the owner of that
+    /// Steam, hides the owner's own path, and binds the stage, the seat's prefixes and the seat's
+    /// caches into the seat. The staging folders stay the owner's, and the owner's library list
+    /// stays read-only. `/run/media` stays hidden.
     #[test]
     fn the_drop_in_binds_each_library_with_private_folders() {
         let text = super::super::session::render_binds(
@@ -1668,9 +1691,9 @@ mod tests {
         assert_eq!(read_only, expected);
     }
 
-    /// The seat's folder on the library's drive is staged idmapped for the Steam's owner, never
-    /// read-only, and bound at the library's view in place of the seat's folder under
-    /// `seats/<id>`; the rest is as without one.
+    /// When the seat has a folder on the library's drive: that folder is staged idmapped for the
+    /// owner of that Steam, never read-only, and bound at the library's view path in place of the
+    /// seat's folder under `seats/<id>`. Everything else is as it is without such a folder.
     #[test]
     fn a_seat_folder_on_the_drive_is_the_library_s_folder() {
         let state = Path::new("/b");
@@ -1831,9 +1854,9 @@ mod tests {
         home.join(".local/share/Steam").join(dir).join(LIST)
     }
 
-    /// Both of the seat's lists gain the shared games folder and the box's libraries at their
-    /// views after Steam's own entry, and lose a stale drive and the folders' host paths; an
-    /// absent copy stays absent.
+    /// Both of the seat's library lists gain the shared games folder and the box's libraries, at
+    /// their view paths, after Steam's own entry. Both lose a stale drive and the host paths of
+    /// those folders. A copy of the list that isn't there stays absent.
     #[test]
     fn the_seat_s_lists_name_the_box_s_libraries() {
         let temp = tempfile::tempdir().unwrap();

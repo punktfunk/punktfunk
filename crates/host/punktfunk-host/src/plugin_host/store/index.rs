@@ -4,7 +4,7 @@
 //! There is no "track latest". A newer upstream release is not offered until a
 //! re-reviewed entry lands in a signed index.
 //!
-//! [`verify_signature`] runs over the exact bytes first; a failed signature is
+//! [`verify_signatures`] runs over the exact bytes first; a failed signature is
 //! an error, never a fallback to unsigned. Then every field is validated. A
 //! malformed entry is dropped with a warning; a malformed document (unknown
 //! schema, non-JSON, oversized) is rejected whole.
@@ -111,8 +111,8 @@ pub(crate) struct Advisory {
     pub url: Option<String>,
 }
 
-// Shared with update manifests: detached ed25519 over exact bytes against pinned keys.
-pub(crate) use pf_update_check::sig::{verify_signature, PublicKey};
+// Shared with update manifests: detached signatures over exact bytes against pinned keys.
+pub(crate) use pf_update_check::sig::{pinned_algs, verify_signatures, Alg, PublicKey};
 
 impl Index {
     /// Reject the document on a structural problem; drop a bad entry or advisory with a warning.

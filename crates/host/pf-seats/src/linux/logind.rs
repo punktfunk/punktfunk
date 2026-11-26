@@ -1,6 +1,8 @@
-//! Who is logged in, from `loginctl`: the supervisor's view of whether the box owner sits at the
-//! machine. The owner's headless session never has a seat, so a session of theirs with one is a
-//! physical login, and that login wins (`mod.rs`).
+//! Who is logged in, read from `loginctl`. The supervisor uses it to tell whether the box owner
+//! sits at the machine.
+//!
+//! The owner's headless session never has a logind seat. So a session of the owner's that has
+//! one is a physical login, and the physical login wins (`mod.rs`).
 
 use super::run;
 use crate::backend::BackendError;

@@ -82,8 +82,8 @@ pub(crate) struct UpdateResultInfo {
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub(crate) struct UpdateStatus {
-    /// `windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |
-    /// `steamos-source` | `nix` | `source`.
+    /// `windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `zypper` |
+    /// `pacman` | `steamos-source` | `nix` | `source`.
     pub install_kind: String,
     /// `stable` | `canary`.
     pub channel: String,

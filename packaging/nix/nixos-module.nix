@@ -819,7 +819,7 @@ in
 
       systemd.packages = [ cfg.seats.package ];
       systemd.tmpfiles.packages = [ cfg.seats.package ];
-      # The seats' pad fence; its helper resolves the seat user with getent.
+      # The udev rule for seat pads; its helper resolves the seat user with getent.
       services.udev.packages = [ cfg.seats.package ];
       services.udev.path = [ pkgs.getent ];
       # Each seat's /dev/uinput is a CUSE device the supervisor makes through /dev/cuse.
