@@ -84,8 +84,30 @@ struct SetWcgState {
     value: u32,
 }
 
+/// `DISPLAYCONFIG_SOURCE_DPI_SCALE_GET` (info type -3), which wingdi.h does not declare. It is
+/// addressed to a path's source. Each field counts entries of the scale list from the scale
+/// Windows recommends for that source.
+#[repr(C)]
+#[derive(Default)]
+struct DpiScaleGet {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    min: i32,
+    cur: i32,
+    max: i32,
+}
+
+/// `DISPLAYCONFIG_SOURCE_DPI_SCALE_SET` (info type -4), undeclared like the read above.
+#[repr(C)]
+#[derive(Default)]
+struct DpiScaleSet {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    step: i32,
+}
+
 packet!(AdvancedColorInfo2, DISPLAYCONFIG_DEVICE_INFO_TYPE(15));
 packet!(SetWcgState, DISPLAYCONFIG_DEVICE_INFO_TYPE(17));
+packet!(DpiScaleGet, DISPLAYCONFIG_DEVICE_INFO_TYPE(-3));
+packet!(DpiScaleSet, DISPLAYCONFIG_DEVICE_INFO_TYPE(-4));
 
 /// A packet of type `T` addressed to `(adapter, id)`.
 fn packet<T: Packet>(adapter: LUID, id: u32) -> T {
@@ -164,6 +186,20 @@ pub(crate) fn advanced_color_info2(adapter: LUID, target_id: u32) -> Option<Adva
 pub(crate) fn set_wcg_state(adapter: LUID, target_id: u32, enable: bool) -> i32 {
     let mut s = packet::<SetWcgState>(adapter, target_id);
     s.value = enable as u32;
+    set(s)
+}
+
+/// A source's desktop scale as `(min, current, max)`, each counted in scale-list entries from
+/// the recommended scale; `None` when the OS refuses.
+pub(crate) fn dpi_scale_steps(adapter: LUID, source_id: u32) -> Option<(i32, i32, i32)> {
+    get::<DpiScaleGet>(adapter, source_id).map(|s| (s.min, s.cur, s.max))
+}
+
+/// Put a source's desktop scale `step` entries from the recommended one. The raw
+/// `DisplayConfigSetDeviceInfo` result: 0 is success.
+pub(crate) fn set_dpi_scale_step(adapter: LUID, source_id: u32, step: i32) -> i32 {
+    let mut s = packet::<DpiScaleSet>(adapter, source_id);
+    s.step = step;
     set(s)
 }
 

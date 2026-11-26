@@ -296,7 +296,7 @@ pub fn resolve_gdi_name(key: CcdTargetKey) -> Option<String> {
 }
 
 /// The active CCD path driving `key`; `None` when the query fails or the target is inactive.
-fn active_path(key: CcdTargetKey) -> Option<DISPLAYCONFIG_PATH_INFO> {
+pub(crate) fn active_path(key: CcdTargetKey) -> Option<DISPLAYCONFIG_PATH_INFO> {
     let (paths, _modes) = query_display_config(QDC_ONLY_ACTIVE_PATHS).ok()?;
     paths.into_iter().find(|p| path_target_key(p) == key)
 }

@@ -10,6 +10,7 @@
 //!   event coincided with it.
 //! - [`snapshot`]: the platform-neutral snapshot types and cache rules (tested everywhere).
 //! - [`layout_db`]: isolates stored in the Windows display database, and their repair.
+//! - [`scale`]: a display's desktop scale, read and written per display.
 //! - [`console_display`]: the console display's power state and the wake a new monitor needs.
 //! - [`compose_probe`]: the recovery canary — a 1-pixel window repaint, never input.
 //! - [`open_wudfhost`]: the WUDFHost a driver channel duplicates handles into, image-path proved.
@@ -36,6 +37,8 @@ pub use input_desktop::{refresh_secure_desktop, secure_desktop};
 pub mod layout_db;
 #[cfg(target_os = "windows")]
 pub mod monitor_devnode;
+/// A display's desktop scale: the step arithmetic everywhere, the OS read and write on Windows.
+pub mod scale;
 /// Display identity, inventory and the snapshot cache — pure std, unit-tested on every platform.
 pub mod snapshot;
 

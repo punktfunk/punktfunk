@@ -7,8 +7,9 @@
 //! reach this map (id `0` / auto, upstream).
 //!
 //! Persist path: `<config>/display-identity.json` (migrates
-//! `pf-vdisplay-identity.json`). GNOME cannot rematch a virtual monitor, so
-//! [`ScaleMap`] stores scale under the same [`identity_key`].
+//! `pf-vdisplay-identity.json`). GNOME cannot rematch a virtual monitor and Windows
+//! rematches only an unchanged EDID, so [`ScaleMap`] stores scale under the same
+//! [`identity_key`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -521,9 +522,34 @@ fn scale_key_for(
     }
 }
 
-/// Client-key → desktop-scale. GNOME never rematches `RecordVirtual` EDIDs
-/// (fresh serial, no override), so the host stores scale and the Mutter backend
-/// reapplies it. Windows/KDE persist scale themselves once the id is stable.
+/// The scale-map key of a Windows host: the device and the size of its display. Windows keeps
+/// a scale per display size already, and the host only stops it being forgotten. `None` for
+/// a device with no identity of its own, whose display other devices use too.
+pub(crate) fn sized_scale_key(
+    fp: Option<[u8; 32]>,
+    mode: (u32, u32),
+    default: crate::policy::Identity,
+) -> Option<String> {
+    sized_scale_key_for(identity_policy_for(fp, default), fp, mode)
+}
+
+/// [`sized_scale_key`] with policy already resolved (no global prefs).
+fn sized_scale_key_for(
+    policy: crate::policy::Identity,
+    fp: Option<[u8; 32]>,
+    mode: (u32, u32),
+) -> Option<String> {
+    if policy == crate::policy::Identity::Shared {
+        return None;
+    }
+    Some(identity_key(fp?, mode, true))
+}
+
+/// Client-key → desktop-scale, for the desktops that forget it. GNOME never rematches
+/// `RecordVirtual` EDIDs (fresh serial, no override). Windows files a scale under the exact
+/// EDID, which changes with the mode, the refresh rate and the client's panel. On both the
+/// host stores the scale and its backend reapplies it. KDE keeps the scale once the id is
+/// stable.
 pub(crate) struct ScaleMap {
     path: PathBuf,
     map: std::collections::BTreeMap<String, f64>,
@@ -578,7 +604,7 @@ impl ScaleMap {
     }
 }
 
-/// Process-wide scale map, loaded once. Mutter backend only.
+/// Process-wide scale map, loaded once. The Mutter backend and the Windows manager use it.
 pub(crate) fn scales() -> &'static Mutex<ScaleMap> {
     static MAP: OnceLock<Mutex<ScaleMap>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(ScaleMap::load()))
@@ -915,6 +941,24 @@ mod tests {
         assert_eq!(pc, identity_key(fp(1), (1920, 1080), false));
         let pcm = scale_key_for(Identity::PerClientMode, Some(fp(1)), (1920, 1080));
         assert!(pcm.ends_with("@1920x1080"));
+    }
+
+    #[test]
+    fn a_sized_scale_key_names_a_device_and_a_size_or_nothing() {
+        use crate::policy::Identity;
+        let size = (3840, 2160);
+        let sized = identity_key(fp(1), size, true);
+        for policy in [Identity::PerClient, Identity::PerClientMode] {
+            assert_eq!(
+                sized_scale_key_for(policy, Some(fp(1)), size),
+                Some(sized.clone())
+            );
+            assert_eq!(sized_scale_key_for(policy, None, size), None);
+        }
+        assert_eq!(
+            sized_scale_key_for(Identity::Shared, Some(fp(1)), size),
+            None
+        );
     }
 
     /// A tablet whose overlay says per-client remembers its own scale on a shared-identity

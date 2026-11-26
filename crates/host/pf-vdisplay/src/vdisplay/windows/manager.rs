@@ -35,6 +35,7 @@ use windows::Win32::System::Threading::{
 use super::{DisplayOwnership, Mode, VirtualOutput};
 use crate::driver::ControlDevice;
 use crate::lifecycle::{self, Acquire, Release};
+use pf_win_display::scale::Arrival;
 use pf_win_display::topology_churn::{self, Finished, Outcome};
 use pf_win_display::win_display::{
     count_other_active, force_extend_topology, resolve_gdi_name, restore_displays_ccd,
@@ -118,6 +119,10 @@ struct Monitor {
     client_fp: Option<[u8; 32]>,
     /// A further screen of a client, held beside its first ([`VirtualDisplayManager::place_beside`]).
     beside: Option<Beside>,
+    /// The desktop scale, in percent, the display ran at when the host last noted it. A
+    /// later read that differs is a scale someone set by hand. `None` before the first look
+    /// and for a display [`settle_scale`] leaves alone.
+    scale_seen: Option<u32>,
 }
 
 /// Where a further screen's monitor sits: `offset` from the monitor of client `anchor`, as the
@@ -155,6 +160,7 @@ impl Monitor {
             generation,
             client_fp: None,
             beside: None,
+            scale_seen: None,
         }
     }
 
@@ -649,6 +655,104 @@ fn committed_mode_or(key: CcdTargetKey, requested: Mode) -> Mode {
         refresh_hz,
         refresh_mhz: 0,
     }
+}
+
+/// The name `mon`'s desktop scale is remembered under: its device and its size
+/// ([`crate::identity::sized_scale_key`]). `None` for a device with no identity of its own.
+fn scale_name(mon: &Monitor) -> Option<String> {
+    crate::identity::sized_scale_key(
+        mon.client_fp,
+        (mon.requested_mode.width, mon.requested_mode.height),
+        crate::policy::Identity::PerClient,
+    )
+}
+
+/// Puts a monitor that just arrived at the desktop scale remembered for its device at that
+/// size, then notes the scale it runs at. Windows files a scale set by hand under the
+/// display's exact EDID, and that EDID follows the refresh rate and the client's panel as
+/// well as the size, so Windows alone forgets the scale when one of those changes. A display
+/// that arrives at a scale set by hand, with nothing remembered yet, has that scale remembered.
+///
+/// A scale the display does not offer lands on the nearest one it does. A seat session keeps
+/// the scale of its own Windows account and is left alone, and so is a display of a device
+/// with no identity of its own.
+fn settle_scale(mon: &mut Monitor) {
+    mon.scale_seen = None;
+    if in_seat_session() {
+        return;
+    }
+    let Some(name) = scale_name(mon) else {
+        return;
+    };
+    let key = mon.ccd_key();
+    let Some(steps) = pf_win_display::scale::read(key) else {
+        return;
+    };
+    if steps.percent().is_none() {
+        tracing::info!(
+            target = %key,
+            "Windows custom scaling is on, so the display's remembered scale is not applied"
+        );
+        return;
+    }
+    let remembered = crate::identity::scales()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&name)
+        .map(|scale| (scale * 100.0).round() as u32);
+    match steps.on_arrival(remembered) {
+        Arrival::MoveTo(step) if pf_win_display::scale::write(key, step) => tracing::info!(
+            target = %key,
+            percent = remembered,
+            "display put at its remembered scale"
+        ),
+        Arrival::MoveTo(_) => tracing::warn!(
+            target = %key,
+            percent = remembered,
+            "remembered scale not applied"
+        ),
+        Arrival::Remember(percent) => remember(&name, percent),
+        Arrival::Nothing => {}
+    }
+    mon.scale_seen = pf_win_display::scale::read(key).and_then(|s| s.percent());
+}
+
+/// Notes the desktop scale a monitor runs at after a resize in place, and leaves it there. The
+/// monitor keeps its EDID, so Windows keeps its own record of the scale, and a scale written
+/// into a running stream restarts its presentation.
+fn note_scale(mon: &mut Monitor) {
+    if mon.scale_seen.is_some() {
+        mon.scale_seen = pf_win_display::scale::read(mon.ccd_key()).and_then(|s| s.percent());
+    }
+}
+
+/// Remembers the desktop scale of a display that is about to change mode or leave, when it is
+/// not the scale last noted for it: someone set it by hand since then. A display a game
+/// moved to another size is skipped, since Windows changes the scale with the size.
+fn remember_scale(mon: &mut Monitor) {
+    let (Some(seen), Some(name)) = (mon.scale_seen, scale_name(mon)) else {
+        return;
+    };
+    let key = mon.ccd_key();
+    let size = (mon.mode.width, mon.mode.height);
+    if pf_win_display::win_display::active_resolution(key) != Some(size) {
+        return;
+    }
+    let now = pf_win_display::scale::read(key).and_then(|s| s.percent());
+    let Some(now) = now.filter(|&now| now != seen) else {
+        return;
+    };
+    remember(&name, now);
+    mon.scale_seen = Some(now);
+}
+
+/// Stores `percent` as the desktop scale remembered under `name`.
+fn remember(name: &str, percent: u32) {
+    crate::identity::scales()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .set(name, f64::from(percent) / 100.0);
+    tracing::info!(percent, "display scale remembered for its device");
 }
 
 /// Whether an acquire for `want` on a live monitor needs a mid-stream resize.
@@ -1288,12 +1392,18 @@ impl VirtualDisplayManager {
     }
 
     /// The live monitor resized in place ([`Self::resize_in_place`]); `false` re-arrives it.
+    /// The desktop scale is remembered before the mode moves ([`remember_scale`]). In place,
+    /// Windows carries the scale over itself and the host only notes it ([`note_scale`]).
     fn resize_slot(&self, dev: &ControlDevice, t: &mut MgrInner, ask: &Ask) -> Seen {
         let Some(Slot { mon, .. }) = t.slots.get_mut(&ask.slot) else {
             unreachable!("a resize means a live slot");
         };
+        remember_scale(mon);
         match self.resize_in_place(dev, mon, ask.mode) {
-            Ok(()) => Seen::Resized(true),
+            Ok(()) => {
+                note_scale(mon);
+                Seen::Resized(true)
+            }
             Err(e) => {
                 // First-seen size: the OS pins settable modes at arrival, and the re-arrival
                 // teaches it. Info, not warn.
@@ -1541,7 +1651,8 @@ impl VirtualDisplayManager {
     }
 
     /// Records the mode the OS committed, not the one asked for ([`committed_mode_or`]); a
-    /// first member with a baseline then parks the standby sinks.
+    /// first member with a baseline then parks the standby sinks. Last, the display takes its
+    /// device's remembered desktop scale ([`settle_scale`]).
     fn verify(&self, t: &mut MgrInner, r: &mut Rungs) -> Seen {
         let mon = r.mon.as_mut().expect("the verify rung follows an ADD");
         let key = mon.ccd_key();
@@ -1552,6 +1663,7 @@ impl VirtualDisplayManager {
         {
             neutralise_standby_sinks(&*self.ccd, t, key, baseline, start);
         }
+        settle_scale(mon);
         Seen::Verified
     }
 
@@ -2320,7 +2432,8 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// Tear down `mons`, already out of `inner.slots`: the group regroups once on what
+    /// Tear down `mons`, already out of `inner.slots`: each one's desktop scale is remembered
+    /// while its display is still there ([`remember_scale`]), the group regroups once on what
     /// survives them all ([`Self::regroup`]), then one REMOVE each, then the survivors'
     /// layout. A seat left with no monitor and no display path is disconnected
     /// ([`rebuild_after_last_remove`]). An empty batch is a no-op.
@@ -2328,7 +2441,7 @@ impl VirtualDisplayManager {
         &self,
         dev: Option<&ControlDevice>,
         inner: &mut MgrInner,
-        mons: Vec<Monitor>,
+        mut mons: Vec<Monitor>,
     ) {
         if mons.is_empty() {
             return;
@@ -2354,6 +2467,7 @@ impl VirtualDisplayManager {
                 })
                 .ok();
         }
+        mons.iter_mut().for_each(remember_scale);
         self.regroup(inner);
         for mon in &mons {
             self.remove(dev, mon);
@@ -2431,7 +2545,9 @@ impl VirtualDisplayManager {
     /// of the Reuse preempt's REMOVE→ADD, but never a pin: only `/display/release` frees that.
     /// A stale lease, or a release on a kept slot, is a no-op; a `joined` lease also gives
     /// back its joined hold. The device handle is fetched before the transition, as
-    /// `force_release` does, so `device` is never waited on inside one.
+    /// `force_release` does, so `device` is never waited on inside one. A display that stays
+    /// has its desktop scale remembered now ([`remember_scale`]): the host may stop before the
+    /// display is torn down.
     fn release(&self, slot: u32, generation: u64, quit_now: bool, joined: bool, slept: Duration) {
         use crate::policy::Linger;
         let dev = self.device_handle();
@@ -2450,7 +2566,11 @@ impl VirtualDisplayManager {
             lifecycle::effective_linger(quit_now, linger_for(s.mon.client_fp)),
             slept,
         );
-        match s.life.release(Instant::now(), linger) {
+        let released = s.life.release(Instant::now(), linger);
+        if matches!(released, Release::Pin | Release::Linger) {
+            remember_scale(&mut s.mon);
+        }
+        match released {
             Release::Decref | Release::Noop => {}
             Release::Pin => tracing::info!(
                 slot,
@@ -3105,6 +3225,7 @@ mod tests {
                 generation,
                 client_fp: None,
                 beside: None,
+                scale_seen: None,
             };
             let life = lifecycle::State::Active { refs: 1 };
             let joined = 0;
