@@ -17,5 +17,6 @@ pub(crate) mod instance;
 pub(crate) mod osinfo;
 pub(crate) mod power;
 pub(crate) mod sleep_inhibit;
+pub(crate) mod sleep_watch;
 #[forbid(unsafe_code)]
 pub(crate) mod wol;

@@ -34,6 +34,18 @@ import { m } from "@/paraglide/messages";
 
 const EMPTY: HookEntry = { on: "session.started", run: "" };
 
+// The kinds something waits on, and the words for each wait. The host refuses `hold` on any other.
+const HOLDS: Record<string, { label: () => string; help: () => string }> = {
+	"game.launching": {
+		label: () => m.automation_field_hold(),
+		help: () => m.automation_field_hold_help(),
+	},
+	"host.sleeping": {
+		label: () => m.automation_field_hold_sleep(),
+		help: () => m.automation_field_hold_sleep_help(),
+	},
+};
+
 /** As many matches as `Combobox` shows (its default `max`), so the host is asked for no more. */
 const SUGGESTIONS = 50;
 
@@ -134,9 +146,8 @@ export const HookForm: FC<{
 	const legacyClient = draft.filter?.fingerprint ? null : draft.filter?.client;
 
 	const action = kind === "run" ? (draft.run ?? "") : (draft.webhook ?? "");
-	// Only the launch stage waits for anyone; the host refuses `hold` on any other kind.
-	const holdable = draft.on.trim() === "game.launching";
-	const holds = holdable && draft.hold === true;
+	const hold = HOLDS[draft.on.trim()];
+	const holds = hold !== undefined && draft.hold === true;
 	// The host says whether it can elevate (`null`: never) and whether an administrator allowed
 	// it. A stored elevated hook stays visible, so it can be turned back off.
 	const elevatedOn = useGetHostInfo().data?.elevated_commands;
@@ -179,7 +190,13 @@ export const HookForm: FC<{
 					    the SSE `?kinds=` filter takes, so it stays in the host's own spelling — but
 					    on its own it would ask the operator to already know the vocabulary. The name
 					    comes from the same table the activity feed labels its rows with. */}
-					<Select value={draft.on} onValueChange={(on) => set({ on })}>
+					{/* A hook that doesn't hold the sleep races it, so picking the sleep ticks the hold. */}
+					<Select
+						value={draft.on}
+						onValueChange={(on) =>
+							set(on === "host.sleeping" ? { on, hold: true } : { on })
+						}
+					>
 						<SelectTrigger id="hook-on">
 							<SelectValue />
 						</SelectTrigger>
@@ -406,7 +423,7 @@ export const HookForm: FC<{
 					</div>
 				)}
 
-				{holdable && (
+				{hold && (
 					<div className="space-y-1">
 						<Label className="flex items-start gap-3 text-sm font-normal">
 							<Checkbox
@@ -414,11 +431,9 @@ export const HookForm: FC<{
 								onCheckedChange={(n) => set({ hold: n === true })}
 								className="mt-0.5"
 							/>
-							<span>{m.automation_field_hold()}</span>
+							<span>{hold.label()}</span>
 						</Label>
-						<p className="pl-7 text-xs text-muted-foreground">
-							{m.automation_field_hold_help()}
-						</p>
+						<p className="pl-7 text-xs text-muted-foreground">{hold.help()}</p>
 					</div>
 				)}
 

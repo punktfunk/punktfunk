@@ -123,7 +123,7 @@ mod hooks;
 mod host;
 // The box itself: identity, adverts, wake, power, sleep; the flat names keep `crate::power::*`.
 mod hostsys;
-use hostsys::{discovery, identity, osinfo, power, sleep_inhibit, wol};
+use hostsys::{discovery, identity, osinfo, power, sleep_inhibit, sleep_watch, wol};
 // HTTPS serving for nvhttp and the management API, and the device-key digest.
 mod https;
 // `pf-inject` at `crate::inject::*`, and the aim of its absolute mapping at a captured head.

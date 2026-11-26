@@ -33,6 +33,7 @@ run a command or call a webhook on an event, see [Events & hooks](/docs/automati
 | `store.changed` | a plugin install or uninstall finished, or a catalog refreshed | nothing: re-read the store |
 | `settings.changed` | host settings changed in the console | the setting ids |
 | `host.started` / `host.stopping` | the host comes up / shuts down | version, whether GameStream is on |
+| `host.sleeping` | the machine is about to sleep, whatever asked for it | nothing; a hook can [hold the sleep](/docs/automation#before-the-host-sleeps) |
 
 Each event is one JSON object with a rising `seq`, a `ts_ms` timestamp and a `schema` version.
 Fields are only ever added, never renamed.

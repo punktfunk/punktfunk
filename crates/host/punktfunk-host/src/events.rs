@@ -521,6 +521,10 @@ pub enum EventKind {
     HostStarted { version: String, gamestream: bool },
     #[serde(rename = "host.stopping")]
     HostStopping,
+    /// The machine is about to sleep. A hook that holds this kind finishes first, for as long
+    /// as the OS waits: 5 s on Linux unless raised, about 2 s on Windows, 30 s on macOS.
+    #[serde(rename = "host.sleeping")]
+    HostSleeping,
 }
 
 impl EventKind {
@@ -555,6 +559,7 @@ impl EventKind {
             EventKind::ActionInvoked { .. } => "action.invoked",
             EventKind::HostStarted { .. } => "host.started",
             EventKind::HostStopping => "host.stopping",
+            EventKind::HostSleeping => "host.sleeping",
         }
     }
 }
@@ -602,7 +607,8 @@ impl EventKind {
             | EventKind::StoreChanged
             | EventKind::SettingsChanged { .. }
             | EventKind::HostStarted { .. }
-            | EventKind::HostStopping => None,
+            | EventKind::HostStopping
+            | EventKind::HostSleeping => None,
         }
     }
 
@@ -1630,6 +1636,7 @@ mod tests {
                 none,
             ),
             (EventKind::HostStopping, none),
+            (EventKind::HostSleeping, none),
         ];
         for (kind, want) in &rows {
             let got = [

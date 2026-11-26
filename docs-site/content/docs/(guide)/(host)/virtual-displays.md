@@ -51,7 +51,9 @@ dropped connection is noticed after the **Disconnect timeout** (8 s, an advanced
 
 **Keep for** keeps counting while the host sleeps: a host that sleeps past the window removes the
 screen a few seconds after it wakes, unless a device reconnects first. On gamescope the game keeps
-running as long as its screen does.
+running as long as its screen does. A screen kept until released stays through a sleep; to
+release it each time the host sleeps, add the hook in
+[Before the host sleeps](/docs/automation#before-the-host-sleeps).
 
 > **Keeping a screen with Turn off keeps your monitors dark after you disconnect**, until the
 > window ends or you release it. On a PC you also use in person, pick **Desk PC**.

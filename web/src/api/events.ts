@@ -139,6 +139,7 @@ const INVALIDATES = {
 	"action.invoked": [],
 	"host.started": [],
 	"host.stopping": [],
+	"host.sleeping": [],
 } satisfies Record<HostEventKind, readonly (readonly unknown[])[]>;
 
 /**
