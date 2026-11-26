@@ -150,7 +150,7 @@ internal fun HostDetailScreen(
                             Text(stringResource(R.string.hostcard_browse_library))
                         }
                     }
-                    host.asProfile?.let { pick ->
+                    host.remembered?.let { pick ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             ProfileFace(
                                 pick.displayName, 28, picture = pick.avatar,

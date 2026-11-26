@@ -44,6 +44,7 @@ struct ConnectFlow {
         /// A tap's profile ask. `late`: unanswered past the grace, so the takeover names its host.
         struct Asking {
             let id = UUID()
+            let hostID: StoredHost.ID
             let hostName: String
             var late = false
         }
@@ -137,12 +138,13 @@ struct ConnectFlow {
 
     /// Ask the host who is playing, then run `go` with the profile to dial as and what opens it.
     /// An ask slower than the grace raises the connect takeover; its Cancel drops the answer.
-    /// `ConnectPlan.afterProfiles` decides what follows the list.
+    /// `ConnectPlan.afterProfiles` decides what follows the list. The picker saves its pick only
+    /// with Remember on, and forgets the saved one without, as the console's does.
     private func askProfile(
         _ host: StoredHost, link: String?, go: @escaping @MainActor (ProfileDial) -> Void
     ) {
         let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
-        let ask = Life.Asking(hostName: host.displayName)
+        let ask = Life.Asking(hostID: host.id, hostName: host.displayName)
         life.asking = ask
         Task { @MainActor in
             // The console's grace: a list faster than this opens its sheet without a flash.
@@ -177,9 +179,10 @@ struct ConnectFlow {
                 settleSeat(host, rows: rows, id: id, go: unlocked)
             case .pick(let rows, let saved, let gone):
                 profileAsk = ProfileAsk(
-                    host: host, content: .choose(rows, saved: saved, gone: gone),
+                    host: host, content: .choose(rows, saved: saved, gone: gone), connects: true,
                     pick: { pick in
-                        store.setProfile(host.id, pick)
+                        guard let pick else { return }
+                        store.setProfile(host.id, pick.remember ? pick : nil)
                         settleSeat(host, rows: rows, id: pick.id, afterSheet: true, go: unlocked)
                     })
             }

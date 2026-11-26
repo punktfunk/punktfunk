@@ -31,27 +31,34 @@ public enum ConnectPlan {
 
     /// What follows the host's profile list.
     public enum AfterProfiles: Equatable {
-        /// No answer: dial `id`, named when it is the saved pick.
+        /// No answer: dial `id`, named when it is the remembered pick.
         case dial(id: String?, name: String?)
-        /// No picker: save `remember`, then settle `id`'s seat and dial.
+        /// No picker: save `remember` as the host's pick, then settle `id`'s seat and dial.
         case settle(id: String?, remember: ProfilePick?)
-        /// Show the picker. `saved` is the remembered pick it still lists, `gone` the name of one
-        /// it dropped.
+        /// Show the picker. `saved` is the saved pick it still lists, which leads; `gone` the
+        /// name of a remembered pick it dropped.
         case pick([ListedProfile], saved: String?, gone: String?)
     }
 
     /// `rows` is the list, nil for a box without profiles; `failed`: no answer in time. `link` is
-    /// a link's `as=`, which wins for this connect. A failed answer dials as before: the link's
-    /// profile, else the saved pick.
+    /// a link's `as=`, which wins for this connect. Only a remembered pick decides, as on the
+    /// console: a pick saved without `remember` leads the picker instead. A failed answer dials
+    /// the link's profile, else the remembered pick.
     public static func afterProfiles(
         rows: [ListedProfile]?, failed: Bool, saved: ProfilePick?, link: String?
     ) -> AfterProfiles {
+        let remembered = saved?.remember == true ? saved : nil
         if failed {
-            let id = link ?? saved?.id
-            return .dial(id: id, name: id == saved?.id ? saved?.displayName : nil)
+            let id = link ?? remembered?.id
+            return .dial(id: id, name: id == remembered?.id ? remembered?.displayName : nil)
         }
-        let d = HostProfiles.pickerDecision(listed: rows, remembered: saved, link: link)
-        guard d.picker, let rows else { return .settle(id: d.send, remember: d.remember) }
+        let d = HostProfiles.pickerDecision(listed: rows, remembered: remembered, link: link)
+        guard d.picker, let rows else {
+            // The old seat's profile is the host's word for this device: it stays remembered.
+            var keep = d.remember
+            keep?.remember = true
+            return .settle(id: d.send, remember: keep == remembered ? saved : keep)
+        }
         return .pick(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone)
     }
 

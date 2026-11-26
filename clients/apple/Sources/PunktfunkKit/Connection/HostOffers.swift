@@ -21,9 +21,11 @@ public struct HostOffers: OptionSet, Sendable {
     /// What `host` offers. A pinned card is a shortcut, not a second host: it carries no host
     /// acts. Library, speed test and logs dial with the pinned identity, so they wait for a
     /// pairing; the demo host has no speed test, log inbox or profiles. `canWake` is
-    /// `WakePolicy.canWake` for the host's MACs.
+    /// `WakePolicy.canWake` for the host's MACs. `profiles` is how many profiles the host
+    /// listed: as on the console, Switch profile needs a remembered pick or two profiles.
     public static func resolve(
-        host: StoredHost, pinned: Bool, online: Bool, isDemo: Bool, canWake: Bool
+        host: StoredHost, pinned: Bool, online: Bool, isDemo: Bool, canWake: Bool,
+        profiles: Int = 0
     ) -> HostOffers {
         let paired = host.pinnedSHA256 != nil
         var offers: HostOffers = []
@@ -32,7 +34,8 @@ public struct HostOffers: OptionSet, Sendable {
         guard !pinned else { return offers }
         offers.formUnion([.details, .power])
         if !online && canWake { offers.insert(.wake) }
-        if paired && !isDemo && host.pickedProfile != nil { offers.insert(.switchProfile) }
+        let choice = host.pickedProfile?.remember == true || profiles > 1
+        if paired && !isDemo && choice { offers.insert(.switchProfile) }
         return offers
     }
 

@@ -104,6 +104,9 @@ struct ContentView: View {
     @State private var flowLife = ConnectFlow.Life()
     @State private var speedTestTarget: StoredHost?
     @State private var libraryTarget: LibraryTarget?
+    /// The start screen's stream, once the touch or Mac UI took it. A pad arriving while that
+    /// connect still waits on who plays hands it to the console (`handStartToConsole`).
+    @State private var startStream: LibraryTarget?
     #if os(iOS) || os(visionOS) || os(tvOS)
     /// The touch and TV UIs' tab. A written `libraryTarget` lands on the Library tab.
     @State private var touchTab: TouchTab = .hosts
@@ -474,9 +477,16 @@ struct ContentView: View {
             case .leave: break
             }
         }
+        .onChange(of: flowLife.asking == nil && profileAsk == nil) { _, idle in
+            // The start screen's stream stopped asking who plays (the player cancelled): a pad
+            // arriving later must not hand a later connect to the console.
+            if idle { startStream = nil }
+        }
         .onChange(of: model.phase) { _, phase in
             // A parked dial that streamed, failed or was cancelled has nothing left to wait for.
             if awaitingApproval?.viaDial == true, phase != .connecting { awaitingApproval = nil }
+            // The start screen's stream dialed: no pad can take it over now.
+            if phase != .idle { startStream = nil }
             switch phase {
             case .streaming:
                 #if os(iOS) || os(visionOS)
@@ -613,7 +623,7 @@ struct ContentView: View {
         libraryShelfID = shelf.id
         touchTab = .library
         libraryTarget = nil
-        if shelf.stream { flow.connect(shelf.host) }
+        if shelf.stream { connectStart(shelf) }
     }
     #endif
 
@@ -626,9 +636,32 @@ struct ContentView: View {
         libraryShelfID = shelf.id
         macDestination = .library
         libraryTarget = nil
-        if shelf.stream { flow.connect(shelf.host) }
+        if shelf.stream { connectStart(shelf) }
+    }
+    #endif
+
+    /// The start screen's stream, on this app's UI. It runs at the first appear, before
+    /// GameController reports a pad that was connected at launch, so `handStartToConsole` may
+    /// still give it to the console.
+    private func connectStart(_ shelf: LibraryTarget) {
+        startStream = shelf
+        flow.connect(shelf.host)
     }
 
+    /// A pad took the screen. While the start screen's stream still waits on who plays, the
+    /// console asks instead: the same route as a connect from the gamepad UI. Once it dials, or
+    /// once the player cancelled, there is nothing to hand over.
+    private func handStartToConsole() {
+        guard let shelf = startStream else { return }
+        startStream = nil
+        let waiting = flowLife.asking?.hostID == shelf.host.id || profileAsk?.host.id == shelf.host.id
+        guard waiting, model.phase == .idle else { return }
+        flowLife.asking = nil
+        profileAsk = nil
+        libraryTarget = shelf
+    }
+
+    #if os(macOS)
     /// Run a host window's pending request here, unless another main window took it first. A
     /// window `LinkArbiter` sends away leaves it to an idle one, then opens a window of its own
     /// for it.
@@ -877,6 +910,7 @@ struct ContentView: View {
                         onCancelConnect: { flow.cancelConnect() })
                 }
             }
+            .onChange(of: gamepadUIActive) { _, up in if up { handStartToConsole() } }
     }
 
     /// The host label for the connect takeover's "Connecting…" phase (`ConnectPlan.takeover`).

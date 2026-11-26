@@ -77,8 +77,10 @@ internal fun ConnectGrid(
     /** Open the host page. */
     onDetails: (KnownHost) -> Unit,
     onWake: (KnownHost) -> Unit,
-    /** Open the profile picker for this host; offered once it has a saved pick. */
+    /** Open the profile picker for this host; offered where [canSwitchProfile]. */
     onSwitchProfile: (KnownHost) -> Unit,
+    /** The fingerprints of the hosts that list two profiles or more. */
+    multiProfile: Set<String> = emptySet(),
     /** What each paired host last said this device may stream, by fingerprint: the card's line. */
     screens: Map<String, DisplayTargets.Targets>,
     /** What each host has up, by fingerprint: "Playing …". */
@@ -110,7 +112,7 @@ internal fun ConnectGrid(
         if (kh.mac.isNotEmpty() && !kh.isOnline(reachable)) {
             add(HostMenuItem(stringResource(R.string.hostcard_wake)) { onWake(kh) })
         }
-        if (kh.paired && kh.asProfile != null) {
+        if (kh.canSwitchProfile(multiProfile)) {
             add(HostMenuItem(stringResource(R.string.hostcard_switch_profile)) { onSwitchProfile(kh) })
         }
         add(HostMenuItem(stringResource(R.string.hostcard_copy_link)) { onCopyLink(kh, null) })
@@ -189,9 +191,9 @@ internal fun ConnectGrid(
                             accent = accentColor(shown?.accent),
                             menuItems = hostMenu(kh, pin),
                             isDefault = pin == null && defaultHostId == kh.id,
-                            profileName = if (pin == null) kh.asProfile?.displayName else null,
-                            profilePicture = kh.asProfile?.avatar,
-                            profileArt = if (kh.asProfile?.avatar != null) rememberProfileArt(kh) else null,
+                            profileName = if (pin == null) kh.remembered?.displayName else null,
+                            profilePicture = kh.remembered?.avatar,
+                            profileArt = if (kh.remembered?.avatar != null) rememberProfileArt(kh) else null,
                             // Named only when it is not the only screen.
                             screenLine = screens[kh.fpHex]?.takeIf { kh.paired }?.cardLineUnder(shown, res),
                         )

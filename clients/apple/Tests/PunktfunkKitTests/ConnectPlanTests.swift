@@ -65,7 +65,9 @@ final class ConnectPlanTests: XCTestCase {
 
     private let anna = ListedProfile(id: "anna", displayName: "Anna")
     private let ben = ListedProfile(id: "ben", displayName: "Ben")
-    private let annaPick = ProfilePick(id: "anna", displayName: "Anna")
+    private let annaPick = ProfilePick(id: "anna", displayName: "Anna", remember: true)
+    /// Saved with Remember off: it leads the picker and decides nothing.
+    private let annaFirst = ProfilePick(id: "anna", displayName: "Anna")
 
     private func after(
         _ rows: [ListedProfile]?, failed: Bool = false, saved: ProfilePick? = nil,
@@ -74,17 +76,33 @@ final class ConnectPlanTests: XCTestCase {
         ConnectPlan.afterProfiles(rows: rows, failed: failed, saved: saved, link: link)
     }
 
-    /// A host that didn't answer in time dials the link's profile, else the saved pick, and
-    /// names it only when it is the saved one.
-    func testAFailedListDialsTheLinkOrTheSavedPick() {
+    /// A host that didn't answer in time dials the link's profile, else the remembered pick,
+    /// and names it only when it is the remembered one.
+    func testAFailedListDialsTheLinkOrTheRememberedPick() {
         XCTAssertEqual(after(nil, failed: true), .dial(id: nil, name: nil))
         XCTAssertEqual(after(nil, failed: true, saved: annaPick), .dial(id: "anna", name: "Anna"))
+        XCTAssertEqual(after(nil, failed: true, saved: annaFirst), .dial(id: nil, name: nil))
         XCTAssertEqual(
             after(nil, failed: true, saved: annaPick, link: "ben"), .dial(id: "ben", name: nil))
         XCTAssertEqual(
             after(nil, failed: true, saved: annaPick, link: "anna"), .dial(id: "anna", name: "Anna"))
         // Rows from a failed answer are not read.
         XCTAssertEqual(after([anna, ben], failed: true), .dial(id: nil, name: nil))
+    }
+
+    /// A pick saved without Remember asks again, that profile first, and stays saved.
+    func testAnUnrememberedPickLeadsThePicker() {
+        XCTAssertEqual(
+            after([anna, ben], saved: annaFirst), .pick([anna, ben], saved: "anna", gone: nil))
+        XCTAssertEqual(after([ben], saved: annaFirst), .settle(id: "ben", remember: annaFirst))
+    }
+
+    /// The old seat's profile settles and is remembered from then on.
+    func testTheOldSeatsProfileIsRemembered() {
+        let seat = ListedProfile(id: "seat", displayName: "Seat", legacySeat: true)
+        let kept = ProfilePick(id: "seat", displayName: "Seat", remember: true)
+        XCTAssertEqual(after([anna, seat]), .settle(id: "seat", remember: kept))
+        XCTAssertEqual(after([anna, seat], saved: annaFirst), .settle(id: "seat", remember: kept))
     }
 
     /// A box without profiles dials with the link's id and keeps the saved pick.
@@ -99,11 +117,14 @@ final class ConnectPlanTests: XCTestCase {
         XCTAssertEqual(after([anna, ben], saved: annaPick), .settle(id: "anna", remember: annaPick))
     }
 
-    /// Several profiles and no usable pick show the picker, naming a pick the box dropped.
+    /// Several profiles and no usable pick show the picker, naming a remembered pick the box
+    /// dropped.
     func testSeveralProfilesWithoutAPickShowThePicker() {
         XCTAssertEqual(after([anna, ben]), .pick([anna, ben], saved: nil, gone: nil))
-        let gone = ProfilePick(id: "carl", displayName: "Carl")
+        var gone = ProfilePick(id: "carl", displayName: "Carl", remember: true)
         XCTAssertEqual(after([anna, ben], saved: gone), .pick([anna, ben], saved: nil, gone: "Carl"))
+        gone.remember = false
+        XCTAssertEqual(after([anna, ben], saved: gone), .pick([anna, ben], saved: nil, gone: nil))
     }
 
     /// A link naming no listed profile shows the picker with the saved pick marked.

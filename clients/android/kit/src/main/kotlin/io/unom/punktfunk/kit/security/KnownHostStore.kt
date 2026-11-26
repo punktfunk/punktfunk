@@ -91,7 +91,7 @@ data class KnownHost(
     /** Unix seconds of the last session that connected; `null` until one has. Mirrors the Rust
      *  `KnownHost.last_used` and the Apple client's `StoredHost.lastConnected`. */
     val lastUsed: Long? = null,
-    /** The profile on the host this device plays as, `null` until one is picked. */
+    /** The pick this device saved for the host, `null` until one is. See [remembered]. */
     val asProfile: ProfilePick? = null,
     /** The name the host last advertised; empty until learned. See [followingName]. */
     val advertName: String = "",
@@ -102,6 +102,9 @@ data class KnownHost(
      */
     val keepAddress: Boolean = false,
 ) {
+    /** The saved pick a connect plays as without asking: the one the player asked this device to remember. */
+    val remembered: ProfilePick? get() = asProfile?.takeIf { it.remember }
+
     /** This record re-pointed at [to]:[toPort], remembering the address it leaves. */
     fun movedTo(to: String, toPort: Int): KnownHost = copy(
         address = to,
