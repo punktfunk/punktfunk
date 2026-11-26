@@ -192,6 +192,15 @@
       ]
     },
     {
+      "id": "macos",
+      "name": "macOS (Apple silicon)",
+      "installs": "host",
+      "packageManager": "dmg",
+      "docs": "/docs/macos-host",
+      "floor": "macOS 15 or newer, Apple silicon",
+      "url": "https://git.unom.io/api/packages/unom/generic/punktfunk-host-macos/latest/Punktfunk-Host.dmg"
+    },
+    {
       "id": "linux-client",
       "name": "Linux client (any distro)",
       "installs": "client",
