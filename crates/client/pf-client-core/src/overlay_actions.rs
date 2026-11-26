@@ -1,11 +1,13 @@
 //! In-stream quick-action ring: the `overlay_actions` JSON blob (schema `v: 2`).
-//! Six slots clockwise from 12 o'clock, key combinations (`shortcut:`), and the
-//! virtual pad preset. Design: `design/touch-client-overlay.md`.
+//! Six slots clockwise from 12 o'clock, key combinations (`shortcut:`), the
+//! virtual pad preset, and the keyboard row ([`RowSlot`]). Design:
+//! `design/touch-client-overlay.md`.
 //!
 //! [`OverlayConfig::parse`] never fails. Short rings pad empty, long ones
-//! truncate; unknown ids and dangling `shortcut:` refs become empty slots;
-//! absent fields take defaults; unparseable blobs take the platform default.
-//! Presets sync across client versions, so a newer ring must degrade quietly.
+//! truncate; unknown ids and dangling `shortcut:` refs become empty slots, and
+//! leave the row; absent fields take defaults; unparseable blobs take the
+//! platform default. Presets sync across client versions, so a newer ring must
+//! degrade quietly.
 //!
 //! Swift (`OverlayActions.swift`) and Kotlin (`OverlayActions.kt`) mirror this
 //! file. All three replay `clients/shared/overlay-actions-vectors.json`; a new
@@ -120,6 +122,34 @@ impl SlotId {
                 }
             }
         })
+    }
+}
+
+/// One button of the keyboard row, the strip a touch client shows above its
+/// on-screen keyboard. `Key` is one key by a [`key_vk`] name, kept as written;
+/// its id is `key:<name>`, which only the row reads. No Rust shell draws a row:
+/// this is the reference parser for the Kotlin and Swift ones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowSlot {
+    Key(String),
+    Action(SlotId),
+}
+
+impl RowSlot {
+    /// Inverse of [`RowSlot::parse`].
+    pub fn id(&self) -> String {
+        match self {
+            RowSlot::Key(name) => format!("key:{name}"),
+            RowSlot::Action(slot) => slot.id(),
+        }
+    }
+
+    /// `None` leaves the row: an id or a key name unknown to this build.
+    pub fn parse(s: &str) -> Option<RowSlot> {
+        match s.strip_prefix("key:") {
+            Some(name) => key_vk(name).map(|_| RowSlot::Key(name.into())),
+            None => SlotId::parse(s).map(RowSlot::Action),
+        }
     }
 }
 
@@ -319,6 +349,9 @@ pub struct OverlayConfig {
     pub ring: [Option<SlotId>; RING_SLOTS],
     pub shortcuts: Vec<Shortcut>,
     pub pad: PadConfig,
+    /// The keyboard row in order. `None` is a row the player never edited, which
+    /// follows the client's default set; an empty list is no row.
+    pub row: Option<Vec<RowSlot>>,
 }
 
 /// On-disk blob. Every field defaults so parse stays lenient.
@@ -329,6 +362,8 @@ struct Raw {
     ring: Vec<Option<String>>,
     shortcuts: Vec<Shortcut>,
     pad: PadConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    row: Option<Vec<Option<String>>>,
 }
 
 impl OverlayConfig {
@@ -357,6 +392,7 @@ impl OverlayConfig {
             ring,
             shortcuts: Vec::new(),
             pad: PadConfig::default(),
+            row: None,
         }
     }
 
@@ -374,17 +410,26 @@ impl OverlayConfig {
             .into_iter()
             .filter(|s| !s.id.is_empty())
             .collect();
+        let known = |s: &SlotId| match s {
+            SlotId::Shortcut(id) => shortcuts.iter().any(|sc| &sc.id == id),
+            _ => true,
+        };
         let mut ring: [Option<SlotId>; RING_SLOTS] = Default::default();
         for (slot, id) in ring.iter_mut().zip(raw.ring) {
-            *slot = id.as_deref().and_then(SlotId::parse).filter(|s| match s {
-                SlotId::Shortcut(id) => shortcuts.iter().any(|sc| &sc.id == id),
-                _ => true,
-            });
+            *slot = id.as_deref().and_then(SlotId::parse).filter(known);
         }
+        let row = raw.row.map(|ids| {
+            ids.iter()
+                .flatten()
+                .filter_map(|id| RowSlot::parse(id))
+                .filter(|b| !matches!(b, RowSlot::Action(s) if !known(s)))
+                .collect()
+        });
         OverlayConfig {
             ring,
             shortcuts,
             pad: raw.pad,
+            row,
         }
     }
 
@@ -398,6 +443,10 @@ impl OverlayConfig {
                 .collect(),
             shortcuts: self.shortcuts.clone(),
             pad: self.pad.clone(),
+            row: self
+                .row
+                .as_ref()
+                .map(|row| row.iter().map(|b| Some(b.id())).collect()),
         };
         serde_json::to_string(&raw).expect("plain data serializes")
     }
@@ -434,14 +483,17 @@ impl OverlayConfig {
         id
     }
 
-    /// Drop the shortcut and empty the ring slot that pointed at it (`parse`
-    /// would on the next read; doing it here shows it at once).
+    /// Drop the shortcut, empty the ring slot that pointed at it and take it out
+    /// of the row (`parse` would on the next read; doing it here shows it at once).
     pub fn remove_shortcut(&mut self, id: &str) {
         self.shortcuts.retain(|s| s.id != id);
         for slot in self.ring.iter_mut() {
             if matches!(slot, Some(SlotId::Shortcut(s)) if s == id) {
                 *slot = None;
             }
+        }
+        if let Some(row) = &mut self.row {
+            row.retain(|b| !matches!(b, RowSlot::Action(SlotId::Shortcut(s)) if s == id));
         }
     }
 }
@@ -747,10 +799,13 @@ mod tests {
         let second = cfg.upsert_shortcut(None, "", vec!["alt".into(), "f4".into()]);
         assert_eq!(second, "s2");
         assert_eq!(cfg.ring[2], Some(SlotId::Shortcut("s2".into())));
+        let combo = |id: &str| RowSlot::Action(SlotId::Shortcut(id.into()));
+        cfg.row = Some(vec![combo("s1"), RowSlot::Key("tab".into()), combo("s2")]);
         cfg.remove_shortcut("s1");
         assert_eq!(cfg.shortcuts.len(), 1);
         assert_eq!(cfg.ring[1], None);
         assert_eq!(cfg.ring[2], Some(SlotId::Shortcut("s2".into())));
+        assert_eq!(cfg.row, Some(vec![RowSlot::Key("tab".into()), combo("s2")]));
     }
 
     /// `clients/shared/overlay-actions-vectors.json`, which the Swift and Kotlin twins replay.
@@ -784,6 +839,12 @@ mod tests {
             let id = id.as_str().unwrap();
             assert_eq!(SlotId::parse(id).map(|s| s.id()).as_deref(), Some(id));
         }
+        let default_row = file["default_row"].as_array().expect("default_row");
+        assert_eq!(default_row.len(), 27);
+        for id in default_row {
+            let id = id.as_str().unwrap();
+            assert_eq!(RowSlot::parse(id).map(|b| b.id()).as_deref(), Some(id));
+        }
         let cases = file["cases"].as_array().expect("cases");
         assert!(cases.len() >= 10, "the vector file is the contract");
         for case in cases {
@@ -801,6 +862,14 @@ mod tests {
                 .collect();
             let want: Vec<Option<String>> = serde_json::from_value(case["ring"].clone()).unwrap();
             assert_eq!(ring, want, "{name}: ring");
+            // A case with no `row` expects a row the player never edited.
+            let row: Option<Vec<String>> = cfg
+                .row
+                .as_ref()
+                .map(|r| r.iter().map(RowSlot::id).collect());
+            let want_row: Option<Vec<String>> =
+                serde_json::from_value(case["row"].clone()).unwrap();
+            assert_eq!(row, want_row, "{name}: row");
             let stored: serde_json::Value = serde_json::from_str(&cfg.to_json()).unwrap();
             assert!(
                 same_json(&stored, &case["round_trip"]),

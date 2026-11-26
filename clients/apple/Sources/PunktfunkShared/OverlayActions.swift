@@ -4,8 +4,9 @@
 // `clients/shared/overlay-actions-vectors.json`.
 //
 // Parsing never fails: fewer than six slots pad with empty, more are truncated, an unknown id or
-// a dangling `shortcut:` reference is an empty slot, an absent field takes its default, and an
-// unparseable blob is the platform default — presets sync between client versions.
+// a dangling `shortcut:` reference is an empty slot and leaves the keyboard row, an absent field
+// takes its default, and an unparseable blob is the platform default — presets sync between
+// client versions.
 
 import Foundation
 
@@ -91,6 +92,36 @@ public enum SlotId: Equatable, Sendable {
             return nil
         }
     }
+}
+
+/// One button of the keyboard row, the strip above the on-screen keyboard: a single key by its
+/// `keyVk` name, kept as written, or a quick action. A key's id is `key:<name>`, which only the
+/// row reads.
+public enum RowSlot: Equatable, Sendable {
+    case key(String)
+    case action(SlotId)
+
+    /// The stored id, the inverse of `parse`.
+    public var id: String {
+        switch self {
+        case .key(let name): return "key:\(name)"
+        case .action(let slot): return slot.id
+        }
+    }
+
+    /// An id from the blob; `nil` for an id or a key name this build does not know.
+    public static func parse(_ s: String) -> RowSlot? {
+        guard s.hasPrefix("key:") else { return SlotId.parse(s).map(RowSlot.action) }
+        let name = String(s.dropFirst(4))
+        return keyVk(name) == nil ? nil : .key(name)
+    }
+
+    /// The row a player has not edited: the keys a phone's keyboard lacks. The shared vectors'
+    /// `default_row`.
+    public static let defaultRow: [RowSlot] = (
+        ["escape", "tab", "ctrl", "alt", "shift", "win", "left", "down", "up", "right",
+         "delete", "home", "end", "pageup", "pagedown"] + (1...12).map { "f\($0)" }
+    ).map(RowSlot.key)
 }
 
 /// A custom key chord. `keys` are names from the shared keymap tables, never raw key codes.
@@ -232,12 +263,20 @@ public struct OverlayConfig: Equatable, Sendable {
     public var ring: [SlotId?]
     public var shortcuts: [OverlayShortcut]
     public var pad: PadConfig
+    /// The keyboard row in order. `nil` is a row the player never edited, which follows
+    /// `RowSlot.defaultRow`; an empty list is no row.
+    public var row: [RowSlot]?
 
-    public init(ring: [SlotId?], shortcuts: [OverlayShortcut] = [], pad: PadConfig = PadConfig()) {
+    public init(ring: [SlotId?], shortcuts: [OverlayShortcut] = [], pad: PadConfig = PadConfig(),
+                row: [RowSlot]? = nil) {
         self.ring = ring
         self.shortcuts = shortcuts
         self.pad = pad
+        self.row = row
     }
+
+    /// The row the stream shows.
+    public var rowButtons: [RowSlot] { row ?? RowSlot.defaultRow }
 
     public func shortcut(_ id: String) -> OverlayShortcut? {
         shortcuts.first { $0.id == id }
@@ -263,12 +302,13 @@ public struct OverlayConfig: Equatable, Sendable {
         }
     }
 
-    /// Remove a shortcut, emptying every slot that sent it (`parse` would, on the next read) and
-    /// dropping each of `bindings` that sent it. The caller writes `bindings` back only to the
-    /// layer that holds this ring.
+    /// Remove a shortcut, emptying every slot that sent it and taking it out of the row (`parse`
+    /// would, on the next read), and dropping each of `bindings` that sent it. The caller writes
+    /// `bindings` back only to the layer that holds this ring.
     public mutating func removeShortcut(_ id: String, bindings: inout Shortcuts) {
         bindings.bindings.removeAll { $0.action == .slot(.shortcut(id)) }
         shortcuts.removeAll { $0.id == id }
+        row?.removeAll { $0 == .action(.shortcut(id)) }
         ring = ring.map { slot in
             if case .shortcut(let sid) = slot, sid == id { return nil }
             return slot
@@ -308,13 +348,20 @@ public struct OverlayConfig: Equatable, Sendable {
             return OverlayShortcut(
                 id: id, label: s["label"] as? String ?? "", keys: s["keys"] as? [String] ?? [])
         }
+        func known(_ slot: SlotId) -> Bool {
+            if case .shortcut(let id) = slot { return shortcuts.contains { $0.id == id } }
+            return true
+        }
         let ringIn = obj["ring"] as? [Any] ?? []
         let ring: [SlotId?] = (0..<ringSlots).map { i in
-            guard i < ringIn.count, let s = ringIn[i] as? String, let slot = SlotId.parse(s) else {
-                return nil
-            }
-            if case .shortcut(let id) = slot, !shortcuts.contains(where: { $0.id == id }) { return nil }
+            guard i < ringIn.count, let s = ringIn[i] as? String, let slot = SlotId.parse(s),
+                  known(slot) else { return nil }
             return slot
+        }
+        let row: [RowSlot]? = (obj["row"] as? [Any])?.compactMap { entry in
+            guard let s = entry as? String, let button = RowSlot.parse(s) else { return nil }
+            if case .action(let slot) = button, !known(slot) { return nil }
+            return button
         }
         let padIn = obj["pad"] as? [String: Any] ?? [:]
         var pad = PadConfig()
@@ -339,7 +386,7 @@ public struct OverlayConfig: Equatable, Sendable {
         }
         pad.controls = tweaks("controls")
         pad.controlsNarrow = tweaks("controls_narrow")
-        return OverlayConfig(ring: ring, shortcuts: shortcuts, pad: pad)
+        return OverlayConfig(ring: ring, shortcuts: shortcuts, pad: pad, row: row)
     }
 
     /// The blob to store — always the current schema version.
@@ -358,12 +405,13 @@ public struct OverlayConfig: Equatable, Sendable {
         }
         if !pad.controls.isEmpty { padOut["controls"] = tweaks(pad.controls) }
         if !pad.controlsNarrow.isEmpty { padOut["controls_narrow"] = tweaks(pad.controlsNarrow) }
-        let obj: [String: Any] = [
+        var obj: [String: Any] = [
             "v": Self.schemaVersion,
             "ring": ring.map { $0.map { $0.id as Any } ?? NSNull() },
             "shortcuts": shortcuts.map { ["id": $0.id, "label": $0.label, "keys": $0.keys] },
             "pad": padOut,
         ]
+        if let row { obj["row"] = row.map(\.id) }
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8)
         else { return "" } // plain data always serialises

@@ -17,8 +17,9 @@ import org.json.JSONObject
  * ([SlotId], [keyVk]), which the shortcuts share.
  *
  * Parsing never fails: fewer than six slots pad with empty, more are truncated, an unknown id or a
- * dangling `shortcut:` reference is an empty slot, an absent field takes its default, and an
- * unparseable blob is the platform default — presets sync between client versions.
+ * dangling `shortcut:` reference is an empty slot and leaves the keyboard row, an absent field
+ * takes its default, and an unparseable blob is the platform default — presets sync between
+ * client versions.
  */
 
 /** What the Controller type slot steps through, as GamepadPref wire bytes: Automatic, then the
@@ -58,6 +59,37 @@ internal fun statsVerbosityLabel(tier: StatsVerbosity): Int = when (tier) {
 data class Shortcut(val id: String, val label: String = "", val keys: List<String> = emptyList())
 
 /**
+ * One button of the keyboard row ([KeyRow]): a single key by its [keyVk] name, kept as written,
+ * or a quick action. A key's id is `key:<name>`, which only the row reads.
+ */
+sealed class RowSlot {
+    data class Key(val name: String) : RowSlot()
+    data class Action(val slot: SlotId) : RowSlot()
+
+    /** The stored id, the inverse of [parse]. */
+    val id: String
+        get() = when (this) {
+            is Key -> "key:$name"
+            is Action -> slot.id
+        }
+
+    companion object {
+        /** An id from a blob; `null` for an id or a key name this build does not know. */
+        fun parse(s: String): RowSlot? =
+            if (s.startsWith("key:")) s.substring(4).takeIf { keyVk(it) != null }?.let(::Key)
+            else SlotId.parse(s)?.let(::Action)
+    }
+}
+
+/** The row a player has not edited: the keys a phone's keyboard lacks. The shared vectors' `default_row`. */
+val DEFAULT_ROW: List<RowSlot> = (
+    listOf(
+        "escape", "tab", "ctrl", "alt", "shift", "win", "left", "down", "up", "right",
+        "delete", "home", "end", "pageup", "pagedown",
+    ) + (1..12).map { "f$it" }
+    ).map(RowSlot::Key)
+
+/**
  * One control's layout override: [x] and [y] place its centre as fractions of the layer's width
  * and height, [scale] sizes it about that centre, [hidden] takes it out of the stream (the
  * editor still shows it, ghosted). An absent field keeps the preset's value.
@@ -87,8 +119,14 @@ data class OverlayConfig(
     val ring: List<SlotId?>,
     val shortcuts: List<Shortcut> = emptyList(),
     val pad: PadConfig = PadConfig(),
+    /** The keyboard row in order. `null` is a row the player never edited, which follows
+     *  [DEFAULT_ROW]; an empty list is no row. */
+    val row: List<RowSlot>? = null,
 ) {
     fun shortcut(id: String): Shortcut? = shortcuts.firstOrNull { it.id == id }
+
+    /** The row the stream shows. */
+    val rowButtons: List<RowSlot> get() = row ?: DEFAULT_ROW
 
     /** The blob to store — always the current schema version. */
     fun toJson(): String {
@@ -125,6 +163,7 @@ data class OverlayConfig(
         if (pad.controls.isNotEmpty()) padOut.put("controls", tweaks(pad.controls))
         if (pad.controlsNarrow.isNotEmpty()) padOut.put("controls_narrow", tweaks(pad.controlsNarrow))
         j.put("pad", padOut)
+        row?.let { buttons -> j.put("row", JSONArray(buttons.map(RowSlot::id))) }
         return j.toString()
     }
 
@@ -165,11 +204,16 @@ data class OverlayConfig(
                     add(Shortcut(id, s.optString("label", ""), keys))
                 }
             }
+            fun known(slot: SlotId) = slot !is SlotId.Shortcut || shortcuts.any { it.id == slot.shortcutId }
             val ringIn = j.optJSONArray("ring") ?: JSONArray()
             val ring = (0 until RING_SLOTS).map { i ->
                 if (i >= ringIn.length() || ringIn.isNull(i)) return@map null
-                SlotId.parse(ringIn.optString(i))?.takeIf { slot ->
-                    slot !is SlotId.Shortcut || shortcuts.any { it.id == slot.shortcutId }
+                SlotId.parse(ringIn.optString(i))?.takeIf(::known)
+            }
+            val row = j.optJSONArray("row")?.let { rowIn ->
+                (0 until rowIn.length()).mapNotNull { i ->
+                    if (rowIn.isNull(i)) return@mapNotNull null
+                    RowSlot.parse(rowIn.optString(i))?.takeIf { it !is RowSlot.Action || known(it.slot) }
                 }
             }
             val padIn = j.optJSONObject("pad")
@@ -197,7 +241,7 @@ data class OverlayConfig(
                 controls = tweaks("controls"),
                 controlsNarrow = tweaks("controls_narrow"),
             )
-            return OverlayConfig(ring, shortcuts, pad)
+            return OverlayConfig(ring, shortcuts, pad, row)
         }
     }
 }
