@@ -15,8 +15,8 @@
 //!   run inside the punktfunk service behind a named pipe.
 
 // Off Windows, `unsafe` is allowed in four places only: `linux::pam` (libpam), `linux::login`
-// (signals and the privilege drop), the `SO_PEERPIDFD` read in `linux::handover` and the
-// `bpf(2)` call in `linux::loopback`.
+// (signals and the privilege drop), the `SO_PEERPIDFD` read in `linux::login_password` and
+// the `bpf(2)` call in `linux::loopback`.
 #![cfg_attr(not(windows), deny(unsafe_code))]
 
 pub mod attempts;
@@ -25,7 +25,9 @@ pub mod backoff;
 #[cfg(any(windows, test))]
 pub mod bootstrap;
 pub mod ipc;
-/// The Linux half. Its tests run wherever Unix does; only the daemon needs Linux.
+// The Linux half. Its tests run wherever Unix does; only the daemon needs Linux. A `//`
+// comment on purpose: a doc comment here would make the module's own header resolve its
+// links from this file.
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod linux;
 pub mod logging;
@@ -37,8 +39,8 @@ mod secret;
 pub mod service;
 pub mod steam;
 pub mod unlock;
-/// The Windows half. Its pure parts and their tests build on every target; the rest needs
-/// Windows.
+// The Windows half. Its pure parts and their tests build on every target; the rest needs
+// Windows. A `//` comment for the same reason.
 #[cfg(any(windows, test))]
 pub mod windows;
 

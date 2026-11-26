@@ -123,8 +123,8 @@ fn err(code: &str, message: impl Into<String>) -> BackendError {
     BackendError::new(code, message)
 }
 
-/// Runs `program` to its end with no stdin. A test installs [`fake`], which records the call and
-/// answers without running anything.
+/// Runs `program` to its end with no stdin. A test installs the stand-in in `fake.rs`, which
+/// records the call and answers without running anything.
 fn output(program: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
     #[cfg(test)]
     if let Some(answer) = fake::answer(program, args) {
