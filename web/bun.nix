@@ -1995,6 +1995,10 @@
     url = "https://registry.npmjs.org/cluster-key-slot/-/cluster-key-slot-1.1.1.tgz";
     hash = "sha512-rwHwUfXL40Chm1r08yrhU3qpUvdVlgkKNeyeGPOxnW8/SyVDvgRaed/Uz54AqWNaTCAThlj6QAs3TZcKI0xDEw==";
   };
+  "cmdk@1.1.1" = fetchurl {
+    url = "https://registry.npmjs.org/cmdk/-/cmdk-1.1.1.tgz";
+    hash = "sha512-Vsv7kFaXm+ptHDMZ7izaRsP70GgrW9NBNGswt9OZaVBLlE0SNpDq8eu/VGXyF9r7M0azK3Wy7OlYXsuyYLFzHg==";
+  };
   "commander@11.1.0" = fetchurl {
     url = "https://registry.npmjs.org/commander/-/commander-11.1.0.tgz";
     hash = "sha512-yPVavfyCcRhmorC7rWlkHn15b4wDVgVmBA7kV4QVBsF7kv/9TKJAbAXVTxvTnwP8HHKjRCJDClKbciiYS7p0DQ==";

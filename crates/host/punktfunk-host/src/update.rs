@@ -107,7 +107,10 @@ enum Leg {
 /// Kinds the root helper applies.
 pub(crate) fn helper_kind(kind: detect::InstallKind) -> bool {
     use detect::InstallKind as K;
-    matches!(kind, K::Apt | K::Dnf | K::Sysext | K::RpmOstree | K::Pacman)
+    matches!(
+        kind,
+        K::Apt | K::Dnf | K::Zypper | K::Sysext | K::RpmOstree | K::Pacman
+    )
 }
 
 /// The leg [`start_apply`] may run, or `None` where the console shows the command instead.
@@ -701,7 +704,7 @@ mod tests {
         }
     }
 
-    const KINDS: [detect::InstallKind; 11] = {
+    const KINDS: [detect::InstallKind; 12] = {
         use detect::InstallKind as K;
         [
             K::WindowsInstaller,
@@ -711,6 +714,7 @@ mod tests {
             K::RpmOstree,
             K::Apt,
             K::Dnf,
+            K::Zypper,
             K::Pacman,
             K::SteamosSource,
             K::Nix,
@@ -766,6 +770,7 @@ mod tests {
             (K::WindowsInstaller, Some(Leg::Installer), "full"),
             (K::Apt, Some(Leg::Helper), "full"),
             (K::Dnf, Some(Leg::Helper), "full"),
+            (K::Zypper, Some(Leg::Helper), "full"),
             (K::Sysext, Some(Leg::Helper), "full"),
             (K::Pacman, Some(Leg::Helper), "full"),
             (K::RpmOstree, Some(Leg::Helper), "staged"),
@@ -790,7 +795,14 @@ mod tests {
             pacman_optin: false,
             ..ready()
         };
-        for kind in [K::Apt, K::Dnf, K::Sysext, K::RpmOstree, K::Pacman] {
+        for kind in [
+            K::Apt,
+            K::Dnf,
+            K::Zypper,
+            K::Sysext,
+            K::RpmOstree,
+            K::Pacman,
+        ] {
             assert_eq!(apply_leg(kind, bare), None, "{}", kind.as_str());
         }
         assert_eq!(apply_leg(K::SteamosSource, bare), Some(Leg::SteamosSource));

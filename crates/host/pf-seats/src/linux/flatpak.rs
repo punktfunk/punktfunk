@@ -9,8 +9,8 @@ use crate::backend::BackendError;
 const FLATHUB: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 const CODE: &str = "flatpak_failed";
 
-/// Installs `id` from Flathub, adding the remote first if the box lacks it, and answers the
-/// version it reports.
+/// Installs the app `id` from Flathub, adding the remote first if the box lacks it, and answers
+/// the version it reports. `--app` refuses an id that names a runtime, as [`remove`] does.
 pub(super) fn install(id: &str) -> Result<Option<String>, BackendError> {
     run(
         CODE,
@@ -29,6 +29,7 @@ pub(super) fn install(id: &str) -> Result<Option<String>, BackendError> {
         &[
             "install",
             "--system",
+            "--app",
             "-y",
             "--noninteractive",
             "flathub",
@@ -39,9 +40,11 @@ pub(super) fn install(id: &str) -> Result<Option<String>, BackendError> {
     Ok(info.ok().as_deref().and_then(version))
 }
 
-/// Uninstalls `id`. `--delete-data` removes root's `~/.var/app/<id>` only: a seat's stays.
+/// Uninstalls the app `id`. `--app` leaves a runtime of that name installed: the owner's
+/// account can ask for any id, and the other accounts' apps run on the runtimes.
+/// `--delete-data` removes root's `~/.var/app/<id>` only: a seat's stays.
 pub(super) fn remove(id: &str, purge: bool) -> Result<(), BackendError> {
-    let mut args = vec!["uninstall", "--system", "-y", "--noninteractive"];
+    let mut args = vec!["uninstall", "--system", "--app", "-y", "--noninteractive"];
     if purge {
         args.push("--delete-data");
     }
@@ -59,6 +62,28 @@ fn version(info: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fake;
+
+    #[test]
+    fn a_removal_names_an_app_so_a_runtime_stays() {
+        let _machine = fake::install(|_, _| (0, String::new()));
+        super::remove("net.pcsx2.PCSX2", true).unwrap();
+        assert_eq!(
+            fake::calls(),
+            ["flatpak uninstall --system --app -y --noninteractive --delete-data net.pcsx2.PCSX2"]
+        );
+    }
+
+    #[test]
+    fn an_install_names_an_app_so_a_runtime_is_refused() {
+        let _machine = fake::install(|_, _| (0, String::new()));
+        super::install("net.pcsx2.PCSX2").unwrap();
+        assert_eq!(
+            fake::calls()[1],
+            "flatpak install --system --app -y --noninteractive flathub net.pcsx2.PCSX2"
+        );
+    }
+
     #[test]
     fn the_version_is_the_info_s_version_line() {
         let info = "\nPCSX2 - PlayStation 2 Emulator\n\n          ID: net.pcsx2.PCSX2\n         Ref: app/net.pcsx2.PCSX2/x86_64/stable\n     Version: v2.2.0\n      Branch: stable\n";

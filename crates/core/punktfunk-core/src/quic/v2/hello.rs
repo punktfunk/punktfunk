@@ -80,6 +80,9 @@ pub struct ClientHello {
     /// panel when it fills the screen, less in a window. The host declares a display that size,
     /// at every mode. `None` is unknown and rides as no tag; a zero side reads as `None`.
     pub display_mm: Option<(u16, u16)>,
+    /// The OS the client runs on, as [`platform_id`] reads it ([`PLATFORM`] in core's own
+    /// dials). Shown beside a paired device; never a fact the host acts on.
+    pub platform: Option<String>,
 }
 
 impl ClientHello {
@@ -172,10 +175,15 @@ impl V2Message for ClientHello {
                 f.bytes(32, &wish.unwrap_or_default())
             });
         let mm = self.display_mm.filter(|&(w, h)| w > 0 && h > 0);
-        super::msg::put_exact_rate(f, 33, &h.mode).when(mm.is_some(), |f| {
-            let (w, h) = mm.unwrap_or_default();
-            f.bytes(34, &[w.to_le_bytes(), h.to_le_bytes()].concat())
-        })
+        let platform = self.platform.as_deref().and_then(platform_id);
+        super::msg::put_exact_rate(f, 33, &h.mode)
+            .when(mm.is_some(), |f| {
+                let (w, h) = mm.unwrap_or_default();
+                f.bytes(34, &[w.to_le_bytes(), h.to_le_bytes()].concat())
+            })
+            .when(platform.is_some(), |f| {
+                f.str(35, platform.as_deref().unwrap_or_default())
+            })
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -207,6 +215,7 @@ impl V2Message for ClientHello {
         let (mut profile, mut access_only) = (None, false);
         let (mut screens, mut view, mut views) = (Vec::new(), None, None);
         let (mut screen_wish, mut exact_mhz, mut display_mm) = (None, 0, None);
+        let mut platform = None;
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -268,6 +277,7 @@ impl V2Message for ClientHello {
                 32 => screen_wish = ScreenWish::of_wire(v),
                 33 => exact_mhz = super::msg::exact_rate_of(v),
                 34 => display_mm = mm_of(v),
+                35 => platform = std::str::from_utf8(v).ok().and_then(platform_id),
                 _ => {}
             }
         }
@@ -299,6 +309,7 @@ impl V2Message for ClientHello {
             view,
             screen_wish,
             display_mm,
+            platform,
         })
     }
 }
@@ -895,7 +906,7 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![], view: None, screen_wish: None, display_mm: None };
+            let ch = ClientHello { hello: h, client_label: None, abr_features: 0, preset: None, link: LinkFacts::default(), probe_only: false, pyrowave_bpp_x100: 0, slices: 0, resume: None, suites: vec![], features: FeatureSet::default(), profile: None, access_only: false, screens: vec![], view: None, screen_wish: None, display_mm: None, platform: None };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -1220,6 +1231,28 @@ mod tests {
     }
 
     #[test]
+    fn platform_rides_as_tag_35_and_only_as_an_id() {
+        let read = |v: &[u8]| {
+            ClientHello::from_body(&Fields::new().bytes(35, v).into_body())
+                .unwrap()
+                .platform
+        };
+        assert_eq!(read(b"macos").as_deref(), Some("macos"));
+        // Not an id is no platform, never a failed handshake or a cleaned-up guess.
+        for bad in [&b""[..], b"MacOS", b"mac os", b"\xff", b"seventeen-chars-x"] {
+            assert_eq!(read(bad), None, "{bad:?}");
+        }
+        let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
+        ch.platform = Some(PLATFORM.into());
+        let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
+        assert_eq!(back.platform.as_deref(), Some(PLATFORM));
+        // A value that is not an id is left off the wire.
+        ch.platform = Some("Not An Id".into());
+        let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
+        assert_eq!(back.platform, None);
+    }
+
+    #[test]
     fn start_extensions_and_session_fields_ride_along() {
         let ch = ClientHello {
             hello: Hello {
@@ -1266,6 +1299,7 @@ mod tests {
             view: None,
             screen_wish: None,
             display_mm: None,
+            platform: None,
         };
         // The bytes on the wire are pinned: a change here is a wire change.
         let frame: String = ch.encode_v2().iter().map(|b| format!("{b:02x}")).collect();

@@ -230,6 +230,21 @@ mod linux_main {
                 run(&mut upgrade, "dnf upgrade")?;
                 Ok(false)
             }
+            "zypper" => {
+                let pkgs = installed_packages(
+                    Command::new("rpm").args(["-qa", "--qf", "%{NAME}\n", "punktfunk*"]),
+                    "rpm -qa",
+                )?;
+                // A cached repo list can predate the release the update check saw.
+                run(
+                    Command::new("zypper").args(["--non-interactive", "refresh"]),
+                    "zypper refresh",
+                )?;
+                let mut update = Command::new("zypper");
+                update.args(["--non-interactive", "update"]).args(&pkgs);
+                run(&mut update, "zypper update")?;
+                Ok(false)
+            }
             "rpm-ostree" => {
                 // Layered packages re-resolve only via uninstall+install in one transaction.
                 // Staged: reboot activates.

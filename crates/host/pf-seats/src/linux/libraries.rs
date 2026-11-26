@@ -59,8 +59,9 @@ const DEFAULTS: &str = "seat-defaults.json";
 
 const LIST: &str = "libraryfolders.vdf";
 const LIST_TEMP: &str = "libraryfolders.vdf.punktfunk";
-/// A real list is a few kilobytes. Root tokenises a seat's whole, at about 40 bytes a byte.
-const MAX_LIST_BYTES: u64 = 1024 * 1024;
+/// Root tokenises a text VDF whole, at about 40 bytes a byte. A real library list is a few
+/// kilobytes, a real `config.vdf` tens of kilobytes.
+pub(super) const MAX_TEXT_VDF_BYTES: u64 = 1024 * 1024;
 
 /// One of the owner's libraries a seat sees.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -445,7 +446,7 @@ fn steam_libraries(
     }
     let list = steam_root.join("steamapps").join(LIST);
     let list_path = list.display();
-    let vdf = match safe_open::read(&list, MAX_LIST_BYTES) {
+    let vdf = match safe_open::read(&list, MAX_TEXT_VDF_BYTES) {
         Ok(Some((bytes, _))) => match String::from_utf8(bytes) {
             Ok(vdf) => vdf,
             Err(_) => {
@@ -847,7 +848,7 @@ pub(super) fn forget(id: &SeatId, steam_root: &Path) {
         return;
     };
     let list = steam_root.join("steamapps").join(LIST);
-    let Ok(Some((bytes, _))) = safe_open::read(&list, MAX_LIST_BYTES) else {
+    let Ok(Some((bytes, _))) = safe_open::read(&list, MAX_TEXT_VDF_BYTES) else {
         return;
     };
     if meta.uid() == 0 {
@@ -1153,7 +1154,7 @@ pub(super) fn merge_list(
     let Some(at) = safe_open::walk(safe_open::dir(home)?, &path)? else {
         return Ok(());
     };
-    match safe_open::read_at(&at, LIST, MAX_LIST_BYTES)? {
+    match safe_open::read_at(&at, LIST, MAX_TEXT_VDF_BYTES)? {
         Some((bytes, meta)) => rewrite(&at, &bytes, &meta, seat, merge),
         None => Ok(()),
     }

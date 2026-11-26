@@ -106,41 +106,41 @@ export const MetadataSourcesSection: FC = () => {
 			<SourceGroup
 				icon={<Images className="size-4" />}
 				title={m.library_metadata_title()}
+				description={m.library_metadata_help()}
 			>
 				<div className="space-y-4">
-					<Stagger gap={ROW_GAP} className="flex flex-col divide-y">
-						{sources.map((source, i) => (
-							<MetadataSourceRow
-								key={source.id}
-								source={source}
-								label={labelOf(source.id)}
-								running={running.has(source.id)}
-								busy={set.isPending}
-								first={i === 0}
-								last={i === sources.length - 1}
-								onToggle={() => patch(i, { enabled: !source.enabled })}
-								onReplace={(replace) => patch(i, { replace })}
-								onUp={() => move(i, -1)}
-								onDown={() => move(i, 1)}
-								onSettings={() => setSettingsFor(source.id)}
-							/>
-						))}
-						{silent.map((entry) => (
-							<SourceItem
-								key={entry.pkg}
-								title={entry.title}
-								meta={`${
-									running.has(entry.id)
-										? m.library_source_running()
-										: m.library_source_stopped()
-								} · ${m.library_metadata_silent()}`}
-								hint={m.library_metadata_silent()}
-							/>
-						))}
-					</Stagger>
-					<p className="max-w-prose text-xs text-muted-foreground">
-						{m.library_metadata_help()}
-					</p>
+					{sources.length + silent.length > 0 && (
+						<Stagger gap={ROW_GAP} className="flex flex-col divide-y">
+							{sources.map((source, i) => (
+								<MetadataSourceRow
+									key={source.id}
+									source={source}
+									label={labelOf(source.id)}
+									running={running.has(source.id)}
+									busy={set.isPending}
+									first={i === 0}
+									last={i === sources.length - 1}
+									onToggle={() => patch(i, { enabled: !source.enabled })}
+									onReplace={(replace) => patch(i, { replace })}
+									onUp={() => move(i, -1)}
+									onDown={() => move(i, 1)}
+									onSettings={() => setSettingsFor(source.id)}
+								/>
+							))}
+							{silent.map((entry) => (
+								<SourceItem
+									key={entry.pkg}
+									title={entry.title}
+									meta={`${
+										running.has(entry.id)
+											? m.library_source_running()
+											: m.library_source_stopped()
+									} · ${m.library_metadata_silent()}`}
+									hint={m.library_metadata_silent()}
+								/>
+							))}
+						</Stagger>
+					)}
 					<AddSourceRail
 						entries={available}
 						busy={catalog.data?.busy === true || install.isPending}

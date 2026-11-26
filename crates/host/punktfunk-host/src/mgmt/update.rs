@@ -1,7 +1,8 @@
 //! `/api/v1/update/*` — host update-check and apply.
 //!
 //! Admin lane only: denied to the plugin token (`auth::plugin_may_access`) and
-//! absent from the paired-cert allowlist. An update trigger is operator business.
+//! absent from the paired-cert allowlist. A paired device starts an update only through the
+//! `host.update` action (`actions.rs`), which demands the manage grant.
 //! On a door, the owner's host answers a packaged install's update ([`owner_answer`]).
 //!
 //! Pin the wire types at [`UpdateStatus`]. Evidence:
@@ -20,11 +21,22 @@ async fn owner_answer(
     target: &str,
     body: Option<Vec<u8>>,
 ) -> Option<Response> {
+    let reply = owner_reply(st, method, target, body).await?;
+    Some(reply.into_response())
+}
+
+/// [`owner_answer`] before it becomes a response: status, content type and body.
+async fn owner_reply(
+    st: &MgmtState,
+    method: &str,
+    target: &str,
+    body: Option<Vec<u8>>,
+) -> Option<Answer> {
     if st.door.is_none() || !update::helper_kind(detect::detect().0) {
         return None;
     }
     match st.owner_call(method, target, body, false).await {
-        reply @ Answer::Reply(..) => Some(reply.into_response()),
+        reply @ Answer::Reply(..) => Some(reply),
         _ => None,
     }
 }
@@ -82,8 +94,8 @@ pub(crate) struct UpdateResultInfo {
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub(crate) struct UpdateStatus {
-    /// `windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |
-    /// `steamos-source` | `nix` | `source`.
+    /// `windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `zypper` |
+    /// `pacman` | `steamos-source` | `nix` | `source`.
     pub install_kind: String,
     /// `stable` | `canary`.
     pub channel: String,
@@ -273,45 +285,112 @@ pub(crate) async fn apply_update(
     if let Some(owner) = owner_answer(&st, "POST", "update/apply", Some(forwarded.into())).await {
         return owner;
     }
+    if let Some(refusal) = apply_here(&st, req.force) {
+        return refusal;
+    }
+    let snap = update::snapshot_and_maybe_refresh();
+    (StatusCode::ACCEPTED, Json(status_from(snap))).into_response()
+}
+
+/// Starts the update this host's verified cache offers. `Some` is the refusal as the route
+/// words it; `None` means it started.
+fn apply_here(st: &MgmtState, force: bool) -> Option<Response> {
     // Either streaming plane counts as an active session (`get_status` same).
     let session_active = st.app.streaming.load(std::sync::atomic::Ordering::SeqCst)
         || !crate::session_status::snapshot().is_empty();
-
-    match update::start_apply(req.force, session_active) {
-        Ok(()) => {
-            let snap = update::snapshot_and_maybe_refresh();
-            (StatusCode::ACCEPTED, Json(status_from(snap))).into_response()
-        }
-        Err(update::ApplyError::Unsupported) => api_error_coded(
+    let refused = update::start_apply(force, session_active).err()?;
+    Some(match refused {
+        update::ApplyError::Unsupported => api_error_coded(
             StatusCode::CONFLICT,
             "update_no_one_click",
             "This install kind has no one-click apply — use the update command shown in status",
         ),
-        Err(update::ApplyError::DiskImage) => api_error_coded(
+        update::ApplyError::DiskImage => api_error_coded(
             StatusCode::CONFLICT,
             "update_disk_image",
             "Punktfunk Host can't update itself. Download the new disk image, then drag it into \
              Applications.",
         ),
-        Err(update::ApplyError::Disabled) => api_error_coded(
+        update::ApplyError::Disabled => api_error_coded(
             StatusCode::CONFLICT,
             "update_apply_disabled",
             "One-click apply is disabled on this host (PUNKTFUNK_UPDATE_APPLY=0)",
         ),
-        Err(update::ApplyError::JobRunning) => api_error(
+        update::ApplyError::JobRunning => api_error(
             StatusCode::CONFLICT,
             "an update is already being applied — poll GET /update/status",
         ),
         // The code is the console's cue to offer the forced update; the text stays the API's.
-        Err(update::ApplyError::SessionActive) => api_error_coded(
+        update::ApplyError::SessionActive => api_error_coded(
             StatusCode::CONFLICT,
             "update_session_active",
             "a streaming session is active — pass {\"force\": true} to update anyway (the stream will drop)",
         ),
-        Err(update::ApplyError::NothingToApply) => api_error_coded(
+        update::ApplyError::NothingToApply => api_error_coded(
             StatusCode::CONFLICT,
             "update_none_known",
             "No newer release is known for this channel — run a check first",
         ),
+    })
+}
+
+/// The newer version a host action can install in one click. `None` when the host knows of
+/// none, or this install updates by a command. On a door the owner's host answers.
+pub(crate) async fn one_click_offer(st: &MgmtState) -> Option<String> {
+    let status = match owner_reply(st, "GET", "update/status", None).await {
+        Some(Answer::Reply(_, _, body)) => serde_json::from_slice(&body).ok()?,
+        _ => status_from(update::snapshot_and_maybe_refresh()),
+    };
+    one_click(status)
+}
+
+fn one_click(status: UpdateStatus) -> Option<String> {
+    let version = status.manifest?.version;
+    (status.available && status.apply != "notify").then_some(version)
+}
+
+/// Starts the offered update for a host action. It drops every stream, so the caller has
+/// ruled out another device's. On a door the owner's host applies a packaged install. `Some`
+/// is the refusal as `POST /update/apply` words it; `None` means it started.
+pub(crate) async fn start_for_action(st: &MgmtState) -> Option<Response> {
+    let force = serde_json::json!({ "force": true }).to_string();
+    match owner_reply(st, "POST", "update/apply", Some(force.into())).await {
+        Some(Answer::Reply(200..=299, ..)) => None,
+        Some(refusal) => Some(refusal.into_response()),
+        None => apply_here(st, true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(available: bool, apply: &str, version: Option<&str>) -> UpdateStatus {
+        serde_json::from_value(serde_json::json!({
+            "install_kind": "dnf", "channel": "stable", "current_version": "0.48.0",
+            "apply": apply, "channel_hint": "", "check_disabled": false,
+            "available": available, "not_published": false,
+            "manifest": version.map(|v| serde_json::json!({
+                "version": v, "serial": 1, "published_at": "", "notes_url": "", "stale": false,
+            })),
+        }))
+        .unwrap()
+    }
+
+    /// An action is offered a version only where one click installs it.
+    #[test]
+    fn an_action_is_offered_only_what_one_click_installs() {
+        let offer = |available, apply, version| one_click(status(available, apply, version));
+        assert_eq!(
+            offer(true, "full", Some("0.49.0")).as_deref(),
+            Some("0.49.0")
+        );
+        assert_eq!(
+            offer(true, "staged", Some("0.49.0")).as_deref(),
+            Some("0.49.0")
+        );
+        assert_eq!(offer(true, "notify", Some("0.49.0")), None);
+        assert_eq!(offer(false, "full", Some("0.48.0")), None);
+        assert_eq!(offer(false, "full", None), None);
     }
 }

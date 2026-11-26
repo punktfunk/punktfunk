@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
 import { ArrowUpCircle } from "lucide-react";
-import { type FC, type ReactNode, useState } from "react";
+import { type FC, useState } from "react";
 import { ApiError, apiFetch } from "@/api/fetcher";
 import type { UpdateStatus } from "@/api/gen/model";
 import {
@@ -11,7 +11,6 @@ import {
 } from "@/api/gen/update/update";
 import { PasswordConfirmDialog } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
@@ -124,16 +123,19 @@ export function updateLine(u: Update): string | undefined {
 	return s.manifest ? m.host_up_to_date() : undefined;
 }
 
+/**
+ * The card under the strip: a headline that says what is happening, the one action that moves it
+ * on (Update now) beside it, the two versions, then whichever panel and notes apply. The strip
+ * keeps Check for update, so the card only says when the last check ran.
+ */
 export const UpdateCard: FC<{
 	state: Loadable<UpdateStatus>;
-	onCheck: () => void;
-	checkBusy: boolean;
 	applying: Applying;
 	wait: JobWait;
 	onApplied: (target: string) => void;
 	/** Leave the applying state after a timeout — otherwise the card waits forever. */
 	onGiveUp: () => void;
-}> = ({ state, onCheck, checkBusy, applying, wait, onApplied, onGiveUp }) => {
+}> = ({ state, applying, wait, onApplied, onGiveUp }) => {
 	const view = updateCardView(
 		state.data,
 		applying,
@@ -144,12 +146,14 @@ export const UpdateCard: FC<{
 	const { body } = view;
 	return (
 		<Card>
-			<CardHeader className="flex flex-row items-center justify-between">
+			<CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
 				<CardTitle className="flex items-center gap-2">
 					<ArrowUpCircle className="size-4" />
-					{m.update_title()}
+					{view.showBadge ? m.update_available_badge() : m.update_title()}
 				</CardTitle>
-				{view.showBadge && <Badge>{m.update_available_badge()}</Badge>}
+				{body?.panel.kind === "apply" && (
+					<ApplyButton status={body.status} onApplied={onApplied} />
+				)}
 			</CardHeader>
 			<CardContent className="space-y-4">
 				<QueryState
@@ -161,45 +165,48 @@ export const UpdateCard: FC<{
 				>
 					{body && (
 						<>
-							<dl className="grid grid-cols-1 gap-3">
-								<UpdateRow
-									label={m.update_current()}
-									value={
-										<span className="flex items-center gap-2 font-medium">
-											{body.status.current_version}
-											<Badge variant="secondary">{body.status.channel}</Badge>
-											<Badge variant="outline" title={m.update_install_kind()}>
-												{body.status.install_kind}
-											</Badge>
+							<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1 text-sm">
+								<dt className="text-muted-foreground">{m.update_current()}</dt>
+								<dd>
+									<span className="font-medium">
+										{body.status.current_version}
+									</span>
+									<span className="text-muted-foreground">
+										{" · "}
+										{body.status.channel}
+										{" · "}
+										<span title={m.update_install_kind()}>
+											{body.status.install_kind}
 										</span>
-									}
-								/>
-								<UpdateRow
-									label={m.update_latest()}
-									value={
-										body.latest.kind === "published" ? (
-											<span className="flex items-center gap-2 font-medium">
-												{body.latest.version}
-												{body.latest.notesUrl && (
+									</span>
+								</dd>
+								<dt className="text-muted-foreground">{m.update_latest()}</dt>
+								<dd>
+									{body.latest.kind === "published" ? (
+										<>
+											<span className="font-medium">{body.latest.version}</span>
+											{body.latest.notesUrl && (
+												<>
+													<span className="text-muted-foreground">{" · "}</span>
 													<a
 														href={body.latest.notesUrl}
 														target="_blank"
 														rel="noreferrer"
-														className="text-sm font-normal underline underline-offset-2"
+														className="underline underline-offset-2"
 													>
 														{m.update_notes()}
 													</a>
-												)}
-											</span>
-										) : (
-											<span className="text-sm text-muted-foreground">
-												{body.latest.kind === "empty-channel"
-													? m.update_none_published()
-													: m.update_never_checked()}
-											</span>
-										)
-									}
-								/>
+												</>
+											)}
+										</>
+									) : (
+										<span className="text-muted-foreground">
+											{body.latest.kind === "empty-channel"
+												? m.update_none_published()
+												: m.update_never_checked()}
+										</span>
+									)}
+								</dd>
 							</dl>
 
 							{body.panel.kind === "progress" ? (
@@ -211,18 +218,25 @@ export const UpdateCard: FC<{
 									onGiveUp={onGiveUp}
 								/>
 							) : body.panel.kind === "apply" ? (
-								<ApplyPanel status={body.status} onApplied={onApplied} />
+								<div className="space-y-2">
+									<p className="text-sm text-muted-foreground">
+										{m.update_apply_ready({
+											version: body.status.manifest?.version ?? "",
+										})}
+									</p>
+									<CommandLine command={body.status.channel_hint} />
+								</div>
 							) : body.panel.kind === "how-to" ? (
-								<div className="space-y-2 rounded-md border p-4">
+								<div className="space-y-2">
 									<p className="text-sm">{m.update_how()}</p>
 									<CommandLine command={body.status.channel_hint} />
 									{body.panel.optInHint && (
-										<div className="space-y-1 border-t pt-2">
-											<p className="text-sm text-muted-foreground">
+										<>
+											<p className="pt-2 text-sm text-muted-foreground">
 												{m.update_opt_in()}
 											</p>
 											<CommandLine command={body.panel.optInHint} />
-										</div>
+										</>
 									)}
 								</div>
 							) : (
@@ -258,27 +272,16 @@ export const UpdateCard: FC<{
 								</p>
 							)}
 							{body.check.kind === "disabled" ? (
-								<p className="text-sm text-muted-foreground">
+								<p className="text-xs text-muted-foreground">
 									{m.update_disabled()}
 								</p>
 							) : (
-								body.check.kind === "button" && (
-									<div className="flex items-center gap-3">
-										<Button
-											variant="outline"
-											size="sm"
-											onClick={onCheck}
-											disabled={checkBusy}
-										>
-											{checkBusy ? m.update_checking() : m.update_check_now()}
-										</Button>
-										{body.check.lastChecked !== null && (
-											<span className="text-xs text-muted-foreground">
-												{m.update_last_checked()}{" "}
-												{fmtDateTimeSecs(body.check.lastChecked)}
-											</span>
-										)}
-									</div>
+								body.check.kind === "button" &&
+								body.check.lastChecked !== null && (
+									<p className="text-xs text-muted-foreground">
+										{m.update_last_checked()}{" "}
+										{fmtDateTimeSecs(body.check.lastChecked)}
+									</p>
 								)
 							)}
 						</>
@@ -289,8 +292,8 @@ export const UpdateCard: FC<{
 	);
 };
 
-/** The one-click leg: the Update button + its password-confirm dialog. */
-const ApplyPanel: FC<{
+/** The one-click leg: Update now and its password-confirm dialog. */
+const ApplyButton: FC<{
 	status: UpdateStatus;
 	onApplied: (target: string) => void;
 }> = ({ status, onApplied }) => {
@@ -318,14 +321,10 @@ const ApplyPanel: FC<{
 	};
 
 	return (
-		<div className="space-y-2 rounded-md border p-4">
-			<p className="text-sm">{m.update_apply_ready({ version: target })}</p>
-			<div className="flex items-center gap-3">
-				<Button size="sm" onClick={() => setOpen(true)}>
-					{m.update_apply_button()}
-				</Button>
-				<CommandLine command={status.channel_hint} />
-			</div>
+		<>
+			<Button size="sm" onClick={() => setOpen(true)}>
+				{m.update_apply_button()}
+			</Button>
 			<PasswordConfirmDialog
 				open={open}
 				id="update-apply-password"
@@ -346,7 +345,7 @@ const ApplyPanel: FC<{
 					setNeedsForce(false);
 				}}
 			/>
-		</div>
+		</>
 	);
 };
 
@@ -380,7 +379,7 @@ const ApplyProgress: FC<{
 		}
 	})();
 	return (
-		<div className="space-y-3 rounded-md border p-4">
+		<div className="space-y-2">
 			<div className="flex items-center gap-3">
 				<Spinner className="size-4" />
 				<p className="text-sm font-medium">
@@ -449,16 +448,6 @@ const LastResult: FC<{
 			)}
 		</div>
 	);
-
-const UpdateRow: FC<{ label: string; value: ReactNode }> = ({
-	label,
-	value,
-}) => (
-	<div className="flex items-baseline justify-between gap-4">
-		<dt className="text-sm text-muted-foreground">{label}</dt>
-		<dd>{value}</dd>
-	</div>
-);
 
 /** The copy-pastable update command, with a small clipboard affordance. */
 const CommandLine: FC<{ command: string }> = ({ command }) => {

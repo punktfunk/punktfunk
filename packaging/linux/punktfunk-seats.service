@@ -51,6 +51,9 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
 RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+# The supervisor holds an account's password in memory while it starts that person's session.
+# A crash must not write that memory to a core file.
+LimitCORE=0
 
 [Install]
 WantedBy=multi-user.target

@@ -3,6 +3,7 @@
 //
 // `<details>` rather than a state-driven accordion: the browser ships the open/close, the keyboard
 // handling and the aria wiring, and a closed section costs one row.
+import { ChevronRight } from "lucide-react";
 import type { FC, ReactNode } from "react";
 import type { DisplayPolicy, EffectivePolicy } from "@/api/gen/model";
 import { usePlatform } from "@/api/platform";
@@ -20,10 +21,8 @@ const Disclosure: FC<{ label: string; children: ReactNode }> = ({
 	<Card>
 		<CardContent flush className="p-0">
 			<details className="group">
-				<summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium marker:content-none">
-					<span className="inline-block transition-transform group-open:rotate-90">
-						▸
-					</span>{" "}
+				<summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-3 text-sm font-medium marker:content-none [&::-webkit-details-marker]:hidden">
+					<ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
 					{label}
 				</summary>
 				<div className="space-y-5 border-t px-4 py-4">{children}</div>

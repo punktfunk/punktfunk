@@ -252,6 +252,7 @@ async fn knock_once(conn: &quinn::Connection, name: &str) -> Result<()> {
             audio_bitstreams: 0,
         },
         client_label: Some(super::client_label()),
+        platform: Some(crate::quic::PLATFORM.into()),
         abr_features: 0,
         preset: None,
         link: Default::default(),

@@ -123,11 +123,12 @@ const post = (p, body) =>
 }
 {
   const res = await get("packageManifests/nope.NotHere");
-  check("manifest: unknown id -> 404", res.status === 404, `got ${res.status}`);
+  // `winget install --id Git.Git -e` asks this source too; a 404 makes winget refuse the install.
+  check("manifest: unknown id -> 204, no body", res.status === 204 && (await res.text()) === "", `got ${res.status}`);
 }
 {
   const res = await get("packageManifests/unom.PunktfunkHost?Version=0.0.0-nope");
-  check("manifest: unknown ?Version -> 404", res.status === 404, `got ${res.status}`);
+  check("manifest: unknown ?Version -> 204", res.status === 204, `got ${res.status}`);
 }
 {
   const res = await get("no/such/route");

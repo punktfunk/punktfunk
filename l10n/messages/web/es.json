@@ -343,8 +343,6 @@
 	"access_grant_launch": "Iniciar juegos",
 	"access_grant_power": "Control de energía del host",
 	"access_grant_power_caption": "Suspender, reiniciar o apagar el host. El acceso por teclado ya permite esto desde el escritorio.",
-	"access_grant_manage_games": "Administrar juegos",
-	"access_grant_manage_games_caption": "Pausar la descarga de un juego o eliminarlo del host. Iniciar juegos ya permite comenzar descargas.",
 	"access_grant_display": "Elegir su pantalla",
 	"access_grant_display_caption": "Elegir cómo usa este dispositivo tus pantallas, en su app y en sus preajustes: como pantalla única, principal o segunda, o como copia de un monitor. Sin este acceso, el dispositivo recibe lo que dice la página Pantallas.",
 	"access_expires_label": "Caducidad del acceso",

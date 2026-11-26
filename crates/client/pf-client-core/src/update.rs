@@ -170,7 +170,9 @@ fn apply_route(kind: InstallKind, c: Caps) -> (Apply, Applier) {
     match kind {
         // Per-user install the user already owns — no helper, no group.
         InstallKind::Flatpak => (Apply::Full, Applier::Flatpak),
-        InstallKind::Apt | InstallKind::Dnf if helper_ready => (Apply::Full, Applier::Helper),
+        InstallKind::Apt | InstallKind::Dnf | InstallKind::Zypper if helper_ready => {
+            (Apply::Full, Applier::Helper)
+        }
         InstallKind::RpmOstree if helper_ready => (Apply::Staged, Applier::Helper),
         InstallKind::Pacman if helper_ready && c.pacman_optin => (Apply::Full, Applier::Helper),
         // Client sysext has no feed (the signed image is the host). Nix, source, Deck tree: same.
@@ -185,7 +187,11 @@ fn opt_in_would_help(kind: InstallKind, c: Caps) -> bool {
         && !c.opted_in
         && matches!(
             kind,
-            InstallKind::Apt | InstallKind::Dnf | InstallKind::RpmOstree | InstallKind::Pacman
+            InstallKind::Apt
+                | InstallKind::Dnf
+                | InstallKind::Zypper
+                | InstallKind::RpmOstree
+                | InstallKind::Pacman
         )
 }
 
@@ -433,6 +439,7 @@ mod tests {
             InstallKind::Flatpak,
             InstallKind::Apt,
             InstallKind::Dnf,
+            InstallKind::Zypper,
             InstallKind::RpmOstree,
             InstallKind::Pacman,
         ] {
@@ -466,7 +473,12 @@ mod tests {
 
     #[test]
     fn helper_kinds_need_helper_and_opt_in() {
-        for kind in [InstallKind::Apt, InstallKind::Dnf, InstallKind::RpmOstree] {
+        for kind in [
+            InstallKind::Apt,
+            InstallKind::Dnf,
+            InstallKind::Zypper,
+            InstallKind::RpmOstree,
+        ] {
             for caps in [
                 Caps {
                     helper: false,

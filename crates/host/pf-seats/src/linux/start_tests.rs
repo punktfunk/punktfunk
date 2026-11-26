@@ -25,7 +25,9 @@ const FAILED: &str =
 const NO_PASSWORD: &str =
     "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainCode=1\nExecMainStatus=95\n";
 
-const GAMES_GID: u32 = 3_999_999_971;
+/// The games group's id, which root gives real folders. Like [`MADE_UID`] it is below 65536,
+/// so the chown also works where a container's user namespace maps only those ids.
+const GAMES_GID: u32 = 59_971;
 
 /// Held by each test that writes a row's real files under `/run`.
 static RUN: Mutex<()> = Mutex::new(());
@@ -176,10 +178,11 @@ fn rig() -> Rig {
 }
 
 const MADE_ID: &str = "0123456789abcdef0123456789abcd07";
-const MADE_UID: u32 = 3_999_999_970;
+/// No account or process has this id, and root gives it real folders.
+const MADE_UID: u32 = 59_970;
 /// A made seat whose delete shares nothing under `/run` with the cold starts of [`MADE_ID`].
 const DELETED_ID: &str = "0123456789abcdef0123456789abcd06";
-const DELETED_UID: u32 = 3_999_999_960;
+const DELETED_UID: u32 = 59_960;
 const OWNER_ID: &str = "0123456789abcdef0123456789abcd08";
 const OWNER_UID: u32 = 1700;
 const PERSON_ID: &str = "0123456789abcdef0123456789abcd09";
