@@ -119,8 +119,9 @@ pub fn client_label(s: &str) -> String {
     bounded_label(s, EXT_CLIENT_MAX)
 }
 
-/// Longest [`ClientHello::platform`] in bytes. An id such as `macos`, so short.
-pub const PLATFORM_MAX: usize = 16;
+/// Longest [`ClientHello::platform`] in bytes. An id such as `macos`, so short. Private: a
+/// public const lands in the C header and changes the ABI hash.
+const PLATFORM_MAX: usize = 16;
 
 /// The platform this build sends: the OS it was compiled for (`std::env::consts::OS`, such as
 /// `macos`, `ios`, `android`), and `web` in a browser.
@@ -130,8 +131,8 @@ pub const PLATFORM: &str = if cfg!(target_family = "wasm") {
     std::env::consts::OS
 };
 
-/// `s` as a [`ClientHello::platform`]: 1 to [`PLATFORM_MAX`] lowercase ASCII letters, digits,
-/// `-` or `_`. Anything else is no platform, never a cut or cleaned one.
+/// `s` as a [`ClientHello::platform`]: 1 to 16 lowercase ASCII letters, digits, `-` or `_`.
+/// Anything else is no platform, never a cut or cleaned one.
 pub fn platform_id(s: &str) -> Option<String> {
     let ok = (1..=PLATFORM_MAX).contains(&s.len())
         && s.bytes()
