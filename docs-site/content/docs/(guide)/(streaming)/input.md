@@ -142,7 +142,8 @@ Touch passthrough depends on the host:
 Your device's keyboard types on the host. On an Android phone or tablet, a row of keys sits above
 it with the keys it lacks: **Esc**, **Tab**, **Ctrl**, **Alt**, **Shift**, **Win**, the arrows,
 **Del**, **Home**, **End**, **PgUp**, **PgDn** and **F1** to **F12**. Swipe the row sideways to
-reach them all. On Android 9 and 10 the row sits at the top of the screen.
+reach them all. Press and hold a key to repeat it, such as an arrow. On Android 9 and 10 the row
+sits at the top of the screen.
 
 Tap **Ctrl**, **Alt**, **Shift** or **Win** to hold it for the next key, from the row or the
 keyboard: **Ctrl**, then **c**, sends Ctrl+C. Tap it again to let it go. Hiding the keyboard lets

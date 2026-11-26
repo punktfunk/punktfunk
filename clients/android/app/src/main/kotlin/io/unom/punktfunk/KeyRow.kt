@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -35,9 +36,10 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The key row over the summoned soft keyboard: [KEY_ROW], the keys a phone's keyboard lacks. A
- * modifier latches in [latch]; the row leaving lets every one go. [onPress] runs before each key,
- * so the IME settles its composition first. The row's surface takes every touch on it, so none
- * reaches the stream's gesture layer below.
+ * modifier latches in [latch]; the row leaving lets every one go. A long press holds a key down
+ * so the host repeats it ([RowKey]). [onPress] runs before each key, so the IME settles its
+ * composition first. The row's surface takes every touch on it, so none reaches the stream's
+ * gesture layer below.
  *
  * It docks on the keyboard's top edge, drawn only once the keyboard has come to rest. Below API 30
  * androidx (core 1.19.1, `WindowInsetsCompat.Impl20`) reads the keyboard from the content and
@@ -71,19 +73,32 @@ internal fun BoxScope.KeyRow(latch: KeyLatch, haptics: ConsoleHaptics, onPress: 
                 .padding(horizontal = 4.dp, vertical = 4.dp),
         ) {
             for (key in KEY_ROW) {
-                val tap = {
+                val finger = remember(key, latch) { RowKey(latch, key) }
+                val fire = { act: () -> Unit ->
                     haptics.tick()
                     onPress()
-                    latch.press(key)
-                    latch.lift(key)
+                    act()
                 }
                 KeyCap(
                     key,
                     armed = key.vk in latch.latched,
                     modifier = Modifier.fillMaxHeight().widthIn(min = 52.dp).padding(horizontal = 2.dp)
-                        .semantics { onClick { tap(); true } }
-                        // A tap, not a press: a drag that starts on a key scrolls the row.
-                        .pointerInput(key, latch) { detectTapGestures { tap() } },
+                        .semantics { onClick { fire(finger::tap); true } }
+                        // A drag that starts on a key scrolls the row, so a key fires at the tap's
+                        // end. The row leaving mid-hold cancels the press, which lifts the key too.
+                        .pointerInput(finger) {
+                            detectTapGestures(
+                                onPress = {
+                                    try {
+                                        tryAwaitRelease()
+                                    } finally {
+                                        finger.end()
+                                    }
+                                },
+                                onLongPress = { fire(finger::longPress) },
+                                onTap = { fire(finger::tap) },
+                            )
+                        },
                 )
             }
         }

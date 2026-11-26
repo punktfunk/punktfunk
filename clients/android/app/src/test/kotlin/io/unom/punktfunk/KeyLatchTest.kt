@@ -47,6 +47,31 @@ class KeyLatchTest {
         assertEquals(listOf(0x11 to true, 0x10 to true, 0x11 to false, 0x10 to false), sent)
     }
 
+    private fun rowKey(legend: String) = RowKey(latch, KEY_ROW.first { it.legend == legend })
+
+    @Test
+    fun aLongPressHoldsARowKeyUntilTheFingerLifts() {
+        tap("Ctrl")
+        val left = rowKey("←")
+        left.longPress()
+        assertEquals(listOf(0x11 to true, 0x25 to true), sent)
+        left.end()
+        left.end()
+        assertEquals(listOf(0x11 to true, 0x25 to true, 0x25 to false, 0x11 to false), sent)
+    }
+
+    @Test
+    fun aTappedRowKeyGoesDownAndUpAndALongPressedModifierLatches() {
+        val tab = rowKey("Tab")
+        tab.tap()
+        tab.end()
+        assertEquals(listOf(0x09 to true, 0x09 to false), sent)
+        val alt = rowKey("Alt")
+        alt.longPress()
+        alt.end()
+        assertEquals(setOf(0x12), latch.latched)
+    }
+
     @Test
     fun aCharacterTypedUnderAModifierGoesAsItsKey() {
         tap("Ctrl")

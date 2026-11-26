@@ -133,6 +133,36 @@ internal class KeyLatch(private val sink: KeySink) {
     }
 }
 
+/**
+ * One key of the stream's key row under a finger. The row scrolls, so a key cannot go down at
+ * the touch: a tap sends it down and up, and a long press holds it down until [end], so the
+ * host repeats it. A modifier latches either way.
+ */
+internal class RowKey(private val latch: KeyLatch, private val key: Key) {
+    private var held = false
+
+    fun tap() {
+        latch.press(key)
+        latch.lift(key)
+    }
+
+    fun longPress() {
+        if (key.modifier) {
+            tap()
+        } else {
+            latch.press(key)
+            held = true
+        }
+    }
+
+    /** The finger is gone, lifted or cancelled: a held key comes up. */
+    fun end() {
+        if (!held) return
+        held = false
+        latch.lift(key)
+    }
+}
+
 /** The page needs this much width for the function row; below it the five rows stand alone. */
 private val F_ROW_WIDTH = 560.dp
 
