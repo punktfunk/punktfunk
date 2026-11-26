@@ -11,8 +11,8 @@
 //! door planted another certificate before the pin was taken, the proofs that a device signed
 //! for the real box are refused.
 
+use super::layout::seat_dir;
 use super::safe_open;
-use super::shared::seat_dir;
 use crate::backend::BackendError;
 use crate::ipc::Diagnostic;
 use crate::model::SeatId;

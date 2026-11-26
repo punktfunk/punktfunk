@@ -21,7 +21,8 @@
 use super::accounts::Passwd;
 use super::libraries::{self, Library, Overlay, VIEW};
 use super::safe_open;
-use super::shared::{self, Reader};
+use super::trust_copy::{self, Reader};
+use super::{layout, library_copy, steam_home};
 use crate::model::SeatId;
 use crate::steam::shortcuts::{self, CompatRow, Fields};
 use rustix::fs::AtFlags;
@@ -73,7 +74,7 @@ pub(super) fn share(
     if owner.is_some_and(|owner| owner.uid == seat.uid) {
         return Vec::new();
     }
-    let trust = safe_open::dir(&shared::trust_dir(state, id)).ok();
+    let trust = safe_open::dir(&layout::trust_dir(state, id)).ok();
     let before = trust
         .as_ref()
         .and_then(|dir| read(dir, shortcuts::SEAT_FILE, MAX_STEAM_FILE_BYTES))
@@ -106,7 +107,7 @@ pub(super) fn share(
 /// owner's Steam at `root`, the first of an appid kept, that seat `seat` can play. Their art is
 /// named here, with the `grid` folder of the account the shortcut came from, and not read.
 fn pick(state: &Path, seat: &Passwd, owner: &Passwd, root: &Path, libraries: &[Library]) -> Picked {
-    let box_library = safe_open::dir(&shared::box_library_dir(state)).ok();
+    let box_library = safe_open::dir(&layout::box_library_dir(state)).ok();
     let catalog = |name, max| (box_library.as_ref()).and_then(|dir| read(dir, name, max));
     let off = shortcuts::off_sources(
         &catalog("library-scanners.json", MAX_STEAM_FILE_BYTES).unwrap_or_default(),
@@ -236,7 +237,7 @@ fn tools(
         return;
     };
     let mut found = Vec::new();
-    for name in shared::names(&dir).unwrap_or_default() {
+    for name in library_copy::names(&dir).unwrap_or_default() {
         let declared = (safe_open::dir_at(&dir, &name).ok().flatten())
             .and_then(|tool| read_owned(&tool, "compatibilitytool.vdf", owner.uid))
             .map(|vdf| shortcuts::tool_names(&String::from_utf8_lossy(&vdf)))
@@ -300,21 +301,21 @@ fn prepare(state: &Path, id: &SeatId, seat: &Passwd, overlay: &Overlay) -> std::
     std::fs::create_dir_all(format!("{}.lower", stage.display()))?;
     let dir = libraries::overlay_dir(state, id, &overlay.key);
     if let Some(overlays) = dir.parent() {
-        shared::make_dir(overlays, 0o711)?;
+        layout::make_dir(overlays, 0o711)?;
     }
-    shared::make_dir(&dir, 0o711)?;
+    layout::make_dir(&dir, 0o711)?;
     let upper = dir.join("upper");
     if std::fs::symlink_metadata(&upper).is_err() {
         std::fs::create_dir(&upper)?;
         std::os::unix::fs::chown(&upper, Some(seat.uid), Some(seat.gid))?;
     }
-    shared::make_dir(&dir.join("work"), 0o700)
+    layout::make_dir(&dir.join("work"), 0o700)
 }
 
 /// `picked` in each of the seat's Steam installs. The appids the box has in any account.
 fn place(seat: &Passwd, picked: &Picked, before: &BTreeSet<u32>) -> BTreeSet<u32> {
     let mut ours = BTreeSet::new();
-    for root in shared::SEAT_STEAMS {
+    for root in steam_home::SEAT_STEAMS {
         let names: Vec<&str> = root.split('/').collect();
         let steam = safe_open::dir(&seat.home).and_then(|home| safe_open::walk(home, &names));
         let placed = match steam {
@@ -345,7 +346,7 @@ fn place_in(
     let reader = Reader::person(seat.uid, seat.gid);
     let mut here = BTreeSet::new();
     if let Some(userdata) = safe_open::dir_at(steam, "userdata")? {
-        for account in shared::names(&userdata)? {
+        for account in library_copy::names(&userdata)? {
             let config = safe_open::dir_at(&userdata, &account)?
                 .map(|account| safe_open::walk(account, &["config"]))
                 .transpose()?
@@ -357,7 +358,7 @@ fn place_in(
                     "seat's shortcuts.vdf unreadable; left as it is");
                 continue;
             };
-            shared::put_file(&config, "shortcuts.vdf", &merged.file, reader)?;
+            trust_copy::put_file(&config, "shortcuts.vdf", &merged.file, reader)?;
             let mut seat_grid = None;
             for (_, name, from) in (picked.art.iter()).filter(|(id, ..)| merged.ours.contains(id)) {
                 let Some(bytes) = read_owned(from, name, picked.owner) else {
@@ -365,9 +366,9 @@ fn place_in(
                 };
                 let grid = match &seat_grid {
                     Some(grid) => grid,
-                    None => seat_grid.insert(shared::seat_folder(&config, "grid", seat)?),
+                    None => seat_grid.insert(layout::seat_folder(&config, "grid", seat)?),
                 };
-                shared::put_file(grid, name, &bytes, reader)?;
+                trust_copy::put_file(grid, name, &bytes, reader)?;
             }
             here.extend(merged.ours);
         }
@@ -383,7 +384,7 @@ fn place_in(
         if let Some(merged) = shortcuts::with_compat_rows(&text, &rows)
             && merged != text
         {
-            shared::put_file(&config, "config.vdf", merged.as_bytes(), reader)?;
+            trust_copy::put_file(&config, "config.vdf", merged.as_bytes(), reader)?;
         }
     }
     link_tools(steam, seat, &picked.tools)?;
@@ -399,9 +400,9 @@ fn link_tools(steam: &OwnedFd, seat: &Passwd, tools: &[(String, PathBuf)]) -> st
     let dir = match safe_open::dir_at(steam, TOOLS)? {
         Some(dir) => dir,
         None if tools.is_empty() => return Ok(()),
-        None => shared::seat_folder(steam, TOOLS, seat)?,
+        None => layout::seat_folder(steam, TOOLS, seat)?,
     };
-    for name in shared::names(&dir)? {
+    for name in library_copy::names(&dir)? {
         let Ok(target) = rustix::fs::readlinkat(&dir, name.as_str(), Vec::new()) else {
             continue;
         };
@@ -440,20 +441,20 @@ fn publish(
 ) {
     let name = shortcuts::SEAT_FILE;
     if let Some(door) = door
-        && let Ok(dir) = safe_open::dir(&shared::box_library_dir(state))
+        && let Ok(dir) = safe_open::dir(&layout::box_library_dir(state))
     {
         let _turn = SEAT_FILE_LOCK
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let had = read(&dir, name, MAX_STEAM_FILE_BYTES);
         let file = shortcuts::with_seat(had.as_deref(), id.as_str(), ours);
-        if let Err(error) = shared::put_file(&dir, name, &file, door) {
+        if let Err(error) = trust_copy::put_file(&dir, name, &file, door) {
             tracing::warn!(seat = %id, %error, "box shortcut list not written");
         }
     }
     if let Some(dir) = trust {
         let file = shortcuts::with_seat(None, id.as_str(), ours);
-        if let Err(error) = shared::put_file(dir, name, &file, Reader::group(seat.gid)) {
+        if let Err(error) = trust_copy::put_file(dir, name, &file, Reader::group(seat.gid)) {
             tracing::warn!(seat = %id, %error, "seat's shortcut list not written");
         }
     }
@@ -474,7 +475,7 @@ fn account_configs(steam: &OwnedFd) -> Vec<OwnedFd> {
     let Ok(Some(userdata)) = safe_open::dir_at(steam, "userdata") else {
         return Vec::new();
     };
-    (shared::names(&userdata).unwrap_or_default().iter())
+    (library_copy::names(&userdata).unwrap_or_default().iter())
         .filter_map(|account| safe_open::dir_at(&userdata, account).ok().flatten())
         .filter_map(|account| safe_open::walk(account, &["config"]).ok().flatten())
         .collect()
@@ -581,7 +582,7 @@ mod tests {
         ] {
             std::fs::write(owner_grid.join(name), bytes).unwrap();
         }
-        let steam = seat.home.join(shared::SEAT_STEAMS[0]);
+        let steam = seat.home.join(steam_home::SEAT_STEAMS[0]);
         let (both, theirs) = (
             steam.join("userdata/10/config"),
             steam.join("userdata/20/config"),
@@ -637,7 +638,7 @@ mod tests {
         for (text, gets_row) in [(settings.to_owned(), true), (over, false)] {
             let temp = tempfile::tempdir().unwrap();
             let seat = seat_user(temp.path());
-            let steam = seat.home.join(shared::SEAT_STEAMS[0]);
+            let steam = seat.home.join(steam_home::SEAT_STEAMS[0]);
             std::fs::create_dir_all(steam.join("userdata/10/config")).unwrap();
             std::fs::create_dir_all(steam.join("config")).unwrap();
             std::fs::write(steam.join("config/config.vdf"), &text).unwrap();

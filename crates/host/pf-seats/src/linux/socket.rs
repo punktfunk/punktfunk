@@ -11,7 +11,7 @@
 //! A socket file left by a crashed supervisor is replaced. One that a live supervisor holds
 //! makes [`bind`] fail.
 
-use super::shared::{
+use super::acl::{
     acl_bytes, ACL_ACCESS, ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ,
 };
 use super::{accounts, LinuxBackend};
@@ -41,7 +41,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 /// A Flatpak install downloads hundreds of megabytes.
 const FLATPAK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-/// The supervisor syncs the box's library copy on its own every two seconds (`linux/mod.rs`), so
+/// The supervisor syncs the box's library copy on its own every two seconds (`linux/sync.rs`), so
 /// a request to sync it now is not worth a longer wait.
 const SYNC_TIMEOUT: Duration = Duration::from_secs(2);
 

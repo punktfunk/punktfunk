@@ -23,8 +23,8 @@
 //! folder the owner granted a plugin is read-only ([`Rom`]); a shortcut's is an [`Overlay`].
 
 use super::accounts::Passwd;
-use super::shared::{self, make_dir};
-use super::{err, run, safe_open};
+use super::layout::{self, make_dir};
+use super::{err, run, safe_open, steam_home, trust_copy};
 use crate::backend::BackendError;
 use crate::model::SeatId;
 use crate::steam;
@@ -136,7 +136,7 @@ pub(super) struct Shares {
 }
 
 pub(super) fn libraries_dir(state: &Path, id: &SeatId) -> PathBuf {
-    shared::seat_dir(state, id).join("libraries")
+    layout::seat_dir(state, id).join("libraries")
 }
 
 /// The seat's folder for library `key` on the seat's drive, bound at its [`VIEW`] path when the
@@ -156,7 +156,7 @@ pub(super) fn games_view() -> PathBuf {
 }
 
 fn private_dir(state: &Path, id: &SeatId, key: &str) -> PathBuf {
-    shared::seat_dir(state, id).join("private").join(key)
+    layout::seat_dir(state, id).join("private").join(key)
 }
 
 pub(super) fn stage_dir(id: &SeatId, key: &str) -> PathBuf {
@@ -165,7 +165,7 @@ pub(super) fn stage_dir(id: &SeatId, key: &str) -> PathBuf {
 
 /// Where seat `id` keeps its writes to overlay `key`: `upper` and overlayfs's `work`.
 pub(super) fn overlay_dir(state: &Path, id: &SeatId, key: &str) -> PathBuf {
-    shared::seat_dir(state, id).join("overlays").join(key)
+    layout::seat_dir(state, id).join("overlays").join(key)
 }
 
 /// The stage of the seat's folder on the drive of library `key`.
@@ -341,7 +341,7 @@ fn spots(steamapps: &Path) -> Vec<Spot> {
 fn writable(box_dir: &Path) -> bool {
     let read = || -> std::io::Result<bool> {
         let path = box_dir.join(DEFAULTS);
-        let Some((bytes, _)) = safe_open::read(&path, shared::MAX_TRUST_BYTES)? else {
+        let Some((bytes, _)) = safe_open::read(&path, trust_copy::MAX_TRUST_BYTES)? else {
             return Ok(true);
         };
         let defaults: serde_json::Value = serde_json::from_slice(&bytes)?;
@@ -381,7 +381,7 @@ pub(super) fn share(
     owner: Option<&Passwd>,
 ) -> Option<Shares> {
     let [Some(nsenter), Some(mount), Some(umount)] =
-        ["nsenter", "mount", "umount"].map(super::which)
+        ["nsenter", "mount", "umount"].map(super::checks::which)
     else {
         tracing::warn!("nsenter, mount or umount not found; no library shown");
         return None;
@@ -464,7 +464,7 @@ fn steam_libraries(
         }
     };
     let found = find(&listed(&vdf, steam_root), owner.0, fstype);
-    let orphans = orphans(&shared::seat_dir(state, id).join("private"), &found);
+    let orphans = orphans(&layout::seat_dir(state, id).join("private"), &found);
     if !orphans.is_empty() {
         tracing::info!(seat = %id, ?orphans, "private folders of libraries no longer listed");
     }
@@ -497,7 +497,7 @@ fn granted_roms(
     owner: &Passwd,
     libraries: &[Library],
 ) -> (Vec<Rom>, Option<PathBuf>) {
-    let text = match safe_open::read(&shared::box_grants(state), shared::MAX_TRUST_BYTES) {
+    let text = match safe_open::read(&layout::box_grants(state), trust_copy::MAX_TRUST_BYTES) {
         Ok(Some((bytes, _))) => String::from_utf8_lossy(&bytes).into_owned(),
         Ok(None) => return (Vec::new(), None),
         Err(error) => {
@@ -791,7 +791,7 @@ fn prepare(
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o1770))
         .map_err(|e| io("open the library to the seat", e))?;
     let private = private_dir(state, id, &library.key);
-    make_dir(&shared::seat_dir(state, id).join("private"), 0o711)
+    make_dir(&layout::seat_dir(state, id).join("private"), 0o711)
         .and_then(|()| make_dir(&private, 0o711))
         .map_err(|e| io("create the private folders", e))?;
     for name in PRIVATE {
@@ -909,11 +909,11 @@ fn make_spots(private: &Path, spots: &[Spot], seat: &Passwd) -> std::io::Result<
         };
         let mut at = safe_open::dir(private)?;
         for name in parents {
-            at = shared::dir_in(&at, name, true)?;
+            at = layout::dir_in(&at, name, true)?;
             fchmod(&at, Mode::from_raw_mode(0o755))?;
         }
         let copy = if spot.dir {
-            let dir = shared::dir_in(&at, last, true)?;
+            let dir = layout::dir_in(&at, last, true)?;
             fchmod(&dir, Mode::from_raw_mode(0o700))?;
             dir
         } else {
@@ -1114,11 +1114,11 @@ fn stage_lines(
 /// ours, under `seats/<id>/libraries` and the games folder's, which Steam's client container
 /// can't open. Steam's own entries stay as written, and a folder missing from the list goes last:
 /// Steam reads entry `0` as its own install and drops a folder listed there. Each of
-/// [`shared::SEAT_STEAMS`] the seat has gets the list. Never fails the start: an unlisted library
+/// [`steam_home::SEAT_STEAMS`] the seat has gets the list. Never fails the start: an unlisted library
 /// is one the seat's Steam doesn't offer.
 pub(super) fn register(state: &Path, id: &SeatId, seat: &Passwd, libraries: &[Library]) {
     let ours = libraries_dir(state, id);
-    let games = shared::games_dir(state);
+    let games = layout::games_dir(state);
     let wanted: Vec<String> = std::iter::once(games_view())
         .chain(libraries.iter().map(|l| view_dir(&l.key)))
         .map(|path| path.to_string_lossy().into_owned())
@@ -1128,7 +1128,7 @@ pub(super) fn register(state: &Path, id: &SeatId, seat: &Passwd, libraries: &[Li
         path.starts_with(&ours) || path == games || path.starts_with("/run/media")
     };
     // Steam writes both copies and reads the one under `config`.
-    for (root, dir) in shared::SEAT_STEAMS
+    for (root, dir) in steam_home::SEAT_STEAMS
         .iter()
         .flat_map(|root| [(root, "steamapps"), (root, "config")])
     {

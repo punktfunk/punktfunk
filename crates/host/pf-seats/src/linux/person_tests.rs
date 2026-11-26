@@ -2,6 +2,7 @@
 //! against [`fake`], which records every program it asks for, so a test names exactly what a
 //! stop, a delete or a refused start did to the machine.
 
+use super::start::{login_dropin, login_with, unit_ended, LOGIN_FALLBACK, LOGIN_TRIPPED};
 use super::*;
 use crate::model::CreateSeat;
 use std::os::unix::fs::PermissionsExt as _;
@@ -101,12 +102,12 @@ fn rig() -> Rig {
     std::fs::write(home.join("notes.txt"), "mine").unwrap();
     std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o750)).unwrap();
     std::fs::create_dir_all(&state).unwrap();
-    shared::ensure_layout(&state).unwrap();
+    layout::ensure_layout(&state).unwrap();
     let seat = person();
     for dir in [
-        shared::person_config_dir(&state, &seat.id),
-        shared::trust_dir(&state, &seat.id),
-        shared::host_dir(&state, &seat.id),
+        layout::person_config_dir(&state, &seat.id),
+        layout::trust_dir(&state, &seat.id),
+        layout::host_dir(&state, &seat.id),
     ] {
         std::fs::create_dir_all(dir).unwrap();
     }
@@ -140,9 +141,9 @@ fn stopping_or_deleting_a_person_row_touches_only_its_own_unit_and_files() {
     backend.remove(seat).unwrap();
     assert_eq!(fake::calls()[3..], [SHOW, STOP, RESET]);
     for gone in [
-        shared::seat_dir(&rig.state, &seat.id),
-        shared::trust_dir(&rig.state, &seat.id),
-        shared::host_dir(&rig.state, &seat.id),
+        layout::seat_dir(&rig.state, &seat.id),
+        layout::trust_dir(&rig.state, &seat.id),
+        layout::host_dir(&rig.state, &seat.id),
     ] {
         assert!(!gone.exists(), "{}", gone.display());
     }

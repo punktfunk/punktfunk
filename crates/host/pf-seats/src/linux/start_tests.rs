@@ -12,10 +12,12 @@
 //! These run anywhere: a person's warm start, every yield, the owner's release, and the stop of
 //! the owner's or a person's row. A made seat's stop and delete need `/proc`.
 
+use super::sync::yield_to_the_desk;
 use super::*;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::os::unix::fs::PermissionsExt as _;
+use std::sync::atomic::Ordering;
 
 const INACTIVE: &str = "ActiveState=inactive\nSubState=dead\nResult=success\n";
 const ACTIVE: &str = "ActiveState=active\nSubState=running\nResult=success\n";
@@ -166,7 +168,7 @@ fn rig() -> Rig {
     for dir in [&box_dir, &state, &home] {
         std::fs::create_dir_all(dir).unwrap();
     }
-    shared::ensure_layout(&state).unwrap();
+    layout::ensure_layout(&state).unwrap();
     std::fs::write(box_dir.join("punktfunk1-paired.json"), "{\"clients\":[]}").unwrap();
     let backend = LinuxBackend::detached(&box_dir, &state);
     Rig {
@@ -210,7 +212,7 @@ fn made_passwd(state: &Path) -> String {
 /// `account` as `useradd` made it for the seat `id`, its home under `state`.
 fn made_passwd_of(state: &Path, account: &str, id: &str, uid: u32) -> String {
     let id = SeatId::parse(id).unwrap();
-    let home = shared::seat_dir(state, &id).join("home");
+    let home = layout::seat_dir(state, &id).join("home");
     std::fs::create_dir_all(&home).unwrap();
     format!(
         "{account}:x:{uid}:{uid}:{}:{}:/bin/sh\n",
@@ -579,7 +581,7 @@ fn the_owner_s_cold_and_warm_start_run_exactly_these() {
     let cold = calls_from(0);
     let files = run_files("pfowner", OWNER_UID, &rig.state);
     let mut acl = [0; 64];
-    let read = rustix::fs::lgetxattr(session::env_path("pfowner"), shared::ACL_ACCESS, &mut acl);
+    let read = rustix::fs::lgetxattr(session::env_path("pfowner"), acl::ACL_ACCESS, &mut acl);
     let acl = acl[..read.unwrap_or(0)].to_vec();
     assert_eq!(rig.backend.start(&seat).unwrap_err().code, "seat_exited");
     let warm = calls_from(cold.len());
@@ -634,8 +636,8 @@ fn the_owner_s_cold_and_warm_start_run_exactly_these() {
             ),
         ]
     );
-    use shared::{ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ};
-    let reader = shared::acl_bytes(&[
+    use acl::{ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ};
+    let reader = acl::acl_bytes(&[
         (ACL_USER_OBJ, 6, ACL_NO_ID),
         (ACL_USER, 4, OWNER_UID),
         (ACL_GROUP_OBJ, 0, ACL_NO_ID),
@@ -771,7 +773,7 @@ fn a_person_s_password_start_runs_exactly_these() {
 /// mode and owner; the home is apart.
 fn seat_folders(state: &Path, id: &str) -> Vec<(String, u32, u32)> {
     use std::os::unix::fs::MetadataExt as _;
-    let dir = shared::seat_dir(state, &SeatId::parse(id).unwrap());
+    let dir = layout::seat_dir(state, &SeatId::parse(id).unwrap());
     let mut out = Vec::new();
     for sub in ["", "saves"] {
         for entry in std::fs::read_dir(dir.join(sub)).unwrap() {
@@ -823,7 +825,7 @@ fn a_made_seat_s_provision_runs_exactly_these() {
     rig.backend.provision(&seat).unwrap();
     let first = calls_under(&rig.state);
     let folders = seat_folders(&rig.state, MADE_ID);
-    let home = shared::seat_dir(&rig.state, &seat.id).join("home");
+    let home = layout::seat_dir(&rig.state, &seat.id).join("home");
     assert_eq!(std::fs::metadata(home).unwrap().mode() & 0o7777, 0o700);
     rig.backend.provision(&seat).unwrap();
     let again = calls_under(&rig.state)[first.len()..].to_vec();
@@ -916,8 +918,8 @@ fn delete_a_made_seat(
     let passwd = made_passwd_of(&rig.state, account, id, uid);
     let found = accounts::parse_passwd(&passwd).unwrap();
     for dir in [
-        shared::trust_dir(&rig.state, &seat.id),
-        shared::host_dir(&rig.state, &seat.id),
+        layout::trust_dir(&rig.state, &seat.id),
+        layout::host_dir(&rig.state, &seat.id),
     ] {
         std::fs::create_dir_all(dir).unwrap();
     }
@@ -994,9 +996,9 @@ fn a_made_seat_s_delete_runs_exactly_these() {
     assert_eq!(deleted.tracked_at_stop, [false]);
     assert_eq!(rig.backend.running_account(DELETED_UID), None);
     for gone in [
-        shared::seat_dir(&rig.state, &seat.id),
-        shared::trust_dir(&rig.state, &seat.id),
-        shared::host_dir(&rig.state, &seat.id),
+        layout::seat_dir(&rig.state, &seat.id),
+        layout::trust_dir(&rig.state, &seat.id),
+        layout::host_dir(&rig.state, &seat.id),
         rig.state.join(lent::DIR.trim_start_matches('/')),
     ] {
         assert!(!gone.exists(), "{}", gone.display());
@@ -1266,14 +1268,14 @@ fn release_owner_row(current: Option<&str>) -> Released {
     };
     let passwd = owner_passwd("pfold", &rig.home);
     let found = accounts::parse_passwd(&passwd).unwrap();
-    let library = shared::box_library_dir(&rig.state);
+    let library = layout::box_library_dir(&rig.state);
     std::fs::create_dir_all(library.join("profiles")).unwrap();
     std::fs::write(library.join("profiles/kept"), "x").unwrap();
     std::fs::write(rig.home.join("notes.txt"), "mine").unwrap();
     for dir in [
-        shared::seat_dir(&rig.state, &seat.id),
-        shared::trust_dir(&rig.state, &seat.id),
-        shared::host_dir(&rig.state, &seat.id),
+        layout::seat_dir(&rig.state, &seat.id),
+        layout::trust_dir(&rig.state, &seat.id),
+        layout::host_dir(&rig.state, &seat.id),
     ] {
         std::fs::create_dir_all(dir).unwrap();
     }
@@ -1300,16 +1302,16 @@ impl Released {
         assert!(self.rig.home.join("notes.txt").exists());
         assert_eq!(lend_holder(&self.rig.state, &lent_pad()), None);
         for gone in [
-            shared::seat_dir(&self.rig.state, &self.seat.id),
-            shared::trust_dir(&self.rig.state, &self.seat.id),
-            shared::host_dir(&self.rig.state, &self.seat.id),
+            layout::seat_dir(&self.rig.state, &self.seat.id),
+            layout::trust_dir(&self.rig.state, &self.seat.id),
+            layout::host_dir(&self.rig.state, &self.seat.id),
         ] {
             assert!(!gone.exists(), "{}", gone.display());
         }
     }
 
     fn library(&self) -> bool {
-        shared::box_library_dir(&self.rig.state)
+        layout::box_library_dir(&self.rig.state)
             .join("profiles/kept")
             .exists()
     }

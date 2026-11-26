@@ -183,8 +183,8 @@ pub(super) fn ensure(seat: &Seat, state: &Path) -> Result<Passwd, BackendError> 
         };
     }
     let groups = present_groups()?;
-    let seat_dir = super::shared::seat_dir(state, &seat.id);
-    super::shared::make_dir(&seat_dir, 0o711)
+    let seat_dir = super::layout::seat_dir(state, &seat.id);
+    super::layout::make_dir(&seat_dir, 0o711)
         .map_err(|e| err("seat_dirs", format!("create {}: {e}", seat_dir.display())))?;
     let home = seat_home(state, &seat.id);
     let comment = marker(&seat.id);
@@ -275,7 +275,7 @@ fn is_member(line: &str, account: &str) -> bool {
 
 /// The home `useradd` is given for `id`'s user.
 fn seat_home(state: &Path, id: &SeatId) -> PathBuf {
-    super::shared::seat_dir(state, id).join("home")
+    super::layout::seat_dir(state, id).join("home")
 }
 
 /// The seat id in `passwd`'s marker, whichever seat that is.

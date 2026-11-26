@@ -61,7 +61,7 @@ Root does a few jobs in short-lived helpers instead of in the daemon, each for o
 
 1. The door sends `Start` on `seats.sock`. `service.rs` checks the row and takes the lifecycle
    lock.
-2. `linux/mod.rs` readies the account: its group, its home, the shared games folder.
+2. `linux/start.rs` readies the account: its group, its home, the shared games folder.
 3. Before the unit: the seat's copies of the box's files are written, lent controllers go to
    the seat, and its `/dev/uinput` stand-in comes up.
 4. A fresh management token, the seat's environment file and its unit drop-ins are written
@@ -108,11 +108,20 @@ actions out. `windows/supervisor.rs` performs the actions. Start with `step.rs`.
 | `persistence.rs` | Crash-safe, link-safe file writes under the supervisor's root |
 | `unlock.rs`, `attempts.rs` | Who may open a person's seat, and the limit on wrong passwords |
 | `profile_locks.rs` | Which devices may open each profile: PINs and device keys |
-| `linux/mod.rs` | The Linux platform: start, stop, delete, and the two-second sync thread |
+| `linux/mod.rs` | The Linux backend: its types, and the trait it implements |
+| `linux/start.rs` | A row's start and stop: the account made ready, the unit raised, the wait for its host |
+| `linux/sync.rs` | The two-second thread that keeps the seats' copies level with the box |
+| `linux/checks.rs` | The prerequisites that the doctor and `Seating` read |
+| `linux/presence.rs` | A person's row: its device list, and the pairing list that follows it |
+| `linux/owner_host.rs` | The owner's own host beside the door, and the box library's copy from the owner's home |
 | `linux/resources.rs` | The table of what must be up while a seat's unit runs, and when it starts and stops |
 | `linux/session.rs` | Everything systemd reads for a seat: environment file, drop-ins |
 | `linux/accounts.rs` | Seat users: created, checked by their marker, removed |
-| `linux/shared.rs` | The state directory: games folder, trust copies, library copy |
+| `linux/layout.rs` | Where each folder under the state directory is, and how it is made |
+| `linux/acl.rs` | POSIX ACL bytes, and the walk that keeps the games folder writable |
+| `linux/trust_copy.rs` | A seat's trust copy of the box's pairing store, and the copy of its host's certificate |
+| `linux/library_copy.rs` | The box library, and each seat's copy of it |
+| `linux/steam_home.rs` | A seat's Steam in its home: cloned, linked, given a library list |
 | `linux/libraries.rs`, `mount_share.rs` | The owner's Steam libraries, mounted into a seat |
 | `linux/node_owner.rs`, `lent.rs` | Which user owns a controller's device nodes |
 | `linux/pam.rs`, `login.rs`, `login_password.rs` | A person's password: checked, then used for one login |

@@ -16,7 +16,7 @@
 //! that empties `/run` loses nothing.
 
 use super::accounts::Passwd;
-use super::{err, libraries, run, shared, SeatAccount};
+use super::{acl, err, layout, libraries, run, SeatAccount};
 use crate::backend::BackendError;
 use crate::model::{RuntimeState, RuntimeStatus, Seat, SeatId};
 use std::io::Write as _;
@@ -126,7 +126,7 @@ pub(super) fn render_env(
     token: &str,
     browser: &Browser,
 ) -> String {
-    let trust = shared::trust_dir(state, &seat.id)
+    let trust = layout::trust_dir(state, &seat.id)
         .to_string_lossy()
         .into_owned();
     let mut rows = vec![
@@ -141,7 +141,7 @@ pub(super) fn render_env(
         }
         SeatAccount::Person => {
             rows.push(("PUNKTFUNK_SEAT_OWN_ACCOUNT", "1".to_owned()));
-            Some(shared::person_config_dir(state, &seat.id))
+            Some(layout::person_config_dir(state, &seat.id))
         }
         SeatAccount::Made => Some(home.join(".config/punktfunk")),
     };
@@ -206,8 +206,8 @@ pub(super) fn render_binds(
     account: &str,
     shares: Option<&libraries::Shares>,
 ) -> String {
-    let seat = shared::seat_dir(state, id);
-    let (games, view) = (shared::games_dir(state), libraries::games_view());
+    let seat = layout::seat_dir(state, id);
+    let (games, view) = (layout::games_dir(state), libraries::games_view());
     let mut out = format!(
         "[Service]\nTemporaryFileSystem=/run/media:ro\nBindPaths={}:{}\n",
         games.display(),
@@ -364,7 +364,7 @@ pub(super) struct Browser {
 pub(super) fn browser(box_dir: &Path) -> Browser {
     let read = || -> std::io::Result<Option<Browser>> {
         let path = box_dir.join("seat-defaults.json");
-        let Some((bytes, _)) = super::safe_open::read(&path, super::shared::MAX_TRUST_BYTES)?
+        let Some((bytes, _)) = super::safe_open::read(&path, super::trust_copy::MAX_TRUST_BYTES)?
         else {
             return Ok(None);
         };
@@ -384,7 +384,7 @@ pub(super) fn browser(box_dir: &Path) -> Browser {
 
 /// Writes the environment file for `seat`, a row of `kind` on `passwd`'s account, root's `0600`:
 /// it holds a secret, and the unit's root commands take their environment from it. The owner's
-/// own user unit reads theirs too, through [`shared::reader_acl`] for their uid. `true` when the
+/// own user unit reads theirs too, through [`acl::reader_acl`] for their uid. `true` when the
 /// file changed.
 pub(super) fn write_env(
     seat: &Seat,
@@ -400,9 +400,9 @@ pub(super) fn write_env(
     let written = write_if_changed(&path, &text, 0o600)
         .map_err(|e| io("write the seat environment file", e))?;
     if kind == SeatAccount::Owner {
-        let acl = shared::reader_acl(passwd.uid, false);
+        let acl = acl::reader_acl(passwd.uid, false);
         let flags = rustix::fs::XattrFlags::empty();
-        rustix::fs::lsetxattr(&path, shared::ACL_ACCESS, &acl, flags)
+        rustix::fs::lsetxattr(&path, acl::ACL_ACCESS, &acl, flags)
             .map_err(|e| io("let the owner read the environment file", e.into()))?;
     }
     Ok(written)
@@ -1131,7 +1131,7 @@ mod tests {
         };
         let none = u32::MAX;
         assert_eq!(
-            shared::reader_acl(1000, false),
+            acl::reader_acl(1000, false),
             [
                 2u32.to_le_bytes().to_vec(),
                 entry(0x01, 6, none),
@@ -1161,9 +1161,9 @@ mod tests {
         let meta = std::fs::metadata(&path).unwrap();
         assert_eq!((meta.uid(), meta.gid()), (0, 0));
         assert!(!write_if_changed(&path, "X=\"1\"\n", 0o600).unwrap());
-        let acl = shared::reader_acl(1000, false);
+        let acl = acl::reader_acl(1000, false);
         let flags = rustix::fs::XattrFlags::empty();
-        match rustix::fs::lsetxattr(&path, shared::ACL_ACCESS, &acl, flags) {
+        match rustix::fs::lsetxattr(&path, acl::ACL_ACCESS, &acl, flags) {
             Err(rustix::io::Errno::NOTSUP) => {}
             set => {
                 set.unwrap();
