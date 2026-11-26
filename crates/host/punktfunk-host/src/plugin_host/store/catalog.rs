@@ -7,7 +7,7 @@
 //!
 //! Pin: `ureq_returns_304_as_ok` (304 is `Ok`, not an error).
 
-use super::index::{Index, MAX_INDEX_BYTES};
+use super::index::{pinned_algs, verify_signatures, Index, MAX_INDEX_BYTES};
 use super::sources::Source;
 use pf_update_check::feed::read_capped;
 use std::path::{Path, PathBuf};
@@ -66,22 +66,25 @@ pub(crate) fn fetch(source: &Source, etag: Option<&str>) -> Fetched {
     // Verify before parse. Nothing below may look at a field until this passes.
     let keys = source.keys();
     if !keys.is_empty() {
-        let sig = match agent.get(&source.sig_url()).call() {
-            Ok(mut r) => match read_capped(&mut r, MAX_INDEX_BYTES as u64) {
-                Ok(b) => b,
-                Err(e) => return Fetched::Failed(format!("signature: {e}")),
-            },
-            Err(e) => {
-                return Fetched::Failed(format!(
-                    "this source is signed but its signature could not be fetched: {e}"
-                ))
+        let mut sigs = Vec::new();
+        for alg in pinned_algs(&keys) {
+            let sig = match agent.get(&source.sig_url(alg)).call() {
+                Ok(mut r) => match read_capped(&mut r, MAX_INDEX_BYTES as u64) {
+                    Ok(b) => b,
+                    Err(e) => return Fetched::Failed(format!("signature: {e}")),
+                },
+                Err(e) => {
+                    return Fetched::Failed(format!(
+                        "this source is signed but its signature could not be fetched: {e}"
+                    ))
+                }
+            };
+            match String::from_utf8(sig) {
+                Ok(text) => sigs.push((alg, text)),
+                Err(_) => return Fetched::Failed("signature file is not text".into()),
             }
-        };
-        let sig_text = match String::from_utf8(sig) {
-            Ok(s) => s,
-            Err(_) => return Fetched::Failed("signature file is not text".into()),
-        };
-        if let Err(e) = super::index::verify_signature(&body, &sig_text, &keys) {
+        }
+        if let Err(e) = verify_signatures(&body, &sigs, &keys) {
             return Fetched::Failed(format!("signature check failed: {e}"));
         }
     }
