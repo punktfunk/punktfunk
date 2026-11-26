@@ -184,6 +184,20 @@ const FILES: [&str; 8] = [
 /// SteamOS keeps the console's password in `web.env`, beside its session secret and bind.
 const PASSWORD_LINE: &str = "^[[:space:]]*PUNKTFUNK_UI_PASSWORD(_HASH)?=";
 const SECRET_LINE: &str = "^[[:space:]]*PUNKTFUNK_UI_SECRET=";
+/// The value root hands back from the door's `web-password`: bare shell-safe characters, or
+/// single quotes with no quote inside. The owner's console loads the file as an environment
+/// file and SteamOS sources it in a shell, so no other variable and no shell syntax comes back.
+const SAFE_VALUE: &str = "=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$";
+
+/// `grep -E`'s pattern for the lines of `keys`, an alternation, that carry a [`SAFE_VALUE`].
+fn safe_pattern(keys: &str) -> String {
+    format!("^[[:blank:]]*PUNKTFUNK_UI_({keys}){SAFE_VALUE}")
+}
+
+/// Root's `grep` over the door's bytes for [`safe_pattern`]'s lines of `keys`.
+fn safe_lines(keys: &str, flags: &str) -> Cmd {
+    Cmd::root(&["grep", flags, "-E", safe_pattern(keys).as_str()])
+}
 /// A write as one side: stdin beside `$1`, which [`hand_over`] moves over it or drops.
 const TO_DOOR: &str = r#"umask 077; cat >"$1.tmp""#;
 const TO_OWNER: &str = r#"umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp""#;
@@ -644,16 +658,29 @@ fn take_password(owner: &Owner) -> Result<(), Stop> {
     hand_over(&stages, &Side::Door, &in_box("web-password"))
 }
 
-/// The door's last password line, spliced into a SteamOS `web.env`: the one line this process
-/// holds of the door's files.
+/// The door's `web-password` back to the owner, less every line [`safe_lines`] refuses. A file
+/// with no line left changes nothing: the owner keeps the password they had before the door.
+/// On SteamOS the door's last password line is spliced into `web.env`: the one line this
+/// process holds of the door's files.
 fn give_password(owner: &Owner) -> Result<(), Stop> {
+    let door = || as_door(&["cat", "--"], "web-password");
     if !steamos_password(owner) {
-        return give(owner, "web-password");
+        if !door_test("web-password") {
+            return Ok(());
+        }
+        let keys = "PASSWORD(_HASH)?|SECRET";
+        if hands::pipe(&[door(), safe_lines(keys, "-aq")]).0 != 0 {
+            eprintln!("door-helper: {BOX_DIR}/web-password holds no line safe to hand back");
+            return Ok(());
+        }
+        let to_owner = owner.cmd(&["sh", "-c", TO_OWNER, "sh"], "web-password");
+        let stages = [door(), safe_lines(keys, "-a"), to_owner];
+        return hand_over(&stages, &owner.side(), &owner.file("web-password"));
     }
     let stages = [
-        as_door(&["cat", "--"], "web-password").quiet(),
-        Cmd::root(&["grep", "-E", PASSWORD_LINE]),
-        Cmd::root(&["tail", "-n1"]).kept(u64::MAX),
+        door().quiet(),
+        safe_lines("PASSWORD(_HASH)?", "-a"),
+        Cmd::root(&["tail", "-n1"]).kept(4096),
     ];
     let mut line = hands::pipe(&stages).1;
     while line.last() == Some(&b'\n') {
@@ -1853,6 +1880,48 @@ mod tests {
         }
     }
 
+    /// What root's `grep` lets back from the door's password file, run for real. The lines the
+    /// console, `web-init.sh` and the SteamOS installer write pass. A line that sets another
+    /// variable, or that a shell sourcing the file would run, does not.
+    #[test]
+    fn only_a_plain_password_line_comes_back_from_the_door() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let rows = [
+            ("PUNKTFUNK_UI_PASSWORD=Ab3dEf9hIjKlMnOpQrSt", true),
+            (
+                "PUNKTFUNK_UI_PASSWORD_HASH='$argon2id$v=19$m=65536,t=2,p=1$c2FsdA$aGFzaA+/='",
+                true,
+            ),
+            ("  PUNKTFUNK_UI_SECRET=s3cret \t", true),
+            ("LD_PRELOAD=/var/lib/punktfunk/x.so", false),
+            ("PUNKTFUNK_UI_BIND=0.0.0.0", false),
+            ("PUNKTFUNK_UI_PASSWORD_EXTRA=1", false),
+            ("PUNKTFUNK_UI_PASSWORD_HASH=x;touch /tmp/planted", false),
+            ("PUNKTFUNK_UI_PASSWORD=$(id)", false),
+            ("PUNKTFUNK_UI_PASSWORD=`id`", false),
+            ("PUNKTFUNK_UI_PASSWORD=a b", false),
+            ("PUNKTFUNK_UI_PASSWORD=\"$(id)\"", false),
+            ("PUNKTFUNK_UI_PASSWORD='a' LD_PRELOAD=x", false),
+            ("PUNKTFUNK_UI_PASSWORD='a'\\''b'", false),
+            ("PUNKTFUNK_UI_PASSWORD='a\u{1}b'", false),
+        ];
+        let input: String = rows.iter().map(|(line, _)| format!("{line}\n")).collect();
+        let mut grep = Command::new("grep")
+            .args(["-a", "-E", &safe_pattern("PASSWORD(_HASH)?|SECRET")])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = grep.stdin.take().unwrap();
+        stdin.write_all(input.as_bytes()).unwrap();
+        drop(stdin);
+        let out = grep.wait_with_output().unwrap();
+        let kept: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap().lines().collect();
+        let want: Vec<&str> = rows.iter().filter(|r| r.1).map(|r| r.0).collect();
+        assert_eq!(kept, want);
+    }
+
     #[test]
     fn the_door_s_off_runs_exactly_these() {
         let rows: [(&str, Make, &[&str]); 3] = [
@@ -2328,6 +2397,9 @@ mod tests {
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-password",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-password",
+        "grep -aq -E ^[[:blank:]]*PUNKTFUNK_UI_(PASSWORD(_HASH)?|SECRET)=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$",
+        "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-password",
+        "grep -a -E ^[[:blank:]]*PUNKTFUNK_UI_(PASSWORD(_HASH)?|SECRET)=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$",
         r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-password"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-password"#,
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
@@ -2374,7 +2446,7 @@ mod tests {
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-password",
-        "grep -E ^[[:space:]]*PUNKTFUNK_UI_PASSWORD(_HASH)?=",
+        "grep -a -E ^[[:blank:]]*PUNKTFUNK_UI_(PASSWORD(_HASH)?)=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$",
         "tail -n1",
         r#"runuser -u alice -- sh -c umask 077; { grep -vE "$3" "$1" || true; } >"$1.tmp" && printf "%s\n" "$2" >>"$1.tmp" && mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web.env PUNKTFUNK_UI_PASSWORD_HASH=door-2 ^[[:space:]]*PUNKTFUNK_UI_PASSWORD(_HASH)?="#,
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
@@ -2595,20 +2667,23 @@ mod tests {
         (26, 7, Some("alice"), true, false),
         (27, 0, None, false, false),
         (28, 0, None, false, false),
-        (29, 7, Some("alice"), true, false),
-        (30, 7, Some("alice"), true, false),
+        (29, 0, None, false, false),
+        (30, 0, None, false, false),
         (31, 7, Some("alice"), true, false),
-        (32, 0, None, false, false),
-        (33, 0, None, false, false),
+        (32, 7, Some("alice"), true, false),
+        (33, 7, Some("alice"), true, false),
         (34, 7, Some("alice"), true, false),
-        (35, 7, Some("alice"), true, false),
-        (36, 7, Some("alice"), true, false),
-        (37, 0, None, false, false),
-        (38, 1, Some("alice"), false, false),
-        (39, 1, Some("alice"), false, false),
+        (35, 0, None, false, false),
+        (36, 0, None, false, false),
+        (37, 7, Some("alice"), true, false),
+        (38, 7, Some("alice"), true, false),
+        (39, 7, Some("alice"), true, false),
         (40, 0, None, false, false),
-        (41, 0, None, false, false),
-        (42, 0, None, false, false),
+        (41, 1, Some("alice"), false, false),
+        (42, 1, Some("alice"), false, false),
         (43, 0, None, false, false),
+        (44, 0, None, false, false),
+        (45, 0, None, false, false),
+        (46, 0, None, false, false),
     ];
 }
