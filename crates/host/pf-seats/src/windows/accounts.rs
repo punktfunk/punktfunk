@@ -14,8 +14,8 @@
 //! goes with its profile, at the next service start if the profile won't go at once; an
 //! adopted one is never deleted.
 
+use super::doctor::AccountInspection;
 use crate::backend::{Adopted, BackendError};
-use crate::doctor::AccountInspection;
 use crate::model::{Seat, SeatId};
 use crate::secret::Secret;
 use crate::windows::credentials::{Credential, CredentialStore};

@@ -24,9 +24,6 @@ pub mod backend;
 pub mod backoff;
 #[cfg(any(windows, test))]
 pub mod bootstrap;
-/// The Windows doctor's row decisions; the tables run on every target.
-#[cfg(any(windows, test))]
-mod doctor;
 pub mod ipc;
 /// The Linux half. Its tests run wherever Unix does; only the daemon needs Linux.
 #[cfg(any(target_os = "linux", all(test, unix)))]
@@ -36,20 +33,13 @@ pub mod model;
 pub mod persistence;
 pub mod pin;
 pub mod profile_locks;
-/// Desk pads lent to a seat on Windows, declared here so its tests run on every target.
-#[path = "windows/lent.rs"]
-pub mod seat_pads;
-/// The Windows supervisor's pure half, declared here so its tests run on every target.
-#[path = "windows/step.rs"]
-mod seat_step;
-/// Seats on and off on Windows as a pure plan, declared here so its tests run on every target.
-#[path = "windows/switch.rs"]
-mod seat_switch;
 mod secret;
 pub mod service;
 pub mod steam;
 pub mod unlock;
-#[cfg(windows)]
+/// The Windows half. Its pure parts and their tests build on every target; the rest needs
+/// Windows.
+#[cfg(any(windows, test))]
 pub mod windows;
 
 pub use backend::{BackendError, PlatformBackend, PresentPad, UnsupportedBackend};

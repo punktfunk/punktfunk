@@ -14,13 +14,13 @@
 //! of an adopted account only the session its cycle marked. Any other session of an adopted
 //! account is its person's: a start refuses one, nothing logs it off.
 
+use super::lent::Lent;
+use super::step::{
+    marked_session, session_mark, Action, Look, Observation, Probe, State, START_TIMEOUT,
+};
 use crate::bootstrap::RdpBootstrap;
 use crate::model::{RuntimeStatus, Seat};
 use crate::persistence::SecretRoot;
-use crate::seat_pads::Lent;
-use crate::seat_step::{
-    marked_session, session_mark, Action, Look, Observation, Probe, State, START_TIMEOUT,
-};
 use crate::windows::accounts::{self, AccountManager};
 use crate::windows::process::{self, ChildProcess, Job};
 use crate::windows::rdp;

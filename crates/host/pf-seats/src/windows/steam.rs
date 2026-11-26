@@ -548,7 +548,7 @@ pub(super) fn unwrap_box_shortcuts() -> std::io::Result<()> {
 /// The shortcuts the Seats key keeps, `path\ttarget\targs\tdir\ticon\tindex` per line.
 fn kept_links() -> Vec<(String, Link)> {
     RegKey::predef(HKEY_LOCAL_MACHINE)
-        .open_subkey_with_flags(super::SEATS_KEY, KEY_READ | KEY_WOW64_64KEY)
+        .open_subkey_with_flags(super::backend::SEATS_KEY, KEY_READ | KEY_WOW64_64KEY)
         .and_then(|key| key.get_value::<String, _>(KEPT_LINKS))
         .unwrap_or_default()
         .lines()
@@ -580,7 +580,7 @@ fn keep_links(kept: &[(String, Link)]) -> std::io::Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     RegKey::predef(HKEY_LOCAL_MACHINE)
-        .open_subkey_with_flags(super::SEATS_KEY, KEY_SET_VALUE | KEY_WOW64_64KEY)?
+        .open_subkey_with_flags(super::backend::SEATS_KEY, KEY_SET_VALUE | KEY_WOW64_64KEY)?
         .set_value(KEPT_LINKS, &text)
 }
 

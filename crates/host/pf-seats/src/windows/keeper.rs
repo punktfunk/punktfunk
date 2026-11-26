@@ -84,7 +84,7 @@ pub fn computer_name() -> WinResult<String> {
 /// Trust needs an elevated operator and a listening TermService.
 pub fn require_trust_prerequisites() -> WinResult<()> {
     require_elevated_admin()?;
-    if super::termservice_running()? {
+    if super::backend::termservice_running()? {
         Ok(())
     } else {
         Err(backend_error(

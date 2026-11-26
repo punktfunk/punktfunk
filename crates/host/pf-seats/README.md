@@ -106,7 +106,7 @@ actions out. `windows/supervisor.rs` performs the actions. Start with `step.rs`.
 | `ipc.rs` | The frames on the socket or pipe, and the `Command` list |
 | `persistence.rs` | Crash-safe, link-safe file writes under the supervisor's root |
 | `unlock.rs`, `attempts.rs` | Who may open a person's seat, and the limit on wrong passwords |
-| `locks.rs` | Which devices may open each profile (PINs, device keys). Not seat locks |
+| `profile_locks.rs` | Which devices may open each profile: PINs and device keys |
 | `linux/mod.rs` | The Linux platform: start, stop, delete, and the two-second sync thread |
 | `linux/resources.rs` | The table of what must be up while a seat's unit runs, and when it starts and stops |
 | `linux/session.rs` | Everything systemd reads for a seat: environment file, drop-ins |
@@ -118,7 +118,9 @@ actions out. `windows/supervisor.rs` performs the actions. Start with `step.rs`.
 | `linux/door_switch.rs` | The root verb that switches the door on and off |
 | `linux/safe_open.rs` | How root reads files in a folder another user can write |
 | `linux/copy_lock.rs` | The lock every writer of a seat's copied files takes |
+| `windows/backend.rs` | `WindowsBackend`: the portable commands, carried out on Windows |
 | `windows/step.rs`, `supervisor.rs` | A Windows seat's lifecycle: the rule, and the OS side |
+| `windows/lent.rs`, `doctor.rs` | Lent controllers per session; the rows of the seat check |
 | `windows/accounts.rs`, `credentials.rs` | Seat accounts and their sealed passwords |
 | `windows/enable.rs`, `switch.rs` | Turning seats on and off for the machine |
 

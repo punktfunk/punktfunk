@@ -9,7 +9,7 @@
 //! the service.
 
 use super::*;
-use pf_seats::seat_pads::{Hardware, Holder, UsbPad};
+use pf_seats::windows::lent::{Hardware, Holder, UsbPad};
 use pf_seats::windows::pipe::{wake, PipeServer};
 use pf_seats::{SeatService, WindowsBackend};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -9,7 +9,7 @@
 //! Logoff looks the account's session up when it runs, never by an ID recorded earlier alone:
 //! Windows reuses freed IDs, and only a session's logon time tells a reused one apart.
 
-use crate::seat_step::Logon;
+use super::step::Logon;
 use crate::windows::util::{backend_error, computer_name, io_error, WinResult};
 use windows::core::PWSTR;
 use windows::Wdk::System::SystemServices::RtlCompareUnicodeStrings;
