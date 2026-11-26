@@ -163,6 +163,31 @@ comment.
 
 CI length caps are a backstop, not the style. A four-line war story is still wrong.
 
+### A stranger can read it
+
+Write for a reader who knows the platform and has never seen this project. Short is still
+required. Plain comes first: a comment that fits the caps and needs its author to decode it
+has failed.
+
+- **Every possessive keeps its noun, every sentence its subject.** `the daemon's account`, not
+  `the daemon's`. `Only a made seat has one`, not `a made seat's alone`.
+- **A name says what the thing is.** A mechanism is not named by a figure of speech: `CopyLock`,
+  not `Level`; `apply`, not `cross`.
+- **One word, one meaning.** If `level` is a lock, it is not also a thread, a command and a
+  verb. A platform's own word keeps the platform's meaning: beside logind, say which `seat`.
+- **A coined word is defined before it is used.** Its definition lives in `CONTEXT.md`. A word
+  only one module uses is defined in that module's header.
+- **A module header opens with what the module is for**, in words a newcomer has. The rules
+  come after.
+
+Bad: `The copy writers' lock, and the device lists that lie behind it.`
+Good: `One mutex that every writer of a seat's copied files takes. It also guards the device
+lists.`
+
+Bad: `What runs beside a unit rises and falls in Inner::cross alone, by beside's table.`
+Good: `What must be up while a seat's unit runs, its copies and its pads, is started and stopped
+in one function, from one table.`
+
 ### Caps
 
 - `//` : at most four lines (CI fails at six).
@@ -417,6 +442,8 @@ Korean".
 - [ ] User-facing fact updated on the docs-site page (not docs/releases/)
 - [ ] New comments state an invariant or a trap, not a recap of the diff
 - [ ] Comments are present-tense live rules, not archaeology or a poem
+- [ ] A stranger can read each new comment: every possessive has its noun, no coined word
+      without a `CONTEXT.md` entry, one meaning per word
 - [ ] Module rustdoc still fits on one screen (CI fails a touched `//!` / `///` at 24 lines)
 - [ ] Touched `//` blocks are at most four lines (CI fails at six), except SAFETY proofs
 - [ ] No new comment that is the only enforcement of a trust boundary
