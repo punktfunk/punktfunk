@@ -10,7 +10,7 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/http/HttpClientResponse"
 // non-recursive definitions
 export type ActionInfo = { readonly "available": boolean, readonly "danger": boolean, readonly "group": string, readonly "id": string, readonly "permitted": boolean, readonly "title": string, readonly "unavailable_code"?: string | null, readonly "unavailable_reason"?: string | null } & { readonly [x: string]: Schema.Json }
-export const ActionInfo = Schema.StructWithRest(Schema.Struct({ "available": Schema.Boolean.annotate({ "description": "Platform probe. A VM that cannot S3 lists sleep as unavailable rather than a dead switch." }), "danger": Schema.Boolean.annotate({ "description": "Double-confirm hint: reboot/shutdown lose state." }), "group": Schema.String, "id": Schema.String.annotate({ "description": "Invoke path parameter (`power.sleep`, …).", "examples": ["power.sleep"] }), "permitted": Schema.Boolean.annotate({ "description": "Whether THIS caller may invoke it. Admin: always. Cert: the live `GRANT_POWER` bit for\npower, its own live session for `display.next`." }), "title": Schema.String.annotate({ "description": "Clients localize known ids and fall back to this for unknown ones." }), "unavailable_code": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The id of `unavailable_reason`: the host message `apierr_<code>`. Absent when the reason\nis the system's own words." })), "unavailable_reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One action as the caller sees it (`GET /actions`).", "identifier": "ActionInfo" })
+export const ActionInfo = Schema.StructWithRest(Schema.Struct({ "available": Schema.Boolean.annotate({ "description": "Platform probe. A VM that cannot S3 lists sleep as unavailable rather than a dead switch." }), "danger": Schema.Boolean.annotate({ "description": "Double-confirm hint: reboot/shutdown lose state." }), "group": Schema.String, "id": Schema.String.annotate({ "description": "Invoke path parameter (`power.sleep`, …).", "examples": ["power.sleep"] }), "permitted": Schema.Boolean.annotate({ "description": "Whether THIS caller may invoke it. Admin: always. Cert: the live `GRANT_POWER` bit for\npower, the manage grant for `host.update`, its own live session for `display.next`." }), "title": Schema.String.annotate({ "description": "Clients localize known ids and fall back to this for unknown ones." }), "unavailable_code": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The id of `unavailable_reason`: the host message `apierr_<code>`. Absent when the reason\nis the system's own words." })), "unavailable_reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "One action as the caller sees it (`GET /actions`).", "identifier": "ActionInfo" })
 export type ApiError = { readonly "code"?: string | null, readonly "error": string, readonly "params"?: { readonly [x: string]: string } | null } & { readonly [x: string]: Schema.Json }
 export const ApiError = Schema.StructWithRest(Schema.Struct({ "code": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "The sentence's id: the message `apierr_<code>` in the host's messages." })), "error": Schema.String.annotate({ "description": "The sentence in English, or developer text when `code` is absent." }), "params": Schema.optionalKey(Schema.Union([Schema.Record(Schema.String, Schema.String).check(Schema.isPropertyNames(Schema.String).annotate({ "expected": "an object with property names matching the schema" })), Schema.Null]).annotate({ "description": "The values of that message's placeholders, by name." })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "description": "Envelope for every non-2xx body.\n\nA sentence written for a person carries `code`: an app words it as the host message\n`apierr_<code>` with `params`, and shows `error` for a code it does not know. Without\n`code`, `error` is developer text and an app words the failure itself.", "identifier": "ApiError" })
 export type ActionOutcome = { readonly "monitor": string } & { readonly [x: string]: Schema.Json }
@@ -4240,8 +4240,10 @@ export interface Punktfunk {
   /**
 * Per-caller view: platform availability plus whether this caller may invoke each one.
 * Admin: everything permitted. Paired cert: power per the device's live Host-power grant,
-* `display.next` while the device streams a session of its own and may choose its screen.
-* Unknown ids still render with the server-supplied title.
+* `host.update` per its Manage-host grant, `display.next` while the device streams a session
+* of its own and may choose its screen. `host.update` is listed only while a newer release is
+* out and this install updates in one click. Unknown ids still render with the
+* server-supplied title.
 */
 readonly "listActions": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<typeof ListActions200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListActions401", typeof ListActions401.Type>>;
@@ -4253,6 +4255,9 @@ readonly "listActions": {
 * flushes, then act; paired-cert callers need Host power and are `409` while another
 * device's session is live or a seat host doesn't answer, the admin console never is. One
 * power action at a time.
+* `host.update` answers `202` and starts the update the host's own check offers, which ends
+* every stream when the host restarts; a paired cert needs Manage host and is `409` while
+* another device's session is live. Progress and outcome are on `GET /update/status`.
 * `display.next` answers `200` with the monitor now streamed and ends nothing; a paired
 * cert needs a live session of its own and the Choose-its-screen grant.
 */

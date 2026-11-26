@@ -32,8 +32,9 @@ pub const GRANT_LAUNCH: u32 = 0x20;
 /// `power.*` (sleep/reboot/shutdown) on the mgmt cert lane (`design/host-actions.md`).
 /// Not a datagram; [`classify`] is untouched. Machine power only — never plugin actions.
 pub const GRANT_POWER: u32 = 0x40;
-/// Pause and remove a title's download on the mgmt cert lane.
-/// Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
+/// Manage host: upkeep on the mgmt cert lane. Pause and remove a title's download, and start
+/// the host update its own check offers. Starting a download is [`GRANT_LAUNCH`]: launching a
+/// missing title installs it anyway. Never pairing, access, plugins, hooks or host settings.
 pub const GRANT_MANAGE_GAMES: u32 = 0x80;
 /// Choosing the screen this device streams and what the host's monitors do meanwhile: its
 /// own pick on the mgmt cert lane and a preset's wish in the Hello. Without it the operator's

@@ -33,7 +33,8 @@ under `/opt/punktfunk` and `/etc` (`scripts/steamdeck/door.sh`).
 `install_flatpak {id}` adds Flathub to the system installation when the
 box lacks it and installs the app there, for every account; each user keeps its own data in
 `~/.var/app/<id>`. `remove_flatpak {id, purge}` uninstalls it; `purge` deletes root's data of
-it, never a seat's. Both answer `flatpak {id, version}`. An id is reverse-DNS: letters, digits,
+it, never a seat's. Both name an app: an id that names a runtime is never installed or removed
+through them. Both answer `flatpak {id, version}`. An id is reverse-DNS: letters, digits,
 `.`, `_` and `-`, at least one dot, at most 255 bytes, no leading `-`; any other is refused
 before `flatpak` runs. One change runs at a time: a second meanwhile answers `conflict`.
 

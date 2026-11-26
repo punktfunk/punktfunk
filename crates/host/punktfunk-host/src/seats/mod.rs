@@ -10,6 +10,7 @@ pub(crate) mod events;
 #[cfg(any(windows, target_os = "linux"))]
 pub(crate) mod lifecycle;
 pub(crate) mod placement;
+pub(crate) mod sent;
 #[cfg(target_os = "linux")]
 pub(crate) mod session_switch;
 
@@ -328,21 +329,57 @@ pub(crate) fn other_client_on_a_seat(fp_hex: &str) -> bool {
     any_on_a_seat(|o| !crate::session_status::is_client(&o.client, fp_hex)).unwrap_or(true)
 }
 
-/// Whether `fp_hex` streams on a seat; `None` when a seat can't say. Blocking, as [`snapshot`].
-pub(crate) fn plays_on_a_seat(fp_hex: &str) -> Option<bool> {
-    any_on_a_seat(|o| crate::session_status::is_client(&o.client, fp_hex))
-}
-
-/// [`plays_on_a_seat`], `None` once `deadline` has passed. A supervisor that accepts and never
-/// answers would hold a caller for minutes, and the startup sweep is one.
-pub(crate) fn plays_on_a_seat_by(fp_hex: &str, deadline: Instant) -> Option<bool> {
+/// Whether `fp_hex` streams on the seat `seat_id`, the one the door sent it to; `None` when that
+/// seat's host or the ledger can't say. No other seat is asked: the player on a seat controls
+/// that seat's host, and so what it lists. Blocking, as [`snapshot`].
+pub(crate) fn plays_on(seat_id: &str, fp_hex: &str) -> Option<bool> {
     if !in_play() {
         return Some(false);
     }
+    on_seat(&list().ok()?, seat_id, fp_hex, occupants)
+}
+
+/// Whether `ask` lists `fp_hex` on the seat `seat_id` of `seats`. A seat that is gone or not
+/// running has nobody on it.
+fn on_seat(
+    seats: &[pf_seats::Seat],
+    seat_id: &str,
+    fp_hex: &str,
+    ask: impl FnOnce(&pf_seats::Seat) -> Option<Vec<Occupant>>,
+) -> Option<bool> {
+    let running = seats
+        .iter()
+        .find(|s| s.id.as_str() == seat_id && s.runtime.state == pf_seats::RuntimeState::Running);
+    let Some(seat) = running else {
+        return Some(false);
+    };
+    let who = ask(seat)?;
+    Some(
+        who.iter()
+            .any(|o| crate::session_status::is_client(&o.client, fp_hex)),
+    )
+}
+
+/// The running seat whose host lists `fp_hex`, every seat asked; `None` when no seat that
+/// answered does. Only the startup sweep asks this, on a door with no redirect record file yet.
+/// Blocking, as [`snapshot`].
+fn listing_seat(fp_hex: &str) -> Option<String> {
+    ask_who(&list().ok()?).into_iter().find_map(|(id, who)| {
+        who?.iter()
+            .any(|o| crate::session_status::is_client(&o.client, fp_hex))
+            .then_some(id)
+    })
+}
+
+/// `ask`'s answer, `None` once `deadline` has passed. A supervisor that accepts and never
+/// answers would hold a caller for minutes, and the startup sweep is one.
+fn by<T: Send + 'static>(
+    deadline: Instant,
+    ask: impl FnOnce() -> Option<T> + Send + 'static,
+) -> Option<T> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let fp = fp_hex.to_owned();
     std::thread::spawn(move || {
-        let _ = tx.send(plays_on_a_seat(&fp));
+        let _ = tx.send(ask());
     });
     rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .ok()
@@ -618,5 +655,40 @@ mod tests {
         assert_eq!(seen_on(&seats, mine), None, "seat-2 may have it");
         seats.insert("seat-1".to_string(), on);
         assert_eq!(seen_on(&seats, mine), Some(true), "seen on seat-1");
+    }
+
+    /// Only the seat the door sent a device to holds it. Another seat that lists the device is
+    /// never asked, and a sent seat that stopped has nobody.
+    #[test]
+    fn a_seat_the_device_was_not_sent_to_never_holds_it() {
+        let fp = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+        let (sent, other) = (
+            "0123456789abcdef0123456789abcdef",
+            "fedcba9876543210fedcba9876543210",
+        );
+        let row = |id: &str, state: &str| -> pf_seats::Seat {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": "Kid", "account": "pf_seat", "display_slot": 12,
+                "native_port": 9778, "mgmt_port": 47992, "runtime": { "state": state },
+            }))
+            .unwrap()
+        };
+        let lists = |seat: &pf_seats::Seat| {
+            let client = if seat.id.as_str() == other {
+                &fp[..12]
+            } else {
+                "112233445566"
+            };
+            Some(vec![Occupant {
+                client: client.into(),
+                name: None,
+            }])
+        };
+        let seats = [row(sent, "running"), row(other, "running")];
+        assert_eq!(super::on_seat(&seats, sent, fp, lists), Some(false));
+        assert_eq!(super::on_seat(&seats, other, fp, lists), Some(true));
+        assert_eq!(super::on_seat(&seats, sent, fp, |_| None), None, "silent");
+        let stopped = [row(sent, "stopped"), row(other, "running")];
+        assert_eq!(super::on_seat(&stopped, sent, fp, lists), Some(false));
     }
 }

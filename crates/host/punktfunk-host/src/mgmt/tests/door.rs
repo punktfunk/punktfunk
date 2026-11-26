@@ -30,6 +30,8 @@ struct FakeSeats {
     no_owner: bool,
     /// The host every call reaches instead of `answers`.
     relay: Option<Router>,
+    /// Device fingerprint → the seat the door sent it to.
+    sent: BTreeMap<String, String>,
 }
 
 impl FakeSeats {
@@ -40,7 +42,16 @@ impl FakeSeats {
             calls: Mutex::new(Vec::new()),
             no_owner: false,
             relay: None,
+            sent: BTreeMap::new(),
         })
+    }
+
+    fn sent(mut self: Arc<Self>, fp: &str, seat: &str) -> Arc<Self> {
+        Arc::get_mut(&mut self)
+            .unwrap()
+            .sent
+            .insert(fp.into(), seat.into());
+        self
     }
 
     fn without_owner(mut self: Arc<Self>) -> Arc<Self> {
@@ -88,6 +99,10 @@ impl Seats for FakeSeats {
             pf_seats::ipc::ErrorCode::Transport,
             "no supervisor in this test",
         ))
+    }
+
+    fn sent_to(&self, fp: &str) -> Option<String> {
+        self.sent.get(fp).cloned()
     }
 
     fn call(&self, target: &Target, call: Forwarded) -> Answer {
@@ -278,11 +293,9 @@ async fn a_dot_segment_never_leaves_the_door() {
 async fn a_device_s_own_play_reaches_its_seat_as_that_device() {
     let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
     let np = paired(&[fp]);
-    let seats = FakeSeats::new(box_snapshot(Some(fp))).answering(
-        "game/end",
-        200,
-        serde_json::json!({"ended": true}),
-    );
+    let seats = FakeSeats::new(box_snapshot(Some(fp)))
+        .sent(fp, KID_SEAT)
+        .answering("game/end", 200, serde_json::json!({"ended": true}));
     let app = test_app_door(test_state(), Some(np), seats.clone());
     let mut req = json_req(Method::POST, "/api/v1/game/end", serde_json::json!({}));
     req.extensions_mut()
@@ -304,11 +317,9 @@ async fn a_device_s_own_play_reaches_its_seat_as_that_device() {
 async fn a_device_s_screen_picker_reads_its_seat() {
     let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
     let np = paired(&[fp]);
-    let seats = FakeSeats::new(box_snapshot(Some(fp))).answering(
-        "display/targets",
-        200,
-        serde_json::json!({"targets": []}),
-    );
+    let seats = FakeSeats::new(box_snapshot(Some(fp)))
+        .sent(fp, KID_SEAT)
+        .answering("display/targets", 200, serde_json::json!({"targets": []}));
     let app = test_app_door(test_state(), Some(np), seats.clone());
     let mut req = get_req("/api/v1/display/targets");
     req.extensions_mut()
@@ -320,6 +331,30 @@ async fn a_device_s_screen_picker_reads_its_seat() {
     assert_eq!(calls[0].0, Target::Seat(KID_SEAT.into()));
     assert_eq!(calls[0].1.device.as_deref(), Some(fp));
     assert!(!calls[0].1.start, "a device's read wakes no seat");
+}
+
+/// A device's call goes to the seat the door sent it to. Another seat that lists the device,
+/// as any seat's player can make it do, takes none of its calls.
+#[tokio::test]
+async fn a_device_s_call_goes_to_the_seat_the_door_sent_it_to() {
+    let fp = "aa11bb22cc33dd44ee55ff6600112233445566778899aabbccddeeff00112233";
+    let picker = |seats: &Arc<FakeSeats>| {
+        let app = test_app_door(test_state(), Some(paired(&[fp])), seats.clone());
+        let mut req = get_req("/api/v1/display/targets");
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.to_string())));
+        app.oneshot(req)
+    };
+    // The kid's seat lists the device; the door sent it to the owner's row.
+    let seats = FakeSeats::new(box_snapshot(Some(fp))).sent(fp, OWNER_SEAT);
+    picker(&seats).await.unwrap();
+    let to: Vec<_> = seats.calls().into_iter().map(|(to, _)| to).collect();
+    assert_eq!(to, [Target::Seat(OWNER_SEAT.into())]);
+    // Sent nowhere: the kid's seat still takes nothing.
+    let seats = FakeSeats::new(box_snapshot(Some(fp)));
+    picker(&seats).await.unwrap();
+    let kid = Target::Seat(KID_SEAT.into());
+    assert!(seats.calls().iter().all(|(to, _)| *to != kid));
 }
 
 /// A device's install, pause and removal reach the owner's host as that device, wherever it
@@ -413,8 +448,8 @@ async fn a_vouched_install_is_the_device_s_never_the_operator_s() {
 }
 
 /// A player with the launch grant and a guest without it, paired on the door and the owner's host
-/// alike, and the owner's host behind a door that passes every call there. `plays`: the player
-/// streams on the kid's seat.
+/// alike, and the owner's host behind a door that passes every call there. `plays`: the door
+/// sent the player to the kid's seat, and it streams there.
 fn desk_door(store: &str, plays: bool) -> (Router, Arc<FakeSeats>, String, String) {
     use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_LAUNCH};
     let (player, guest) = ("a1".repeat(32), "b2".repeat(32));
@@ -434,7 +469,10 @@ fn desk_door(store: &str, plays: bool) -> (Router, Arc<FakeSeats>, String, Strin
     let np = Arc::new(np);
     let owner = test_app_native(test_state(), np.clone());
     let snapshot = box_snapshot(plays.then_some(player.as_str()));
-    let seats = FakeSeats::new(snapshot).relaying(owner);
+    let mut seats = FakeSeats::new(snapshot).relaying(owner);
+    if plays {
+        seats = seats.sent(&player, KID_SEAT);
+    }
     let door = test_app_door(test_state(), Some(np), seats.clone());
     (door, seats, player, guest)
 }

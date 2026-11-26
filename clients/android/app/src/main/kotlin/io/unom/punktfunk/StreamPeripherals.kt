@@ -64,8 +64,12 @@ internal class StreamPeripherals(
     /** A pad or the keyboard fired a shortcut the router does not act on itself ([fireShortcut]). */
     var onShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Unit)? = null
 
+    /** The key row's modifiers ([KeyRow]), which the system keyboard's keys go under too. */
+    val keyLatch = KeyLatch { vk, down -> NativeBridge.nativeSendKey(handle, vk, down, 0) }
+
     fun start() {
         activity?.streamHandle = handle // route hardware keys to this session
+        activity?.keyLatch = keyLatch
         // Multi-controller router: a stable wire pad index per connected controller, per-device axis
         // state, Arrival/Remove on hot-plug, and feedback routed back by pad index. Forwards every
         // controller (Automatic). Built here, released on dispose.
@@ -418,6 +422,8 @@ internal class StreamPeripherals(
         activity?.ringKeys = null // a session torn down with the ring up must not keep the keys
         activity?.keyShortcuts = null
         activity?.fireShortcut = null
+        keyLatch.release()
+        activity?.keyLatch = null
         router.onMotionUnreachable = null // same: no notice raised by a slot closing at teardown
         router.release() // flush every slot (nothing sticks host-side) + drop the hot-plug listener
         activity?.gamepadRouter = null
