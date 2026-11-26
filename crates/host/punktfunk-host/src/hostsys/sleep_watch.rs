@@ -54,8 +54,9 @@ fn watch() {
     use zbus::zvariant::OwnedFd;
 
     async fn delay(login: &zbus::Proxy<'_>) -> Option<OwnedFd> {
-        let why = ("sleep", "Punktfunk", "hooks run before a sleep", "delay");
-        let fd = match login.call_method("Inhibit", &why).await {
+        let what = "sleep";
+        let args = (what, "Punktfunk", "hooks run before a sleep", "delay");
+        let fd = match login.call_method("Inhibit", &args).await {
             Ok(reply) => reply.body().deserialize::<OwnedFd>(),
             Err(e) => Err(e),
         };
