@@ -12,7 +12,8 @@
 //! [`hands::Theirs`], and all that can be done with one is to pass it to a command that runs as
 //! that side (`runuser -u <side> --`, [`hands::Cmd::by`]). Their bytes pass through root in two
 //! places, the port lines and the password lines, and root filters both. Root writes only its own
-//! files in the state directory: the owner record, the door-on mark, the hold and the port file.
+//! files in the state directory: the owner record, the door-on mark, the port file and the hold,
+//! which keeps the door's units off until an on has copied the files or an off has ended.
 //!
 //! Every program runs through [`hands::pipe`], which the tests replace. So each switch is a table
 //! of commands and each step can be made to fail: see `the_door_s_on_runs_exactly_these`,
@@ -20,6 +21,7 @@
 
 use super::accounts::{Passwd, Switchable};
 use super::err;
+use super::shared::MAX_TRUST_BYTES;
 use crate::backend::BackendError;
 use std::ffi::OsStr;
 use std::io::Read;
@@ -34,6 +36,10 @@ const PORT_KEYS: [&str; 3] = [
 
 /// The most [`ports`] reads: the owner's two env files, theirs to make any size.
 const MAX_PORT_INPUT: u64 = 1 << 20;
+
+/// The most [`kept`] reads, such as an avatar listing that the door's account writes. 1 MiB is
+/// tens of thousands of names.
+const MAX_LISTING: u64 = 1 << 20;
 
 /// Whom a switch is for.
 #[derive(Debug, PartialEq, Eq)]
@@ -206,7 +212,8 @@ fn safe_lines(keys: &str, flags: &str) -> Cmd {
 }
 /// A write as one side: stdin beside `$1`, which [`hand_over`] moves over it or drops.
 const TO_DOOR: &str = r#"umask 077; cat >"$1.tmp""#;
-const TO_OWNER: &str = r#"umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp""#;
+/// The owner's write fails past `$2` bytes, so a file the door's account grew never moves home.
+const TO_OWNER: &str = r#"umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2""#;
 const MOVE: &str = r#"mv -f "$1.tmp" "$1""#;
 const DROP: &str = r#"rm -f "$1.tmp""#;
 /// `$1`, the owner's `web.env`, less its `$3` lines, then `$2`: the door's last password line.
@@ -457,13 +464,16 @@ fn must(stages: &[Cmd]) -> Result<(), Stop> {
     }
 }
 
-/// `$(cmd)`: its stdout less the trailing newlines.
-fn kept(cmd: Cmd) -> Vec<u8> {
-    let mut out = hands::pipe(&[cmd.kept(u64::MAX)]).1;
+/// `$(cmd)`: its stdout less the trailing newlines, or `None` past [`MAX_LISTING`] bytes.
+fn kept(cmd: Cmd) -> Option<Vec<u8>> {
+    let mut out = hands::pipe(&[cmd.kept(MAX_LISTING + 1)]).1;
+    if out.len() as u64 > MAX_LISTING {
+        return None;
+    }
     while out.last() == Some(&b'\n') {
         out.pop();
     }
-    out
+    Some(out)
 }
 
 /// Root's `rm -f`: every path is tried, and any failure but a missing file fails the whole.
@@ -637,14 +647,21 @@ fn take(owner: &Owner, name: &str, fresh: bool) -> Result<(), Stop> {
     )
 }
 
+/// `name` in the owner's folder, written from stdin as the owner. Past [`MAX_TRUST_BYTES`], the
+/// size the trust copy refuses for the same files, the write fails.
+fn to_owner(owner: &Owner, name: &str) -> Cmd {
+    let cap = MAX_TRUST_BYTES.to_string();
+    let (head, tail) = (["sh", "-c", TO_OWNER, "sh"], [OsStr::new(&cap)]);
+    Cmd::by(&owner.side(), &head, Some(&owner.file(name)), &tail)
+}
+
 /// `name` from the box directory back to the owner: read as the door, written as the owner, so
-/// neither side's links lead anywhere that side couldn't go.
+/// neither side's links lead anywhere that side couldn't go. A file too large fails the step.
 fn give(owner: &Owner, name: &str) -> Result<(), Stop> {
     if !door_test(name) {
         return Ok(());
     }
-    let to_owner = owner.cmd(&["sh", "-c", TO_OWNER, "sh"], name);
-    let stages = [as_door(&["cat", "--"], name), to_owner];
+    let stages = [as_door(&["cat", "--"], name), to_owner(owner, name)];
     hand_over(&stages, &owner.side(), &owner.file(name))
 }
 
@@ -679,8 +696,11 @@ fn give_password(owner: &Owner) -> Result<(), Stop> {
             eprintln!("door-helper: {BOX_DIR}/web-password holds no line safe to hand back");
             return Ok(());
         }
-        let to_owner = owner.cmd(&["sh", "-c", TO_OWNER, "sh"], "web-password");
-        let stages = [door(), safe_lines(keys, "-a"), to_owner];
+        let stages = [
+            door(),
+            safe_lines(keys, "-a"),
+            to_owner(owner, "web-password"),
+        ];
         return hand_over(&stages, &owner.side(), &owner.file("web-password"));
     }
     let stages = [
@@ -706,13 +726,15 @@ fn give_password(owner: &Owner) -> Result<(), Stop> {
     must(&[splice])
 }
 
-/// The names `ls -1` printed, split as the shell splits words, that [`safe_name`] keeps.
-fn avatars(listing: &[u8]) -> Vec<String> {
-    listing
+/// The names `ls -1` prints, split as the shell splits words, that [`safe_name`] keeps. A listing
+/// past [`MAX_LISTING`] ends the switch, as a file that can't be read does.
+fn avatars(ls: Cmd) -> Result<Vec<String>, Stop> {
+    let listing = kept(ls.quiet()).ok_or_else(|| die("the avatar listing runs past 1 MiB"))?;
+    Ok(listing
         .split(|b| matches!(b, b' ' | b'\t' | b'\n'))
         .filter(|name| safe_name(name))
         .map(|name| format!("profiles/{}", String::from_utf8_lossy(name)))
-        .collect()
+        .collect())
 }
 
 fn safe_name(name: &[u8]) -> bool {
@@ -729,16 +751,14 @@ fn take_avatars(owner: &Owner, fresh: bool) -> Result<(), Stop> {
         must(&[as_door(&["rm", "-rf"], "profiles")])?;
     }
     must(&[as_door(&["mkdir", "-p", "-m", "0700"], "profiles")])?;
-    let ls = owner.cmd(&["ls", "-1", "--"], "profiles");
-    for name in avatars(&kept(ls.quiet())) {
+    for name in avatars(owner.cmd(&["ls", "-1", "--"], "profiles"))? {
         take(owner, &name, false)?;
     }
     Ok(())
 }
 
 fn give_avatars(owner: &Owner) -> Result<(), Stop> {
-    let ls = as_door(&["ls", "-1", "--"], "profiles");
-    for name in avatars(&kept(ls.quiet())) {
+    for name in avatars(as_door(&["ls", "-1", "--"], "profiles"))? {
         give(owner, &name)?;
     }
     Ok(())
@@ -750,13 +770,22 @@ fn read(side: &Side, from: &Theirs) -> Vec<u8> {
     hands::pipe(&[cat.quiet().kept(MAX_PORT_INPUT + 1)]).1
 }
 
-/// The hold's name in the state directory. An off sets it first and removes it last, and the
-/// door's units don't start under it.
-pub(super) const HOLD: &str = "door-hold";
+/// The hold's name in the state directory. The door's units don't start under it. An on holds it
+/// from before the record until the files are in the box, with [`ON_HOLD`] inside; an off holds
+/// it empty from its first step to its last.
+const HOLD: &str = "door-hold";
+/// What an on's hold holds. An off's is empty.
+const ON_HOLD: &str = "on\n";
+
+/// Whether the hold in `state` is an off's: an off that began and didn't finish. An on's hold
+/// doesn't count. It checks the size, which needs no read right on root's file.
+pub(super) fn off_held(state: &Path) -> bool {
+    std::fs::metadata(state.join(HOLD)).is_ok_and(|m| m.len() == 0)
+}
 
 /// What a switch puts back when it ends early.
 enum Back<'a> {
-    /// A first on: no record, mark or owner row, and the supervisor off unless it was on.
+    /// A first on: no record, mark, hold or owner row, and the supervisor off unless it was on.
     On { user: &'a str, seats_were_up: bool },
     /// An off whose files didn't arrive home: it ends as [`Door::stand_down`] does and keeps the
     /// record, the mark and the hold. The door stays off; an on, then an off, hands them back.
@@ -849,8 +878,8 @@ impl Door {
         Path::new(&self.state).join("host.env")
     }
 
-    /// The door's units don't start while it exists: an off writes it first and removes it
-    /// last, so a failed off stays off at boot where the units can't be disabled.
+    /// The door's units don't start while it exists ([`HOLD`]), so a switch that stops halfway
+    /// stays off at boot, where the units can't be disabled.
     fn hold(&self) -> PathBuf {
         Path::new(&self.state).join(HOLD)
     }
@@ -930,7 +959,7 @@ impl Door {
         }
         let step = |done: Result<(), Stop>| if strict { done } else { Ok(()) };
         step(ensure_group(DOOR_GROUP))?;
-        if kept(Cmd::root(&["id", "-gn", DOOR])) != DOOR_GROUP.as_bytes() {
+        if kept(Cmd::root(&["id", "-gn", DOOR])).as_deref() != Some(DOOR_GROUP.as_bytes()) {
             step(must(&[Cmd::root(&["usermod", "-g", DOOR_GROUP, DOOR])]))?;
         }
         // The door's own files only: a file another account left there stays as it is.
@@ -965,6 +994,10 @@ impl Door {
         Ok(())
     }
 
+    /// Switches the door on for `owner`. The hold goes up before the record and comes down once
+    /// the files are in the box and the supervisor has the owner's row. So an on that stops
+    /// halfway, killed or failed, leaves the door's units off, and the next on or off finishes the
+    /// switch. A first on that fails puts the box back ([`Door::undo_on`]).
     fn on(&self, owner: &Owner, gone: Option<&str>, recorded: &str) -> Result<(), Stop> {
         let user = owner.user;
         let seats_were_up = active(SEATS_UNIT);
@@ -1006,6 +1039,11 @@ impl Door {
                 seats_were_up,
             }),
         };
+        // A hold already there stays as it is: a failed off's stays empty for `off_held`.
+        if !self.hold().exists() {
+            std::fs::write(self.hold(), ON_HOLD)
+                .map_err(|e| die(&format!("write {}: {e}", self.hold().display())))?;
+        }
         self.write_record(user)?;
         if !self.mark().exists() {
             // The box holds this member's files alone; only a gone owner's stay where this
@@ -1023,7 +1061,8 @@ impl Door {
         // Ready once its socket is bound (Type=notify).
         must(&[Cmd::root(&["systemctl", "start", SEATS_UNIT])])?;
         must(&[Cmd::root(&[self.seats.as_str(), "adopt-owner", user]).hidden()])?;
-        // A failed off's hold would keep the door's units from starting below.
+        // The files are in the box. The hold, this on's or a failed off's, would keep the door's
+        // units from starting below.
         remove(&[&self.hold()])?;
         wire(&[DOOR_UNIT, WEB_DOOR_UNIT])?;
         undo.disarm();
@@ -1041,13 +1080,16 @@ impl Door {
         Ok(())
     }
 
-    /// A first on that fails puts the box back. The user's own files were only copied.
+    /// A first on that fails puts the box back as [`Back::On`] says. The user's own files were
+    /// only copied.
     fn undo_on(&self, user: &str, seats_were_up: bool) {
         eprintln!("door-helper: couldn't switch the door on, putting the box back");
         if active(SEATS_UNIT) {
             status(Cmd::root(&[self.seats.as_str(), "release-owner"]).hidden());
         }
-        let gone = remove(&[&self.mark(), &self.record(), &self.contract(user)]);
+        // The hold goes only after the record: a record without a hold starts the door's units.
+        let gone = remove(&[&self.mark(), &self.record(), &self.contract(user)])
+            .and_then(|()| remove(&[&self.hold()]));
         if gone.is_ok() && !seats_were_up {
             unwire(&[SEATS_UNIT]);
         }
@@ -1795,6 +1837,7 @@ mod tests {
         record: Option<String>,
         mark: bool,
         hold: bool,
+        off_held: bool,
         contract: bool,
         seats: bool,
         ports: Option<String>,
@@ -1853,6 +1896,7 @@ mod tests {
             record: read("owner").map(|r| r.trim_end().to_owned()),
             mark: state.join("door-on").exists(),
             hold: state.join("door-hold").exists(),
+            off_held: off_held(&state),
             contract: contract.exists(),
             seats: world.active.borrow().contains(SEATS_UNIT),
             ports: read("host.env"),
@@ -1990,8 +2034,8 @@ mod tests {
 
     /// Every call of a first on and of an off fails in turn. A hand-over's read that fails ends
     /// its step, and its move is a call of its own. A first on that fails before the door's
-    /// ports move leaves no record or mark, asks the supervisor to release the owner's row and
-    /// leaves it as it was. An off whose hand-back fails ends as an off does, the door off and
+    /// ports move leaves no record, mark or hold, asks the supervisor to release the owner's row
+    /// and leaves it as it was. An off whose hand-back fails ends as an off does, the door off and
     /// the owner's host back, and keeps the record, the mark and the hold.
     #[test]
     fn a_failed_step_puts_the_box_back() {
@@ -2022,6 +2066,8 @@ mod tests {
                 }
                 if make().verb == "off" {
                     assert_eq!(ran.hold, record.is_some(), "{row}: {failed}");
+                } else {
+                    assert!(!ran.hold, "{row}: {failed}");
                 }
                 if exit != 0 && mark && make().verb == "off" {
                     assert!(ran.calls.ends_with(&stand_down()), "{row}: {failed}");
@@ -2098,6 +2144,80 @@ mod tests {
         );
     }
 
+    /// A takeover puts nothing back, so a step that fails halfway through the copy leaves what a
+    /// kill leaves. The hold keeps the door's units off a box with half of the member's files,
+    /// and the owner's host doesn't read it as an off that didn't finish.
+    #[test]
+    fn an_on_cut_short_leaves_the_door_held() {
+        let mut scenario = on_takeover();
+        let read = "runuser -u bob -- cat -- /home/bob/.config/punktfunk/profiles.json";
+        scenario.world.fail_at = Some(nth(&switch(on_takeover()).calls, read));
+        let ran = switch(scenario);
+        assert_eq!(
+            (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
+            (7, Some("bob"), false, true)
+        );
+        assert!(!ran.off_held);
+    }
+
+    /// What a killed on leaves, the record and the hold with no mark, is finished by the next
+    /// on: it copies the owner's files as a first on does and lifts the hold.
+    #[test]
+    fn an_on_after_a_killed_one_copies_and_lifts_the_hold() {
+        let mut world = world(&ALL_HAS, true);
+        world.owner = ALICE.to_vec();
+        let ran = switch(Scenario {
+            record: Some("alice"),
+            hold: true,
+            ..scenario("on", "alice", world)
+        });
+        let fresh = recorded(ON_FRESH);
+        let from = nth(
+            &fresh,
+            "runuser -u alice -- test -f /home/alice/.config/punktfunk/native-cert.pem",
+        );
+        let to = nth(&fresh, "systemctl enable punktfunk-seats.service");
+        let copy = &fresh[from - 1..to - 1];
+        let copied = ran.calls.windows(copy.len()).any(|w| w == copy);
+        assert!(copied, "{:#?}", ran.calls);
+        assert_eq!(
+            (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
+            (0, Some("alice"), true, false)
+        );
+        assert!(ran.seats);
+    }
+
+    /// A listing of the door's avatars past the cap ends the off as an unreadable file does: the
+    /// door stays off, and the record, the mark and the hold stay for the next off.
+    #[test]
+    fn an_avatar_listing_past_the_cap_ends_the_off() {
+        let flood = format!("profiles/{}", "a".repeat(MAX_LISTING as usize));
+        let mut scenario = off_owner();
+        let world = &mut scenario.world;
+        world.door.push((Box::leak(flood.into_boxed_str()), "png"));
+        let ran = switch(scenario);
+        assert_eq!(
+            (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
+            (1, Some("alice"), true, true)
+        );
+        assert!(ran.calls.ends_with(&stand_down()));
+    }
+
+    /// The owner's side of a hand-back writes at most the cap. A file past it fails the
+    /// hand-over, so nothing moves; a file at the cap arrives whole. Run for real.
+    #[test]
+    fn a_hand_back_past_the_cap_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("profiles/alice.png");
+        let to = to.to_str().unwrap();
+        let write = || Cmd::root(&["sh", "-c", TO_OWNER, "sh", to, "4"]);
+        let feed = |bytes| Cmd::root(&["printf", bytes]);
+        assert!(hands::pipe_held(&[feed("12345"), write()]).is_err());
+        assert!(hands::pipe_held(&[Cmd::root(&["yes"]), write()]).is_err());
+        assert_eq!(hands::pipe_held(&[feed("1234"), write()]), Ok(()));
+        assert_eq!(std::fs::read(format!("{to}.tmp")).unwrap(), b"1234");
+    }
+
     /// What an off runs once the files are home, a failed hand-back's too: the seats released,
     /// the units off, the owner's host and console back.
     fn stand_down() -> Vec<String> {
@@ -2126,7 +2246,7 @@ mod tests {
             (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
             (7, Some("alice"), true, true)
         );
-        assert!(!ran.contract && !ran.seats);
+        assert!(!ran.contract && !ran.seats && ran.off_held);
     }
 
     /// A first on gives the box this member's files alone: each one they lack, and every avatar,
@@ -2386,25 +2506,25 @@ mod tests {
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-cert.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-cert.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-cert.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-key.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-key.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-key.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/uniqueid",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/uniqueid",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/uniqueid 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/punktfunk1-paired.json",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/punktfunk1-paired.json 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles.json",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-key",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-session-epoch",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/web-session-epoch 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-password",
@@ -2412,12 +2532,12 @@ mod tests {
         "grep -aq -E ^[[:blank:]]*PUNKTFUNK_UI_(PASSWORD(_HASH)?|SECRET)=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-password",
         "grep -a -E ^[[:blank:]]*PUNKTFUNK_UI_(PASSWORD(_HASH)?|SECRET)=([A-Za-z0-9_.,:=+/@%^-]{0,255}|'[^'[:cntrl:]]{0,255}')[[:blank:]]*$",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-password"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/web-password 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-password"#,
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles/alice.png",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/profiles/alice.png",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/profiles/alice.png 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
         "systemctl is-active --quiet punktfunk-seats.service",
         "punktfunk-seats stop-all",
@@ -2435,25 +2555,25 @@ mod tests {
         "runuser -u punktfunk -- rm -f /var/lib/punktfunk/door-on",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-cert.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-cert.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-cert.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-cert.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-cert.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/native-key.pem",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/native-key.pem",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/native-key.pem"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/native-key.pem 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/native-key.pem"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/uniqueid",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/uniqueid",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/uniqueid"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/uniqueid 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/uniqueid"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/punktfunk1-paired.json",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/punktfunk1-paired.json",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/punktfunk1-paired.json 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/punktfunk1-paired.json"#,
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles.json",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-key",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/web-session-epoch",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/web-session-epoch",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/web-session-epoch"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/web-session-epoch 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/web-session-epoch"#,
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web.env",
         "runuser -u alice -- test -f /home/alice/.config/punktfunk/web-password",
@@ -2464,7 +2584,7 @@ mod tests {
         "runuser -u punktfunk -- ls -1 -- /var/lib/punktfunk/profiles",
         "runuser -u punktfunk -- test -f /var/lib/punktfunk/profiles/alice.png",
         "runuser -u punktfunk -- cat -- /var/lib/punktfunk/profiles/alice.png",
-        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
+        r#"runuser -u alice -- sh -c umask 077; mkdir -p "$(dirname "$1")"; head -c "$(($2 + 1))" >"$1.tmp" && test "$(wc -c <"$1.tmp")" -le "$2" sh /home/alice/.config/punktfunk/profiles/alice.png 8388608"#,
         r#"runuser -u alice -- sh -c mv -f "$1.tmp" "$1" sh /home/alice/.config/punktfunk/profiles/alice.png"#,
         "systemctl is-active --quiet punktfunk-seats.service",
         "punktfunk-seats stop-all",
