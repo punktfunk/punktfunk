@@ -73,6 +73,14 @@ ExclusiveArch:  x86_64 aarch64
 %global debug_package %{nil}
 %endif
 
+# The package manager that updates this install. The install-kind marker carries it, and the
+# console's update button runs it.
+%if 0%{?suse_version}
+%global pf_install_kind zypper
+%else
+%global pf_install_kind dnf
+%endif
+
 # --- Build toolchain ---------------------------------------------------------
 BuildRequires:  cargo
 BuildRequires:  rust
@@ -447,7 +455,7 @@ install -Dm0644 scripts/punktfunk-host-desktop-session.conf %{buildroot}%{_datad
 # Install-kind + channel marker, read by the host's update-check surface (planning:
 # host-update-from-web-console.md §4.1). `pf_channel` is defined by build-rpm.sh (canary
 # when the release override starts `0.ci`); a plain local rpmbuild is stable.
-printf 'dnf %{?pf_channel}%{!?pf_channel:stable}\n' > %{buildroot}%{_datadir}/%{name}/install-kind
+printf '%{pf_install_kind} %{?pf_channel}%{!?pf_channel:stable}\n' > %{buildroot}%{_datadir}/%{name}/install-kind
 
 # Optional headless KDE session unit (the kwin streaming appliance): brings up `kwin --virtual` on
 # wayland-kde via the packaged run-headless-kde.sh, so the host's kwin backend has a session whose
@@ -530,7 +538,7 @@ install -Dm0644 packaging/linux/punktfunk.sysusers %{buildroot}%{_sysusersdir}/p
 # with a glob, so a sibling file there would be owned by both and `dnf install punktfunk
 # punktfunk-client` would fail on the conflict.
 install -d %{buildroot}%{_datadir}/punktfunk-client
-printf 'dnf %{?pf_channel}%{!?pf_channel:stable}\n' > %{buildroot}%{_datadir}/punktfunk-client/install-kind
+printf '%{pf_install_kind} %{?pf_channel}%{!?pf_channel:stable}\n' > %{buildroot}%{_datadir}/punktfunk-client/install-kind
 
 %if %{with host}
 # Headless session helpers + example config + OpenAPI doc (reference material).

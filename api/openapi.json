@@ -21863,7 +21863,7 @@
           },
           "install_kind": {
             "type": "string",
-            "description": "`windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |\n`steamos-source` | `nix` | `source`."
+            "description": "`windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `zypper` |\n`pacman` | `steamos-source` | `nix` | `source`."
           },
           "job": {
             "oneOf": [
