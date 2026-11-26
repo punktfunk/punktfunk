@@ -84,6 +84,7 @@
 	"android_companion_group_host": "Companion panel Actions page: group heading.",
 	"android_companion_group_leave": "Companion panel Actions page: group heading over End game, End stream and Disconnect.",
 	"android_companion_armed_a11y": "Screen-reader state of an action tile that needs a second press.",
+	"android_key_held_a11y": "Screen-reader state of an on-screen Ctrl, Alt, Shift or Win key while it stays pressed for the next key.",
 	"android_companion_trackpad_hint": "Companion panel Trackpad page: the gestures it understands.",
 	"android_companion_show_controller": "Companion panel Controller page: button that shows the virtual controller.",
 	"android_pad_group_gamepads": "Controllers screen group heading.",
