@@ -51,8 +51,9 @@ private const val HOST_ACTIONS_TTL_MS = 300_000L
  * The engine is a [ConnectController], remembered here for the screen's life: the dial and its
  * wake fallback, trust, request access and the `punktfunk://` router, with the state they share.
  * This function runs the effects that feed it (the browse, the probe sweep, host actions, what
- * each host has up) and the acts only this screen has. What is drawn lives beside it:
- * [ConnectGrid], the host page ([HostDetailScreen]) in the grid's place while one is open, and
+ * each host has up and whether it lists several profiles) and the acts only this screen has.
+ * What is drawn lives beside it: [ConnectGrid], the host page ([HostDetailScreen]) in the grid's
+ * place while one is open, and
  * [ConnectPrompts] over both. Each takes what it displays and hands back what was pressed.
  */
 @Composable
@@ -205,6 +206,8 @@ fun ConnectScreen(
     }
     // The title each paired host has up, by fingerprint: a card's "Playing …". Asked every lap.
     var nowPlaying by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // The hosts that list two profiles or more, by fingerprint: where Switch profile is a choice.
+    var multiProfile by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(ctl.savedHosts, ctl.identity) {
         val id = ctl.identity ?: return@LaunchedEffect
         while (true) {
@@ -235,6 +238,15 @@ fun ConnectScreen(
                     HostActions.list(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
                 }
                 hostActions = hostActions + (kh.fpHex to found)
+                // A failed answer keeps what the host listed before.
+                when (val listing = withContext(Dispatchers.IO) {
+                    HostProfiles.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex, kh.port)
+                }) {
+                    is ProfilesAnswer.Listed ->
+                        multiProfile = if (listing.rows.size > 1) multiProfile + kh.fpHex else multiProfile - kh.fpHex
+                    ProfilesAnswer.NoProfiles -> multiProfile = multiProfile - kh.fpHex
+                    is ProfilesAnswer.Failed -> {}
+                }
             }
             delay(30_000)
         }
@@ -431,7 +443,7 @@ fun ConnectScreen(
                 connect = { ctl.connect(kh.address, kh.port, saved = kh) },
                 // The fetch authenticates with the pinned identity, so only a paired host browses.
                 browse = if (kh.paired) ({ onOpenLibrary(kh, null) }) else null,
-                switchProfile = if (kh.paired && kh.asProfile != null) ({ switchProfile(kh) }) else null,
+                switchProfile = if (kh.canSwitchProfile(multiProfile)) ({ switchProfile(kh) }) else null,
                 bind = { id -> write { HostRecords.bindPreset(knownHostStore, it, id, null) } },
                 togglePin = { id -> write { HostRecords.togglePin(knownHostStore, it, id) } },
                 pickScreen = { row -> pickScreen(kh, row) },
@@ -475,6 +487,7 @@ fun ConnectScreen(
             onDetails = { kh -> detailId = kh.id },
             onWake = { kh -> ctl.wakeHost(kh) },
             onSwitchProfile = { kh -> switchProfile(kh) },
+            multiProfile = multiProfile,
             screens = screens,
             nowPlaying = nowPlaying,
             onCopyLink = { kh, pin -> copyLink(kh, pin) },
@@ -531,7 +544,7 @@ fun ConnectScreen(
         ProfilePickerDialog(
             hostName = kh.name.ifBlank { kh.address },
             answer = answer,
-            saved = kh.asProfile,
+            saved = kh.remembered,
             gone = null,
             art = rememberProfileArt(kh),
             onPick = { pick ->
@@ -540,6 +553,11 @@ fun ConnectScreen(
                 switching = null
             },
             onDismiss = { switching = null },
+            onAskEveryTime = {
+                HostRecords.savePick(knownHostStore, kh, null)
+                ctl.refreshHosts()
+                switching = null
+            },
         )
     }
 

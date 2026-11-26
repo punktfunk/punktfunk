@@ -5,19 +5,20 @@ import XCTest
 @testable import PunktfunkKit
 
 final class HostOffersTests: XCTestCase {
-    private func host(paired: Bool = true, pick: Bool = false) -> StoredHost {
+    private func host(paired: Bool = true, pick: Bool = false, remember: Bool = true) -> StoredHost {
         var host = StoredHost(name: "Desk", address: "10.0.0.2")
         if paired { host.pinnedSHA256 = Data(repeating: 0xAB, count: 32) }
-        if pick { host.pickedProfile = ProfilePick(id: "p1", displayName: "Ada") }
+        if pick { host.pickedProfile = ProfilePick(id: "p1", displayName: "Ada", remember: remember) }
         return host
     }
 
     private func offers(
         _ host: StoredHost, pinned: Bool = false, online: Bool = true, isDemo: Bool = false,
-        canWake: Bool = false
+        canWake: Bool = false, profiles: Int = 0
     ) -> HostOffers {
         HostOffers.resolve(
-            host: host, pinned: pinned, online: online, isDemo: isDemo, canWake: canWake)
+            host: host, pinned: pinned, online: online, isDemo: isDemo, canWake: canWake,
+            profiles: profiles)
     }
 
     func testAPairedHostOffersItsPageLibraryAndDiagnostics() {
@@ -36,9 +37,13 @@ final class HostOffersTests: XCTestCase {
         XCTAssertTrue(offers(host(paired: false), online: false, canWake: true).contains(.wake))
     }
 
-    func testSwitchProfileNeedsAPickOnAPairedHost() {
+    /// As on the console: a remembered pick, or two profiles to choose from.
+    func testSwitchProfileNeedsAChoiceOnAPairedHost() {
         XCTAssertTrue(offers(host(pick: true)).contains(.switchProfile))
+        XCTAssertTrue(offers(host(), profiles: 2).contains(.switchProfile))
         XCTAssertFalse(offers(host()).contains(.switchProfile))
+        XCTAssertFalse(offers(host(), profiles: 1).contains(.switchProfile))
+        XCTAssertFalse(offers(host(pick: true, remember: false), profiles: 1).contains(.switchProfile))
         XCTAssertFalse(offers(host(paired: false, pick: true)).contains(.switchProfile))
     }
 

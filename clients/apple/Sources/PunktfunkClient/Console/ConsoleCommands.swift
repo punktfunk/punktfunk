@@ -562,7 +562,9 @@ extension ConsoleModel {
             onOnline: { [weak self] in
                 guard let self else { return }
                 bridge.push(.wake, "null")
-                if thenConnect { actions.connect(host, preset, .send(host.pickedProfile?.id)) }
+                // Only a remembered pick plays unasked, as the console's own connect.
+                let remembered = host.pickedProfile.flatMap { $0.remember ? $0.id : nil }
+                if thenConnect { actions.connect(host, preset, .send(remembered)) }
             })
     }
 

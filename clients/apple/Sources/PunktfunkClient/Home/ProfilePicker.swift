@@ -1,8 +1,8 @@
 // The profile picker: who is playing on this box. A connect asks the paired host for its profiles
-// first (`ProfileFetch`), applies the shared rule (`HostProfiles.pickerDecision`) and shows this
-// only when the rule says so. "Switch profile…" opens it directly and saves the pick without
-// connecting. A sheet on every platform, with larger tiles on tvOS. `SeatWait` is the sheet a
-// connect shows while the picked profile's seat starts.
+// (`ProfileFetch`) and shows this when the console's rule says so (`ConnectPlan.afterProfiles`).
+// "Switch profile…" opens it directly: a pick is remembered, Ask every time forgets it. A sheet on
+// every platform, with larger tiles on tvOS. `SeatWait` is the sheet a connect shows while the
+// picked profile's seat starts.
 
 import PunktfunkKit
 import SwiftUI
@@ -15,12 +15,12 @@ enum ProfileAnswer {
 }
 
 enum ProfileFetch {
-    /// Seconds a connect waits for the list before it dials with the saved pick.
+    /// Seconds a connect waits for the list before it dials with the remembered pick.
     static let wait: TimeInterval = 3
 
     /// Ask `host` for its profiles, giving up after `seconds` (nil waits for the transport).
     /// `mgmt` overrides the saved management port, as the console's row carries it. An unpaired
-    /// host fails without a request.
+    /// host fails without a request. Every list lands in `HostProfileStore` too.
     static func list(
         _ host: StoredHost, mgmt: UInt16? = nil, within seconds: TimeInterval? = nil
     ) async -> ProfileAnswer {
@@ -36,9 +36,41 @@ enum ProfileFetch {
                 return .failed
             }
         }
-        guard let seconds else { return await ask() }
         // The transport does not stop on a cancel, so the cap must not wait for it.
-        return await Deadline.first(within: seconds, fallback: .failed, ask)
+        let answer = if let seconds {
+            await Deadline.first(within: seconds, fallback: .failed, ask)
+        } else {
+            await ask()
+        }
+        await HostProfileStore.shared.learn(host, answer)
+        return answer
+    }
+}
+
+/// How many profiles each paired host listed, from every list this app asked for. A card offers
+/// Switch profile from it, as the console does from its own.
+@MainActor
+final class HostProfileStore: ObservableObject {
+    static let shared = HostProfileStore()
+
+    /// 300 s, as host power: profiles change when an operator edits them.
+    private var cache = TTLCache<Int>(ttl: 300)
+
+    /// What `host` last listed; 0 until a list lands.
+    func listed(_ host: StoredHost) -> Int { cache[host.id.uuidString] ?? 0 }
+
+    /// Ask unless the last ask is younger than the TTL. A miss waits the TTL out too, so a host
+    /// that refuses the list is not asked on every beat.
+    func refresh(_ host: StoredHost) {
+        guard !DemoMode.isDemo(host), cache.ask(host.id.uuidString, now: Date()) != nil
+        else { return }
+        Task { @MainActor in _ = await ProfileFetch.list(host) }
+    }
+
+    func learn(_ host: StoredHost, _ answer: ProfileAnswer) {
+        guard case .listed(let rows) = answer else { return }
+        objectWillChange.send()
+        cache.store(rows?.count ?? 0, for: host.id.uuidString, now: Date())
     }
 }
 
@@ -90,8 +122,9 @@ struct SeatWaitView: View {
 /// A picker waiting on the player.
 struct ProfileAsk: Identifiable {
     enum Content {
-        /// `saved` is the id of the remembered pick the box still lists; `gone` the name of one
-        /// it no longer does.
+        /// `saved` is the id of the listed profile that leads: the saved pick before a connect,
+        /// the remembered pick on Switch profile. `gone` names a remembered pick the box no
+        /// longer lists.
         case choose([ListedProfile], saved: String?, gone: String?)
         case failed
     }
@@ -100,11 +133,16 @@ struct ProfileAsk: Identifiable {
     let host: StoredHost
     var hostName: String { host.displayName }
     let content: Content
-    /// Runs once the player has picked, before the sheet closes.
-    let pick: (ProfilePick) -> Void
+    /// A connect waits on the pick: the sheet offers Remember on this device. Without one it
+    /// is Switch profile, which offers Ask every time.
+    var connects = false
+    /// Runs once the player has picked, before the sheet closes: the pick, with `remember` set
+    /// when this device keeps it, or nil for Ask every time.
+    let pick: (ProfilePick?) -> Void
 }
 
-/// Opens the picker for "Switch profile…": a pick is saved and nothing connects.
+/// Opens the picker for "Switch profile…": a pick is remembered, Ask every time forgets it, and
+/// nothing connects.
 @MainActor
 final class ProfileSwitch: ObservableObject {
     @Published var ask: ProfileAsk?
@@ -115,13 +153,14 @@ final class ProfileSwitch: ObservableObject {
         fetching = Task { [weak self] in
             let answer = await ProfileFetch.list(host)
             guard !Task.isCancelled, let self else { return }
-            let saved = store.hosts.first { $0.id == host.id }?.pickedProfile ?? host.pickedProfile
+            let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
+            let remembered = saved?.remember == true ? saved?.id : nil
             switch answer {
             case .listed(let rows):
                 ask = ProfileAsk(
                     host: host,
                     content: .choose(
-                        rows ?? [], saved: rows?.first { $0.id == saved?.id }?.id, gone: nil),
+                        rows ?? [], saved: rows?.first { $0.id == remembered }?.id, gone: nil),
                     pick: { store.setProfile(host.id, $0) })
             case .failed:
                 ask = ProfileAsk(host: host, content: .failed, pick: { _ in })
@@ -133,6 +172,8 @@ final class ProfileSwitch: ObservableObject {
 struct ProfilePickerView: View {
     let ask: ProfileAsk
     @Environment(\.dismiss) private var dismiss
+    /// Before a connect: keep the pick on this device. Off until the player turns it on.
+    @State private var remember = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -156,10 +197,14 @@ struct ProfilePickerView: View {
                         ) {
                             // The saved pick leads, so it is where focus starts.
                             ForEach(rows.sorted { ($0.id == saved) && ($1.id != saved) }) { row in
-                                card(row, saved: row.id == saved)
+                                card(row, current: !ask.connects && row.id == saved)
                             }
+                            if !ask.connects && rows.count > 1 { askCard(current: saved == nil) }
                         }
                         .padding(8)
+                    }
+                    if ask.connects {
+                        Toggle(L10n.profileRememberDevice, isOn: $remember).fixedSize()
                     }
                 }
             }
@@ -184,9 +229,13 @@ struct ProfilePickerView: View {
         #endif
     }
 
-    private func card(_ row: ListedProfile, saved: Bool) -> some View {
+    /// A profile's card. Switch profile remembers the pick; a connect keeps it only with Remember
+    /// on. `current`: what this host does now, ringed.
+    private func card(_ row: ListedProfile, current: Bool) -> some View {
         Button {
-            ask.pick(row.pick)
+            var pick = row.pick
+            pick.remember = !ask.connects || remember
+            ask.pick(pick)
             dismiss()
         } label: {
             VStack(spacing: 8) {
@@ -194,11 +243,7 @@ struct ProfilePickerView: View {
                     name: row.displayName, accent: row.accent, size: tile, picture: row.avatar,
                     host: ask.host
                 )
-                    .overlay {
-                        if saved {
-                            Circle().strokeBorder(Color.primary, lineWidth: 3).padding(-6)
-                        }
-                    }
+                    .overlay { ring(current) }
                     .padding(6)
                 HStack(spacing: 4) {
                     // Opens with its account password or PIN, or this device's face or finger.
@@ -219,6 +264,33 @@ struct ProfilePickerView: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(current ? .isSelected : [])
+    }
+
+    /// Ask every time: Switch profile forgets the pick, so every connect asks.
+    private func askCard(current: Bool) -> some View {
+        Button {
+            ask.pick(nil)
+            dismiss()
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: "questionmark")
+                    .font(.system(size: tile * 0.4, weight: .bold, design: .rounded))
+                    .frame(width: tile, height: tile)
+                    .background(Circle().fill(Color.secondary.opacity(0.2)))
+                    .overlay { ring(current) }
+                    .padding(6)
+                Text(L10n.profileAskEveryTime).font(.headline).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(current ? .isSelected : [])
+    }
+
+    @ViewBuilder private func ring(_ shown: Bool) -> some View {
+        if shown { Circle().strokeBorder(Color.primary, lineWidth: 3).padding(-6) }
     }
 }
 

@@ -64,6 +64,8 @@ struct HomeView: View {
     @StateObject private var hostPower = HostPowerStore.shared
     /// The screen each paired host streams this device, on the same beat.
     @StateObject private var hostScreens = HostScreenStore.shared
+    /// How many profiles each paired host lists, on the same beat.
+    @StateObject private var hostProfiles = HostProfileStore.shared
     /// "Switch profile…": the picker, opened from a card's menu.
     @StateObject private var profileSwitch = ProfileSwitch()
     /// What each paired host is playing right now — refreshed on the same beat below.
@@ -347,7 +349,7 @@ struct HomeView: View {
         HostActions(
             host: host, pinned: pinned, online: isOnline(host), store: store,
             presets: presets.presets, power: hostPower.actions(for: host),
-            screens: hostScreens.targets(for: host),
+            screens: hostScreens.targets(for: host), profiles: hostProfiles.listed(host),
             surface: HostActionSurface(
                 connect: { connect(host, $0) },
                 pair: { if !model.isBusy { pairingTarget = host } },

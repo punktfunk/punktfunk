@@ -140,7 +140,8 @@ struct HostActions {
     var speedTest: (() -> Void)?
     var sendLogs: (() -> Void)?
     var wake: (() -> Void)?
-    /// Opens the profile picker to change who plays. nil until this device has picked one.
+    /// Opens the profile picker to change who plays. nil until the host remembers a pick or
+    /// lists two profiles.
     var switchProfile: (() -> Void)?
     var copyLink: (() -> Void)?
     /// Opens the host page. nil on a pinned card, which is a shortcut rather than a host.
@@ -177,17 +178,18 @@ struct HostActionSurface {
 extension HostActions {
     /// What `host` offers (`HostOffers.resolve`), run on `surface`. A pinned card connects and
     /// browses with ITS preset. `screens` is the host's answer for this device, the pick it
-    /// streams; the pinned or bound preset's `host_screen` may decide it.
+    /// streams; the pinned or bound preset's `host_screen` may decide it. `profiles` is how many
+    /// profiles the host listed (`HostProfileStore`).
     @MainActor init(
         host: StoredHost, pinned: StreamPreset?, online: Bool, store: HostStore,
         presets: [StreamPreset], power: [HostAction], screens: DisplayTargets?,
-        surface: HostActionSurface
+        profiles: Int = 0, surface: HostActionSurface
     ) {
         let selection: PresetSelection = pinned.map { .preset($0.id) } ?? .inherit
         let preset = pinned ?? host.presetID.flatMap { id in presets.first { $0.id == id } }
         let offers = HostOffers.resolve(
             host: host, pinned: pinned != nil, online: online, isDemo: DemoMode.isDemo(host),
-            canWake: WakePolicy.canWake(host.wakeMacs))
+            canWake: WakePolicy.canWake(host.wakeMacs), profiles: profiles)
         self.init(
             connect: { surface.connect(selection) },
             pair: surface.pair,

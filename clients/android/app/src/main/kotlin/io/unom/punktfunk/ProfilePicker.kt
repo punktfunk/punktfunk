@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
@@ -24,6 +26,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -135,7 +139,10 @@ object HostProfiles {
     }
 }
 
-/** A picker a connect is waiting on: [answer] completes with the pick, or `null` for Cancel. */
+/**
+ * A picker a connect is waiting on: [answer] completes with the pick, or `null` for Cancel. The
+ * pick's `remember` says whether to keep it for the next connect.
+ */
 class ProfileAsk(
     val host: KnownHost,
     val listed: List<ListedProfile>,
@@ -169,6 +176,13 @@ class ProfileWait(val title: Say) {
 internal fun savedRow(id: String, saved: ProfilePick?): ListedProfile =
     ListedProfile(id = id, displayName = saved?.displayName?.takeIf { saved.id == id && it.isNotEmpty() } ?: id)
 
+/**
+ * Who plays on this host is a choice: it remembers a pick, or its fingerprint is in [multi], the
+ * hosts that list two profiles or more.
+ */
+internal fun KnownHost.canSwitchProfile(multi: Set<String>): Boolean =
+    paired && (remembered != null || fpHex in multi)
+
 /** Whether [host] still lists profile [id], by a fresh answer. */
 suspend fun stillListed(identity: ClientIdentity, host: KnownHost, id: String): Boolean =
     withContext(Dispatchers.IO) {
@@ -200,11 +214,9 @@ object ProfileRetry {
 }
 
 /**
- * The profile a connect to [host] dials as: asks the host who plays on it, applies
- * [pickerDecision], then [seatGate] to the profile that plays. A failed or late answer dials
- * with the saved pick, named by what this device saved, so a `profile-locked` close can still
- * ask for its password. [link] is a link's `as=`. [ask] shows the picker and returns once the
- * player has answered; [wait] shows the seat wait, and hides it with `null`.
+ * The profile a connect to [host] dials as: asks the host who plays on it, then [decideProfile].
+ * [link] is a link's `as=`. [ask] shows the picker and returns once the player has answered;
+ * [wait] shows the seat wait, and hides it with `null`.
  */
 suspend fun chooseProfile(
     store: KnownHostStore,
@@ -219,23 +231,46 @@ suspend fun chooseProfile(
     val answer = withContext(Dispatchers.IO) {
         HostProfiles.fetch(identity, host.address, host.effectiveMgmtPort, host.fpHex, host.port)
     }
+    return decideProfile(answer, saved, store, identity, host, link, wait, ask)
+}
+
+/**
+ * What a connect does with the host's [answer]: [pickerDecision], then [seatGate] to the profile
+ * that plays. Only a remembered [saved] pick dials without asking; any other leads the picker.
+ * The picker's pick is saved as remembered when the player turned Remember on, else the saved
+ * pick is forgotten. A failed or late answer dials with the remembered pick, named by what this
+ * device saved, so a `profile-locked` close can still ask for its password.
+ */
+internal suspend fun decideProfile(
+    answer: ProfilesAnswer,
+    saved: ProfilePick?,
+    store: KnownHostStore,
+    identity: ClientIdentity,
+    host: KnownHost,
+    link: String?,
+    wait: (ProfileWait?) -> Unit,
+    ask: suspend (ProfileAsk) -> Unit,
+): ProfileChoice {
+    val remembered = saved?.takeIf { it.remember }
     val listed = when (answer) {
         is ProfilesAnswer.Listed -> answer.rows.takeIf { it.isNotEmpty() }
         ProfilesAnswer.NoProfiles -> null
         is ProfilesAnswer.Failed -> {
-            val id = link ?: saved?.id ?: return ProfileChoice.Dial(null)
+            val id = link ?: remembered?.id ?: return ProfileChoice.Dial(null)
             return ProfileChoice.Dial(id, savedRow(id, saved))
         }
     }
-    val d = pickerDecision(listed, saved, link)
+    val d = pickerDecision(listed, remembered, link)
     if (!d.picker) {
-        if (d.remember != saved) HostRecords.savePick(store, host, d.remember)
+        // A host's old seat of this device is its word for who plays here: it stays remembered.
+        val keep = d.remember?.copy(remember = true)
+        if (keep != remembered) HostRecords.savePick(store, host, keep)
         return gateSeat(d.send, listed, identity, host, wait)
     }
     val asked = ProfileAsk(host, listed.orEmpty(), d.gone)
     ask(asked)
     val pick = asked.answer.await() ?: return ProfileChoice.Cancelled
-    HostRecords.savePick(store, host, pick)
+    HostRecords.savePick(store, host, pick.takeIf { it.remember })
     return gateSeat(pick.id, listed, identity, host, wait)
 }
 
@@ -364,9 +399,13 @@ internal fun ProfileFace(
 }
 
 /**
- * Who plays on [hostName]: one circle per profile, the saved pick first and ringed, a lock by the
- * name of one that asks for a password where this shell can prompt. [answer] is `null` while the
- * host is asked. A pick calls [onPick]; the dialog never saves anything itself.
+ * Who plays on [hostName]: one circle per profile, [saved] first and ringed, a lock by the name of
+ * one that asks for a password where this shell can prompt. [answer] is `null` while the host is
+ * asked. A pick calls [onPick]; the dialog never saves anything itself.
+ *
+ * Before a connect ([onAskEveryTime] null) a Remember on this device switch, off until turned on,
+ * sets the pick's `remember`. Switching profile ([onAskEveryTime] set) remembers every pick, and
+ * a last circle, Ask every time, calls [onAskEveryTime] once the host lists two profiles or more.
  */
 @Composable
 internal fun ProfilePickerDialog(
@@ -377,9 +416,12 @@ internal fun ProfilePickerDialog(
     art: ProfileArt?,
     onPick: (ProfilePick) -> Unit,
     onDismiss: () -> Unit,
+    onAskEveryTime: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val marksLocks = remember { promptsUnlock(context) }
+    var keep by remember { mutableStateOf(false) }
+    val remembers = onAskEveryTime != null || keep
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.profile_title, hostName)) },
@@ -411,12 +453,13 @@ internal fun ProfilePickerDialog(
                                         Modifier
                                             .width(88.dp)
                                             .clip(MaterialTheme.shapes.medium)
-                                            .clickable { onPick(p.pick()) }
+                                            .clickable { onPick(p.pick().copy(remember = remembers)) }
                                             .padding(4.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                     ) {
                                         ProfileFace(
-                                            p.displayName, 72, p.accent, ringed = p.id == saved?.id,
+                                            p.displayName, 72, p.accent,
+                                            ringed = onAskEveryTime != null && p.id == saved?.id,
                                             picture = p.avatar, art = art,
                                         )
                                         Spacer(Modifier.height(6.dp))
@@ -446,6 +489,43 @@ internal fun ProfilePickerDialog(
                                             )
                                         }
                                     }
+                                }
+                                if (onAskEveryTime != null && rows.size > 1) {
+                                    Column(
+                                        Modifier
+                                            .width(88.dp)
+                                            .clip(MaterialTheme.shapes.medium)
+                                            .clickable { onAskEveryTime() }
+                                            .padding(4.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                    ) {
+                                        ProfileFace("?", 72, ringed = rows.none { it.id == saved?.id })
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(
+                                            stringResource(R.string.profile_ask_every_time),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                            if (onAskEveryTime == null) {
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                        .toggleable(value = keep, role = Role.Switch, onValueChange = { keep = it })
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        stringResource(R.string.profile_remember_device),
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Switch(checked = keep, onCheckedChange = null)
                                 }
                             }
                         }
