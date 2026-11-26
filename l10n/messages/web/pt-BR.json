@@ -343,8 +343,6 @@
 	"access_grant_launch": "Iniciar jogos",
 	"access_grant_power": "Energia do host",
 	"access_grant_power_caption": "Suspender, reiniciar ou desligar o host. O acesso ao teclado já pode chegar a isso pela área de trabalho.",
-	"access_grant_manage_games": "Gerenciar jogos",
-	"access_grant_manage_games_caption": "Pausar o download de um jogo ou removê-lo do host. Iniciar jogos já inicia um download.",
 	"access_grant_display": "Escolher a tela",
 	"access_grant_display_caption": "Escolher como este dispositivo usa suas telas, no app e nas predefinições dele: como a única tela, a principal ou a segunda, ou como cópia de um monitor. Sem isso, o dispositivo recebe o que a página Telas define.",
 	"access_expires_label": "Expiração do acesso",

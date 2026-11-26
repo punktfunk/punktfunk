@@ -354,8 +354,6 @@
 	"access_grant_launch": "Spiele starten",
 	"access_grant_power": "Host ein-/ausschalten",
 	"access_grant_power_caption": "Host schlafen legen, neu starten oder herunterfahren. Mit Tastaturzugriff geht das ohnehin über den Desktop.",
-	"access_grant_manage_games": "Spiele verwalten",
-	"access_grant_manage_games_caption": "Den Download eines Spiels pausieren oder es vom Host entfernen. „Spiele starten“ lädt ohnehin herunter.",
 	"access_grant_display": "Bildschirm wählen",
 	"access_grant_display_caption": "Wählen, wie dieses Gerät deine Bildschirme nutzt, in seiner App und seinen Voreinstellungen: als einziger, Haupt- oder zweiter Bildschirm oder als Kopie eines Monitors. Ohne das bekommt das Gerät, was unter „Anzeigen“ steht.",
 	"access_expires_label": "Zugriff läuft ab",

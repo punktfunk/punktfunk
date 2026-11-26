@@ -68,6 +68,7 @@ pub fn known_label(id: &str) -> Option<&'static str> {
         "power.reboot" => pf_l10n::host::host_power_reboot(),
         "power.shutdown" => pf_l10n::host::host_power_shutdown(),
         "host.restart" => pf_l10n::host::host_power_restart_service(),
+        "host.update" => pf_l10n::host::hostaction_update(),
         "display.next" => pf_l10n::host::hostaction_display_next(),
         _ => return None,
     })
@@ -208,6 +209,7 @@ mod tests {
         assert_eq!(mk("power.sleep", "Sleep host").label(), "Sleep host");
         assert_eq!(mk("power.reboot", "whatever").label(), "Restart host");
         assert_eq!(mk("host.restart", "x").label(), "Restart Punktfunk");
+        assert_eq!(mk("host.update", "x").label(), "Update host");
         assert_eq!(mk("display.next", "x").label(), "Next monitor");
         assert_eq!(
             mk("plugin:vpn:toggle", "Toggle the VPN").label(),
