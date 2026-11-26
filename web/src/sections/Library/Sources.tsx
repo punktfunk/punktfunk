@@ -3,6 +3,7 @@ import { toast } from "@unom/ui/toast";
 import {
 	Boxes,
 	Download,
+	Filter,
 	Lock,
 	PackagePlus,
 	Settings2,
@@ -27,7 +28,7 @@ import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RowActions } from "@/components/ui/menu";
+import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { EmulatorsCard } from "@/sections/Library/Emulators";
@@ -37,8 +38,8 @@ import { refreshLibrary } from "./helpers";
 import { SourceSettingsDialog } from "./SourceSettings";
 
 /**
- * The Sources tab: one card of sections — Game sources, Emulators, Art & metadata — with the
- * migration banner above it. Game sources: enablement, liveness, counts, actions, and pending
+ * The Sources tab: one card each for Game sources, Emulators and Art & metadata, with the
+ * migration banner above them. Game sources: enablement, liveness, counts, actions, and pending
  * folder access in one list, because this is where missing games are visible. A host older than
  * v0.28.0 may still report built-in scanners, so the migration banner stays. A profile's view
  * switches only its own sources and their stream settings: the rest is the owner's library's.
@@ -180,39 +181,35 @@ export const SourcesSection: FC<{
 					onInstall={onInstall}
 				/>
 			)}
-			<Card>
-				<CardContent className="space-y-8">
-					<SourcesCard
-						sources={sources}
-						available={view ? [] : available}
-						running={running}
-						absent={absent}
-						busyId={toggle.isPending ? (toggle.variables?.id ?? null) : null}
-						installBusy={catalog.data?.busy === true || install.isPending}
-						activeFilter={activeFilter}
-						onToggle={onToggle}
-						onFilter={onFilter}
-						onSettings={setSettingsFor}
-						{...(view
-							? {
-									profile: {
-										name: view.name,
-										ownerName: view.ownerName,
-										person: view.person,
-									},
-								}
-							: {
-									onPurge,
-									access: access.access.data,
-									accessBusy: access.busy,
-									onAccessDecision: access.onDecide,
-								})}
-						onInstall={onInstall}
-					/>
-					{(!view || view.person) && <EmulatorsCard />}
-					{metadata}
-				</CardContent>
-			</Card>
+			<SourcesCard
+				sources={sources}
+				available={view ? [] : available}
+				running={running}
+				absent={absent}
+				busyId={toggle.isPending ? (toggle.variables?.id ?? null) : null}
+				installBusy={catalog.data?.busy === true || install.isPending}
+				activeFilter={activeFilter}
+				onToggle={onToggle}
+				onFilter={onFilter}
+				onSettings={setSettingsFor}
+				{...(view
+					? {
+							profile: {
+								name: view.name,
+								ownerName: view.ownerName,
+								person: view.person,
+							},
+						}
+					: {
+							onPurge,
+							access: access.access.data,
+							accessBusy: access.busy,
+							onAccessDecision: access.onDecide,
+						})}
+				onInstall={onInstall}
+			/>
+			{(!view || view.person) && <EmulatorsCard />}
+			{metadata}
 			{settingsFor && (
 				<SourceSettingsDialog
 					source={settingsFor}
@@ -277,8 +274,8 @@ export interface SourcesProfile {
 	person?: boolean;
 }
 
-/** Presentational source list, including deterministic pending-access states for Storybook. A
- * section of the Sources card, not a card of its own. */
+/** The Game sources card, presentational, including deterministic pending-access states for
+ * Storybook. */
 export const SourcesCard: FC<{
 	sources: ScannerInfo[];
 	/** Catalog rows offering a library source that isn't installed yet. */
@@ -329,6 +326,13 @@ export const SourcesCard: FC<{
 	<SourceGroup
 		icon={<Boxes className="size-4" />}
 		title={m.library_sources_title()}
+		description={
+			profile?.person
+				? m.person_sources_help()
+				: profile
+					? m.profile_view_sources_help({ name: profile.name })
+					: m.library_sources_help()
+		}
 	>
 		<div className="space-y-4">
 			<Stagger gap={ROW_GAP} className="flex flex-col divide-y">
@@ -360,14 +364,6 @@ export const SourcesCard: FC<{
 					/>
 				))}
 			</Stagger>
-			<p className="max-w-prose text-xs text-muted-foreground">
-				{profile?.person
-					? m.person_sources_help()
-					: profile
-						? m.profile_view_sources_help({ name: profile.name })
-						: m.library_sources_help()}
-			</p>
-
 			<AddSourceRail
 				entries={available}
 				busy={installBusy}
@@ -378,7 +374,7 @@ export const SourcesCard: FC<{
 );
 
 /**
- * One source: on/off, its name over what it is doing, the rest in ⋯. The folder requests that
+ * One source: on/off, its name over what it is doing, Settings, the rest in ⋯. The folder requests that
  * explain missing games open below it. In a profile's view the switch is the profile's own; a
  * source the owner turned off has a lock and the reason instead.
  */
@@ -461,32 +457,38 @@ const SourceRow: FC<{
 			detail={why}
 			actions={
 				isPlugin && (
-					<RowActions
-						actions={[
-							{
-								label: filtered
+					<>
+						{/* The form is a plugin the console reaches; another seat's is not. A profile's
+						    view, the person's own included, has only the stream settings, its own. */}
+						{(reachable || profile !== undefined) && (
+							<Button
+								variant="ghost"
+								size="icon"
+								aria-label={m.library_source_settings()}
+								title={m.library_source_settings()}
+								onClick={onSettings}
+							>
+								<Settings2 className="size-4" />
+							</Button>
+						)}
+						<RowMenu label={m.common_more_actions()}>
+							<MenuItem onSelect={onFilter}>
+								<Filter />
+								{filtered
 									? m.library_provider_show_all()
-									: m.library_provider_filter(),
-								onSelect: onFilter,
-							},
-							// The form is a plugin the console reaches; another seat's is not. A
-							// profile's view, the person's own included, has only the stream
-							// settings, which are its own.
-							(reachable || profile !== undefined) && {
-								label: m.library_source_settings(),
-								icon: <Settings2 />,
-								iconOnly: true,
-								onSelect: onSettings,
-							},
-							onPurge && {
-								label: m.library_provider_purge(),
-								icon: <Trash2 />,
-								iconOnly: true,
-								destructive: true,
-								onSelect: onPurge,
-							},
-						]}
-					/>
+									: m.library_provider_filter()}
+							</MenuItem>
+							{onPurge && (
+								<>
+									<MenuSeparator />
+									<MenuItem destructive onSelect={onPurge}>
+										<Trash2 />
+										{m.library_provider_purge()}
+									</MenuItem>
+								</>
+							)}
+						</RowMenu>
+					</>
 				)
 			}
 		>

@@ -8,9 +8,9 @@ import type { SignedInDevice } from "@/api/gen/model/signedInDevice";
 import { baseLocale, overwriteGetLocale } from "@/paraglide/runtime";
 import { DevicesList } from "./devices";
 import {
-	LockAction,
 	LockChip,
 	LockLines,
+	lockActionLabel,
 	lockCard,
 	lockWith,
 	signOutAsk,
@@ -62,15 +62,13 @@ test("a PIN is 4 to 8 ASCII digits", () => {
 
 test("an open card has one action, a locked one a status and its wrong PINs", () => {
 	const open = { locked: false, holder: "kid", onOpen: () => {} };
-	expect(renderToStaticMarkup(<LockAction lock={open} />)).toContain(
-		'aria-label="Lock profile"',
+	expect(lockActionLabel(open)).toBe("Lock profile");
+	expect(lockActionLabel({ ...open, owner: "Enrico" })).toBe(
+		"Lock Enrico's desktop",
 	);
-	expect(
-		renderToStaticMarkup(<LockAction lock={{ ...open, owner: "Enrico" }} />),
-	).toContain("Lock Enrico&#x27;s desktop");
 	expect(renderToStaticMarkup(<LockChip lock={open} />)).toBe("");
 	const locked = { ...open, locked: true, failedPins: 1 };
-	expect(renderToStaticMarkup(<LockAction lock={locked} />)).toBe("");
+	expect(lockActionLabel(locked)).toBeUndefined();
 	expect(renderToStaticMarkup(<LockChip lock={locked} />)).toContain("<button");
 	expect(renderToStaticMarkup(<LockLines lock={locked} />)).toContain(
 		"1 wrong PIN in the last 15 minutes",

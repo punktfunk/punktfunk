@@ -160,8 +160,8 @@ export interface UpdateInfo {
   client_update_available: boolean;
   client_current: string; // installed client commit (flatpak) or version (native)
   client_latest: string; // newest client commit (flatpak) or version (native)
-  // "flatpak" | "apt" | "dnf" | "pacman" | "rpm-ostree" | "sysext" | "steamos-source" | "nix" |
-  // "source" | "" (`InstallKind::as_str` in pf-update-check).
+  // "flatpak" | "apt" | "dnf" | "zypper" | "pacman" | "rpm-ostree" | "sysext" |
+  // "steamos-source" | "nix" | "source" | "" (`InstallKind::as_str` in pf-update-check).
   client_install: string;
   // Who can perform the update: "flatpak" (this plugin runs it), "helper" (the client drives the
   // packaged root helper), "none" (nothing here can — show `client_command`).

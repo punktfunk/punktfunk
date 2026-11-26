@@ -19,7 +19,7 @@
           "actions"
         ],
         "summary": "List host actions",
-        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: power per the device's live Host-power grant,\n`display.next` while the device streams a session of its own and may choose its screen.\nUnknown ids still render with the server-supplied title.",
+        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: power per the device's live Host-power grant,\n`host.update` per its Manage-host grant, `display.next` while the device streams a session\nof its own and may choose its screen. `host.update` is listed only while a newer release is\nout and this install updates in one click. Unknown ids still render with the\nserver-supplied title.",
         "operationId": "listActions",
         "responses": {
           "200": {
@@ -52,13 +52,13 @@
           "actions"
         ],
         "summary": "Invoke a host action",
-        "description": "Id-only, empty body: nothing in the request reaches the privileged path. Power actions\nanswer `202`, end every session (typed HostPower close), wait ~1 s so this response\nflushes, then act; paired-cert callers need Host power and are `409` while another\ndevice's session is live or a seat host doesn't answer, the admin console never is. One\npower action at a time.\n`display.next` answers `200` with the monitor now streamed and ends nothing; a paired\ncert needs a live session of its own and the Choose-its-screen grant.",
+        "description": "Id-only, empty body: nothing in the request reaches the privileged path. Power actions\nanswer `202`, end every session (typed HostPower close), wait ~1 s so this response\nflushes, then act; paired-cert callers need Host power and are `409` while another\ndevice's session is live or a seat host doesn't answer, the admin console never is. One\npower action at a time.\n`host.update` answers `202` and starts the update the host's own check offers, which ends\nevery stream when the host restarts; a paired cert needs Manage host and is `409` while\nanother device's session is live. Progress and outcome are on `GET /update/status`.\n`display.next` answers `200` with the monitor now streamed and ends nothing; a paired\ncert needs a live session of its own and the Choose-its-screen grant.",
         "operationId": "invokeAction",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "Action id (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `display.next`)",
+            "description": "Action id (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `host.update`, `display.next`)",
             "required": true,
             "schema": {
               "type": "string"
@@ -77,7 +77,7 @@
             }
           },
           "202": {
-            "description": "Accepted — sessions are being ended and the action follows in about a second"
+            "description": "Accepted — sessions are being ended and the action follows in about a second; for `host.update`, the update has started"
           },
           "401": {
             "description": "Missing or invalid credentials",
@@ -90,7 +90,7 @@
             }
           },
           "403": {
-            "description": "This caller's access does not include this action (no Host power grant; for `display.next`, no live session of its own or no Choose-its-screen grant)",
+            "description": "This caller's access does not include this action (no Host power grant; for `host.update`, no Manage host grant; for `display.next`, no live session of its own or no Choose-its-screen grant)",
             "content": {
               "application/json": {
                 "schema": {
@@ -110,7 +110,7 @@
             }
           },
           "409": {
-            "description": "Refused: an action is already in flight, another device's session is live or a seat host doesn't answer (cert lane), or the platform said no (a foreign sleep inhibitor, a second local user, a single monitor, …)",
+            "description": "Refused: an action is already in flight, another device's session is live or a seat host doesn't answer (cert lane), the platform said no (a foreign sleep inhibitor, a second local user, a single monitor, …), or `host.update` has nothing to install or no one-click update on this install",
             "content": {
               "application/json": {
                 "schema": {
@@ -11762,7 +11762,7 @@
           },
           "permitted": {
             "type": "boolean",
-            "description": "Whether THIS caller may invoke it. Admin: always. Cert: the live `GRANT_POWER` bit for\npower, its own live session for `display.next`."
+            "description": "Whether THIS caller may invoke it. Admin: always. Cert: the live `GRANT_POWER` bit for\npower, the manage grant for `host.update`, its own live session for `display.next`."
           },
           "title": {
             "type": "string",
@@ -17601,9 +17601,25 @@
             "example": 1,
             "minimum": 0
           },
+          "last_seen_unix": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the device last opened a session, unix seconds. `null` until its first session\non a host that records it."
+          },
           "name": {
             "type": "string",
             "example": "Living Room iPad"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The OS the device last said it runs, such as `macos`, `ios`, `android`, `windows`,\n`linux`, or `web` for a browser. `null` until a client that states it connects.",
+            "example": "android"
           },
           "preferred_pad_slot": {
             "type": "integer",
@@ -21863,7 +21879,7 @@
           },
           "install_kind": {
             "type": "string",
-            "description": "`windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |\n`steamos-source` | `nix` | `source`."
+            "description": "`windows-installer` | `mac-app` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `zypper` |\n`pacman` | `steamos-source` | `nix` | `source`."
           },
           "job": {
             "oneOf": [

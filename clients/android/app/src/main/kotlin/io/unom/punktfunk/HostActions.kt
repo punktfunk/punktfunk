@@ -53,6 +53,7 @@ object HostActions {
             "power.reboot" -> res.getString(R.string.host_power_reboot)
             "power.shutdown" -> res.getString(R.string.host_power_shutdown)
             "host.restart" -> res.getString(R.string.host_power_restart_service)
+            "host.update" -> res.getString(R.string.hostaction_update)
             "display.next" -> res.getString(R.string.hostaction_display_next)
             else -> label
         }

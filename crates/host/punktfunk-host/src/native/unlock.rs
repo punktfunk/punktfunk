@@ -458,6 +458,10 @@ pub(crate) mod fake {
             self.asked.lock().unwrap().push(command);
             answer
         }
+
+        fn sent_to(&self, _: &str) -> Option<String> {
+            None
+        }
     }
 
     /// A person's own Linux account, running, its host pinned and on `port`.

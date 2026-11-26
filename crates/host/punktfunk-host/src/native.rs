@@ -1473,12 +1473,11 @@ async fn admit_here(
     )
     .await?;
     host.profiles.touch(&resolved.id);
-    if placed.is_some() {
-        if let Some(fp) = fp_hex {
+    if let Some(sent) = placed {
+        // Every redirect record is held, so each one ends when its device leaves.
+        if let (Some(fp), Some(sent)) = (fp_hex, sent) {
             let count = session.filter(|_| host.np.is_session_only(&fp));
-            if count.is_some() || presence.is_some() {
-                hold_while_on_seat((count, presence), fp, false);
-            }
+            hold_while_on_seat((count, presence), fp, sent, false);
         }
         return Ok(None);
     }
@@ -2237,7 +2236,8 @@ fn display_half(
 /// device's claim on it goes to [`unlock::watch_left`]. A made seat starts for a dial that
 /// announced an unlock ([`start_for_dial`]) when `unlocked` (that unlock opened the profile's
 /// lock) or when the wake route would start it for this device ([`crate::mgmt::may_wake`]).
-/// `Some` when the session ended in a redirect; `None` when it plays here.
+/// `Some` when the session ended in a redirect, with the redirect record made once the redirect
+/// left (none for a device with no fingerprint); `None` when it plays here.
 async fn place_profile(
     conn: &link::SessionLink,
     (send, recv): (&mut link::CtlSend, &mut link::CtlReader),
@@ -2245,7 +2245,7 @@ async fn place_profile(
     first: &ClientHello,
     (resolved, unlocked): (&crate::profiles::Resolved, bool),
     host: &SessionHost,
-) -> Result<Option<Served>> {
+) -> Result<Option<Option<crate::seats::sent::Sent>>> {
     use crate::seats::placement::{here, place, Asker, Placement};
     if here(&resolved.os_account) {
         return Ok(None);
@@ -2289,6 +2289,9 @@ async fn place_profile(
         .has(punktfunk_core::quic::v2::registry::FEATURE_PROFILES);
     let browser = conn.is_web();
     let who = resolved.clone();
+    // The row `place` redirects to, and the device it redirects.
+    let row = snap.row_of(&resolved.os_account).map(str::to_owned);
+    let device = fp.clone();
     let placed = tokio::task::spawn_blocking(move || {
         let joins = crate::vdisplay::policy::prefs()
             .get()
@@ -2314,7 +2317,10 @@ async fn place_profile(
                 unlock::watch_left(seats, claim, sent.is_ok());
             }
             sent?;
-            Ok(Some(Served::Session))
+            let record = device
+                .zip(row)
+                .map(|(fp, row)| crate::seats::sent::record(&fp, &row));
+            Ok(Some(record))
         }
         Placement::Refuse(reason) => {
             if let Some(claim) = claim {
@@ -2406,26 +2412,46 @@ const SEAT_LANDING: std::time::Duration = std::time::Duration::from_secs(120);
 /// hangs is not serving anyone.
 const SEAT_SILENCE: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Holds each "this session" guest the startup sweep kept, as a redirect holds its own: the guest
-/// plays on a seat of a box whose host restarted. Spawns tasks, so it runs inside the runtime.
+/// The longest the door holds a redirected device, whatever its seat says: 24 hours, the cap a
+/// person's presence on their own account has. The player on a seat controls what it lists.
+const SEAT_HOLD_CAP: std::time::Duration =
+    std::time::Duration::from_secs(pf_seats::unlock::CAP_SECS.unsigned_abs());
+
+/// Resumes the hold of each device a redirect record names, as the records stood before this
+/// host restarted, timed from the record. A "this session" guest the startup sweep kept holds
+/// its grant's count again. Spawns tasks, so it runs inside the runtime.
 pub(crate) fn hold_guests_kept_at_start(np: &Arc<NativePairing>) {
-    for (fp, landed) in np.take_kept_at_start() {
-        hold_while_on_seat(np.session_started(&fp), fp, landed);
+    let kept: std::collections::HashMap<String, bool> = np
+        .take_kept_at_start()
+        .into_iter()
+        .map(|(fp, landed)| (fp.to_ascii_lowercase(), landed))
+        .collect();
+    for (fp, sent) in crate::seats::sent::all() {
+        let landed = kept.get(&fp).copied();
+        let count = landed.map(|_| np.session_started(&fp));
+        hold_while_on_seat(count, fp, sent, landed.unwrap_or(false));
     }
 }
 
-/// A redirected device plays on a seat after the redirect ended the door's own session. Holds
-/// `session` until it has played there and left: a "this session" record's count, or its place
-/// on a locked profile's list, so either outlasts the play and not the redirect. The grace after
-/// is the usual one. `landed` is true for a device already seen on a seat.
-fn hold_while_on_seat(session: impl Send + 'static, fp: String, mut landed: bool) {
+/// A redirected device plays on its seat after the redirect ended the door's own session. Holds
+/// `session`, a "this session" grant's count or a place on a locked profile's list, while the
+/// device plays on the seat `sent` names, so either outlasts the play and not the redirect. Only
+/// that seat is asked, never past [`SEAT_HOLD_CAP`] from `sent`'s start, and the redirect record
+/// ends with the hold. The grace after is the usual one. `landed` is true for a device already
+/// seen there.
+fn hold_while_on_seat(
+    session: impl Send + 'static,
+    fp: String,
+    sent: crate::seats::sent::Sent,
+    mut landed: bool,
+) {
     tokio::spawn(async move {
         let started = std::time::Instant::now();
         let mut heard = started;
         loop {
             tokio::time::sleep(SEAT_POLL).await;
-            let fp = fp.clone();
-            let asked = tokio::task::spawn_blocking(move || crate::seats::plays_on_a_seat(&fp));
+            let (seat, who) = (sent.seat.clone(), fp.clone());
+            let asked = tokio::task::spawn_blocking(move || crate::seats::plays_on(&seat, &who));
             let here = tokio::time::timeout(SEAT_SILENCE, asked)
                 .await
                 .ok()
@@ -2435,26 +2461,32 @@ fn hold_while_on_seat(session: impl Send + 'static, fp: String, mut landed: bool
                 heard = std::time::Instant::now();
                 landed |= here;
             }
-            if hold_over(here, landed, started.elapsed(), heard.elapsed()) {
+            let held = crate::clock::unix_secs().saturating_sub(sent.since_unix);
+            let held = std::time::Duration::from_secs(u64::try_from(held).unwrap_or(0));
+            if hold_over(here, landed, started.elapsed(), heard.elapsed(), held) {
                 break;
             }
         }
+        crate::seats::sent::forget(&fp, &sent);
         drop(session);
     });
 }
 
-/// A redirected guest's hold ends once it is off the seat after playing there, or never came,
-/// or no seat has said anything for [`SEAT_SILENCE`]. `here` is `None` when a seat can't say.
+/// A redirected device's hold ends once it is off its seat after playing there, or never came,
+/// or its seat has said nothing for [`SEAT_SILENCE`], and [`SEAT_HOLD_CAP`] after it began
+/// whatever the seat says. `here` is `None` when the seat can't say.
 fn hold_over(
     here: Option<bool>,
     landed: bool,
     waited: std::time::Duration,
     silent: std::time::Duration,
+    held: std::time::Duration,
 ) -> bool {
-    match here {
-        Some(here) => !here && (landed || waited > SEAT_LANDING),
-        None => silent > SEAT_SILENCE,
-    }
+    held >= SEAT_HOLD_CAP
+        || match here {
+            Some(here) => !here && (landed || waited > SEAT_LANDING),
+            None => silent > SEAT_SILENCE,
+        }
 }
 
 /// The stream thread's body. A probe-only session answers probes and builds nothing; otherwise
@@ -2582,6 +2614,14 @@ async fn admit(
         None => (GRANT_ALL, None, None),
     };
     let session = fp_hex.map(|fp_hex| host.np.session_started(fp_hex));
+    if let Some(fp_hex) = fp_hex {
+        // A browser is told apart by the plane it came in on; any other client says.
+        let platform = match conn {
+            link::SessionLink::Web(..) => Some("web"),
+            _ => first.platform.as_deref(),
+        };
+        host.np.note_session(fp_hex, platform);
+    }
     if grants & GRANT_LAUNCH == 0 && first.hello.launch.is_some() {
         close_rejected(
             conn,

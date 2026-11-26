@@ -37,6 +37,17 @@ On Windows every attempt writes `C:\ProgramData\punktfunk\logs\update-<version>.
 an elevated PowerShell). If the new host crash-loops, the service reinstalls the previous version,
 says so in the card and writes `update-rollback-from-<version>.log`.
 
+## From a paired client
+
+Once a newer release exists, the host's menu on a paired client shows **Update host**, on every
+install that has the **Update now** button above. It does what the button does and asks before it
+runs, because the host restarts and your stream ends.
+
+- The row appears only for a device with the **Manage host** grant, which Full control includes
+  ([access levels](/docs/access-levels)).
+- The host refuses while another device is streaming.
+- Turning off **Console updates** removes the row too.
+
 ## Update by hand
 
 | How you installed | Command |

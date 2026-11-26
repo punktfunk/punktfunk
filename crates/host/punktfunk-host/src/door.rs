@@ -102,6 +102,7 @@ fn missing(kind: InstallKind) -> ApiError {
     match kind {
         InstallKind::Apt => package("sudo apt install punktfunk-seats"),
         InstallKind::Dnf => package("sudo dnf install punktfunk-seats"),
+        InstallKind::Zypper => package("sudo zypper install punktfunk-seats"),
         InstallKind::Pacman => package("sudo pacman -S punktfunk-seats"),
         InstallKind::RpmOstree => ApiError::coded(
             "door_missing_package_rpm_ostree",
@@ -514,6 +515,7 @@ mod tests {
         for (kind, fix) in [
             (InstallKind::Apt, "sudo apt install punktfunk-seats"),
             (InstallKind::Dnf, "sudo dnf install punktfunk-seats"),
+            (InstallKind::Zypper, "sudo zypper install punktfunk-seats"),
             (InstallKind::Pacman, "sudo pacman -S punktfunk-seats"),
             (InstallKind::RpmOstree, "update-punktfunk.sh"),
             (InstallKind::Sysext, "sudo punktfunk-sysext update"),

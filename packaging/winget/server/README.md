@@ -31,7 +31,7 @@ time has nothing to mutate, so they are not implemented.
 | --- | --- |
 | `GET /information` | Source identity, `ServerSupportedVersions`, declared capabilities. |
 | `POST /manifestSearch` | `Query` / `Inclusions` (OR) / `Filters` (AND) / `FetchAllManifests`. **204** on no match — not an empty 200. |
-| `GET /packageManifests/{id}` | Full manifest; honours `?Version=`. Identifier match is case-insensitive. |
+| `GET /packageManifests/{id}` | Full manifest; honours `?Version=`. Identifier match is case-insensitive. **204** for a package or version the source lacks: winget asks every source for an exact id and treats a 404 as a broken source. |
 | `GET /healthz` | Not part of the spec — liveness for compose. |
 
 `NormalizedPackageNameAndPublisher` is deliberately declared **unsupported**. winget derives it

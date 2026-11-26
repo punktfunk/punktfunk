@@ -1,9 +1,11 @@
 # Build the punktfunk-host RPM and publish it to Gitea's RPM package registry, so Bazzite /
-# Fedora Atomic hosts layer + update it with rpm-ostree. Counterpart to deb.yml (apt). Runs in
-# the Fedora builder images (ci/fedora-rpm.Dockerfile, one per matrix leg) so the RPM's auto
-# library Requires match the target's sonames.
+# Fedora Atomic hosts layer + update it with rpm-ostree. Counterpart to deb.yml (apt). Each leg
+# compiles in its own distro's builder image (ci/fedora-rpm.Dockerfile per Fedora release,
+# ci/opensuse-rpm.Dockerfile for Tumbleweed) so the RPM's auto library Requires match the
+# target's sonames.
 #
-# Registry (public, unom org), one group per Fedora leg (`bazzite`, `fedora-44`, `fedora-45`):
+# Registry (public, unom org), one group per leg (`bazzite`, `fedora-44`, `fedora-45`,
+# `opensuse-tumbleweed`):
 #   repo file  https://git.unom.io/api/packages/unom/rpm/bazzite.repo
 # Box setup (once): see packaging/rpm/README.md
 #
@@ -168,6 +170,11 @@ jobs:
           - image: punktfunk-fedora45-rpm   # Fedora 45 == Bazzite 45 + Fedora 45
             group: fedora-45
             fedver: 45
+          # openSUSE Tumbleweed. It has no `fedver`, and the steps that exist once per Fedora
+          # release (the patched gamescope, the Bazzite sysext image, the UCM check) are
+          # `if: matrix.fedver`.
+          - image: punktfunk-opensuse-rpm
+            group: opensuse-tumbleweed
     container:
       image: 192.168.1.58:5010/${{ matrix.image }}:latest
     timeout-minutes: 90
@@ -181,13 +188,20 @@ jobs:
       - name: sccache (no-op once the image bakes it)
         run: sh scripts/ci/ensure-sccache.sh
 
-      # rpmbuild + git archive need the checkout trusted; cache the crates download.
-      # The client link deps are also baked into the fedora-rpm image, but this job runs
-      # against the image from the PREVIOUS push (docker.yml bootstrap note) — keep it
-      # green across image changes; a no-op once the image has them.
+      # rpmbuild + git archive need the checkout trusted.
       - name: Prep
         run: |
           git config --global --add safe.directory "$PWD"
+          # bun builds the punktfunk-web console (--with web) and the spec vendors it into
+          # punktfunk-bun, so this job signs those bytes. Baked into the image; the script heals an
+          # image that lags the pin in ci/bun.env (docker.yml bootstrap note).
+          sh ci/install-bun.sh
+      # The client link deps are also baked into the fedora-rpm image, but this job runs
+      # against the image from the PREVIOUS push (docker.yml bootstrap note) — keep it
+      # green across image changes; a no-op once the image has them.
+      - name: Prep (Fedora packages)
+        if: matrix.fedver
+        run: |
           # No vulkan-headers: nothing in the workspace compiles against the system Vulkan headers.
           # The host's Vulkan encode hand-rolls its structs, pyrowave-sys bindgens its own vendored
           # copy, and both host and client reach Vulkan through ash, which dlopens the loader. (The
@@ -205,10 +219,6 @@ jobs:
           # on a cache hit (the common case) nothing else in this job would have pulled libavif /
           # luajit / seatd / SDL2 in. Cheap, and it tracks gamescope's dep list for us.
           dnf -y install gamescope || true
-          # bun builds the punktfunk-web console (--with web) and the spec vendors it into
-          # punktfunk-bun, so this job signs those bytes. Baked into the image; the script heals an
-          # image that lags the pin in ci/bun.env (docker.yml bootstrap note).
-          sh ci/install-bun.sh
       # cargo's git dir too, not just the registry: cargo clones every git dependency to resolve
       # the workspace, the Windows client's windows-rs among them (1.5 GB), though nothing
       # Windows is compiled here. The key family is deb.yml's: for one Cargo.lock both lanes
@@ -305,8 +315,9 @@ jobs:
         run: bash packaging/rpm/sign-rpms.sh
 
       - name: The DualSense UCM drop-in must still bite
+        if: matrix.fedver
         # scripts/alsa-ucm2/ hooks into alsa-ucm-conf's own dispatcher, so an upstream rename or
-        # reorder can neuter it with no error anywhere. This is the only leg that runs on a real
+        # reorder can neuter it with no error anywhere. The Fedora legs are the ones on a real
         # Fedora tree, hence the two packages. Skips itself on any box without them.
         run: |
           dnf -y install alsa-ucm alsa-ucm-utils
@@ -330,6 +341,25 @@ jobs:
           bash scripts/ci/assert-payload-parity.sh --self-test
           bash scripts/ci/assert-payload-parity.sh dist/punktfunk-[0-9]*.rpm dist/punktfunk-client-[0-9]*.rpm \
             dist/punktfunk-seats-[0-9]*.rpm
+
+      # Tumbleweed is rolling and its builder image is a snapshot of it. An empty root makes the
+      # answer honest: zypper must satisfy every dependency from today's repository, as a user's
+      # box does, and not from what the image has installed. `--dry-run` resolves and installs
+      # nothing. This is arch.yml's gate, for zypper.
+      - name: Assert the set installs on a current Tumbleweed box
+        if: ${{ !matrix.fedver }}
+        run: |
+          root="$(mktemp -d)"
+          zypper --root "$root" --non-interactive addrepo \
+            https://download.opensuse.org/tumbleweed/repo/oss/ oss
+          zypper --root "$root" --non-interactive --gpg-auto-import-keys refresh
+          if ! zypper --root "$root" --non-interactive install --dry-run --no-recommends \
+               --allow-unsigned-rpm dist/*.rpm; then
+            echo "::error::refusing to publish: a current Tumbleweed box can't install this set."
+            echo "::error::Usual cause: the builder image lags Tumbleweed across a library bump —"
+            echo "::error::bump 'refreshed:' in ci/opensuse-rpm.Dockerfile, let docker.yml republish it, re-run."
+            exit 1
+          fi
 
       - name: Publish to the Gitea RPM registry
         env:
@@ -362,13 +392,14 @@ jobs:
       # building one. Per-Fedora-major, because the binary is soname-coupled to its base exactly
       # like the RPM is — an f43 build does not start on f44.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.fedver
         id: gamescope
         with:
           path: gs-cache
           key: punktfunk-gamescope-f${{ matrix.fedver }}-${{ hashFiles('packaging/gamescope/**') }}
 
       - name: Build the HDR gamescope
-        if: steps.gamescope.outputs.cache-hit != 'true'
+        if: matrix.fedver && steps.gamescope.outputs.cache-hit != 'true'
         # Best-effort ON PURPOSE. The sysext is the primary Bazzite delivery path and works without
         # this binary (the host just stays SDR on the gamescope backend) — so a hiccup building
         # someone else's tree must not cost the whole image. It is loud, though: the warning
@@ -429,6 +460,7 @@ jobs:
       # Same best-effort rule as the build above: no binary, no package, and the host stays on its
       # existing SDR/host-composited path. The spec re-checks the +pfhdr marker itself.
       - name: Package punktfunk-gamescope as an RPM
+        if: matrix.fedver
         run: |
           if [ -x gs-cache/usr/bin/punktfunk-gamescope ] && gs-cache/usr/bin/punktfunk-gamescope --version >/dev/null 2>&1; then
             bash packaging/gamescope/build-gamescope-rpm.sh \
@@ -448,6 +480,7 @@ jobs:
       # Same fail-closed rule as the first pass: sign-rpms.sh hard-fails on refs/tags/v* if the org
       # secret is missing, rather than republishing something a user's dnf will reject.
       - name: Sign punktfunk-gamescope
+        if: matrix.fedver
         env:
           RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
           RPM_GPG_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
@@ -462,6 +495,7 @@ jobs:
           bash packaging/rpm/sign-rpms.sh "${rpms[@]}"
 
       - name: Publish punktfunk-gamescope to the Gitea RPM registry
+        if: matrix.fedver
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
@@ -482,6 +516,7 @@ jobs:
       # image and publish it to the per-Fedora-major feed (punktfunk-sysext/f43[-canary], …) that
       # `punktfunk-sysext install|update` reads. Same RPMs, same channels — just no rpm-ostree.
       - name: Build the sysext image
+        if: matrix.fedver
         run: |
           # Execute it here rather than only handing it over: build-sysext.sh treats an unusable
           # --version as fatal (rightly — it is how the +pfhdr marker is read), and a cached binary
@@ -511,6 +546,7 @@ jobs:
       # The script proves its own reader first (cap a file, squash it, unsquash it, read it back)
       # so a runner that cannot see file capabilities FAILS the leg instead of blessing the image.
       - name: Assert the capability matrix (sysext image)
+        if: matrix.fedver
         run: |
           bash scripts/ci/assert-cap-matrix.sh \
             "dist-sysext/punktfunk-${PF_VERSION}-${PF_RELEASE}-x86-64.raw"
@@ -519,6 +555,7 @@ jobs:
       # punktfunk-sysext(8) refuses a feed it can't verify — the checksums alone never proved
       # anything, sitting on the same registry as the images they describe.
       - name: Publish the sysext feed
+        if: matrix.fedver
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
           RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
@@ -535,10 +572,10 @@ jobs:
           bash packaging/bazzite/publish-sysext-feed.sh --seal "$OTHER" \
             || echo "::warning::could not seal the $OTHER feed (no manifest yet?)"
 
-      # On a real release, also attach the .rpms to the unified Gitea Release. The Fedora bases
-      # (bazzite=F43, fedora-44, fedora-45) build the SAME filename, so suffix the asset with the
-      # base to keep all on the release; canary builds live in the `*-canary` rpm groups (no
-      # release page).
+      # On a real release, also attach the .rpms to the unified Gitea Release. The legs can build
+      # the SAME filename, so suffix the asset with the group to keep all on the release; canary
+      # builds live in the `*-canary` rpm groups (no release page). Only a Fedora leg has an
+      # image to attach.
       - name: Attach .rpms to the Gitea release (stable tags only)
         if: startsWith(gitea.ref, 'refs/tags/v')
         env:
@@ -552,6 +589,7 @@ jobs:
             upsert_asset "$RID" "$rpm" "${base}.${{ matrix.group }}.rpm"
           done
           for raw in dist-sysext/*.raw; do
+            [ -e "$raw" ] || continue
             upsert_asset "$RID" "$raw" "$(basename "$raw" .raw).f${{ matrix.fedver }}.raw"
           done
 
@@ -562,7 +600,7 @@ jobs:
       # the feed publish AND the attach above, withholding the punktfunk RPMs and .raw images
       # that built perfectly well. Everything good ships first; the job goes red after.
       - name: A tag or main build must ship the gamescope RPM
-        if: startsWith(gitea.ref, 'refs/tags/v') || gitea.ref == 'refs/heads/main'
+        if: matrix.fedver && (startsWith(gitea.ref, 'refs/tags/v') || gitea.ref == 'refs/heads/main')
         run: |
           shopt -s nullglob
           built=(dist/punktfunk-gamescope-*.rpm)

@@ -343,8 +343,6 @@
 	"access_grant_launch": "Lancer des jeux",
 	"access_grant_power": "Alimentation de l’hôte",
 	"access_grant_power_caption": "Mettre en veille, redémarrer ou éteindre l’hôte. L’accès au clavier permet déjà d’y arriver depuis le bureau.",
-	"access_grant_manage_games": "Gérer les jeux",
-	"access_grant_manage_games_caption": "Mettre en pause le téléchargement d’un jeu ou le supprimer de l’hôte. « Lancer des jeux » démarre déjà un téléchargement.",
 	"access_grant_display": "Choisir son écran",
 	"access_grant_display_caption": "Choisir comment cet appareil utilise vos écrans, dans son application et ses préréglages : comme écran unique, principal ou second écran, ou comme copie d’un moniteur. Sans cet accès, l’appareil reçoit ce que dit la page Écrans.",
 	"access_expires_label": "Expiration de l’accès",

@@ -203,6 +203,8 @@ pub trait Uinput: AsFd {
     fn set_phys(&self, phys: &str) -> io::Result<()>;
     fn read(&self, buf: &mut [u8]) -> io::Result<usize>;
     fn write(&self, buf: &[u8]) -> io::Result<usize>;
+    /// After this, a drop closes this fd alone: the fd store's copy of the fd keeps the device.
+    fn keep_device(&mut self);
 }
 
 impl Uinput for ReplayUinput {
@@ -220,6 +222,9 @@ impl Uinput for ReplayUinput {
     }
     fn write(&self, buf: &[u8]) -> io::Result<usize> {
         ReplayUinput::write(self, buf)
+    }
+    fn keep_device(&mut self) {
+        ReplayUinput::keep_device(self);
     }
 }
 
@@ -738,9 +743,12 @@ impl<U: Uinput> Proxy<U> {
         })
     }
 
-    /// A restart is coming: ends every blocking read still waiting with `EINTR`. The kernel
-    /// keeps a read this process took in processing until it is answered, and the next supervisor
-    /// can't name it; its caller reads again, and the new request waits for the next supervisor.
+    /// A restart is coming: ends every blocking read still waiting with `EINTR`, and leaves each
+    /// device and its record to the next supervisor. The kernel holds a read this process took as
+    /// in processing until it is answered, and the next supervisor can't name it; its caller reads
+    /// again, and the new request waits for the next supervisor. The fd store's copy of each
+    /// uinput fd keeps the device made, and its record has the udev helper still give the
+    /// device's nodes to the seat.
     fn drain(&mut self) {
         let waiting: Vec<u64> = self
             .opens
@@ -750,6 +758,11 @@ impl<U: Uinput> Proxy<U> {
             .collect();
         for unique in waiting {
             self.send(&cuse::error(unique, EINTR));
+        }
+        for open in self.opens.values_mut() {
+            open.dev.keep_device();
+            // A forgotten record leaves its file on disk; it holds no fd.
+            std::mem::forget(open.device_record.take());
         }
     }
 
@@ -803,7 +816,7 @@ impl<U: Uinput> Proxy<U> {
 /// Serves `proxy` until `stop`'s peer hangs up or the kernel ends the device, then takes its
 /// fds out of systemd's store; dropping them removes the node and destroys every device. A byte
 /// on `stop` is [`Proxy::drain`]: the proxy answers its waiting reads and reads no more requests,
-/// and leaves its fds in the store for the supervisor that follows.
+/// and leaves its fds, and the devices on them, in the store for the supervisor that follows.
 fn serve<U: Uinput>(mut proxy: Proxy<U>, stop: UnixStream) {
     let mut buf = vec![0u8; CHANNEL_BUF];
     loop {
@@ -1312,15 +1325,26 @@ mod tests {
         assert_eq!(parse_name("uinput/a/4/32/-/x"), None);
     }
 
-    /// Stands in for `/dev/uinput`: logs each request, and reads what the test queues.
+    /// Stands in for `/dev/uinput`: logs each request, and reads what the test queues. Dropped
+    /// without [`Uinput::keep_device`], it logs `destroy` where the real device sends
+    /// `UI_DEV_DESTROY`.
     struct Fake {
         queue: UnixDatagram,
         log: Arc<Mutex<Vec<String>>>,
+        kept: bool,
     }
 
     impl Fake {
         fn note(&self, line: String) {
             self.log.lock().unwrap().push(line);
+        }
+    }
+
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            if !self.kept {
+                self.note("destroy".into());
+            }
         }
     }
 
@@ -1359,6 +1383,9 @@ mod tests {
             self.note(format!("write {}", buf.len()));
             self.log.lock().unwrap().push(hex(buf));
             Ok(buf.len())
+        }
+        fn keep_device(&mut self) {
+            self.kept = true;
         }
     }
 
@@ -1440,6 +1467,7 @@ mod tests {
             Ok(Fake {
                 queue,
                 log: Arc::default(),
+                kept: false,
             })
         });
         let mut proxy = Proxy::new(File::from(ours), "pf-seat-1", opener, Vec::new());
@@ -1484,6 +1512,7 @@ mod tests {
             Ok(Fake {
                 queue,
                 log: Arc::clone(&opener_log),
+                kept: false,
             })
         });
         let chan = File::from(ours);
@@ -1649,6 +1678,7 @@ mod tests {
             Ok(Fake {
                 queue,
                 log: Arc::default(),
+                kept: false,
             })
         });
         // The fd store's copy: the connection outlives the proxy.
@@ -1674,6 +1704,59 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(200)))
             .unwrap();
         assert!(kernel.sock.recv(&mut [0u8; 64]).is_err(), "nobody reads it");
+    }
+
+    /// A drain leaves each device and its record for the next supervisor. When the stop peer
+    /// hangs up instead, each device is destroyed and its record goes.
+    #[test]
+    fn a_drained_proxy_keeps_its_devices_and_a_hung_up_one_destroys_them() {
+        let records = std::env::temp_dir().join(format!("pf-records-kept-{}", std::process::id()));
+        let record = records.join("@input987650");
+        for drained in [false, true] {
+            let (theirs, ours) = pad_broker::relay_pair().unwrap();
+            let mut kernel = Kernel {
+                sock: theirs,
+                unique: 0,
+            };
+            kernel
+                .sock
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let opener_log = Arc::clone(&log);
+            let opener = Box::new(move || {
+                let (queue, _) = UnixDatagram::pair()?;
+                Ok(Fake {
+                    queue,
+                    log: Arc::clone(&opener_log),
+                    kept: false,
+                })
+            });
+            let mut proxy = Proxy::new(File::from(ours), "pf-seat-1", opener, Vec::new());
+            proxy.records_dir = records.clone();
+            let (stop, theirs) = UnixStream::pair().unwrap();
+            let thread = std::thread::spawn(move || serve(proxy, theirs));
+
+            assert_eq!(kernel.ask(cuse::FUSE_OPEN, &[0; 8]).0, 0);
+            assert_eq!(kernel.ask(cuse::FUSE_OPEN, &[0; 8]).0, 0);
+            assert_eq!(kernel.ioctl(UI_DEV_CREATE, 0, &[], 0).0, 0, "fh 1's device");
+            assert!(record.exists());
+
+            if drained {
+                (&stop).write_all(b"d").unwrap();
+            }
+            drop(stop);
+            thread.join().unwrap();
+            let destroyed = log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| *l == "destroy")
+                .count();
+            let want = if drained { (0, true) } else { (2, false) };
+            assert_eq!((destroyed, record.exists()), want, "drained: {drained}");
+        }
+        let _ = std::fs::remove_dir_all(&records);
     }
 
     #[test]

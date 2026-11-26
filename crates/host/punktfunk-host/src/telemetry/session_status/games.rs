@@ -246,6 +246,7 @@ mod tests {
                 launcher: false,
                 child: None,
                 spawned: None,
+                started_at: None,
                 launch_stamp: None,
                 procs: None,
                 #[cfg(target_os = "linux")]

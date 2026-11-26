@@ -221,6 +221,9 @@ class MainActivity : FragmentActivity() {
     /** What a fired keyboard shortcut does. Null while not streaming. */
     var fireShortcut: ((Shortcuts.Action, Shortcuts.Phase) -> Unit)? = null
 
+    /** The key row's latched modifiers, which let go after a key [keyOn] lifts on the host. */
+    internal var keyLatch: KeyLatch? = null
+
     /** Keys down on the host, by shortcut id: the VK each went down as, for a lift. */
     private val hostKeys = HashMap<Int, Int>()
 
@@ -839,7 +842,10 @@ class MainActivity : FragmentActivity() {
         return ours
     }
 
-    /** One key past the shortcuts: the ring's, the remote pointer's, or the host's. */
+    /**
+     * One key past the shortcuts: the ring's, the remote pointer's, or the host's. A key the host
+     * takes lets the key row's latched modifiers go at its lift ([keyLatch]).
+     */
     private fun keyOn(event: KeyEvent, handle: Long, id: Int): Boolean {
         // The ring is modal: its scrim owns every finger, the router masks the pad behind it,
         // and this is the same claim for keys. Non-nav keys are swallowed, not sent — except
@@ -904,6 +910,7 @@ class MainActivity : FragmentActivity() {
                         event.isShiftPressed && vk != 0xA0 && vk != 0xA1
                     if (down && imeShift) NativeBridge.nativeSendKey(handle, 0xA0, true, 0)
                     NativeBridge.nativeSendKey(handle, vk, down, 0)
+                    if (!down && !KeyEvent.isModifierKey(event.keyCode)) keyLatch?.release()
                     if (down) hostKeys[id] = vk else hostKeys.remove(id)
                     if (!down && imeShift) NativeBridge.nativeSendKey(handle, 0xA0, false, 0)
                     // The service path never sees a dispatcher repeat, so a held hardware

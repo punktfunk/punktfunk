@@ -767,8 +767,9 @@
 // Not a datagram; [`classify`] is untouched. Machine power only — never plugin actions.
 #define PUNKTFUNK_GRANT_POWER 64
 
-// Pause and remove a title's download on the mgmt cert lane.
-// Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
+// Manage host: upkeep on the mgmt cert lane. Pause and remove a title's download, and start
+// the host update its own check offers. Starting a download is [`GRANT_LAUNCH`]: launching a
+// missing title installs it anyway. Never pairing, access, plugins, hooks or host settings.
 #define PUNKTFUNK_GRANT_MANAGE_GAMES 128
 
 // Choosing the screen this device streams and what the host's monitors do meanwhile: its
