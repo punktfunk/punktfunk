@@ -1121,9 +1121,9 @@ impl LibraryScreen {
         let land = snap || ui.reduce_motion;
         let applied = self.applied();
         self.bar.step(fonts, k, avail, true, applied, dt, land);
-        // Where the scroll stood before this frame's glide: the reveal starts from there.
+        // Where the scroll was headed before this frame's glide: the reveal starts from there.
         let grid = Id::new(GRID, 0);
-        let stood = f64::from(self.grid.borrow().offset(grid));
+        let aim = f64::from(self.grid.borrow().destination(grid));
         self.grid.get_mut().tick(dt as f32);
 
         // The recoil moves the drawing on its axis, never the cells a pointer hits.
@@ -1301,7 +1301,7 @@ impl LibraryScreen {
         let mut tree = this.grid.borrow_mut();
         let mut frame = tree.layout(build(), viewport);
         // A landing moved the scroll this frame: lay out again for the rows now in view.
-        if this.follow_reveal(&mut tree, &frame, &lines, &g, stood, land) {
+        if this.follow_reveal(&mut tree, &frame, &lines, &g, aim, land) {
             frame = tree.layout(build(), viewport);
         }
         // The chips line and each band keep their focused item in view, centred; the
@@ -1396,10 +1396,11 @@ impl LibraryScreen {
         }
     }
 
-    /// While the list follows focus, take the field's scroll from where it `stood` to the
-    /// reveal of the focused item as `frame` laid it out. The tree glides there and parks
-    /// under a finger ([`Tree::follow`]); a pan lets go until a move asks again. True when
-    /// the scroll landed elsewhere this frame.
+    /// While the list follows focus, take the field's scroll from `aim`, where it was headed
+    /// ([`Tree::destination`]), to the reveal of the focused item as `frame` laid it out. A
+    /// target the scroll already reaches is kept, so a landed scroll rests. The tree glides
+    /// there and parks under a finger ([`Tree::follow`]); a pan lets go until a move asks
+    /// again. True when the scroll landed elsewhere this frame.
     #[allow(clippy::too_many_arguments)]
     fn follow_reveal(
         &self,
@@ -1407,7 +1408,7 @@ impl LibraryScreen {
         frame: &crate::el::Frame<'_>,
         lines: &[Line],
         g: &FieldGeom,
-        stood: f64,
+        aim: f64,
         land: bool,
     ) -> bool {
         if !self.follow {
@@ -1417,7 +1418,7 @@ impl LibraryScreen {
         let laid = tree.offset(grid);
         let (top, h) = self.focus_span(frame, lines, g);
         let max = frame.scroll(grid).map_or(0.0, |s| f64::from(s.1));
-        let want = reveal(stood, top, h, g.usable, g.breath).clamp(0.0, max);
+        let want = reveal(aim, top, h, g.usable, g.breath).clamp(0.0, max);
         tree.follow(grid, want as f32, land);
         tree.offset(grid) != laid
     }

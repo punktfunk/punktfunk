@@ -560,6 +560,15 @@ impl Tree {
         self.scrolls.get(&scroll).is_some_and(|s| s.goal.is_some())
     }
 
+    /// Where `scroll` comes to rest: a gliding follow's goal, else its offset. A reveal that
+    /// starts from here keeps a glide's target; one that starts from the moving offset aims
+    /// at a past frame's position and never rests.
+    pub fn destination(&self, scroll: Id) -> f32 {
+        self.scrolls
+            .get(&scroll)
+            .map_or(0.0, |s| s.goal.map_or(s.offset, |(goal, _)| goal))
+    }
+
     /// A finger moved the offset by `delta`. Past an end the content lags the finger,
     /// more the further it is stretched. The scroll stays parked where the finger leaves
     /// it until focus asks for somewhere new.
