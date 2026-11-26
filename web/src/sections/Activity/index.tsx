@@ -18,6 +18,7 @@ import {
 	useActivity,
 	useActivityReady,
 } from "@/api/events";
+import { useListNativeClients } from "@/api/gen/native/native";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -97,7 +98,10 @@ export function collapse(entries: ActivityEntry[]): ActivityRow[] {
  * (`useActivityReady`). A row mounting into a list already on screen animates by itself, at once,
  * which is what a live arrival should do.
  */
-export const ActivityList: FC<{ entries: ActivityRow[] }> = ({ entries }) => (
+export const ActivityList: FC<{
+	entries: ActivityRow[];
+	nameOf?: NameOf;
+}> = ({ entries, nameOf }) => (
 	<motion.ul
 		variants={{ from: {}, enter: {} }}
 		transition={{ delayChildren: rowDelay }}
@@ -118,7 +122,9 @@ export const ActivityList: FC<{ entries: ActivityRow[] }> = ({ entries }) => (
 							×{e.count}
 						</span>
 					)}
-					<span className="min-w-0 flex-1 truncate text-sm">{describe(e)}</span>
+					<span className="min-w-0 flex-1 truncate text-sm">
+						{describe(e, nameOf)}
+					</span>
 					<time
 						dateTime={new Date(e.ts_ms).toISOString()}
 						className="shrink-0 text-xs tabular-nums text-muted-foreground"
@@ -137,15 +143,22 @@ export const ActivityCard: FC = () => {
 	const ready = useActivityReady();
 	// Not until the feed is settled: a card that mounts empty and fills a moment later animates on
 	// a different path each time. Mounted with its rows, it animates the same way every time.
+	const paired = useListNativeClients({ query: { retry: false } });
 	if (!ready) return null;
-	return <ActivityCardView entries={entries} />;
+	return (
+		<ActivityCardView
+			entries={entries}
+			nameOf={(fp) => paired.data?.find((c) => c.fingerprint === fp)?.name}
+		/>
+	);
 };
 
 /** Split from the hook so a story can hand it a busy host — the cap and the cadence are the
  *  parts worth looking at, and neither shows up without one. */
-export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
-	entries,
-}) => {
+export const ActivityCardView: FC<{
+	entries: ActivityEntry[];
+	nameOf?: NameOf;
+}> = ({ entries, nameOf }) => {
 	const [all, setAll] = useState(false);
 	const rows = collapse(entries);
 	return (
@@ -161,7 +174,10 @@ export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
 					<p className="text-sm text-muted-foreground">{m.activity_empty()}</p>
 				) : (
 					<>
-						<ActivityList entries={all ? rows : rows.slice(0, CARD_MAX)} />
+						<ActivityList
+							entries={all ? rows : rows.slice(0, CARD_MAX)}
+							nameOf={nameOf}
+						/>
 						{all ? (
 							// The ring is per page load; a reader at its bottom has earned that fact.
 							<p className="border-t pt-3 text-xs text-muted-foreground">
@@ -188,21 +204,33 @@ export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
 	);
 };
 
+/** A paired device's name by its full fingerprint, when the console knows the device. */
+export type NameOf = (fingerprint: string) => string | undefined;
+
 /**
- * The subject of an event, in one line — whatever the payload actually names. A `local` game's
- * `client` is the key `desk`, which names no device.
+ * The subject of an event, in one line — whatever the payload actually names. A session's, game's
+ * or stream's `client` is a key, so the device's name stands in for it when `nameOf` knows the
+ * fingerprint. A `local` game's `client` is the key `desk`, which names no device. A stream's
+ * `app` is a title only on GameStream; elsewhere it is a store id and the game's own row names it.
  */
-export function describe(e: ActivityEntry): string {
+export function describe(e: ActivityEntry, nameOf?: NameOf): string {
 	const d = e.data;
+	const local = pick(d.game, "plane") === "local";
+	const fingerprint =
+		pick(d.session, "fingerprint") ??
+		(local ? undefined : pick(d.game, "fingerprint")) ??
+		pick(d.stream, "fingerprint");
 	const client =
 		pick(d.client, "name") ??
+		(fingerprint ? nameOf?.(fingerprint) : undefined) ??
 		pick(d.session, "client") ??
-		(pick(d.game, "plane") === "local" ? undefined : pick(d.game, "client")) ??
+		(local ? undefined : pick(d.game, "client")) ??
 		pick(d.device, "name");
-	const stream = d.stream as Record<string, unknown> | undefined;
 	const parts = [
 		client,
-		typeof stream?.app === "string" ? stream.app : undefined,
+		pick(d.stream, "plane") === "gamestream"
+			? pick(d.stream, "app")
+			: undefined,
 		pick(d.game, "title"),
 		typeof d.reason === "string" ? d.reason : undefined,
 	].filter((x): x is string => typeof x === "string" && x.length > 0);
