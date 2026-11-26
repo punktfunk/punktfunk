@@ -304,9 +304,9 @@ mod linux {
             }
         }
 
-        /// A folder swapped in on the path is judged as it is when opened: a reader is refused
-        /// where a closed folder now lies on the way, and root sees whose the folder now is. The
-        /// thread is root's again after each open.
+        /// A folder that was swapped in on the path is judged as it is at the moment it is
+        /// opened. A reader is refused when a closed folder now lies on the way. Root sees who owns
+        /// the folder now. After each open the thread is root's again.
         #[test]
         fn a_swapped_folder_is_judged_as_it_is_when_opened() {
             if !rustix::process::geteuid().is_root() {

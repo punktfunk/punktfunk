@@ -351,9 +351,10 @@ pub(super) fn require_owner(account: &str) -> Result<Passwd, BackendError> {
     }
 }
 
-/// The person a new row may adopt as `account`: an existing ordinary user whom no row holds and
-/// who is not the box owner, the one `door-helper` recorded in `state` or the one the owner's
-/// row names. The uid is read here, from the system, and no caller's.
+/// The person that a new row may adopt as `account`. It must be an existing ordinary user that
+/// no row holds. It must not be the box owner: neither the account that `door-helper` recorded
+/// in `state`, nor the account that the owner's row names. The uid is read here, from the
+/// system, and never taken from a caller.
 pub(super) fn adoptable(
     account: &str,
     ledger: &Ledger,

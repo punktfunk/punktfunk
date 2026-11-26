@@ -723,9 +723,10 @@ fn seat_folders(state: &Path, id: &str) -> Vec<(String, u32, u32)> {
     out
 }
 
-/// A made seat's provision, the account not yet there: the games group and folder, then the
-/// account with its own group and the groups that exist, its home closed, its folders and Steam
-/// files handed to it. Provisioning again finds the account and makes none.
+/// A made seat's provision when the account doesn't exist yet. First the games group and the
+/// games folder. Then the account, with a group of its own and those of its groups that exist.
+/// Then the account's home is closed, and the seat's folders and Steam files are handed to the
+/// account. Provisioning a second time finds the account and makes none.
 #[test]
 #[ignore = "needs root: hands the seat's folders to its user"]
 fn a_made_seat_s_provision_runs_exactly_these() {
@@ -968,9 +969,9 @@ fn a_made_seat_s_delete_takes_its_files_under_run_and_reloads() {
     assert!(left.is_empty(), "{left:?}");
 }
 
-/// A made seat's delete on a box whose owner's row is prepared: the owner's Steam is known
-/// without a look at every account, and the seat's folders on the drives of its libraries go
-/// first, as the owner.
+/// A made seat's delete on a box where the owner's row is prepared. The owner's Steam is known
+/// without a look at every account. The seat's folders on the drives of the owner's libraries
+/// are removed first, and as the owner.
 #[test]
 #[ignore = "needs root and Linux: hands the owner's Steam to the owner, reads /proc"]
 fn a_made_seat_s_delete_forgets_its_folders_on_the_owner_s_library_drives() {

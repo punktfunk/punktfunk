@@ -104,10 +104,14 @@ const EV_MSC: u32 = 0x04;
 const EV_FF: u32 = 0x15;
 const INPUT_PROP_ACCELEROMETER: u32 = 0x06;
 
-/// Whether a seat may set `code` with `UI_SET_*BIT` number `nr` (`UI_ABS_SETUP` counts as
-/// `UI_SET_ABSBIT`). Only what a gamepad or its motion sensors carry: never a key below
-/// `BTN_MISC` or a braille key, which make a VT keyboard, never a mouse button, touch or tool,
-/// relative axis, multitouch axis, switch, LED, sound or autorepeat.
+/// Whether a seat may set `code` with the `UI_SET_*BIT` ioctl number `nr`. `UI_ABS_SETUP` counts
+/// as `UI_SET_ABSBIT`. A seat may set only what a gamepad or its motion sensors carry. Never
+/// allowed:
+///
+/// - a key below `BTN_MISC`, or a braille key: either makes the device a VT keyboard
+/// - a mouse button, a touch button or a tool button
+/// - a relative axis or a multitouch axis
+/// - a switch, an LED, a sound or autorepeat
 fn allowed(nr: u32, code: u32) -> bool {
     match nr {
         100 => matches!(code, EV_SYN | EV_KEY | EV_ABS | EV_MSC | EV_FF),

@@ -255,10 +255,15 @@ fn hex4(text: &str) -> bool {
     text.len() == 4 && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The key of the USB device `instance`, `USB\VID_vvvv&PID_pppp\<tail>`: its ids, then `s` and
-/// the tail when that is a serial a key can carry, else `p` and the port id Windows made, its
-/// `&` written `.`. A tail that is neither has no key. The tail is upper-cased: Windows
-/// reports one id in either case and finds it by both.
+/// The key of the USB device `instance`, which has the form `USB\VID_vvvv&PID_pppp\<tail>`. The
+/// key is the device's ids, followed by one of:
+///
+/// - `s` and the tail, when the tail is a serial that a key can carry
+/// - `p` and the tail, when the tail is the port id that Windows made. Each `&` in it is
+///   written as `.`.
+///
+/// A tail that is neither gives no key. The tail is upper-cased, because Windows reports one id
+/// in either case and finds it by both.
 fn key_of(instance: &str) -> Option<String> {
     let mut parts = instance.split('\\');
     let (bus, ids, tail) = (parts.next()?, parts.next()?, parts.next()?);

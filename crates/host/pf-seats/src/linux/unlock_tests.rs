@@ -1103,9 +1103,10 @@ fn autostart_never_starts_a_person_s_row() {
     assert_eq!(rig.starts(), 0);
 }
 
-/// The audit line of a failed and of a passed unlock names the seat, account, device, proof,
-/// result and the failures counted, and neither it nor the command, the proof or the answer
-/// prints the password. The line is the value the journal gets, built by the same call.
+/// The audit line of a failed unlock and of a passed one names the seat, the account, the
+/// device, the proof, the result and the failures counted. Nothing prints the password: not that
+/// line, the command, the proof or the answer. The line tested is the value the journal gets,
+/// built by the same call.
 #[test]
 fn the_audit_line_never_carries_the_secret() {
     let rig = rig();
@@ -1157,11 +1158,12 @@ fn the_audit_line_never_carries_the_secret() {
     }
 }
 
-/// Against the box's own `login` stack, through the `pam-check` child of the built
-/// `punktfunk-seats`: the right password unlocks, a wrong one is refused, and the account's third
-/// wrong one in the window is refused without a check. Each child appends to a count file before
-/// it runs the real check, so the count is the checks PAM saw. Makes and removes the account
-/// `pfunlock`, so it needs root.
+/// Unlocks against the box's own `login` stack, through the `pam-check` child of the built
+/// `punktfunk-seats`. The right password unlocks. A wrong one is refused. The account's third
+/// wrong password in the window is refused without a check.
+///
+/// Each child appends to a count file before it runs the real check, so the count is the number
+/// of checks PAM saw. The test makes and removes the account `pfunlock`, so it needs root.
 #[test]
 #[ignore = "needs root, libpam, the login service and a built punktfunk-seats; makes the account pfunlock"]
 fn the_login_stack_unlocks_a_person_s_row() {

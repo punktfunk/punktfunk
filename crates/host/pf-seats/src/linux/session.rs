@@ -784,9 +784,9 @@ mod tests {
         assert_eq!(manager_parts(&dropins, updates).unwrap().len(), 2);
     }
 
-    /// A person's row is a contract seat on their own account: the box's library and the row's
-    /// name, a host identity under the row's directory and nothing under their home, and the
-    /// runner's marker without the owner's.
+    /// A person's row is a contract seat on the person's own account. It gets the box's library and
+    /// the row's name. Its host identity is under the row's directory, and nothing is under the
+    /// person's home. It has the runner's marker and not the owner's.
     #[test]
     fn a_person_s_env_file_keeps_their_home_clear() {
         let person = Seat {

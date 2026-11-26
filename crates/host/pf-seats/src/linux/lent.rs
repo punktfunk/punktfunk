@@ -813,9 +813,10 @@ mod tests {
         );
     }
 
-    /// A pad lent by its serial is the lent pad in any port. While a twin that reports the same
-    /// serial is plugged in, only the device in the port the lend remembers is: the twin is the
-    /// desk's, listed by its port, and a stop of the seat leaves it alone.
+    /// A pad lent by its serial is the lent pad in whatever port it is plugged. While a twin that
+    /// reports the same serial is plugged in too, only the device in the port that the lend
+    /// remembers is the lent pad. The twin belongs to the desk and is listed by its port, and a
+    /// stop of the seat leaves it alone.
     #[test]
     fn a_twin_of_a_lent_pad_stays_the_desk_s() {
         let desk = Desk::new();

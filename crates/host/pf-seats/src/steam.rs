@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 /// The folder beside a library's `steamapps` that holds each Linux seat's own folder for it.
 pub const SEAT_ROOTS: &str = ".punktfunk-seats";
 
-/// Top-level entries of a Steam install that a seat's copy leaves behind, on Windows and Linux:
-/// the box's sign-ins, library, caches and logs, Steam Guard's sentry files, and the seats'
-/// folders for the library there ([`SEAT_ROOTS`]). Names compare without case.
+/// The top-level entries of a Steam install that a seat's copy leaves out, on Windows and on
+/// Linux: the box's sign-ins, its library, its caches and logs, Steam Guard's sentry files, and
+/// the folders that seats have there for the library ([`SEAT_ROOTS`]). Names are compared
+/// without case.
 pub fn skipped(name: &str) -> bool {
     const DIRS: [&str; 7] = [
         "config",

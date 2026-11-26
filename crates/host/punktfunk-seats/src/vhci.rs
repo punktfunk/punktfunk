@@ -36,9 +36,10 @@ fn lock() -> MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// At the supervisor's start: makes the map, drops stale rows (attachments outlive a restart,
-/// the kernel holds their sockets) and, when the udev rule for seat pads is installed, starts every new
-/// vhci interface unauthorized.
+/// Runs at the supervisor's start. It makes the map directory and drops stale records. Other
+/// records stay: an attachment outlives a restart, because the kernel holds its socket. When
+/// the udev rule for seat pads is installed, it also makes every new vhci interface start
+/// unauthorized.
 pub fn prepare() {
     let _held = lock();
     let dir = Path::new(MAP);
@@ -174,9 +175,10 @@ pub fn node_owner(devpath: &str) -> bool {
     true
 }
 
-/// Authorizes each of `device`'s interfaces that may bind, then probes those still unbound:
-/// the kernel probes none it made unauthorized, and a driver that claims a sibling at probe
-/// (`cdc_acm`, `snd-usb-audio`) is refused an unauthorized one.
+/// Authorizes each interface of `device` that may bind, then probes the interfaces that are
+/// still unbound. The probe is needed because the kernel probes no interface that it made
+/// unauthorized. All are authorized before any is probed because a driver that claims a sibling
+/// interface at probe (`cdc_acm`, `snd-usb-audio`) is refused an unauthorized one.
 fn authorize(device: &Path, seat: bool) {
     let Some(prefix) = device
         .file_name()

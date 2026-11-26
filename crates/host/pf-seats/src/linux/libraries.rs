@@ -300,10 +300,14 @@ fn folders(dir: &Path) -> Vec<String> {
     out
 }
 
-/// What a game still writes in a read-only `steamapps`, as found there: each Steam Linux
-/// Runtime's `var` and each of its `*_platform_*` folders' `files/.ref`, which pressure-vessel
-/// opens before a native game starts, and each Proton's `dist.lock`. Read-only, either fails the
-/// launch with EROFS. Links are never followed; a file that isn't there yet stays read-only.
+/// The few places a game still writes in a read-only `steamapps`, as they are found there:
+///
+/// - each Steam Linux Runtime's `var`, and `files/.ref` in each of the runtime's
+///   `*_platform_*` folders. pressure-vessel opens these before a native game starts.
+/// - each Proton's `dist.lock`
+///
+/// If one of these is read-only, the launch fails with EROFS. Links are never followed. A file
+/// that doesn't exist yet stays read-only.
 fn spots(steamapps: &Path) -> Vec<Spot> {
     let found = |spot: &Spot| {
         let meta = std::fs::symlink_metadata(steamapps.join(&spot.path));
@@ -924,14 +928,19 @@ fn make_spots(private: &Path, spots: &[Spot], seat: &Passwd) -> std::io::Result<
     Ok(())
 }
 
-/// The drop-in lines that show `shares` to seat `id`: stage each library before the unit starts,
-/// read-only if the box says so, and unmount it after; the same for the seat's folder on its
-/// drive. Both must still be the Steam owner's where they are mounted. Bind the seat's folder, on
-/// that drive or [`root_dir`], at the library's [`VIEW`] path. Hide the library's own path, bind
-/// the stage, the seat's private folders ([`STAGING`] only while read-only) and its spots' copies
-/// over it, and keep the owner's library list there read-only. A folder not mounted leaves the
-/// seat an empty library, not a failed start. Then each granted root ([`rom_lines`]) and each
-/// overlay ([`overlay_lines`]).
+/// The drop-in lines that show `shares` to seat `id`. For each library:
+///
+/// 1. Stage the library before the unit starts, read-only if the box says so, and unmount it
+///    after the unit stops. Do the same for the seat's folder on the library's drive. Both must
+///    still belong to the owner of that Steam where they are mounted.
+/// 2. Bind the seat's folder, the one on that drive or else [`root_dir`], at the library's
+///    [`VIEW`] path.
+/// 3. Hide the library's own path, and bind the stage at the view's `steamapps`. Over that,
+///    bind the seat's private folders ([`STAGING`] only while read-only) and the seat's copies
+///    of the library's spots. Keep the owner's library list there read-only.
+///
+/// A folder that isn't mounted leaves the seat an empty library, not a failed start. After the
+/// libraries come each granted root ([`rom_lines`]) and each overlay ([`overlay_lines`]).
 pub(super) fn unit_lines(state: &Path, id: &SeatId, shares: &Shares) -> String {
     let host = format!("{} -t 1 -m --", shares.nsenter.display());
     let ro = if shares.read_only { "ro," } else { "" };
@@ -1599,9 +1608,10 @@ mod tests {
         assert!(unit_lines(Path::new("/b"), &id(), &without).is_empty());
     }
 
-    /// The unit stages each library idmapped for the Steam's owner, hides the owner's own path,
-    /// binds the stage and the seat's prefixes and caches into the seat, leaves the staging
-    /// folders the owner's and keeps the owner's list read-only. `/run/media` stays hidden.
+    /// What the unit does with each library. It stages the library idmapped for the owner of that
+    /// Steam, hides the owner's own path, and binds the stage, the seat's prefixes and the seat's
+    /// caches into the seat. The staging folders stay the owner's, and the owner's library list
+    /// stays read-only. `/run/media` stays hidden.
     #[test]
     fn the_drop_in_binds_each_library_with_private_folders() {
         let text = super::super::session::render_binds(
@@ -1681,9 +1691,9 @@ mod tests {
         assert_eq!(read_only, expected);
     }
 
-    /// The seat's folder on the library's drive is staged idmapped for the Steam's owner, never
-    /// read-only, and bound at the library's view in place of the seat's folder under
-    /// `seats/<id>`; the rest is as without one.
+    /// When the seat has a folder on the library's drive: that folder is staged idmapped for the
+    /// owner of that Steam, never read-only, and bound at the library's view path in place of the
+    /// seat's folder under `seats/<id>`. Everything else is as it is without such a folder.
     #[test]
     fn a_seat_folder_on_the_drive_is_the_library_s_folder() {
         let state = Path::new("/b");
@@ -1844,9 +1854,9 @@ mod tests {
         home.join(".local/share/Steam").join(dir).join(LIST)
     }
 
-    /// Both of the seat's lists gain the shared games folder and the box's libraries at their
-    /// views after Steam's own entry, and lose a stale drive and the folders' host paths; an
-    /// absent copy stays absent.
+    /// Both of the seat's library lists gain the shared games folder and the box's libraries, at
+    /// their view paths, after Steam's own entry. Both lose a stale drive and the host paths of
+    /// those folders. A copy of the list that isn't there stays absent.
     #[test]
     fn the_seat_s_lists_name_the_box_s_libraries() {
         let temp = tempfile::tempdir().unwrap();
