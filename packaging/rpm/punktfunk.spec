@@ -1,5 +1,8 @@
 ################################################################################
-# punktfunk — low-latency desktop/game streaming host (RPM for Fedora / Bazzite)
+# punktfunk — low-latency desktop/game streaming host (RPM for Fedora, Bazzite, openSUSE)
+#
+# One build serves every one of them: the hard dependencies below are libraries and files, not
+# one family's package names. A weak dependency a distro does not carry is skipped.
 #
 # Builds `punktfunk-host` from source with cargo and installs the binary, the
 # uinput udev rule (virtual gamepads), the systemd *user* unit, and the headless
@@ -118,7 +121,8 @@ Recommends:     pipewire-pulseaudio
 # Weak-dep: Fedora desktops ship rtkit anyway, and without it the user@.service.d LimitNICE
 # drop-in below still covers the direct path from the next login.
 Recommends:     rtkit
-Requires:       libei
+# Named by library: the package is `libei` on Fedora and `libei1` on openSUSE.
+Requires:       libei.so.1()(64bit)
 # A compositor to drive. Bazzite ships gamescope; the others are user choice.
 Recommends:     gamescope
 # HDR, the real mode and the cursor in a gamescope session. Weak because a Fedora major whose
@@ -159,9 +163,10 @@ Summary:        Low-latency desktop/game streaming client (punktfunk/2, GTK4)
 # Audio playback / mic capture want the PipeWire daemon; degrade gracefully without it.
 Recommends:     pipewire
 Recommends:     wireplumber
-# The session streamer loads libvulkan at runtime (ash) for its ash/Skia presenter + Vulkan
-# Video decode. vulkan-loader provides libvulkan.so.1; the ICD is the GPU's mesa/NVIDIA driver.
-Requires:       vulkan-loader
+# The session streamer loads libvulkan at runtime (ash) for its presenter and Vulkan Video
+# decode. Named by library: `vulkan-loader` on Fedora, `libvulkan1` on openSUSE. The ICD is the
+# GPU's Mesa or NVIDIA driver.
+Requires:       libvulkan.so.1()(64bit)
 
 %description client
 The native Linux client for punktfunk. Discovers hosts on the LAN (mDNS), trusts
@@ -176,12 +181,13 @@ virtual output at exactly this client's resolution and refresh rate — no scali
 Summary:        punktfunk seat supervisor (a user, a session and a host per profile)
 # What the supervisor and the door helper run: useradd/groupadd/usermod, runuser and setpriv,
 # setfacl, loginctl/systemctl, pkill in seat-session. The host requires this package at its own
-# version, so the two move together without a loop back.
+# version, so the two move together without a loop back. pkill is named by path: its package is
+# `procps-ng` on Fedora and `procps` on openSUSE.
 Requires:       shadow-utils
 Requires:       util-linux
 Requires:       acl
 Requires:       systemd
-Requires:       procps-ng
+Requires:       /usr/bin/pkill
 
 %description seats
 The root daemon behind profile seats. Each seat is a system user with its own logind session,
