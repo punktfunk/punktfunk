@@ -15,6 +15,7 @@ import { m } from "@/paraglide/messages";
 import { CopyRow } from "./CopyRow";
 import { actionTitle, actionUnavailable, ConfirmDialog } from "./PowerCard";
 import { type Update, updateLine } from "./UpdateCard";
+import { jobRunning } from "./updateView";
 
 /**
  * The top of Host, in three bands: who this host is and how current, with **Check for update**
@@ -54,16 +55,21 @@ export const HostStrip: FC<{
 						</p>
 					</div>
 					<div className="ml-auto flex shrink-0 items-center gap-1">
-						{s && !s.check_disabled && !update.applying && !s.job && (
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={update.checkBusy}
-								onClick={update.onCheck}
-							>
-								{update.checkBusy ? m.update_checking() : m.host_check_update()}
-							</Button>
-						)}
+						{s &&
+							!s.check_disabled &&
+							!update.applying &&
+							!jobRunning(s, update.wait) && (
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={update.checkBusy}
+									onClick={update.onCheck}
+								>
+									{update.checkBusy
+										? m.update_checking()
+										: m.host_check_update()}
+								</Button>
+							)}
 						{/* Rare, and four end this host's streams: a menu, not a row of buttons. */}
 						{list.length > 0 && (
 							<RowMenu label={m.host_power_menu()}>
