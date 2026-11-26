@@ -653,6 +653,42 @@ fn a_third_password_in_the_window_never_reaches_the_windows_sign_in() {
     };
 }
 
+/// An account's wrong passwords outlive the supervisor: a service opened again over the same root
+/// refuses the third password, a right one too, before the Windows sign-in sees it.
+#[test]
+fn a_restart_keeps_an_account_s_wrong_passwords() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    let credential = |id: &pf_seats::SeatId, password: &str| Command::Credential {
+        id: id.clone(),
+        password: Secret::new(password.into()),
+    };
+    let ben = {
+        let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+        let CommandResult::Created { seat } = service
+            .dispatch(adopt_existing("Ben", "S-1-5-21-1-2-3-1001"))
+            .unwrap()
+        else {
+            panic!("adopt")
+        };
+        for _ in 0..2 {
+            let wrong = service.dispatch(credential(&seat.id, "wrong"));
+            assert!(wrong.unwrap_err().message.starts_with("credential_wrong: "));
+        }
+        seat
+    };
+    backend.clear_calls();
+
+    let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+    let held = service.dispatch(credential(&ben.id, "right")).unwrap_err();
+    assert!(
+        held.message.starts_with("unlock_locked_out: "),
+        "{}",
+        held.message
+    );
+    assert!(!backend.calls().iter().any(|c| c.starts_with("reseal:")));
+}
+
 fn adopt_user(account: &str, password: &str) -> Command {
     Command::AdoptUser {
         seat: CreateSeat {
