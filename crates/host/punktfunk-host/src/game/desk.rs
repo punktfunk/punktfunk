@@ -1023,8 +1023,9 @@ pub(crate) mod lease_tests {
             .map(|g| g.state)
     }
 
+    /// Waits until `id`'s row reads `want`, for `within` plus [`crate::gamelease::SLOW_DISK`].
     pub(crate) fn wait_for(id: &str, want: Option<&str>, within: Duration) {
-        let deadline = Instant::now() + within;
+        let deadline = Instant::now() + within + crate::gamelease::SLOW_DISK;
         while state(id) != want && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -1044,10 +1045,12 @@ pub(crate) mod lease_tests {
             .unwrap_or_else(|e| e.into_inner());
         let id = "custom:desk-held";
         let before = stats(id).totals;
-        launch(target(id, "sleep 8"));
+        // 15 s: the lease's watcher starts after the launch's synced write, which takes seconds
+        // on a busy disk, and the game must still be running then.
+        launch(target(id, "sleep 15"));
         wait_for(id, Some("running"), SHIM_WINDOW + Duration::from_secs(5));
         assert!(
-            matches!(begin(&target(id, "sleep 8").game), Begin::Running),
+            matches!(begin(&target(id, "sleep 15").game), Begin::Running),
             "a second launch adopts the running one"
         );
         wait_for(id, None, Duration::from_secs(15));

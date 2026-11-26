@@ -39,6 +39,10 @@ pub(crate) const EXIT_CONFIRM: Duration = Duration::from_secs(3);
 /// 5 s successful child exit = launcher hand-off, never the game. Apollo's `auto_detach` uses
 /// the same 5 s for any exit code.
 pub(crate) const SHIM_WINDOW: Duration = Duration::from_secs(5);
+/// 30 s of room in a test's wait for the synced writes a launch and an exit make. A busy disk
+/// takes seconds for each, and such a wait ends as soon as its state arrives.
+#[cfg(test)]
+pub(crate) const SLOW_DISK: Duration = Duration::from_secs(30);
 /// 10 s after SIGTERM / WM_CLOSE before SIGKILL. Enough to save.
 const TERM_GRACE: Duration = Duration::from_secs(10);
 /// Cap on [`crate::procscan::running_hint`] holding off an exit after every
@@ -345,6 +349,10 @@ pub struct LeaseRequest {
     /// [`LeaseKind::Untracked`]. Pinned to start time at [`open`]
     /// ([`crate::procscan::Scanner::resolve`]).
     pub spawned: Option<u32>,
+    /// When the host started the launch's process. The [`SHIM_WINDOW`] checks and the start
+    /// deadline count from it, so a write between the start and [`open`] does not push them
+    /// back. `None` when this request started nothing: the watcher counts from its own start.
+    pub started_at: Option<Instant>,
     /// Process-start-timeline seconds from **before** spawn ([`launch_clock`]): adopt
     /// floor, so a copy already open is not this session. `None` disables
     /// the filter. A reconnect inherits it from [`crate::launchreg`].
@@ -454,7 +462,7 @@ fn early_exit_message(
 
 /// Open a lease and start watching. `on_exit` fires **at most once**: game
 /// was seen running, then confirmed gone. Never for never-started, a shim,
-/// or a host-requested end.
+/// or a host-requested end. The launch's clock is [`LeaseRequest::started_at`].
 pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
     let LeaseRequest {
         game,
@@ -469,6 +477,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         launcher,
         child,
         spawned,
+        started_at,
         launch_stamp,
         procs,
         #[cfg(target_os = "linux")]
@@ -565,7 +574,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
     shared
         .awaiting_window
         .store(window.is_some(), Ordering::Relaxed);
-    let watcher = spawn_watcher(shared.clone(), child, procs, on_exit, window);
+    let watcher = spawn_watcher(shared.clone(), child, procs, on_exit, window, started_at);
     if watcher.is_none() {
         shared.awaiting_window.store(false, Ordering::Relaxed);
         // No watcher: Nested still reports Running (gamescope node-death
@@ -585,14 +594,15 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
     }
 }
 
-/// Watch thread. No thread for Untracked, Nested-with-empty-spec, or a
-/// platform with no matcher.
+/// Watch thread, counting the launch from `started_at` ([`LeaseRequest::started_at`]). No
+/// thread for Untracked, Nested-with-empty-spec, or a platform with no matcher.
 fn spawn_watcher(
     shared: Arc<LeaseShared>,
     child: Option<std::process::Child>,
     procs: Option<crate::launchreg::LiveProcs>,
     on_exit: OnExit,
     window: Option<WindowSource>,
+    started_at: Option<Instant>,
 ) -> Option<std::thread::JoinHandle<()>> {
     // Untracked: nothing to observe. Nested with a spec: watch the game;
     // node-death misses a Steam launch that nests the resident client.
@@ -607,14 +617,14 @@ fn spawn_watcher(
     // No matcher on this platform: status lease, no poll.
     #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
-        let _ = (child, procs, on_exit, window);
+        let _ = (child, procs, on_exit, window, started_at);
         None
     }
     #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     {
         std::thread::Builder::new()
             .name("pf1-gamelease".into())
-            .spawn(move || watch(shared, child, procs, on_exit, window))
+            .spawn(move || watch(shared, child, procs, on_exit, window, started_at))
             .ok()
     }
 }
@@ -886,6 +896,7 @@ struct Watcher {
     /// up" — the same one-way transition as a reaped `child`.
     spawned: Option<crate::procscan::ProcRef>,
     kind: LeaseKind,
+    /// When the launch's process started: [`SHIM_WINDOW`] and [`START_GRACE`] count from it.
     spawned_at: Instant,
     /// Play time credits a recorded launch's title. Unrecorded — no client key, no
     /// library id, a test lease — keeps none ([`crate::launchreg::Claim`]).
@@ -896,7 +907,8 @@ struct Watcher {
 }
 
 /// Wait for the game to appear, then for its window, then for it to stay gone. An adopted
-/// launch has appeared already ([`Watcher::resume`]).
+/// launch has appeared already ([`Watcher::resume`]). The launch's clock is `started_at`, or
+/// this watcher's own start when the request started nothing.
 #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn watch(
     shared: Arc<LeaseShared>,
@@ -904,12 +916,13 @@ fn watch(
     procs: Option<crate::launchreg::LiveProcs>,
     on_exit: OnExit,
     window: Option<WindowSource>,
+    started_at: Option<Instant>,
 ) {
     let mut w = Watcher {
         credit: procs.as_ref().and(shared.game.id.clone()),
         spawned: shared.spawned,
         kind: shared.kind.clone(),
-        spawned_at: Instant::now(),
+        spawned_at: started_at.unwrap_or_else(Instant::now),
         scanner: crate::procscan::Scanner::system(),
         shared,
         child,
@@ -1744,6 +1757,7 @@ mod tests {
             launcher: false,
             child: None,
             spawned: None,
+            started_at: None,
             // No floor: these leases never match real processes.
             launch_stamp: None,
             // Unrecorded; nothing here spawns.
@@ -2273,6 +2287,7 @@ mod tests {
                 launcher: false,
                 child: Some((child, false)),
                 spawned: None,
+                started_at: None,
                 launch_stamp: None,
                 procs: None,
                 #[cfg(target_os = "linux")]
@@ -2377,6 +2392,65 @@ mod tests {
             1,
             "the player quitting must end the session exactly once"
         );
+    }
+
+    /// A process that outlives [`SHIM_WINDOW`] is the game, counted from when the host started
+    /// it. The launch's synced write sits between that start and [`open`] and takes seconds on
+    /// a busy disk: a lease opened 4 s after its start reads running 1 s later, one with no
+    /// start instant after the whole window.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_launchs_shim_window_counts_from_its_start_not_from_its_lease() {
+        let started = Instant::now()
+            .checked_sub(Duration::from_secs(4))
+            .expect("a clock more than 4 s old");
+        let mut games: Vec<_> = (0..2)
+            .map(|_| {
+                std::process::Command::new("sleep")
+                    .arg("30")
+                    .spawn()
+                    .expect("spawn the fake game")
+            })
+            .collect();
+        let lease_of = |game: &std::process::Child, id: &str, started_at| {
+            open(
+                LeaseRequest {
+                    spawned: Some(game.id()),
+                    started_at,
+                    launch_stamp: launch_clock(),
+                    ..req(id, DetectSpec::default(), false)
+                },
+                Box::new(|| {}),
+            )
+        };
+        let counted = lease_of(&games[0], "custom:clock-from-start", Some(started));
+        let own = lease_of(&games[1], "custom:clock-from-lease", None);
+        let runs_within = |lease: &GameLease, within: Duration| {
+            let deadline = Instant::now() + within;
+            while Instant::now() < deadline && lease.shared().state() != GameState::Running {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            lease.shared().state() == GameState::Running
+        };
+
+        assert!(
+            runs_within(&counted, Duration::from_secs(3)),
+            "4 s of the window is behind a lease whose process started 4 s ago"
+        );
+        assert_ne!(
+            own.shared().state(),
+            GameState::Running,
+            "a lease with no start instant counts from its own open"
+        );
+        assert!(
+            runs_within(&own, SHIM_WINDOW + Duration::from_secs(3)),
+            "a process that outlives the shim window is the game"
+        );
+        drop((counted, own));
+        for game in &mut games {
+            let _ = game.kill();
+            let _ = game.wait();
+        }
     }
 
     /// Pid-only hand-off with empty spec must not end the session.
@@ -2522,6 +2596,7 @@ mod tests {
                 launcher: false,
                 child: Some((child, true)),
                 spawned: None,
+                started_at: None,
                 launch_stamp,
                 procs: None,
                 #[cfg(target_os = "linux")]
