@@ -1,17 +1,38 @@
-# punktfunk-host — RPM (Bazzite / Fedora Atomic) via the Gitea registry
+# punktfunk-host — RPM (Fedora, Bazzite, openSUSE) via the Gitea registry
 
 `punktfunk-host` is published as an RPM to **Gitea's RPM package registry** in the public `unom`
-org (stable groups `bazzite`/`fedora-44`, canary groups `bazzite-canary`/`fedora-44-canary`), so
+org. Each distro release has its own group, compiled in that release's builder image, with a
+`-canary` twin: `bazzite` (Fedora 43), `fedora-44`, `fedora-45` and `opensuse-tumbleweed`.
 Bazzite / Fedora Atomic hosts layer and update it with `rpm-ostree`. CI (`.gitea/workflows/rpm.yml`)
 builds and publishes on every push to `main` (a rolling `<next-minor>-0.ciN.g<sha>` build — the base
 is derived from the latest stable tag by `scripts/ci/pf-version.sh` — to the `*-canary`
 groups) and on `vX.Y.Z` tags (a clean `X.Y.Z-1` to the base groups, plus attached to the unified
 Gitea Release) — separate repos, so a stable box never jumps to a canary build (see
 [Release Channels](https://punktfunk.unom.io/docs/channels)). The `baseurl` below subscribes to the
-`bazzite` stable group; use `bazzite-canary` for the latest main builds. The RPM is built in the
-Fedora 43 image (`ci/fedora-rpm.Dockerfile`) so its auto-generated library Requires
-match Bazzite's sonames; the NVIDIA driver lib (`libcuda.so.1`) is
+`bazzite` stable group; use `bazzite-canary` for the latest main builds. Each group's RPM is built in
+its own image (`ci/fedora-rpm.Dockerfile` per Fedora release, `ci/opensuse-rpm.Dockerfile` for
+Tumbleweed) so its auto-generated library Requires
+match that distro's sonames; the NVIDIA driver lib (`libcuda.so.1`) is
 excluded — NVENC/EGL come from whatever NVIDIA stack the host runs (a weak Recommends).
+
+One spec serves both families, so a hard dependency in it names a library or a file, never one
+family's package name: `libei` is `libei1` on openSUSE, `vulkan-loader` is `libvulkan1`.
+
+**openSUSE packages carry no `.fcNN` in their release, and the registry's cleanup rule has to know
+that.** The organisation's rule for RPMs (`git.unom.io/org/unom/settings/packages`) deletes a
+version seven days after it was published unless the version matches the rule's keep pattern,
+which is what keeps a stable release installable. The pattern must accept a stable release with and
+without `.fcNN`:
+
+```
+(.*-[1-9][0-9]*(\.[0-9]+)*(\.fc[0-9]+)?)
+```
+
+A canary's release starts with `0.`, so it never matches and is pruned as before.
+
+**Tumbleweed is rolling.** Its builder image is a snapshot, like the Arch one, and `rpm.yml`
+refuses to publish a set that a current Tumbleweed box can't install. When that gate fires, bump
+`refreshed:` in `ci/opensuse-rpm.Dockerfile` and re-run once `docker.yml` has pushed the image.
 
 This is the same package as the [COPR](../copr/README.md) / [bootc](../bootc/Containerfile)
 paths — same spec (`punktfunk.spec`) — just self-hosted in Gitea instead of COPR, mirroring the
