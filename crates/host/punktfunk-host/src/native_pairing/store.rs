@@ -52,6 +52,14 @@ pub struct PairedClient {
     /// familiar, so its next device's knock may be approved. Never an authorization input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// When this device last opened a session, unix seconds. Display only; never an
+    /// authorization input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_unix: Option<i64>,
+    /// The OS the device last said it runs (`macos`, `android`, `web`). Display only; the
+    /// client states it, so never an authorization input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
 }
 
 /// The vocabulary this host writes `grants` in, where [`GRANT_ALL`] is `0x1FF`.
@@ -270,6 +278,8 @@ impl TrustStore {
                 until_disconnect: access.is_some_and(|a| a.until_disconnect),
                 preferred_pad_slot: None,
                 origin: None,
+                last_seen_unix: None,
+                platform: None,
             }),
         }
         if let Err(e) = save(&p) {
@@ -342,6 +352,30 @@ impl TrustStore {
             return Ok(());
         };
         existing.origin = Some(origin.to_string());
+        if let Err(e) = save(&p) {
+            p.clients.clients = snapshot;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Stamp `fp_hex`'s record with `at` as its last session, and the platform it stated, if
+    /// any. No record writes nothing. Persist failure rolls back RAM.
+    pub(super) fn note_session(&self, fp_hex: &str, at: i64, platform: Option<&str>) -> Result<()> {
+        let mut p = self.lock();
+        let snapshot = p.clients.clients.clone();
+        let Some(existing) = p
+            .clients
+            .clients
+            .iter_mut()
+            .find(|c| c.fingerprint.eq_ignore_ascii_case(fp_hex))
+        else {
+            return Ok(());
+        };
+        existing.last_seen_unix = Some(at);
+        if let Some(platform) = platform {
+            existing.platform = Some(platform.to_string());
+        }
         if let Err(e) = save(&p) {
             p.clients.clients = snapshot;
             return Err(e);
@@ -440,6 +474,8 @@ mod tests {
             until_disconnect: false,
             preferred_pad_slot: None,
             origin: None,
+            last_seen_unix: None,
+            platform: None,
         };
         let marked = Some(GRANTS_REV);
         assert_eq!(stored_grants(&record(None, None)), GRANT_ALL);

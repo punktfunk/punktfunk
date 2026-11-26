@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useLocale } from "@/lib/i18n";
 import { usePerson } from "@/lib/person";
+import { platformName } from "@/lib/platform";
 import { isBoolean, useLocalPref } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -255,17 +256,6 @@ export const BrowseTab: FC<{
 };
 
 /**
- * The catalog stores platform IDENTIFIERS (`linux | windows | macos` — see the index
- * validator); these are their display names. Proper nouns, so deliberately not routed
- * through i18n, and `macos` is spelled the way Apple spells it.
- */
-const PLATFORM_LABELS: Record<string, string> = {
-	linux: "Linux",
-	windows: "Windows",
-	macos: "macOS",
-};
-
-/**
  * These cards have no header, so their `CardContent` is the first child and keeps its top inset
  * (`INSET_AFTER_SIBLING` in `components/ui/card.tsx`). tailwind-merge keeps `p-card` beside the
  * base `p-padding-card`, which the stylesheet emits later, so only the top takes `--spacing-card`.
@@ -324,7 +314,7 @@ export const StoreCard: FC<{ entry: CatalogEntry; onInstall: () => void }> = ({
 				<div className="flex flex-wrap gap-1.5">
 					{entry.platforms.map((p) => (
 						<Badge key={p} variant="secondary" className="font-normal">
-							{PLATFORM_LABELS[p] ?? p}
+							{platformName(p) ?? p}
 						</Badge>
 					))}
 				</div>

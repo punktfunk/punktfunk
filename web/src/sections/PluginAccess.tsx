@@ -481,44 +481,58 @@ export const PendingAccess: FC<{
 };
 
 /** The operator's own way to let a plugin reach a server on this computer: a port and Allow,
- * with no request from the plugin. The host refuses a port of its own. */
+ * with no request from the plugin. Folded like the row's other access lines until asked for.
+ * The host refuses a port of its own. */
 export const AllowPort: FC<{ busy: boolean; onDecide: DecideAccess }> = ({
 	busy,
 	onDecide,
 }) => {
 	const id = useId();
+	const [open, setOpen] = useState(false);
 	const [value, setValue] = useState("");
 	const port = Number(value);
 	const valid = Number.isInteger(port) && port >= 1 && port <= 65535;
 	return (
-		<form
-			className="mt-1 flex flex-wrap items-center gap-2 text-xs"
-			onSubmit={(e) => {
-				e.preventDefault();
-				if (!valid) return;
-				onDecide([portPath(port)], "allow");
-				setValue("");
-			}}
-		>
-			<label htmlFor={id} className="text-muted-foreground">
-				{m.plugin_access_port_add()}
-			</label>
-			<Input
-				id={id}
-				inputMode="numeric"
-				className="h-7 w-24"
-				value={value}
-				onChange={(e) => setValue(e.target.value.replace(/\D/g, ""))}
-			/>
-			<Button
-				type="submit"
-				size="sm"
-				variant="outline"
-				disabled={busy || !valid}
+		<div className="mt-1">
+			<button
+				type="button"
+				aria-expanded={open}
+				onClick={() => setOpen((v) => !v)}
+				className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 			>
-				{m.plugin_access_allow()}
-			</Button>
-		</form>
+				<ChevronRight
+					className={cn("size-3.5 transition-transform", open && "rotate-90")}
+				/>
+				{m.plugin_access_port_add()}
+			</button>
+			{open && (
+				<form
+					className="mt-2 flex items-center gap-2 pl-5"
+					onSubmit={(e) => {
+						e.preventDefault();
+						if (!valid) return;
+						onDecide([portPath(port)], "allow");
+						setValue("");
+						setOpen(false);
+					}}
+				>
+					<label htmlFor={id} className="sr-only">
+						{m.plugin_access_port_add()}
+					</label>
+					{/* `!`: the field's own height is a theme token a plain class does not displace. */}
+					<Input
+						id={id}
+						inputMode="numeric"
+						className="h-8! w-24 font-mono"
+						value={value}
+						onChange={(e) => setValue(e.target.value.replace(/\D/g, ""))}
+					/>
+					<Button type="submit" size="sm" disabled={busy || !valid}>
+						{m.plugin_access_allow()}
+					</Button>
+				</form>
+			)}
+		</div>
 	);
 };
 

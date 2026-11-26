@@ -12,6 +12,7 @@ import { useHostEvents } from "@/api/events";
 import { endPersonSession, usePersonMe, usePersonPlugins } from "@/api/person";
 import { pluginIcon, uiPlugins, usePlugins } from "@/api/plugins";
 import { BrandMark } from "@/components/brand-mark";
+import { CommandPalette, PaletteButton } from "@/components/command-palette";
 import { ProfileAvatar } from "@/components/profile-avatar";
 import { QueryState } from "@/components/query-state";
 import { ROW, Stagger, staggerProps } from "@/components/stagger";
@@ -95,6 +96,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 	// Plugin UIs do not add themselves to the sidebar, so a fresh install says where it went
 	// (design/web-console-overhaul.md §4.1).
 	useNewPluginToast();
+	const [palette, setPalette] = useState(false);
+	const openPalette = () => setPalette(true);
 	return (
 		<div className="flex min-h-screen">
 			{/* Desktop sidebar (≥ sm). Sticky at viewport height: the page (body) scrolls with
@@ -112,14 +115,20 @@ export function AppShell({ children }: { children: ReactNode }) {
 					<BrandMark className="size-7 shrink-0 drop-shadow-[0_2px_12px_rgba(108,91,243,0.45)]" />
 					<Wordmark className="hidden h-4 lg:block" />
 				</Link>
+				<div className="mb-4">
+					<PaletteButton onOpen={openPalette} />
+				</div>
 				<Sidebar />
 			</aside>
 
 			<div className="flex flex-1 flex-col overflow-x-hidden">
-				{/* Mobile top bar (< sm): brand only. Language is set once, in Settings. */}
+				{/* Mobile top bar (< sm): brand and search. Language is set once, in Settings. */}
 				<header className="flex items-center gap-2 border-b bg-card/40 px-4 py-3 sm:hidden">
 					<BrandMark className="size-6" />
 					<Wordmark className="h-3.5" />
+					<div className="ml-auto -my-2">
+						<PaletteButton onOpen={openPalette} compact />
+					</div>
 				</header>
 
 				<main className="flex-1">
@@ -132,6 +141,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 			</div>
 
 			<MobileNav />
+			<CommandPalette open={palette} onOpenChange={setPalette} />
 		</div>
 	);
 }

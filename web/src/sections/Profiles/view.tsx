@@ -6,6 +6,7 @@ import {
 	ImageMinus,
 	ImagePlus,
 	KeyRound,
+	Lock,
 	Pencil,
 	Plus,
 	RotateCw,
@@ -41,6 +42,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
 import {
 	Select,
 	SelectContent,
@@ -57,10 +59,10 @@ import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { DeskPadsCard, type PadLending } from "./deskPadsCard";
 import {
-	LockAction,
 	type LockCard,
 	LockChip,
 	LockLines,
+	lockActionLabel,
 	lockCard,
 } from "./lock";
 import {
@@ -334,6 +336,7 @@ const ProfileRow: FC<{
 }) => {
 	const file = useRef<HTMLInputElement>(null);
 	const state = p.seat?.state;
+	const lockLabel = lock && lockActionLabel(lock);
 	// A take-turns profile has no managed seat to start/stop by hand — the client drives the
 	// switch. Its card shows no seat buttons. Only its person's unlock starts a desktop on their
 	// own Linux account.
@@ -349,8 +352,8 @@ const ProfileRow: FC<{
 			: m.profiles_never_used(),
 	];
 	return (
-		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:flex-wrap sm:items-center">
-			<div className="flex min-w-0 flex-1 items-center gap-3">
+		<div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b pb-4 last:border-0 last:pb-0">
+			<div className="flex min-w-0 flex-1 basis-56 items-center gap-3">
 				<ProfileAvatar profile={p} className="size-11" />
 				<div className="min-w-0">
 					<div className="flex flex-wrap items-center gap-2">
@@ -378,7 +381,7 @@ const ProfileRow: FC<{
 					{lock && <LockLines lock={lock} />}
 				</div>
 			</div>
-			<div className="flex shrink-0 items-center justify-end gap-1">
+			<div className="ml-auto flex shrink-0 items-center justify-end gap-1">
 				{managed && startable && state === "stopped" && (
 					<Button
 						variant="outline"
@@ -412,29 +415,6 @@ const ProfileRow: FC<{
 							{m.profiles_seat_stop()}
 						</Button>
 					)}
-				{managed?.onPassword && p.seat?.account && (
-					<Button
-						variant="ghost"
-						size="icon"
-						aria-label={m.profiles_seat_password_update()}
-						title={m.profiles_seat_password_update()}
-						disabled={busy}
-						onClick={() => managed.onPassword?.(p)}
-					>
-						<KeyRound className="size-4" />
-					</Button>
-				)}
-				{lock && <LockAction lock={lock} disabled={busy} />}
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label={m.action_rename()}
-					title={m.action_rename()}
-					disabled={busy}
-					onClick={onRename}
-				>
-					<Pencil className="size-4" />
-				</Button>
 				<input
 					ref={file}
 					type="file"
@@ -446,42 +426,45 @@ const ProfileRow: FC<{
 						if (picked) onPicture(picked);
 					}}
 				/>
-				<Button
-					variant="ghost"
-					size="icon"
-					aria-label={m.profiles_picture_set()}
-					title={m.profiles_picture_set()}
-					disabled={busy}
-					onClick={() => file.current?.click()}
-				>
-					<ImagePlus className="size-4" />
-				</Button>
-				{p.avatar && (
-					<Button
-						variant="ghost"
-						size="icon"
-						aria-label={m.profiles_picture_remove()}
-						title={m.profiles_picture_remove()}
-						disabled={busy}
-						onClick={onRemovePicture}
-					>
-						<ImageMinus className="size-4" />
-					</Button>
-				)}
-				{!p.owner && (
-					<Button
-						variant="ghost"
-						size="icon"
-						aria-label={m.profiles_remove()}
-						title={m.profiles_remove()}
-						disabled={busy}
-						onClick={onRemove}
-					>
-						<Trash2 className="size-4 text-destructive" />
-					</Button>
-				)}
+				<RowMenu label={m.common_more_actions()} disabled={busy}>
+					<MenuItem onSelect={onRename}>
+						<Pencil />
+						{m.action_rename()}
+					</MenuItem>
+					<MenuItem onSelect={() => file.current?.click()}>
+						<ImagePlus />
+						{m.profiles_picture_set()}
+					</MenuItem>
+					{p.avatar && (
+						<MenuItem onSelect={onRemovePicture}>
+							<ImageMinus />
+							{m.profiles_picture_remove()}
+						</MenuItem>
+					)}
+					{lock?.onOpen && lockLabel && (
+						<MenuItem onSelect={lock.onOpen}>
+							<Lock />
+							{lockLabel}
+						</MenuItem>
+					)}
+					{managed?.onPassword && p.seat?.account && (
+						<MenuItem onSelect={() => managed.onPassword?.(p)}>
+							<KeyRound />
+							{m.profiles_seat_password_update()}
+						</MenuItem>
+					)}
+					{!p.owner && (
+						<>
+							<MenuSeparator />
+							<MenuItem destructive onSelect={onRemove}>
+								<Trash2 />
+								{m.profiles_remove()}
+							</MenuItem>
+						</>
+					)}
+				</RowMenu>
 			</div>
-			{devices && <div className="sm:basis-full">{devices}</div>}
+			{devices && <div className="basis-full">{devices}</div>}
 		</div>
 	);
 };

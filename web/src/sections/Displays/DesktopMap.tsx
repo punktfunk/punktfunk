@@ -388,6 +388,9 @@ export const DesktopMap: FC<{
 								// covers — under `primary` and `exclusive` it shares their origin, and
 								// source order alone would hide its name under a monitor's box.
 								b.kind !== "monitor" && "z-[1]",
+								// The ghost is see-through over the main monitor: its name sits at the
+								// bottom so the monitor's, top left, stays readable.
+								b.kind === "ghost" && "justify-end",
 								b.dimmed && "opacity-40",
 								b.draggable &&
 									onMove &&
