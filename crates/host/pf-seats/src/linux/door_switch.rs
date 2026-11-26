@@ -12,7 +12,8 @@
 //! [`hands::Theirs`], and all that can be done with one is to pass it to a command that runs as
 //! that side (`runuser -u <side> --`, [`hands::Cmd::by`]). Their bytes pass through root in two
 //! places, the port lines and the password lines, and root filters both. Root writes only its own
-//! files in the state directory: the owner record, the door-on mark, the hold and the port file.
+//! files in the state directory: the owner record, the door-on mark, the port file and the hold,
+//! which keeps the door's units off until an on has copied the files or an off has ended.
 //!
 //! Every program runs through [`hands::pipe`], which the tests replace. So each switch is a table
 //! of commands and each step can be made to fail: see `the_door_s_on_runs_exactly_these`,
@@ -750,13 +751,22 @@ fn read(side: &Side, from: &Theirs) -> Vec<u8> {
     hands::pipe(&[cat.quiet().kept(MAX_PORT_INPUT + 1)]).1
 }
 
-/// The hold's name in the state directory. An off sets it first and removes it last, and the
-/// door's units don't start under it.
-pub(super) const HOLD: &str = "door-hold";
+/// The hold's name in the state directory. The door's units don't start under it. An on holds it
+/// from before the record until the files are in the box, with [`ON_HOLD`] inside; an off holds
+/// it empty from its first step to its last.
+const HOLD: &str = "door-hold";
+/// What an on's hold holds. An off's is empty.
+const ON_HOLD: &str = "on\n";
+
+/// Whether the hold in `state` is an off's: an off that began and didn't finish. An on's hold
+/// doesn't count. It checks the size, which needs no read right on root's file.
+pub(super) fn off_held(state: &Path) -> bool {
+    std::fs::metadata(state.join(HOLD)).is_ok_and(|m| m.len() == 0)
+}
 
 /// What a switch puts back when it ends early.
 enum Back<'a> {
-    /// A first on: no record, mark or owner row, and the supervisor off unless it was on.
+    /// A first on: no record, mark, hold or owner row, and the supervisor off unless it was on.
     On { user: &'a str, seats_were_up: bool },
     /// An off whose files didn't arrive home: it ends as [`Door::stand_down`] does and keeps the
     /// record, the mark and the hold. The door stays off; an on, then an off, hands them back.
@@ -849,8 +859,8 @@ impl Door {
         Path::new(&self.state).join("host.env")
     }
 
-    /// The door's units don't start while it exists: an off writes it first and removes it
-    /// last, so a failed off stays off at boot where the units can't be disabled.
+    /// The door's units don't start while it exists ([`HOLD`]), so a switch that stops halfway
+    /// stays off at boot, where the units can't be disabled.
     fn hold(&self) -> PathBuf {
         Path::new(&self.state).join(HOLD)
     }
@@ -965,6 +975,10 @@ impl Door {
         Ok(())
     }
 
+    /// Switches the door on for `owner`. The hold goes up before the record and comes down once
+    /// the files are in the box and the supervisor has the owner's row. So an on that stops
+    /// halfway, killed or failed, leaves the door's units off, and the next on or off finishes the
+    /// switch. A first on that fails puts the box back ([`Door::undo_on`]).
     fn on(&self, owner: &Owner, gone: Option<&str>, recorded: &str) -> Result<(), Stop> {
         let user = owner.user;
         let seats_were_up = active(SEATS_UNIT);
@@ -1006,6 +1020,11 @@ impl Door {
                 seats_were_up,
             }),
         };
+        // A hold already there stays as it is: a failed off's stays empty for `off_held`.
+        if !self.hold().exists() {
+            std::fs::write(self.hold(), ON_HOLD)
+                .map_err(|e| die(&format!("write {}: {e}", self.hold().display())))?;
+        }
         self.write_record(user)?;
         if !self.mark().exists() {
             // The box holds this member's files alone; only a gone owner's stay where this
@@ -1023,7 +1042,8 @@ impl Door {
         // Ready once its socket is bound (Type=notify).
         must(&[Cmd::root(&["systemctl", "start", SEATS_UNIT])])?;
         must(&[Cmd::root(&[self.seats.as_str(), "adopt-owner", user]).hidden()])?;
-        // A failed off's hold would keep the door's units from starting below.
+        // The files are in the box. The hold, this on's or a failed off's, would keep the door's
+        // units from starting below.
         remove(&[&self.hold()])?;
         wire(&[DOOR_UNIT, WEB_DOOR_UNIT])?;
         undo.disarm();
@@ -1041,13 +1061,16 @@ impl Door {
         Ok(())
     }
 
-    /// A first on that fails puts the box back. The user's own files were only copied.
+    /// A first on that fails puts the box back as [`Back::On`] says. The user's own files were
+    /// only copied.
     fn undo_on(&self, user: &str, seats_were_up: bool) {
         eprintln!("door-helper: couldn't switch the door on, putting the box back");
         if active(SEATS_UNIT) {
             status(Cmd::root(&[self.seats.as_str(), "release-owner"]).hidden());
         }
-        let gone = remove(&[&self.mark(), &self.record(), &self.contract(user)]);
+        // The hold goes only after the record: a record without a hold starts the door's units.
+        let gone = remove(&[&self.mark(), &self.record(), &self.contract(user)])
+            .and_then(|()| remove(&[&self.hold()]));
         if gone.is_ok() && !seats_were_up {
             unwire(&[SEATS_UNIT]);
         }
@@ -1795,6 +1818,7 @@ mod tests {
         record: Option<String>,
         mark: bool,
         hold: bool,
+        off_held: bool,
         contract: bool,
         seats: bool,
         ports: Option<String>,
@@ -1853,6 +1877,7 @@ mod tests {
             record: read("owner").map(|r| r.trim_end().to_owned()),
             mark: state.join("door-on").exists(),
             hold: state.join("door-hold").exists(),
+            off_held: off_held(&state),
             contract: contract.exists(),
             seats: world.active.borrow().contains(SEATS_UNIT),
             ports: read("host.env"),
@@ -1990,8 +2015,8 @@ mod tests {
 
     /// Every call of a first on and of an off fails in turn. A hand-over's read that fails ends
     /// its step, and its move is a call of its own. A first on that fails before the door's
-    /// ports move leaves no record or mark, asks the supervisor to release the owner's row and
-    /// leaves it as it was. An off whose hand-back fails ends as an off does, the door off and
+    /// ports move leaves no record, mark or hold, asks the supervisor to release the owner's row
+    /// and leaves it as it was. An off whose hand-back fails ends as an off does, the door off and
     /// the owner's host back, and keeps the record, the mark and the hold.
     #[test]
     fn a_failed_step_puts_the_box_back() {
@@ -2022,6 +2047,8 @@ mod tests {
                 }
                 if make().verb == "off" {
                     assert_eq!(ran.hold, record.is_some(), "{row}: {failed}");
+                } else {
+                    assert!(!ran.hold, "{row}: {failed}");
                 }
                 if exit != 0 && mark && make().verb == "off" {
                     assert!(ran.calls.ends_with(&stand_down()), "{row}: {failed}");
@@ -2098,6 +2125,49 @@ mod tests {
         );
     }
 
+    /// A takeover puts nothing back, so a step that fails halfway through the copy leaves what a
+    /// kill leaves. The hold keeps the door's units off a box with half of the member's files,
+    /// and the owner's host doesn't read it as an off that didn't finish.
+    #[test]
+    fn an_on_cut_short_leaves_the_door_held() {
+        let mut scenario = on_takeover();
+        let read = "runuser -u bob -- cat -- /home/bob/.config/punktfunk/profiles.json";
+        scenario.world.fail_at = Some(nth(&switch(on_takeover()).calls, read));
+        let ran = switch(scenario);
+        assert_eq!(
+            (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
+            (7, Some("bob"), false, true)
+        );
+        assert!(!ran.off_held);
+    }
+
+    /// What a killed on leaves, the record and the hold with no mark, is finished by the next
+    /// on: it copies the owner's files as a first on does and lifts the hold.
+    #[test]
+    fn an_on_after_a_killed_one_copies_and_lifts_the_hold() {
+        let mut world = world(&ALL_HAS, true);
+        world.owner = ALICE.to_vec();
+        let ran = switch(Scenario {
+            record: Some("alice"),
+            hold: true,
+            ..scenario("on", "alice", world)
+        });
+        let fresh = recorded(ON_FRESH);
+        let from = nth(
+            &fresh,
+            "runuser -u alice -- test -f /home/alice/.config/punktfunk/native-cert.pem",
+        );
+        let to = nth(&fresh, "systemctl enable punktfunk-seats.service");
+        let copy = &fresh[from - 1..to - 1];
+        let copied = ran.calls.windows(copy.len()).any(|w| w == copy);
+        assert!(copied, "{:#?}", ran.calls);
+        assert_eq!(
+            (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
+            (0, Some("alice"), true, false)
+        );
+        assert!(ran.seats);
+    }
+
     /// What an off runs once the files are home, a failed hand-back's too: the seats released,
     /// the units off, the owner's host and console back.
     fn stand_down() -> Vec<String> {
@@ -2126,7 +2196,7 @@ mod tests {
             (ran.exit, ran.record.as_deref(), ran.mark, ran.hold),
             (7, Some("alice"), true, true)
         );
-        assert!(!ran.contract && !ran.seats);
+        assert!(!ran.contract && !ran.seats && ran.off_held);
     }
 
     /// A first on gives the box this member's files alone: each one they lack, and every avatar,

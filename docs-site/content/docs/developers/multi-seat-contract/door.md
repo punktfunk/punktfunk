@@ -143,7 +143,10 @@ The console's `web-session-key` and `web-session-epoch` move with them (on Steam
 owner's `host-settings.json`, so the door's own rows start as the owner set them; before `off`,
 the door sends the rows it stored to the owner's host, and answers 503 while that host starts. The
 user must be in the `punktfunk-update` group, and a member switches the door for their own account
-only. The switch writes that account to `/var/lib/punktfunk-seats/owner` first. Who may switch
+only. An on first sets `/var/lib/punktfunk-seats/door-hold`, which keeps the door's units from
+starting, then writes that account to `/var/lib/punktfunk-seats/owner`. It lifts the hold once
+the owner's files are in `/var/lib/punktfunk`, so an on that dies halfway leaves the door off
+until the next on or off finishes the switch. Who may switch
 is decided under the switch's lock, from that file: it refuses to switch on while the file names another account, and to switch off for
 any but the one it names, which may have left the group since. A name whose account no longer
 exists names no one: a member's switch-on takes the door over, replacing the box's files with
