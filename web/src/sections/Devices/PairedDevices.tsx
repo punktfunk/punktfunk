@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { fmtAgo } from "@/lib/format";
 import { widensAccess } from "@/lib/password-gates";
+import { platformName } from "@/lib/platform";
 import { m } from "@/paraglide/messages";
 import {
 	ClientPolicySheet,
@@ -306,8 +307,9 @@ export function usePairedDevices() {
 	};
 }
 /**
- * One paired device. Its details line says how it pairs and when it last connected, or its
- * fingerprint where the host has no time for it; the full fingerprint is the line's tooltip. What can be changed is
+ * One paired device. Its details line says how it pairs, what it runs when the host knows, and
+ * when it last connected, or its fingerprint where the host has no time for it; the full
+ * fingerprint is the line's tooltip. What can be changed is
  * what you click, each with a pencil: the name (a Moonlight device's, whose certificate carries
  * none), the access chip, the display line. Unpair is the row's one button. A Moonlight row
  * carries no access fields and reads "Full (ungoverned)".
@@ -349,7 +351,7 @@ export const PairedRowView: FC<{
 				{r.protocol === "native"
 					? m.pairing_protocol_native()
 					: m.pairing_protocol_moonlight()}{" "}
-				·{" "}
+				· {platformName(r.platform) && <>{platformName(r.platform)} · </>}
 				{r.lastSeenUnix ? (
 					m.devices_last_seen({ when: fmtAgo(r.lastSeenUnix, nowUnix) })
 				) : (

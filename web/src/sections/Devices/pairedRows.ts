@@ -37,6 +37,8 @@ export interface PairedRow {
 	untilDisconnect?: boolean | null;
 	/** When it last opened a session (unix secs), native rows on a host that records it. */
 	lastSeenUnix?: number | null;
+	/** The OS the device last said it runs (`macos`, `web`), native rows only. */
+	platform?: string | null;
 }
 
 /** Whether the host reported access fields for this row (⇒ the chip and editor exist). */
@@ -60,6 +62,7 @@ export function pairedRows(
 				expiresUnix: c.expires_unix,
 				untilDisconnect: c.until_disconnect,
 				lastSeenUnix: c.last_seen_unix,
+				platform: c.platform,
 			}),
 		),
 		...(moonlight ?? []).map(

@@ -324,6 +324,7 @@
 	"devices_col_device": "Device",
 	"devices_col_access": "Access",
 	"devices_last_seen": "Last connected {when}",
+	"devices_platform_web": "Browser",
 	"devices_col_display": "Display",
 	"pairing_native_empty": "No devices paired yet.",
 	"pairing_native_unpair_confirm": "Unpair this device?",

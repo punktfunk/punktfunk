@@ -517,6 +517,7 @@ export const nativeClients: NativeClient[] = [
 		expires_unix: null,
 		until_disconnect: false,
 		last_seen_unix: accessNowUnix - 2 * 3600,
+		platform: "macos",
 	},
 	{
 		name: "living-room-tv",
@@ -529,6 +530,7 @@ export const nativeClients: NativeClient[] = [
 		expires_unix: accessNowUnix + 7080,
 		until_disconnect: false,
 		last_seen_unix: accessNowUnix - 3 * 86400,
+		platform: "android",
 	},
 	// A guest admitted for the evening: no deadline, the record goes when they do.
 	{
@@ -541,6 +543,7 @@ export const nativeClients: NativeClient[] = [
 		expires_unix: null,
 		until_disconnect: true,
 		last_seen_unix: accessNowUnix - 840,
+		platform: "linux",
 	},
 ];
 

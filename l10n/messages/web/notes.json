@@ -267,6 +267,7 @@
 	"devices_col_device": "Column header of the paired devices list on the Devices page; the column holds name and protocol.",
 	"devices_col_access": "Column header of the paired devices list; on a phone a small label over the value. The column shows what the device may do.",
 	"devices_last_seen": "Devices page, a paired device's details line after its protocol. {when} is a relative time such as '2 hours ago' / 'vor 2 Stunden'.",
+	"devices_platform_web": "Devices page, a paired device's details line: the device is a web browser running the web client. Other platforms show their product name (macOS, Android).",
 	"devices_col_display": "Column header of the paired devices list; on a phone a small label over the value. The column shows the device's display setup.",
 	"pairing_native_empty": "Empty state of the paired devices list.",
 	"pairing_native_unpair_confirm": "Title of the confirm dialog for unpairing one device.",
