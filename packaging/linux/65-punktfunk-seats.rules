@@ -1,18 +1,19 @@
 # punktfunk seats: a pad the supervisor made for a seat belongs to that seat's user alone.
 #
 # The supervisor stamps `phys` with `punktfunk-seat:` and records each device it makes, where
-# only root reads. `punktfunk-seats fence` names the user the record gives that exact device. The
-# node is then the user's, 0600, and on a seat of its own: `uaccess` (73-seat-late) finds no
-# session there and grants no ACL, so neither the box's own Steam nor another seat sees it, and
-# a distro rule that opens every hidraw or input node (`MODE="0666"`) loses to `:=`. Anyone can
-# write the stamp: a stamped node no record vouches for is root's alone, on a seat nobody uses.
+# only root reads. `punktfunk-seats node-owner` names the user the record gives that exact
+# device. The node is then the user's, 0600, and on a seat of its own: `uaccess` (73-seat-late)
+# finds no session there and grants no ACL, so neither the box's own Steam nor another seat sees
+# it, and a distro rule that opens every hidraw or input node (`MODE="0666"`) loses to `:=`.
+# Anyone can write the stamp: a stamped node no record vouches for is root's alone, on a seat
+# nobody uses.
 ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*|js*", ATTRS{phys}=="punktfunk-seat:*", \
-    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats node-owner"
 # A uhid pad's nodes: the stamp is the HID device's `phys`, which the helper reads. A driver's
 # own input devices (hid-playstation's) leave theirs empty.
 ACTION!="remove", SUBSYSTEM=="hidraw|input", KERNEL=="hidraw*|event*|js*", \
     DEVPATH=="/devices/virtual/misc/uhid/*", \
-    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats node-owner"
 # Everything under a vhci port: the helper maps the port to the seat that attached it. While
 # the supervisor runs, a vhci interface starts unauthorized and the helper authorizes and probes
 # it: a seat's only on a device the host emulates and only HID, audio, CDC-ACM or vendor
@@ -21,16 +22,16 @@ ACTION!="remove", SUBSYSTEM=="hidraw|input", KERNEL=="hidraw*|event*|js*", \
 # udev re-applies a node's owner, mode and ACL on every event, a driver's `bind` and a
 # `udevadm trigger` too, so every line runs on all but `remove`.
 ACTION!="remove", DEVPATH=="/devices/platform/vhci_hcd*/usb*/*", \
-    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats node-owner"
 # A seat's /dev/uinput, the supervisor's CUSE device /dev/punktfunk/uinput-<account>: the
 # helper reads the account from its name.
 ACTION!="remove", SUBSYSTEM=="cuse", DEVPATH=="/devices/virtual/cuse/punktfunk!uinput-*", \
-    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+    IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats node-owner"
 # A real USB device's nodes, while a desk pad is lent: the helper hands a lent pad's nodes to
 # the seat its record names, makes a parked pad's and its keyboard and mouse nodes root's, and
 # says nothing of any device no record names.
 ACTION!="remove", SUBSYSTEMS=="usb", DEVPATH!="/devices/platform/vhci_hcd*", \
-    TEST=="/run/punktfunk/pads/lent", IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats fence"
+    TEST=="/run/punktfunk/pads/lent", IMPORT{program}="/usr/libexec/punktfunk/punktfunk-seats node-owner"
 ACTION!="remove", SUBSYSTEM=="input|hidraw|usb|sound|tty|cuse", ENV{PF_SEAT_USER}=="?*", \
     OWNER:="$env{PF_SEAT_USER}", GROUP:="root", MODE:="0600", TAG-="uaccess", \
     ENV{ID_SEAT}="$env{PF_SEAT}", ENV{ID_MM_DEVICE_IGNORE}="1"

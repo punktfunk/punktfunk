@@ -1,14 +1,15 @@
-//! The files behind [`crate::unlock`]: a person's row's device list and the box's pin.
+//! The two files behind [`crate::unlock`]: the device list of a person's row, and the box's pin.
 //!
-//! `seats/<id>/devices.json` is root's `0600`, in the row's root-owned directory, written whole
-//! and renamed into place on each change. A file that can't be read or doesn't hold a list this
-//! supervisor would write loads as no device, and the doctor says so: nobody is let on from a
-//! list nobody can vouch for.
+//! **`seats/<id>/devices.json`** is the device list. It is root's, mode `0600`, in the row's
+//! root-owned directory. Each change writes the whole file and renames it into place. A file
+//! that can't be read, or that doesn't hold a list this supervisor would write, loads as a list
+//! with no device, and the doctor says so. Nobody is let on from a list nobody can vouch for.
 //!
-//! `box-pin` holds the SHA-256 of the box's certificate, `native-cert.pem` in the door's
-//! directory, as the supervisor read it when a key proof first needed it. The certificate is
-//! public: a door that changes it afterwards gets every key proof refused, and one that planted
-//! another before the pin gets proofs a device signed for the real box refused.
+//! **`box-pin`** holds the SHA-256 of the box's certificate (`native-cert.pem` in the door's
+//! directory), as the supervisor read it the first time a key proof needed it. The certificate
+//! is public. If the door changes the certificate afterwards, every key proof is refused. If the
+//! door planted another certificate before the pin was taken, the proofs that a device signed
+//! for the real box are refused.
 
 use super::safe_open;
 use super::shared::seat_dir;

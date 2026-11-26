@@ -1,20 +1,24 @@
-//! Turning seats on and off: the prerequisite checks, the seat display driver, the Remote
-//! Desktop listener and its firewall scope, the seat listener, and the pinned RDP certificate.
+//! Turns seats on and off on Windows. This covers the prerequisite checks, the seat display
+//! driver, the Remote Desktop listener and its firewall scope, the seat listener, and the pinned
+//! RDP certificate.
 //!
-//! [`checks`] only reads. [`turn_on`] creates the Seats key and records there what it changed
-//! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`,
-//! `RdpRulesNarrowed`); [`turn_off`] undoes exactly that and deletes the key last, so a failed
-//! restore can be retried. Both read the key into [`Recorded`], take their steps from
-//! [`crate::seat_switch`] and [`perform`] them in order. A refusal carries one plain sentence for
-//! the operator; its cause goes to the log. The seat display driver stays in the driver store
-//! when seats go off.
+//! - [`checks`] only reads.
+//! - [`turn_on`] creates the Seats key and records in it what it changed (`ListenerWasOff`,
+//!   `AllowRdpFromNetwork`, `RdpRulesOpened`, `RdpRuleScopes`, `RdpRulesNarrowed`).
+//! - [`turn_off`] undoes exactly what is recorded and deletes the key last, so a restore that
+//!   failed can be tried again.
+//!
+//! Both read the key into [`Recorded`], take their steps from [`super::switch`] and [`perform`]
+//! them in order. A refusal carries one plain sentence for the operator, and its cause goes to
+//! the log. The seat display driver stays in the driver store when seats go off.
 
+use super::backend::{seats_enabled, server_edition, session_wrapper, ENABLING, SEATS_KEY};
+use super::doctor::DriverState;
+use super::keeper;
+use super::switch::{self, Recorded, Step};
 use super::util::{backend_error, WinResult};
-use super::{keeper, seats_enabled, server_edition, session_wrapper, ENABLING, SEATS_KEY};
 use crate::backend::BackendError;
-use crate::doctor::DriverState;
 use crate::ipc::Diagnostic;
-use crate::seat_switch::{self, Recorded, Step};
 use pf_paths::POWERSHELL;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -247,7 +251,7 @@ pub(super) fn turn_on(host_path: &Path, allow_rdp_from_network: bool) -> WinResu
     done
 }
 
-/// Undo what `turn_on` recorded ([`seat_switch::off`]), then remove the Seats key.
+/// Undo what `turn_on` recorded ([`switch::off`]), then remove the Seats key.
 pub(super) fn turn_off() -> WinResult<()> {
     let _switching = SWITCHING.lock().unwrap_or_else(PoisonError::into_inner);
     off()
@@ -262,7 +266,7 @@ fn off() -> WinResult<()> {
         return Ok(());
     };
     // No step of seats off reads the host path.
-    perform_all(&seat_switch::off(&recorded(&seats)), seats, Path::new(""))
+    perform_all(&switch::off(&recorded(&seats)), seats, Path::new(""))
 }
 
 /// What the Seats key records of the changes a turn-on made.
@@ -422,12 +426,12 @@ pub(super) fn rdp_local_chosen() -> bool {
 }
 
 /// A local or Group Policy firewall rule, in any group, lets an address other than this PC's
-/// reach Remote Desktop ([`seat_switch::reaches_rdp_from_network`]). For the doctor.
+/// reach Remote Desktop ([`switch::reaches_rdp_from_network`]). For the doctor.
 pub(super) fn rdp_reachable() -> bool {
     [FIREWALL_RULES, POLICY_RULES]
         .iter()
         .flat_map(|store| firewall_rules(store))
-        .any(|rule| seat_switch::reaches_rdp_from_network(&rule))
+        .any(|rule| switch::reaches_rdp_from_network(&rule))
 }
 
 /// Narrow Remote Desktop again where the operator keeps it on this PC and a rule of its groups
@@ -556,7 +560,7 @@ pub(super) fn refusal(error: BackendError) -> Diagnostic {
     row
 }
 
-/// Create or open the Seats key and perform [`seat_switch::on`] for what it records. A new key
+/// Create or open the Seats key and perform [`switch::on`] for what it records. A new key
 /// reads as off until the last step; a finished one stays on while it is redone.
 fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
     let dir = package_dir(host_path);
@@ -575,7 +579,7 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
         })?;
     let recorded = (disposition != RegDisposition::REG_CREATED_NEW_KEY).then(|| recorded(&seats));
     perform_all(
-        &seat_switch::on(recorded, allow_rdp_from_network),
+        &switch::on(recorded, allow_rdp_from_network),
         seats,
         host_path,
     )

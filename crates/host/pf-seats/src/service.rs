@@ -1,17 +1,21 @@
-//! Serialized command dispatch over a validated ledger and platform backend.
+//! Carries out the supervisor's commands, one at a time, on the ledger and the platform.
 //!
-//! Each mutation is applied to a clone, persisted with a new generation, then
-//! published in memory. Provisioning precedes the create commit; a create that
-//! fails in either removes what it made through the backend's marker-checked
-//! remove, and only an explicit Delete removes a committed seat's account.
-//! Runtime observations, including backend failures, are persisted. Startup
-//! reconciliation starts autostart seats and refreshes the rest. One mutex
-//! serializes lifecycle calls because four seats do not need rollback races; the
-//! ledger's own lock is never held across a backend call that takes time (a
-//! create, start, stop, delete or Enable), only for the edit and its write, so
-//! `List` answers while a seat takes its tens of seconds to come up. A password check runs under
-//! the attempt limits of [`crate::attempts`]; a Linux one runs outside the mutex too. A person's
-//! Linux row starts only through [`unlock`].
+//! A change to the ledger is applied to a copy, saved with a new generation number, and only
+//! then published in memory.
+//!
+//! - **Create**: the account is provisioned first, then the row is saved. If either step fails,
+//!   what was made is removed again through the backend's `remove`, which checks the account's
+//!   marker. Only an explicit `Delete` removes the account of a saved seat.
+//! - **Runtime state**: what the backend observes, failures included, is saved too.
+//! - **At startup**: seats marked autostart are started and the state of the others is read.
+//!
+//! Two locks. `ops` lets one lifecycle call run at a time: four seats need nothing finer. The
+//! ledger's own lock is held only for an edit and its save, never across a slow backend call
+//! (create, start, stop, delete, Enable), so `List` still answers while a seat takes tens of
+//! seconds to start.
+//!
+//! A password check runs under the limits of [`crate::attempts`]. On Linux it also runs outside
+//! `ops`. A person's Linux row starts only through [`unlock`].
 
 mod pads;
 mod unlock;
@@ -132,10 +136,10 @@ impl<B: PlatformBackend> SeatService<B> {
             Command::Lend { id, key } => self.lend(&id, &key),
             Command::TakeBack { key } => self.take_back(&key),
             // Neither the ledger nor `ops`: a seat's start never holds a library change back.
-            Command::LevelLibrary => self
+            Command::SyncLibrary => self
                 .backend
-                .level_library()
-                .map(|changed| CommandResult::Leveled { changed })
+                .sync_library()
+                .map(|changed| CommandResult::Synced { changed })
                 .map_err(ApiError::from),
         }
     }

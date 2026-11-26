@@ -1,17 +1,18 @@
-//! Attempt limits for secret checks, kept in memory: the supervisor's for passwords, the host's
-//! per device for profile PINs (a profile's own cap is in its lock file, `locks`). Pure: the
-//! caller passes the time.
+//! Attempt limits for checks of a secret, kept in memory. The supervisor uses them for
+//! passwords. The host uses them, per device, for profile PINs. A profile's own cap is in its
+//! lock file (`profile_locks`). Pure: the caller passes the time.
 //!
-//! A device, of a seat, an account or a profile, waits `2 s × 2^failures` after each failed check
-//! and [`LOCKOUT`] after the fifth. An account lets at most [`ACCOUNT_FAILURES`] failed checks
-//! through in any [`WINDOW`], over all its devices, so a login stack that locks an account after
-//! three (`pam_faillock`) is never driven there from here. The account's window doubles with
-//! every [`ACCOUNT_STEP`] failures since its last pass, up to [`WINDOW_MAX`].
-//!
-//! A check in flight counts as failed until it settles, so concurrent attempts can't share one
-//! allowance. A refusal here is not a failure. A pass clears its device and account. A device's
-//! entry goes once its last failure is a [`WINDOW`] old, an account's once its last failure is
-//! a [`WINDOW_MAX`] old, so waiting out one window doesn't reset the doubling.
+//! - **Per device.** A device is counted separately for each seat, account or profile it tries.
+//!   After each failed check it waits `2 s × 2^failures`, and after the fifth, [`LOCKOUT`].
+//! - **Per account.** Over all its devices, an account lets at most [`ACCOUNT_FAILURES`] failed
+//!   checks through in any [`WINDOW`]. So a login stack that locks an account after three
+//!   failures (`pam_faillock`) is never driven there from here. The window doubles with every
+//!   [`ACCOUNT_STEP`] failures since the account's last pass, up to [`WINDOW_MAX`].
+//! - **In flight.** A check counts as failed until it settles, so concurrent attempts can't
+//!   share one allowance. A refusal by these limits is not a failure.
+//! - **Forgetting.** A pass clears its device and its account. A device's entry is dropped once
+//!   its last failure is one [`WINDOW`] old, an account's once its last failure is one
+//!   [`WINDOW_MAX`] old. So waiting out one window doesn't reset the doubling.
 
 use crate::backend::BackendError;
 use std::collections::HashMap;

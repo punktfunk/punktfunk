@@ -1,29 +1,32 @@
-//! What seats share and what each keeps: the games folder, the trust copy and the Steam clone.
+//! The supervisor's state directory: what the seats share, and what each seat keeps to itself.
 //!
-//! Under the supervisor's state directory ([`super::STATE_DIR`]), root's alone:
+//! Everything is under [`super::STATE_DIR`], which only root can change:
 //!
-//! - `games/steamapps/{common,compatdata,shadercache,downloading}` is one library every seat
-//!   writes. `compatdata`, `shadercache` and `downloading` are covered per seat by bind mounts
-//!   (`session.rs`), so Wine prefixes and download state never cross.
-//! - `seats/<id>/` holds the seat user's home, those three private directories, and the box
-//!   owner's libraries as the seat sees them (`libraries.rs`).
-//! - `trust/<id>/` is a read-only copy of the box's pairing store and profiles from the door's
-//!   directory, so a seat user can read what it needs and nothing else there. A seat on a
-//!   person's own account gets only the pairing records of the devices its row admits, and so
-//!   does a locked profile's seat, with its lock and no PIN. A seat other than the owner's also
-//!   finds the box's library there, with its own profile's layer and no other.
-//! - `library/` is the box's library: a copy of the owner's, which the owner's host writes, with
-//!   every profile's layer, the plugins' grants and the firmware they staged. The door serves it
-//!   to every client, and each seat's trust copy takes it from here.
-//! - `seats/hosts/<id>/mgmt-token` is the token the box presents to that seat host's loopback
-//!   API. It belongs to the `punktfunk` user, not the seat group: every seat user is a member.
+//! - `games/steamapps/{common,compatdata,shadercache,downloading}`: one Steam library that every
+//!   seat writes. Each seat gets its own `compatdata`, `shadercache` and `downloading` mounted
+//!   over the shared ones (`session.rs`), so Wine prefixes and downloads never mix.
+//! - `seats/<id>/`: the seat user's home, those three private folders, and the box owner's
+//!   libraries as the seat sees them (`libraries.rs`).
+//! - `trust/<id>/`: the seat's trust copy, a read-only copy of the box's pairing store and
+//!   profiles from the door's directory. The seat's user can read what the seat needs and
+//!   nothing else of the door's. A seat on a person's own account gets only the pairing records
+//!   of the devices its row lets on. So does the seat of a locked profile, with the lock and
+//!   without the PIN. Every seat but the owner's also finds the box's library here, with its own
+//!   profile's layer and no other profile's.
+//! - `library/`: the box's library copy. The owner's host writes the library in the owner's
+//!   home. The supervisor copies it here, with every profile's layer, the plugins' grants and the
+//!   firmware the plugins staged. The door serves it to every client, and each seat's trust copy
+//!   takes it from here.
+//! - `seats/hosts/<id>/mgmt-token`: the token the box presents to that seat host's loopback
+//!   API. It belongs to the `punktfunk` user and not to the seat group, because every seat user
+//!   is in that group.
 
 use super::accounts::{is_ordinary, Passwd};
 use super::session::PRIVATE_DIRS;
 use super::{err, run, safe_open};
 use crate::backend::BackendError;
-use crate::locks;
 use crate::model::SeatId;
+use crate::profile_locks;
 use rustix::fs::{AtFlags, Mode, OFlags, XattrFlags};
 use rustix::io::Errno;
 use std::collections::{BTreeSet, HashSet};
@@ -797,8 +800,8 @@ fn sync_trust(
             let written = match copy {
                 Some(copy) => serde_json::to_vec_pretty(&copy)
                     .map_err(std::io::Error::other)
-                    .and_then(|bytes| put_file(&dst, locks::FILE, &bytes, reader)),
-                None => unlink(&dst, locks::FILE),
+                    .and_then(|bytes| put_file(&dst, profile_locks::FILE, &bytes, reader)),
+                None => unlink(&dst, profile_locks::FILE),
             };
             note(written, "write the profile locks");
             admitted
@@ -992,7 +995,7 @@ fn lock_holder(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Option<String
     Some(id.map(str::to_owned))
 }
 
-/// What the door's lock file ([`locks::FILE`]) gives seat `id` at `now`: the devices its pairing
+/// What the door's lock file ([`profile_locks::FILE`]) gives seat `id` at `now`: the devices its pairing
 /// list admits, `None` for every paired one, and the lock copy its host reads, without any PIN,
 /// `None` for none. A lock file that is there and doesn't read admits nobody, and so does a
 /// `profiles.json` that doesn't read while anything is locked.
@@ -1001,15 +1004,15 @@ fn lock_filter(
     id: &SeatId,
     owner: bool,
     now: i64,
-) -> (Option<BTreeSet<String>>, Option<locks::Locks>) {
-    let read = match safe_open::read(&box_dir.join(locks::FILE), MAX_TRUST_BYTES) {
+) -> (Option<BTreeSet<String>>, Option<profile_locks::Locks>) {
+    let read = match safe_open::read(&box_dir.join(profile_locks::FILE), MAX_TRUST_BYTES) {
         Ok(None) => return (None, None),
-        Ok(Some((bytes, _))) => locks::Locks::parse(&bytes),
+        Ok(Some((bytes, _))) => profile_locks::Locks::parse(&bytes),
         Err(_) => None,
     };
-    let closed = locks::Locks {
+    let closed = profile_locks::Locks {
         unreadable: true,
-        ..locks::Locks::default()
+        ..profile_locks::Locks::default()
     };
     let Some(read) = read else {
         return (Some(BTreeSet::new()), Some(closed));
@@ -2128,7 +2131,7 @@ mod tests {
     /// with. A lock file that doesn't read admits nobody.
     #[test]
     fn a_locked_profile_s_seat_admits_only_its_devices() {
-        use crate::locks::{Lock, Locks, PinHash};
+        use crate::profile_locks::{Lock, Locks, PinHash};
         let temp = tempfile::tempdir().unwrap();
         let box_dir = temp.path();
         let state_temp = tempfile::tempdir().unwrap();
@@ -2149,7 +2152,7 @@ mod tests {
                 .collect()
         };
         let copy = |seat: &SeatId| {
-            let bytes = std::fs::read(trust_dir(state, seat).join(locks::FILE)).ok()?;
+            let bytes = std::fs::read(trust_dir(state, seat).join(profile_locks::FILE)).ok()?;
             Some(Locks::parse(&bytes).unwrap())
         };
         let lock = |fp: &str| {
@@ -2167,7 +2170,7 @@ mod tests {
         };
         let write = |locks: &Locks| {
             let bytes = serde_json::to_vec(locks).unwrap();
-            std::fs::write(box_dir.join(locks::FILE), bytes).unwrap();
+            std::fs::write(box_dir.join(profile_locks::FILE), bytes).unwrap();
         };
 
         refresh_trust(box_dir, state, &id(), reader).unwrap();
@@ -2183,7 +2186,10 @@ mod tests {
         let anna = copy(&id()).unwrap();
         assert_eq!(anna.profiles.keys().collect::<Vec<_>>(), [ANNA]);
         assert!(anna.profiles[ANNA].locked && anna.profiles[ANNA].pin.is_none());
-        assert_eq!(mode(&trust_dir(state, &id()).join(locks::FILE)), 0o640);
+        assert_eq!(
+            mode(&trust_dir(state, &id()).join(profile_locks::FILE)),
+            0o640
+        );
         refresh_owner_trust(box_dir, state, &owner, reader).unwrap();
         let own = admitted(&owner);
         assert_eq!(own, std::slice::from_ref(&phone), "the owner's own list");
@@ -2209,13 +2215,13 @@ mod tests {
         refresh_trust(box_dir, state, &id(), reader).unwrap();
         assert_eq!(admitted(&id()), [tv.clone(), phone.clone()], "open again");
 
-        std::fs::write(box_dir.join(locks::FILE), "not a lock file").unwrap();
+        std::fs::write(box_dir.join(profile_locks::FILE), "not a lock file").unwrap();
         for (seat, owner) in [(id(), false), (owner.clone(), true)] {
             sync_trust(box_dir, state, &seat, reader, Who::Seat { owner }).unwrap();
             assert!(admitted(&seat).is_empty(), "{seat}");
             assert!(copy(&seat).unwrap().unreadable);
         }
-        std::fs::remove_file(box_dir.join(locks::FILE)).unwrap();
+        std::fs::remove_file(box_dir.join(profile_locks::FILE)).unwrap();
         refresh_trust(box_dir, state, &id(), reader).unwrap();
         assert_eq!(admitted(&id()), [tv, phone]);
         assert!(copy(&id()).is_none());

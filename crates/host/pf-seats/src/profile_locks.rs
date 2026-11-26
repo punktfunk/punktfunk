@@ -1,20 +1,22 @@
-//! Which paired devices may open each profile: [`FILE`], kept by the host that pairs, beside its
-//! pairing store and readable by its user alone. The supervisor reads it to fill a locked
-//! profile's seat copy. Pure: the caller passes the time.
+//! Which paired devices may open each profile. The rules are stored in [`FILE`]. The host that
+//! pairs devices keeps that file beside its pairing store, readable only by its own user. The
+//! supervisor reads it to fill the seat copy of a locked profile. Pure: the caller passes the
+//! time.
 //!
-//! A profile with no entry, or one not `locked`, is open. A locked profile opens for the devices
-//! its list admits, by [`DeviceList::admitted`]'s rules. A device it lists with an unlock key for
-//! the profile asked needs that key's proof or the PIN; any other needs the PIN, and with no PIN
-//! never opens it. Profiles that share a lock each have their own key on a device's entry. A
-//! file that can't be read locks every profile. A seat's copy carries no PIN: a seat host never
-//! takes a proof.
+//! - A profile with no entry, or with an entry that is not `locked`, is open.
+//! - A locked profile opens for the devices its list lets on ([`DeviceList::admitted`]).
+//! - A listed device that has an unlock key for the profile needs a proof with that key, or the
+//!   PIN. Any other device needs the PIN. With no PIN set, it never opens the profile.
+//! - Profiles that share a lock each have a key of their own on a device's entry.
+//! - A file that can't be read locks every profile.
+//! - A seat's copy carries no PIN, because a seat host never takes a proof.
 //!
-//! A profile takes [`PIN_FAILURES`] wrong PINs in a window, over all devices, counted in the
-//! file so a restart forgets none. The window starts at [`PIN_WINDOW`], and every ten wrong PINs
-//! after the first ten double it, up to [`PIN_WINDOW_MAX`], until a right PIN or a new one: a
-//! flat window would let a paired device try every 4-digit PIN in ten days. A try counts before
-//! its hash runs and is taken back when right, so neither a crash nor tries at once get past
-//! the cap.
+//! A profile takes [`PIN_FAILURES`] wrong PINs per window, over all devices. The count is kept
+//! in the file, so a restart forgets none. The window starts at [`PIN_WINDOW`]. After the first
+//! ten wrong PINs, every ten more double it, up to [`PIN_WINDOW_MAX`], until a right PIN or a new
+//! one. A flat window would let a paired device try every 4-digit PIN in ten days. A try is
+//! counted before its hash runs and taken back when the PIN is right, so neither a crash nor
+//! simultaneous tries get past the cap.
 
 use crate::ipc::{Device, UnlockKey};
 use crate::unlock::{lower_hex, DeviceList, MAX_KEYS};

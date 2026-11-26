@@ -1,10 +1,13 @@
-//! The trusted RDP leaf pin, stored in the seat root.
+//! The trusted RDP pin: the SHA-256 of TermService's TLS leaf certificate, stored in the seat
+//! root.
 //!
-//! `punktfunk-seat-keeper trust` records the SHA-256 of TermService's TLS leaf here. The
-//! supervisor reads it into every keeper's bootstrap, and the keeper refuses any other leaf
-//! before CredSSP can send a credential. A changed leaf is never stored without `replace`:
-//! turning seats on is the operator's yes, and the supervisor refuses to start a keeper
-//! against a leaf that moved since.
+//! `punktfunk-seat-keeper trust` records the pin here. The supervisor copies it into every
+//! keeper's bootstrap, and the keeper refuses any other leaf certificate before CredSSP can send
+//! a credential.
+//!
+//! A changed certificate is never stored without `replace`. Turning seats on is the operator's
+//! yes to the certificate of that moment, and the supervisor refuses to start a keeper against a
+//! certificate that has changed since.
 
 use crate::persistence::SecretRoot;
 use crate::windows::util::{backend_error, io_error, WinResult};

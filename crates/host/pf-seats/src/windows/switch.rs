@@ -1,12 +1,20 @@
-//! Turning seats on and off on Windows as a pure plan.
+//! Turning seats on and off on Windows, as a plan with no side effects.
 //!
-//! [`Recorded`] is what the Seats key holds; [`on`] and [`off`] turn it and the operator's
-//! choice into the ordered [`Step`]s `enable.rs` performs, one function per step. No I/O and no
-//! OS types, so the tables run on every target. The order is the contract: the firewall has its
-//! final scope before Remote Desktop listens, the listener goes off before the firewall widens,
-//! each change is noted before it is made, and the key goes last, so a failed step leaves
-//! enough behind for the next turn-off to undo. [`reaches_rdp_from_network`] reads whether a
-//! firewall rule breaks the operator's choice of this PC only.
+//! [`Recorded`] is what the Seats registry key holds. [`on`] and [`off`] take it and the
+//! operator's choice and return the ordered [`Step`]s. `enable.rs` performs them, one function
+//! per step. Nothing here does I/O or uses an OS type, so the tests run on every target.
+//!
+//! The order is the contract:
+//!
+//! - The firewall has its final scope before Remote Desktop listens.
+//! - The listener goes off before the firewall widens.
+//! - Each change is noted in the key before it is made.
+//! - The key changes last: a turn-on drops the `Enabling` mark as its final step, and a turn-off
+//!   removes the key after every undo.
+//!
+//! So a step that fails leaves enough behind for the next turn-off to undo it.
+//! [`reaches_rdp_from_network`] reads whether a firewall rule breaks the operator's choice of
+//! this PC only.
 
 // Off Windows only the tests read this module.
 #![cfg_attr(not(windows), allow(dead_code))]

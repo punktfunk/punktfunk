@@ -1,14 +1,16 @@
-//! The supervisor's named pipe, open to SYSTEM and Administrators only.
+//! The supervisor's named pipe, open only to SYSTEM and Administrators.
 //!
-//! One instance waits at a time. Each connection gets its own thread, answers one request
-//! ([`crate::ipc::answer`]) and closes. The first instance carries
-//! `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a process that created the name first makes
-//! [`PipeServer::bind`] fail instead of answering clients in the supervisor's place;
-//! [`PipeServer::bind_until`] tries again until the name is free. The pipe mode refuses remote
-//! clients. [`wake`] ends a wait so the loop can see its stop flag;
-//! [`request`] is the client the console host calls. It talks only to a server that runs as
-//! LocalSystem, since the name has no owner while the service is down, and it gives up on an
-//! answer that takes too long.
+//! One pipe instance waits at a time. Each connection gets a thread of its own, answers one
+//! request ([`crate::ipc::answer`]) and closes. The pipe mode refuses remote clients.
+//!
+//! The first instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`. If another process
+//! created the name first, [`PipeServer::bind`] fails, so that process never answers clients in
+//! the supervisor's place. [`PipeServer::bind_until`] tries again until the name is free.
+//! [`wake`] ends a wait so the loop can see its stop flag.
+//!
+//! [`request`] is the client that the console host calls. It talks only to a server that runs as
+//! LocalSystem, because nobody owns the name while the service is down. It gives up on an answer
+//! that takes too long.
 
 use super::util::{io_error, process_is_local_system, wide, WinResult};
 use crate::backend::PlatformBackend;

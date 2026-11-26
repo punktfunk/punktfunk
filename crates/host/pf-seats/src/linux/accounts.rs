@@ -1,9 +1,12 @@
-//! Seat users: one system-range Linux account per seat, owned by an exact GECOS marker.
+//! Seat users: one Linux account per made seat, in the system uid range, marked as the
+//! supervisor's by its GECOS field.
 //!
-//! The account is created with `useradd -r` so a display manager's greeter never lists it, with
-//! its home under the supervisor's state directory. The GECOS field carries `punktfunk-seat=<id>`; a user is
-//! touched or deleted only when that field matches exactly, so a name that collides with a
-//! person's account is refused instead of adopted.
+//! The account is created with `useradd -r`, so a display manager's greeter never lists it. Its
+//! home is under the supervisor's state directory. Its GECOS field holds `punktfunk-seat=<id>`.
+//!
+//! The supervisor changes or deletes a user only when that field matches exactly. So when a
+//! seat's name collides with a person's account, the supervisor refuses instead of taking the
+//! account over.
 
 use super::{err, run};
 use crate::backend::BackendError;

@@ -1,11 +1,15 @@
-//! The supervisor's Unix socket, open to root and the `punktfunk` user, and to the box owner for
-//! box-wide Flatpaks.
+//! The supervisor's Unix socket. It is open to root, to the `punktfunk` user, and to the box
+//! owner for box-wide Flatpaks.
 //!
-//! One request per connection, framed as on the Windows pipe ([`crate::ipc::answer`]). The
-//! socket file is `0660 root:punktfunk-door`, the door user's own group, plus an ACL entry for
-//! the box owner's uid, but the gate is the kernel's record of who connected (`SO_PEERCRED`): a
-//! peer [`command_allowed`] refuses is closed unanswered. A leftover socket from a crashed
-//! supervisor is replaced; a live one makes [`bind`] fail.
+//! Each connection carries one request, framed as on the Windows pipe ([`crate::ipc::answer`]).
+//!
+//! The socket file is `0660 root:punktfunk-door`, where `punktfunk-door` is the door user's own
+//! group, plus an ACL entry for the box owner's uid. The file mode is not the check, though. The
+//! check is the kernel's record of who connected (`SO_PEERCRED`): a peer that
+//! [`command_allowed`] refuses is closed with no answer.
+//!
+//! A socket file left by a crashed supervisor is replaced. One that a live supervisor holds
+//! makes [`bind`] fail.
 
 use super::shared::{
     acl_bytes, ACL_ACCESS, ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ,
@@ -37,9 +41,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 /// A Flatpak install downloads hundreds of megabytes.
 const FLATPAK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-/// The supervisor levels the box's library on its own every two seconds (`linux/mod.rs`), so an
-/// ask for it now is worth no longer a wait.
-const LEVEL_TIMEOUT: Duration = Duration::from_secs(2);
+/// The supervisor syncs the box's library copy on its own every two seconds (`linux/mod.rs`), so
+/// a request to sync it now is not worth a longer wait.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Root, or the `punktfunk` user when it exists. With no such user only root is let in.
 pub fn peer_allowed(peer_uid: u32, punktfunk_uid: Option<u32>) -> bool {
@@ -279,7 +283,7 @@ fn answer_within(command: &Command) -> Duration {
     match command {
         Command::InstallFlatpak { .. } | Command::RemoveFlatpak { .. } => FLATPAK_TIMEOUT,
         Command::Unlock { .. } => super::pam::CHECK_TIMEOUT + ANSWER_TIMEOUT,
-        Command::LevelLibrary => LEVEL_TIMEOUT,
+        Command::SyncLibrary => SYNC_TIMEOUT,
         _ => ANSWER_TIMEOUT,
     }
 }
