@@ -108,6 +108,7 @@ actions out. `windows/supervisor.rs` performs the actions. Start with `step.rs`.
 | `unlock.rs`, `attempts.rs` | Who may open a person's seat, and the limit on wrong passwords |
 | `locks.rs` | Which devices may open each profile (PINs, device keys). Not seat locks |
 | `linux/mod.rs` | The Linux platform: start, stop, delete, and the two-second sync thread |
+| `linux/resources.rs` | The table of what must be up while a seat's unit runs, and when it starts and stops |
 | `linux/session.rs` | Everything systemd reads for a seat: environment file, drop-ins |
 | `linux/accounts.rs` | Seat users: created, checked by their marker, removed |
 | `linux/shared.rs` | The state directory: games folder, trust copies, library copy |

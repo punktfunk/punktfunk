@@ -803,7 +803,7 @@ fn a_made_seat_s_provision_runs_exactly_these() {
 
 /// A made seat never yields to its user at the machine, though they have a session there: its
 /// account is the supervisor's, nobody else's. The sync thread is not even offered the row,
-/// since only a row on someone's own account is tracked with a guest to yield to.
+/// since only a seat on someone's own account is tracked with an account to yield to.
 #[test]
 fn a_made_seat_never_yields_to_the_desk() {
     let rig = rig();
@@ -816,7 +816,7 @@ fn a_made_seat_never_yields_to_the_desk() {
     yield_to_the_desk(&rig.backend.inner, &seat);
     assert_eq!(calls_from(0), expect(&[SHOW], "pf-seat-7", MADE_UID));
     assert!(owner_at_desk("pf-seat-7"), "the session is there");
-    assert!(Tracked::of(&seat, &found).guest.is_none());
+    assert!(Tracked::of(&seat, &found).own_account.is_none());
 }
 
 /// What deleting a made seat's row asked of the machine.
@@ -852,7 +852,7 @@ fn delete_a_made_seat(
     }
     before(&rig, &seat);
     rig.backend.track(&seat.id, Tracked::of(&seat, &found));
-    rig.backend.inner.lent.level(&seat, true, true);
+    rig.backend.inner.lent.set_live(&seat, true, true);
     assert_eq!(
         lend_holder(&rig.state, &lent_pad()).as_deref(),
         Some(account)
@@ -1065,8 +1065,11 @@ fn the_owner_row_is_tracked_after_a_supervisor_restart() {
     assert_eq!(cold, expect(&expected_cold, "pfowner", OWNER_UID));
     assert_eq!(warm, expect(&prepare, "pfowner", OWNER_UID));
     let tracked = tracked.expect("the owner's row is tracked");
-    assert_eq!((tracked.kind, tracked.uid), (Own::Owner, OWNER_UID));
-    assert!(tracked.guest.is_some(), "the sync thread can yield it");
+    assert_eq!((tracked.kind, tracked.uid), (SeatAccount::Owner, OWNER_UID));
+    assert!(
+        tracked.own_account.is_some(),
+        "the sync thread can yield it"
+    );
     assert_eq!(others, [None, None]);
     assert_eq!(after_stop.as_deref(), Some("pfowner"));
 }
@@ -1198,7 +1201,7 @@ fn release_owner_row(current: Option<&str>) -> Released {
         std::fs::create_dir_all(dir).unwrap();
     }
     rig.backend.track(&seat.id, Tracked::of(&seat, &found));
-    rig.backend.inner.lent.level(&seat, true, true);
+    rig.backend.inner.lent.set_live(&seat, true, true);
     let owner = current.map(|name| accounts::Passwd {
         name: name.into(),
         ..found.clone()

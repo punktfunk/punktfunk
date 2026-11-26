@@ -287,17 +287,17 @@ fn only_a_made_seat_is_ours_to_end() {
         kind: RowKind::owner(),
         ..person()
     };
-    assert_eq!(Own::of(&made.kind), Own::Seat);
-    assert_eq!(Own::of(&owner.kind), Own::Owner);
-    assert_eq!(Own::of(&person().kind), Own::Person);
+    assert_eq!(SeatAccount::of(&made.kind), SeatAccount::Made);
+    assert_eq!(SeatAccount::of(&owner.kind), SeatAccount::Owner);
+    assert_eq!(SeatAccount::of(&person().kind), SeatAccount::Person);
     for (seat, ours, yields) in [
         (made, true, false),
         (owner, false, true),
         (person(), false, true),
     ] {
-        let kind = Own::of(&seat.kind);
+        let kind = SeatAccount::of(&seat.kind);
         assert_eq!(
-            (kind.ours(), seat.kind.yields_to_the_desk()),
+            (kind.made(), seat.kind.yields_to_the_desk()),
             (ours, yields),
             "{kind:?}"
         );
@@ -314,7 +314,7 @@ struct Rules {
     proof: bool,
     /// Keep-warm may start it and the idle stop end it.
     upkeep: bool,
-    own: Own,
+    own: SeatAccount,
     ours: bool,
     yields: bool,
     /// Windows: an account the supervisor made, marked by comment.
@@ -329,14 +329,14 @@ struct Rules {
 
 fn rules(seat: &Seat) -> Rules {
     let kind = &seat.kind;
-    let own = Own::of(kind);
+    let own = SeatAccount::of(kind);
     Rules {
         owner: kind.is_owner(),
         person: kind.is_person(),
         proof: kind.starts_on_proof(),
         upkeep: kind.upkeep(),
         own,
-        ours: own.ours(),
+        ours: own.made(),
         yields: kind.yields_to_the_desk(),
         windows_ours: kind.supervisor_owns_account(),
         own_marker: kind.is_person(),
@@ -376,7 +376,7 @@ fn row_kind_policy_table() {
                 person: false,
                 proof: false,
                 upkeep: true,
-                own: Own::Seat,
+                own: SeatAccount::Made,
                 ours: true,
                 yields: false,
                 windows_ours: true,
@@ -393,7 +393,7 @@ fn row_kind_policy_table() {
                 person: false,
                 proof: false,
                 upkeep: false,
-                own: Own::Owner,
+                own: SeatAccount::Owner,
                 ours: false,
                 yields: true,
                 windows_ours: false,
@@ -410,7 +410,7 @@ fn row_kind_policy_table() {
                 person: true,
                 proof: true,
                 upkeep: false,
-                own: Own::Person,
+                own: SeatAccount::Person,
                 ours: false,
                 yields: true,
                 windows_ours: false,
@@ -427,7 +427,7 @@ fn row_kind_policy_table() {
                 person: true,
                 proof: false,
                 upkeep: true,
-                own: Own::Person,
+                own: SeatAccount::Person,
                 ours: false,
                 yields: true,
                 windows_ours: false,

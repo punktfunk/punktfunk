@@ -489,7 +489,7 @@ impl Lent {
     /// Brings each of `seat`'s lent pads live or parked; a record that already says so changes
     /// nothing. At `starting`, a parked pad going live has udev's rules re-run: only root held
     /// its nodes. Any other change cycles the device. A failure is logged, never returned.
-    pub(super) fn level(&self, seat: &Seat, live: bool, starting: bool) {
+    pub(super) fn set_live(&self, seat: &Seat, live: bool, starting: bool) {
         if seat.lent.is_empty() {
             return;
         }
@@ -846,7 +846,7 @@ mod tests {
         assert_eq!(fresh.code, "pad_not_present", "a serial two devices share");
         assert!(desk.lent.lendable_pad(twin, &lends).is_ok());
 
-        desk.lent.level(&row, false, false);
+        desk.lent.set_live(&row, false, false);
         assert!(desk.cycled(&a.dev), "the lent pad parks");
         assert!(!desk.cycled(&b.dev), "the desk's twin is left alone");
         desk.lent
@@ -1014,21 +1014,21 @@ mod tests {
         let parked = Some(PARKED.to_owned());
         let live = Some("pf-seat-1".to_owned());
 
-        lent.level(&row, false, false);
+        lent.set_live(&row, false, false);
         assert_eq!(
             (held(), desk.cycled(&pad.dev)),
             (parked.clone(), true),
             "no record yet"
         );
         let at = written();
-        lent.level(&row, false, false);
+        lent.set_live(&row, false, false);
         assert_eq!(
             (written(), desk.cycled(&pad.dev)),
             (at, false),
             "parked again"
         );
 
-        lent.level(&row, true, true);
+        lent.set_live(&row, true, true);
         let started = (held(), desk.cycled(&pad.dev), desk.refreshed(&pad));
         assert_eq!(
             started,
@@ -1036,13 +1036,13 @@ mod tests {
             "a start from parked re-runs the rules"
         );
         let at = written();
-        lent.level(&row, true, false);
+        lent.set_live(&row, true, false);
         let again = (written(), desk.cycled(&pad.dev), desk.refreshed(&pad));
         assert_eq!(again, (at, false, false), "running, as recorded");
 
-        lent.level(&row, false, false);
+        lent.set_live(&row, false, false);
         assert_eq!((held(), desk.cycled(&pad.dev)), (parked, true), "stopped");
-        lent.level(&row, true, false);
+        lent.set_live(&row, true, false);
         let found = (held(), desk.cycled(&pad.dev), desk.refreshed(&pad));
         assert_eq!(found, (live.clone(), true, false), "found running");
 
@@ -1050,7 +1050,7 @@ mod tests {
         assert!(!desk.records().exists() && desk.cycled(&pad.dev), "removed");
         lent.release(&row);
         assert!(!desk.cycled(&pad.dev), "removed again");
-        lent.level(&row, true, true);
+        lent.set_live(&row, true, true);
         assert_eq!(
             (held(), desk.cycled(&pad.dev)),
             (live, true),
