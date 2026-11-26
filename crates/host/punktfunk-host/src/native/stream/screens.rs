@@ -233,8 +233,8 @@ pub(super) struct ScreenSet {
     /// Stopped loops whose thread has not ended: a build in flight runs for seconds, and the
     /// first screen's tick does not wait for it.
     retiring: Vec<ScreenHandle>,
-    /// The client's screens waiting for their index's retiring loop: two loops never hold one
-    /// display identity or stream.
+    /// The client's screens not running: each waits for its index's retiring loop, as two loops
+    /// never hold one display identity or stream, or for the session to leave gamescope.
     pending: Vec<Screen>,
     /// The client's screen 0 record, for its position and primary flag.
     first: Screen,
@@ -353,7 +353,8 @@ impl ScreenSet {
     /// Run exactly the screens `list` names past the first, as [`Self::plan`] says, each at the
     /// view its own [`screen_intent`] keeps. A stopped loop retires: [`Self::poll`] reaps it once
     /// its thread ends. A kept loop takes the list's record, and places its display again when
-    /// the client moved it against the first.
+    /// the client moved it against the first. On gamescope, which has one output, every start
+    /// waits in `pending` instead; [`Self::rebase`] onto a desktop starts them.
     fn apply(&mut self, list: Vec<Screen>) {
         let Some(base) = self.base.clone() else {
             return;
@@ -396,10 +397,14 @@ impl ScreenSet {
             }
             h.ask = now;
         }
-        for w in plan.start {
-            self.start(&base, w);
-        }
         self.pending = plan.wait;
+        if base.compositor == crate::vdisplay::Compositor::Gamescope {
+            self.pending.extend(plan.start);
+        } else {
+            for w in plan.start {
+                self.start(&base, w);
+            }
+        }
         self.reshare();
     }
 
@@ -1613,6 +1618,53 @@ mod tests {
             set.base.as_ref().map(|b| b.plan.codec),
             Some(crate::encode::Codec::H264)
         );
+        set.shutdown();
+    }
+
+    /// On gamescope every further screen waits: the layout names screen 0 alone, which keeps
+    /// the whole video, and a new list only changes what waits. A rebase onto KWin starts the
+    /// waiting screens; a rebase back onto gamescope stops them and they wait again.
+    #[test]
+    fn gamescope_parks_further_screens_until_a_desktop() {
+        use crate::vdisplay::Compositor::{Gamescope, Kwin};
+        let (mut base, _frames, mut told, wire) = kwin_base();
+        base.compositor = Gamescope;
+        let (screens_tx, screens_rx) = std::sync::mpsc::channel();
+        let one = mode(1920, 1080, 60);
+        let three = vec![asked(0, one), asked(1, one), asked(2, one)];
+        let mut set = ScreenSet::new(base, screens_rx, three.clone());
+        assert!(set.loops.is_empty(), "a screen started on gamescope");
+        assert_eq!(set.pending, three[1..]);
+        set.poll(one, Picture::of(one), None);
+        let Ok(ScreenTell::Layout(layout)) = told.try_recv() else {
+            panic!("a layout is told at once");
+        };
+        assert_eq!(layout.len(), 1, "only screen 0 runs on gamescope");
+        assert_eq!(wire.primary_share.load(Ordering::Relaxed), SHARE_ALL);
+        screens_tx.send(three[..2].to_vec()).unwrap();
+        set.poll(one, Picture::of(one), None);
+        assert!(
+            set.loops.is_empty(),
+            "a new list started a screen on gamescope"
+        );
+        assert_eq!(set.pending, three[1..2]);
+        screens_tx.send(three.clone()).unwrap();
+        set.poll(one, Picture::of(one), None);
+        set.rebase(|b| b.compositor = Kwin);
+        let running: Vec<Screen> = set.loops.iter().map(|h| h.ask).collect();
+        assert_eq!(
+            running,
+            three[1..],
+            "the desktop starts the waiting screens"
+        );
+        assert!(set.pending.is_empty());
+        let started: Vec<Arc<AtomicBool>> = set.loops.iter().map(|h| h.stop.clone()).collect();
+        set.rebase(|b| b.compositor = Gamescope);
+        for stop in &started {
+            assert_eq!(Arc::strong_count(stop), 1, "a loop outlived the switch");
+        }
+        assert!(set.loops.is_empty(), "a screen kept running on gamescope");
+        assert_eq!(set.pending, three[1..], "the screens wait again");
         set.shutdown();
     }
 
