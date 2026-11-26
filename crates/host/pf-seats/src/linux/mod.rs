@@ -1452,12 +1452,13 @@ impl PlatformBackend for LinuxBackend {
 impl LinuxBackend {
     /// A row's unit up: its account ready, what runs outside the unit raised, the unit, then what
     /// runs inside it, then the wait for its host. `asked` is the stop count the start began at.
-    /// The owner at the machine has their own login host the row: the headless unit stays down
-    /// and their user host is started. A person at the machine is refused: their login is
-    /// theirs, and the headless session would sit beside it uninvited; what is made for their
-    /// row is the row's own, never in the account. The login drop-in [`Self::bring_up`] wrote
-    /// stays while the start waits; a helper that ended before a session falls back to the
-    /// plain start.
+    /// What is made for a person's row is the row's own, never in the account. The login drop-in
+    /// [`Self::bring_up`] wrote stays while the start waits; a helper that ended before a session
+    /// falls back to the plain start.
+    ///
+    /// When the row's user sits at the machine, before the unit starts or once the wait failed,
+    /// [`Self::start_at_desk`] ends the start. The sync thread stops the unit for that login
+    /// without counting a stop, so the wait reads the unit's end as a failure.
     fn start_row(
         &self,
         seat: &Seat,
@@ -1472,15 +1473,7 @@ impl LinuxBackend {
             SeatAccount::Person => {
                 let passwd = accounts::require_person(seat)?;
                 if owner_at_desk(&seat.account) {
-                    return Err(err(
-                        "account_at_desk",
-                        format!(
-                            "{} is signed in at the machine. Try again once they have signed out.",
-                            seat.account
-                        ),
-                    )
-                    .said("account_at_desk")
-                    .param("account", &seat.account));
+                    return self.start_at_desk(seat, asked);
                 }
                 shared::ensure_person_dirs(state, &seat.id, &passwd)?;
                 passwd
@@ -1494,9 +1487,7 @@ impl LinuxBackend {
             None,
         )?;
         if kind == SeatAccount::Owner && owner_at_desk(&seat.account) {
-            user_host(&seat.account, "start");
-            self.wait_port(seat, asked)?;
-            return Ok(RuntimeStatus::running());
+            return self.start_at_desk(seat, asked);
         }
         let written = self.bring_up(seat, kind, &passwd, password, asked)?;
         self.inner.apply_change(
@@ -1508,7 +1499,7 @@ impl LinuxBackend {
         )?;
         let ready = self.wait_ready(seat, asked, written.is_some());
         drop(written);
-        match ready {
+        let started = match ready {
             Err(error) if [LOGIN_FALLBACK, LOGIN_TRIPPED].contains(&error.code.as_str()) => {
                 let tripped = error.code == LOGIN_TRIPPED;
                 if tripped && !self.inner.helper_off.swap(true, Ordering::SeqCst) {
@@ -1519,7 +1510,33 @@ impl LinuxBackend {
                 self.start_plain(seat, &passwd, asked)
             }
             ready => ready.map(|()| RuntimeStatus::running()),
+        };
+        match started {
+            Err(_) if seat.kind.yields_to_the_desk() && owner_at_desk(&seat.account) => {
+                self.start_at_desk(seat, asked)
+            }
+            started => started,
         }
+    }
+
+    /// A start while the row's user sits at the machine. The owner's own login hosts the owner's
+    /// row: the headless unit stays down and the owner's user host is started. A person is
+    /// refused: their login is theirs, and a headless session would sit beside it uninvited.
+    fn start_at_desk(&self, seat: &Seat, asked: u64) -> Result<RuntimeStatus, BackendError> {
+        if !seat.kind.is_owner() {
+            return Err(err(
+                "account_at_desk",
+                format!(
+                    "{} is signed in at the machine. Try again once they have signed out.",
+                    seat.account
+                ),
+            )
+            .said("account_at_desk")
+            .param("account", &seat.account));
+        }
+        user_host(&seat.account, "start");
+        self.wait_port(seat, asked)?;
+        Ok(RuntimeStatus::running())
     }
 
     /// A made seat's user ready for its unit: a group of its own, its home closed, its groups,

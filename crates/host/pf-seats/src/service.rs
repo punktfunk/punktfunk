@@ -570,13 +570,15 @@ impl<B: PlatformBackend> SeatService<B> {
             }
             Err(error) => {
                 // The backend's own account of the failure, when it has one, is the sentence
-                // the console shows; the code and the operator's message go to the caller.
+                // the console shows; the code and the operator's message go to the caller. A
+                // start refused at the desk failed nothing: the row keeps the unit's state.
                 // What the failed change left running beside the unit is taken back now.
                 let observed = self.backend.status(&original);
                 if let Ok(status) = &observed {
                     self.backend.reconcile(&original, status);
                 }
                 seat.runtime = match observed {
+                    Ok(status) if error.code == "account_at_desk" => status,
                     Ok(status)
                         if status.state == RuntimeState::Failed && status.detail.is_some() =>
                     {

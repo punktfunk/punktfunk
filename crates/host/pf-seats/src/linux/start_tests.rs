@@ -369,7 +369,8 @@ fn a_stop_untracks_a_person_before_its_unit_stops() {
 }
 
 /// A person's start with their unit already up writes nothing under `/run` and keeps its token:
-/// it refreshes the row's copies, then waits on the unit, which here ends.
+/// it refreshes the row's copies, then waits on the unit, which here ends. Last it asks whether
+/// the person sat down at the machine meanwhile.
 #[test]
 fn a_person_s_warm_start_runs_exactly_these() {
     let rig = rig();
@@ -390,8 +391,65 @@ fn a_person_s_warm_start_runs_exactly_these() {
         SHOW,
         "systemctl stop punktfunk-seat@ACCOUNT.service",
         "systemctl reset-failed punktfunk-seat@ACCOUNT.service",
+        SESSIONS,
     ];
     assert_eq!(calls_from(0), expect(&warm, "pfperson", uid));
+    assert_eq!(rig.backend.running_account(uid), None);
+}
+
+/// `pfperson`'s machine: their unit runs until a `systemctl stop`, and they sit at the machine
+/// once `seated` is set.
+fn sitting_down(
+    passwd: String,
+    up: Arc<AtomicBool>,
+    seated: Arc<AtomicBool>,
+) -> impl Fn(&str, &[&str]) -> (i32, String) {
+    let at_desk = with_a_login_at_the_desk(machine(passwd, &[ACTIVE], Arc::default()), "pfperson");
+    move |program, args| match (program, args) {
+        ("systemctl", ["show", ..]) if !up.load(Ordering::SeqCst) => (0, INACTIVE.into()),
+        ("systemctl", ["stop", _]) => {
+            up.store(false, Ordering::SeqCst);
+            (0, String::new())
+        }
+        ("loginctl", _) if !seated.load(Ordering::SeqCst) => (0, String::new()),
+        _ => at_desk(program, args),
+    }
+}
+
+/// The person sits down at the machine while their start waits. The sync thread's yield, on a
+/// thread of its own, ends the unit; the start then answers as a start at the desk does.
+#[test]
+fn a_person_who_sits_down_during_their_start_is_refused_at_the_desk() {
+    let rig = rig();
+    let (uid, gid) = (
+        rustix::process::getuid().as_raw(),
+        rustix::process::getgid().as_raw(),
+    );
+    let seat = row("pfperson", PERSON_ID, false, Some(uid));
+    let passwd = format!("pfperson:x:{uid}:{gid}::{}:/bin/sh\n", rig.home.display());
+    let (up, seated) = (Arc::new(AtomicBool::new(true)), Arc::default());
+    let desk = {
+        let (inner, seat) = (Arc::clone(&rig.backend.inner), seat.clone());
+        let machine = (passwd.clone(), Arc::clone(&up), Arc::clone(&seated));
+        std::thread::spawn(move || {
+            let seated = Arc::clone(&machine.2);
+            let _fake = fake::install(sitting_down(machine.0, machine.1, machine.2));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !inner.running.lock().unwrap().contains_key(&seat.id) {
+                assert!(Instant::now() < deadline, "the start never tracked the row");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            seated.store(true, Ordering::SeqCst);
+            yield_to_the_desk(&inner, &seat);
+            fake::calls()
+        })
+    };
+    let _fake = fake::install(sitting_down(passwd, up, seated));
+    let ended = rig.backend.start(&seat).unwrap_err();
+    let yielded = desk.join().unwrap();
+    let stop = "systemctl stop punktfunk-seat@pfperson.service".to_owned();
+    assert!(yielded.contains(&stop), "{yielded:?}");
+    assert_eq!(ended.code, "account_at_desk", "{ended}");
     assert_eq!(rig.backend.running_account(uid), None);
 }
 
@@ -535,6 +593,7 @@ fn the_owner_s_cold_and_warm_start_run_exactly_these() {
         SHOW,
         "systemctl stop punktfunk-seat@ACCOUNT.service",
         "systemctl reset-failed punktfunk-seat@ACCOUNT.service",
+        SESSIONS,
     ];
     let up = [
         SHOW,
@@ -619,6 +678,7 @@ fn a_person_s_cold_start_runs_exactly_these() {
         SHOW,
         "systemctl stop punktfunk-seat@ACCOUNT.service",
         "systemctl reset-failed punktfunk-seat@ACCOUNT.service",
+        SESSIONS,
     ];
     assert_eq!(cold, expect(&expected, "pfperson", PERSON_UID));
     assert_eq!(*logins.lock().unwrap(), [false]);
@@ -696,6 +756,7 @@ fn a_person_s_password_start_runs_exactly_these() {
         SHOW,
         "systemctl stop punktfunk-seat@ACCOUNT.service",
         "systemctl reset-failed punktfunk-seat@ACCOUNT.service",
+        SESSIONS,
     ];
     assert_eq!(calls_from(0), expect(&expected, "pfperson", PERSON_UID));
     assert_eq!(*logins.lock().unwrap(), [true, false]);

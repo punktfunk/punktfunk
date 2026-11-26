@@ -536,8 +536,8 @@ fn each_pam_refusal_answers_its_code() {
     assert!(rig.devices().is_empty());
 }
 
-/// A cold start goes through the row's real start, so a person at the machine is refused and no
-/// device is let on.
+/// A cold start goes through the row's real start, so a person at the machine is refused, no
+/// device is let on and the row stays stopped: nothing failed. Once they leave, it starts.
 #[test]
 fn a_person_at_the_machine_is_not_unlocked() {
     let rig = rig();
@@ -546,6 +546,10 @@ fn a_person_at_the_machine_is_not_unlocked() {
     assert_eq!(code(&refused), "account_at_desk");
     assert!(rig.devices().is_empty());
     assert!(!rig.machine.active.load(Ordering::SeqCst));
+    let row = rig.service.ledger().seat(&rig.seat.id).cloned().unwrap();
+    assert_eq!(row.runtime, RuntimeStatus::stopped());
+    rig.machine.at_desk.store(false, Ordering::SeqCst);
+    assert!(rig.unlock(&device(1), password(true, None)).unwrap().1);
 }
 
 /// A name that resolves to another user, before PAM or while it runs, is not the row's: the
