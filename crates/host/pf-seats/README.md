@@ -79,6 +79,7 @@ from systemd; seats keep running meanwhile.
 |---|---|---|
 | `/var/lib/punktfunk` | The door's directory: identity, pairing store, profiles | The door |
 | `/var/lib/punktfunk-seats/seats/ledger.json` | The ledger | root |
+| `/var/lib/punktfunk-seats/seats/password-failures.json` | Each account's recent wrong passwords, kept across a restart | root |
 | `/var/lib/punktfunk-seats/seats/<id>/` | A made seat's home and private folders | That seat |
 | `/var/lib/punktfunk-seats/trust/<id>/` | The seat's read-only copy of the box's pairing store and profiles | That seat |
 | `/var/lib/punktfunk-seats/library/` | Root's copy of the owner's game library | The door, every seat's copy |

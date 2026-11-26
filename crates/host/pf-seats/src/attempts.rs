@@ -1,6 +1,6 @@
-//! Attempt limits for checks of a secret, kept in memory. The supervisor uses them for
-//! passwords. The host uses them, per device, for profile PINs. A profile's own cap is in its
-//! lock file (`profile_locks`). Pure: the caller passes the time.
+//! Attempt limits for checks of a secret. The supervisor uses them for passwords. The host uses
+//! them, per device and in memory only, for profile PINs. A profile's own cap is in its lock file
+//! (`profile_locks`). Pure: the caller passes the time and does any file I/O.
 //!
 //! - **Per device.** A device is counted separately for each seat, account or profile it tries.
 //!   After each failed check it waits `2 s × 2^failures`, and after the fifth, [`LOCKOUT`].
@@ -13,9 +13,12 @@
 //! - **Forgetting.** A pass clears its device and its account. A device's entry is dropped once
 //!   its last failure is one [`WINDOW`] old, an account's once its last failure is one
 //!   [`WINDOW_MAX`] old. So waiting out one window doesn't reset the doubling.
+//! - **Saved.** The account side, without checks in flight, converts to unix seconds and back
+//!   ([`Saved`]), so the supervisor keeps it in a file across a restart. The device side doesn't.
 
 use crate::backend::BackendError;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 const BACKOFF: Duration = Duration::from_secs(2);
@@ -29,6 +32,10 @@ const WINDOW: Duration = Duration::from_secs(15 * 60);
 /// source try about 70,000 passwords a year; doubled to the cap, it is about 700.
 const ACCOUNT_STEP: u32 = 10;
 const WINDOW_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+/// The largest [`Saved`] in JSON: 64 accounts under sustained guessing fit in about 40 KiB.
+pub const SAVED_BYTES: usize = 64 * 1024;
+/// The most accounts a [`Saved`] holds. A box has a handful.
+const SAVED_ACCOUNTS: usize = 64;
 
 /// What a check is for: `device`, a device of a seat, an account or a profile, and `account`, what
 /// the secret opens. A side that is `None` has no limit of its own.
@@ -77,7 +84,82 @@ struct Account {
     streak: u32,
 }
 
+/// The account side of an [`Attempts`] with its times as unix seconds on the wall clock.
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Saved {
+    accounts: BTreeMap<String, SavedAccount>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct SavedAccount {
+    failed: Vec<i64>,
+    streak: u32,
+}
+
+impl Saved {
+    /// The state as JSON, `None` over [`SAVED_BYTES`] or [`SAVED_ACCOUNTS`].
+    pub fn to_json(&self) -> Option<Vec<u8>> {
+        let bytes = serde_json::to_vec(self).ok()?;
+        self.fits(&bytes).then_some(bytes)
+    }
+
+    /// The state `bytes` hold, `None` for one [`Saved::to_json`] would not have written.
+    pub fn parse(bytes: &[u8]) -> Option<Self> {
+        let saved: Self = serde_json::from_slice(bytes).ok()?;
+        saved.fits(bytes).then_some(saved)
+    }
+
+    fn fits(&self, bytes: &[u8]) -> bool {
+        bytes.len() <= SAVED_BYTES && self.accounts.len() <= SAVED_ACCOUNTS
+    }
+}
+
 impl Attempts {
+    /// The account side at `now`, which is `unix` on the wall clock. Times round to the second
+    /// later, so an import waits at most a second longer.
+    pub fn export(&self, now: Instant, unix: i64) -> Saved {
+        let age = |at: &Instant| now.saturating_duration_since(*at).as_secs();
+        let stamp = |at: &Instant| unix.saturating_sub_unsigned(age(at));
+        let accounts = self.accounts.iter().filter(|(_, a)| !a.failed.is_empty());
+        let saved = |(key, a): (&String, &Account)| {
+            let failed = a.failed.iter().map(stamp).collect();
+            let streak = a.streak;
+            (key.clone(), SavedAccount { failed, streak })
+        };
+        Saved {
+            accounts: accounts.map(saved).collect(),
+        }
+    }
+
+    /// Takes in the accounts of `saved` at `now`, which is `unix` on the wall clock. A failure
+    /// [`WINDOW_MAX`] old is dropped, and one stamped after `unix` counts as now. A failure from
+    /// before the `Instant` clock's start (on Windows, the boot) counts as now while the account's
+    /// window would still hold it, and is dropped after.
+    pub fn import(&mut self, saved: Saved, now: Instant, unix: i64) {
+        for (key, entry) in saved.accounts {
+            let mut account = Account {
+                streak: entry.streak,
+                ..Account::default()
+            };
+            let window = account.window();
+            for stamp in entry.failed {
+                let age = u64::try_from(unix.saturating_sub(stamp)).unwrap_or(0);
+                let age = Duration::from_secs(age);
+                if age >= WINDOW_MAX {
+                    continue;
+                }
+                match now.checked_sub(age) {
+                    Some(at) => account.failed.push(at),
+                    None if age < window => account.failed.push(now),
+                    None => {}
+                }
+            }
+            if !account.failed.is_empty() {
+                self.accounts.insert(key, account);
+            }
+        }
+    }
+
     /// Admits a check for `target` at `now`, or answers how long until one would be.
     pub fn admit(&mut self, target: Target<'_>, now: Instant) -> Result<Ticket, Duration> {
         self.expire(now);
@@ -290,6 +372,16 @@ mod tests {
         Ok(outcome)
     }
 
+    /// One failure for `who`, after waiting out any refusal; then a second passes.
+    fn fail(gate: &mut Attempts, who: Target<'_>, now: &mut Instant) {
+        let ticket = gate.admit(who, *now).unwrap_or_else(|wait| {
+            *now += wait;
+            gate.admit(who, *now).unwrap()
+        });
+        gate.settle(who, ticket, Outcome::Failed, *now);
+        *now += SECOND;
+    }
+
     /// Each failure doubles the wait from 4 s; a refusal inside it changes nothing.
     #[test]
     fn a_device_backs_off_after_each_failure() {
@@ -458,28 +550,20 @@ mod tests {
         };
         let mut gate = Attempts::default();
         let mut now = Instant::now();
-        let fail = |gate: &mut Attempts, now: &mut Instant| {
-            let ticket = gate.admit(who, *now).unwrap_or_else(|wait| {
-                *now += wait;
-                gate.admit(who, *now).unwrap()
-            });
-            gate.settle(who, ticket, Outcome::Failed, *now);
-            *now += SECOND;
-        };
         // Failures come two to a window, so every even count ends locked.
         for _ in 0..8 {
-            fail(&mut gate, &mut now);
+            fail(&mut gate, who, &mut now);
         }
         let wait = |gate: &mut Attempts, now| gate.admit(who, now).unwrap_err();
         let first = wait(&mut gate, now);
         assert!(first <= WINDOW, "eight failures: {first:?}");
         for _ in 0..4 {
-            fail(&mut gate, &mut now);
+            fail(&mut gate, who, &mut now);
         }
         let doubled = wait(&mut gate, now);
         assert!(doubled > WINDOW && doubled <= WINDOW * 2, "{doubled:?}");
         for _ in 0..80 {
-            fail(&mut gate, &mut now);
+            fail(&mut gate, who, &mut now);
         }
         let capped = wait(&mut gate, now);
         let half = WINDOW_MAX / 2;
@@ -492,15 +576,86 @@ mod tests {
         // A pass forgets it at once: the next two failures wait the first window again.
         let mut fresh = Attempts::default();
         for _ in 0..12 {
-            fail(&mut fresh, &mut now);
+            fail(&mut fresh, who, &mut now);
         }
         now += WINDOW * 2;
         let ticket = fresh.admit(who, now).unwrap();
         fresh.settle(who, ticket, Outcome::Passed, now);
-        fail(&mut fresh, &mut now);
-        fail(&mut fresh, &mut now);
+        fail(&mut fresh, who, &mut now);
+        fail(&mut fresh, who, &mut now);
         let again = wait(&mut fresh, now);
         assert!(again <= WINDOW, "{again:?}");
+    }
+
+    const UNIX: i64 = 1_800_000_000;
+
+    /// An account's state exported at one instant and imported at another, with the wall clock
+    /// moved as far, waits as long and keeps its doubled window. A check in flight stays behind.
+    #[test]
+    fn an_account_s_state_survives_an_export_and_an_import() {
+        let who = Target {
+            device: None,
+            account: Some("uid:1001"),
+        };
+        let mut gate = Attempts::default();
+        let mut now = Instant::now();
+        for _ in 0..12 {
+            fail(&mut gate, who, &mut now);
+        }
+        let _in_flight = gate.admit(console("uid:1002"), now).unwrap();
+        let saved = gate.export(now, UNIX);
+        assert_eq!(saved.accounts.keys().collect::<Vec<_>>(), ["uid:1001"]);
+
+        let restart = Instant::now() + 3 * MINUTE;
+        let mut fresh = Attempts::default();
+        fresh.import(saved, restart, UNIX + 180);
+        assert_eq!(fresh.accounts["uid:1001"].streak, 12);
+        let waits = gate.admit(who, now + 3 * MINUTE).unwrap_err();
+        assert!(waits > WINDOW - 3 * MINUTE, "the doubled window: {waits:?}");
+        assert_eq!(fresh.admit(who, restart).unwrap_err(), waits);
+    }
+
+    /// A right password leaves nothing to export.
+    #[test]
+    fn a_pass_exports_an_empty_state() {
+        let mut gate = Attempts::default();
+        let t0 = Instant::now();
+        let target = console("uid:1500");
+        attempt(&mut gate, target, t0, &mut || Outcome::Failed).unwrap();
+        assert_ne!(gate.export(t0, UNIX), Saved::default());
+        attempt(&mut gate, target, t0 + 4 * SECOND, &mut || Outcome::Passed).unwrap();
+        assert_eq!(gate.export(t0 + 4 * SECOND, UNIX), Saved::default());
+    }
+
+    /// An import drops a failure a day old and counts one stamped in the future as now. A file
+    /// that isn't JSON of this shape, or holds too many accounts, parses as nothing.
+    #[test]
+    fn an_import_drops_a_day_old_failure_and_clamps_a_future_one() {
+        let day = i64::try_from(WINDOW_MAX.as_secs()).unwrap();
+        let json = format!(
+            r#"{{"accounts":{{"uid:1001":{{"failed":[{},{},{}],"streak":3}},
+                "uid:1002":{{"failed":[{}],"streak":1}}}}}}"#,
+            UNIX - day,
+            UNIX,
+            UNIX + 600,
+            UNIX - day,
+        );
+        let mut gate = Attempts::default();
+        let now = Instant::now();
+        gate.import(Saved::parse(json.as_bytes()).unwrap(), now, UNIX);
+        assert_eq!(gate.accounts.keys().collect::<Vec<_>>(), ["uid:1001"]);
+        assert_eq!(gate.accounts["uid:1001"].failed, [now, now]);
+        let who = Target {
+            device: None,
+            account: Some("uid:1001"),
+        };
+        assert_eq!(gate.admit(who, now).unwrap_err(), WINDOW);
+
+        assert!(Saved::parse(b"not json").is_none());
+        let entry = |n| format!(r#""uid:{n}":{{"failed":[{UNIX}],"streak":1}}"#);
+        let many: Vec<String> = (0..=SAVED_ACCOUNTS).map(entry).collect();
+        let many = format!(r#"{{"accounts":{{{}}}}}"#, many.join(","));
+        assert!(Saved::parse(many.as_bytes()).is_none());
     }
 
     #[test]
