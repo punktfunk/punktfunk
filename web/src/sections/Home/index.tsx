@@ -1,7 +1,6 @@
 import {
 	QueryClientProvider,
 	useMutation,
-	useQueries,
 	useQueryClient,
 } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -15,10 +14,6 @@ import {
 	useGetHostInfo,
 	useGetStatus,
 } from "@/api/gen/host/host";
-import {
-	getGetLibraryPageQueryKey,
-	getLibraryPage,
-} from "@/api/gen/library/library";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
 import type { HostInfo } from "@/api/gen/model/hostInfo";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
@@ -43,6 +38,7 @@ import {
 	useStopOneSession,
 	useStopSession,
 } from "@/api/gen/session/session";
+import { useLibraryEntries } from "@/api/library";
 import { isFullSeat, seatClient } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import type { AvatarProfile } from "@/components/profile-avatar";
@@ -333,23 +329,12 @@ const OperatorHome: FC = () => {
 		onError: failed(m.profiles_seat_failed()),
 	});
 
-	// Box art for the games left without a stream. One title each: a library runs to thousands.
-	const appIds = [
-		...new Set(
-			(status.data?.games ?? []).flatMap((g) => (g.app_id ? [g.app_id] : [])),
-		),
-	].sort();
-	const covers = useQueries({
-		queries: appIds.map((id) => ({
-			queryKey: getGetLibraryPageQueryKey({ id, limit: 1 }),
-			queryFn: ({ signal }: { signal: AbortSignal }) =>
-				getLibraryPage({ id, limit: 1 }, { signal }),
-			staleTime: 5 * 60_000,
-		})),
-	});
-	const library = covers.flatMap((r) => r.data?.items ?? []);
+	// Box art for every game on the host, streamed or left running.
+	const entryOf = useLibraryEntries(
+		(status.data?.games ?? []).map((g) => g.app_id),
+	);
 	const coverOf = (g: ActiveGame) => {
-		const e = g.app_id ? library.find((x) => x.id === g.app_id) : undefined;
+		const e = entryOf(g.app_id);
 		return e?.art.portrait ?? e?.art.header ?? undefined;
 	};
 

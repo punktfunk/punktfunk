@@ -19,6 +19,7 @@ import {
 	useActivityReady,
 } from "@/api/events";
 import { useListNativeClients } from "@/api/gen/native/native";
+import { useLibraryEntries } from "@/api/library";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -100,8 +101,8 @@ export function collapse(entries: ActivityEntry[]): ActivityRow[] {
  */
 export const ActivityList: FC<{
 	entries: ActivityRow[];
-	nameOf?: NameOf;
-}> = ({ entries, nameOf }) => (
+	names?: Names;
+}> = ({ entries, names }) => (
 	<motion.ul
 		variants={{ from: {}, enter: {} }}
 		transition={{ delayChildren: rowDelay }}
@@ -123,7 +124,7 @@ export const ActivityList: FC<{
 						</span>
 					)}
 					<span className="min-w-0 flex-1 truncate text-sm">
-						{describe(e, nameOf)}
+						{describe(e, names)}
 					</span>
 					<time
 						dateTime={new Date(e.ts_ms).toISOString()}
@@ -144,11 +145,15 @@ export const ActivityCard: FC = () => {
 	// Not until the feed is settled: a card that mounts empty and fills a moment later animates on
 	// a different path each time. Mounted with its rows, it animates the same way every time.
 	const paired = useListNativeClients({ query: { retry: false } });
+	const entryOf = useLibraryEntries(entries.map(streamApp));
 	if (!ready) return null;
 	return (
 		<ActivityCardView
 			entries={entries}
-			nameOf={(fp) => paired.data?.find((c) => c.fingerprint === fp)?.name}
+			names={{
+				device: (fp) => paired.data?.find((c) => c.fingerprint === fp)?.name,
+				game: (id) => entryOf(id)?.title,
+			}}
 		/>
 	);
 };
@@ -157,8 +162,8 @@ export const ActivityCard: FC = () => {
  *  parts worth looking at, and neither shows up without one. */
 export const ActivityCardView: FC<{
 	entries: ActivityEntry[];
-	nameOf?: NameOf;
-}> = ({ entries, nameOf }) => {
+	names?: Names;
+}> = ({ entries, names }) => {
 	const [all, setAll] = useState(false);
 	const rows = collapse(entries);
 	return (
@@ -176,7 +181,7 @@ export const ActivityCardView: FC<{
 					<>
 						<ActivityList
 							entries={all ? rows : rows.slice(0, CARD_MAX)}
-							nameOf={nameOf}
+							names={names}
 						/>
 						{all ? (
 							// The ring is per page load; a reader at its bottom has earned that fact.
@@ -204,16 +209,26 @@ export const ActivityCardView: FC<{
 	);
 };
 
-/** A paired device's name by its full fingerprint, when the console knows the device. */
-export type NameOf = (fingerprint: string) => string | undefined;
+/** Names the console can look up: a paired device's by its full fingerprint, a library game's
+ * by its id. Either gives undefined when it does not know. */
+export type Names = {
+	device?: (fingerprint: string) => string | undefined;
+	game?: (id: string) => string | undefined;
+};
+
+/** A native stream's game: its `app` is a library id there, a title on GameStream. */
+export const streamApp = (e: ActivityEntry): string | undefined =>
+	pick(e.data.stream, "plane") === "gamestream"
+		? undefined
+		: pick(e.data.stream, "app");
 
 /**
  * The subject of an event, in one line — whatever the payload actually names. A session's, game's
- * or stream's `client` is a key, so the device's name stands in for it when `nameOf` knows the
- * fingerprint. A `local` game's `client` is the key `desk`, which names no device. A stream's
- * `app` is a title only on GameStream; elsewhere it is a store id and the game's own row names it.
+ * or stream's `client` is a key, so the device's name stands in for it when `names` knows the
+ * fingerprint. A `local` game's `client` is the key `desk`, which names no device. A native
+ * stream's `app` is a library id, shown as the game's title once the library names it.
  */
-export function describe(e: ActivityEntry, nameOf?: NameOf): string {
+export function describe(e: ActivityEntry, names: Names = {}): string {
 	const d = e.data;
 	const local = pick(d.game, "plane") === "local";
 	const fingerprint =
@@ -222,15 +237,14 @@ export function describe(e: ActivityEntry, nameOf?: NameOf): string {
 		pick(d.stream, "fingerprint");
 	const client =
 		pick(d.client, "name") ??
-		(fingerprint ? nameOf?.(fingerprint) : undefined) ??
+		(fingerprint ? names.device?.(fingerprint) : undefined) ??
 		pick(d.session, "client") ??
 		(local ? undefined : pick(d.game, "client")) ??
 		pick(d.device, "name");
+	const app = streamApp(e);
 	const parts = [
 		client,
-		pick(d.stream, "plane") === "gamestream"
-			? pick(d.stream, "app")
-			: undefined,
+		app ? names.game?.(app) : pick(d.stream, "app"),
 		pick(d.game, "title"),
 		typeof d.reason === "string" ? d.reason : undefined,
 	].filter((x): x is string => typeof x === "string" && x.length > 0);
