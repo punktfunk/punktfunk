@@ -481,9 +481,10 @@ fn only_a_password_start_goes_through_the_login_helper() {
     assert_eq!(login_with(Some(&password), &Label::Missing, false), None);
 }
 
-/// The helper's end decides what a failed start through it does: every end before a session
-/// falls back, PAM's refusal of what the gate admitted also trips the helper off, anything else
-/// is the seat's failure. A plain start never reads the helper's codes.
+/// How the login helper ended decides what a failed start through it does. Every end before a
+/// session falls back to the plain start. When PAM refuses a password that the gate let
+/// through, the helper is also switched off. Any other end is the seat's own failure. A plain
+/// start never reads the helper's codes.
 #[test]
 fn a_start_through_the_login_helper_reads_its_end() {
     let seat = person();

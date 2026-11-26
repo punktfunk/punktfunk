@@ -434,10 +434,13 @@ pub(super) fn rdp_reachable() -> bool {
         .any(|rule| switch::reaches_rdp_from_network(&rule))
 }
 
-/// Narrow Remote Desktop again where the operator keeps it on this PC and a rule of its groups
-/// is open to the network: the Session Host role, Windows updates and a restore of the defaults
-/// add or reset them. A registry read decides whether PowerShell runs, so the service repeats
-/// this on its tick. A look while seats turn on or off is skipped.
+/// Narrows Remote Desktop's firewall rules again when the operator keeps Remote Desktop on this
+/// PC and a rule of Remote Desktop's groups is open to the network. That happens without the
+/// operator: the Session Host role, a Windows update and a restore of the firewall defaults
+/// each add or reset those rules.
+///
+/// A registry read decides whether PowerShell has to run, so the service repeats this on its
+/// tick. It does nothing while seats are being turned on or off.
 pub(super) fn keep_rdp_local() {
     let _switching = match SWITCHING.try_lock() {
         Ok(held) => held,

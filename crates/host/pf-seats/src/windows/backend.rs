@@ -270,11 +270,13 @@ impl PlatformBackend for WindowsBackend {
         self.supervisor.stop(seat)
     }
 
-    /// The seat host's own directories go with the seat: its identity key, token and logs, as a
-    /// Linux seat's directory does. A directory that won't go is logged; the seat is gone anyway.
-    /// An account that isn't the seat's is refused before the stop logs anything off, except an
-    /// adopted row whose name the person gave to a new account: its release works by the row's
-    /// SID alone.
+    /// Removes the seat. The seat host's own directories are removed with it: its identity key, its
+    /// token and its logs, as a Linux seat's directory is. A directory that can't be removed is
+    /// logged, and the seat is gone anyway.
+    ///
+    /// An account that isn't the seat's is refused before the stop logs any session off. One case
+    /// is let through: an adopted row whose account name the person has given to a new account.
+    /// Its release works by the row's SID alone.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
         if !self.accounts.name_reassigned(seat) {
             self.accounts.ensure_owned_or_absent(seat)?;

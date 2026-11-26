@@ -48,9 +48,10 @@ const RESTART: Backoff = Backoff::new(
 );
 /// The longest wait after a session ended, and the session that clears the wait.
 const MAX_SESSION_RESTART_DELAY: Duration = Duration::from_secs(120);
-/// The wait before the next cycle once a session was active. A player ends their own session
-/// at will, and each end and each sign-in disturbs the other seats' displays: the wait doubles
-/// to two minutes, and only a session that lasted that long starts it over.
+/// The wait before the next cycle, after a cycle whose session was active. A player ends their
+/// own session whenever they like, and each end and each sign-in disturbs the displays of the
+/// other seats. So the wait doubles, up to two minutes, and only a session that lasted two
+/// minutes starts the wait over.
 const SESSION_RESTART: Backoff = Backoff::new(
     Curve::Doubling {
         first: FIRST_RESTART_DELAY,

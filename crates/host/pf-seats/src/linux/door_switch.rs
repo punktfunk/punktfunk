@@ -1088,9 +1088,13 @@ impl Door {
         Ok(())
     }
 
-    /// The steps of an off that move no file: the seats the door placed stop, the owner row and
-    /// its contract go, the units no longer start at boot, and the owner's host and console come
-    /// back as theirs. Each is tried; false when one didn't hold.
+    /// The steps of an off that move no file. Each is tried, and the result is `false` when one
+    /// didn't hold:
+    ///
+    /// - the seats that the door placed are stopped
+    /// - the owner's row and its contract are removed
+    /// - the units no longer start at boot
+    /// - the owner's host and console come back as the owner's own
     fn stand_down(&self, user: &str, owner: Option<&Owner>) -> bool {
         let mut held = true;
         if active(SEATS_UNIT) {

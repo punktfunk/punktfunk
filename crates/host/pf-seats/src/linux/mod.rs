@@ -1069,9 +1069,9 @@ impl PlatformBackend for LinuxBackend {
         Ok(())
     }
 
-    /// The box owner's uid once their row is prepared, for the account `door-helper` recorded:
-    /// the one peer besides root and the door the socket serves, for Flatpak changes only, and
-    /// the uid the ledger keeps on the owner's row.
+    /// The box owner's uid, known once the owner's row is prepared. It is the uid of the account
+    /// that `door-helper` recorded. The socket serves this uid as its one peer besides root and
+    /// the door, for Flatpak changes only. The ledger keeps the same uid on the owner's row.
     fn owner_uid(&self) -> Option<u32> {
         self.owner().map(|owner| owner.uid)
     }
@@ -1960,10 +1960,13 @@ fn unit_ended(seat: &Seat, state: &session::UnitState, login: bool) -> BackendEr
     }
 }
 
-/// Writes the environment file of a row of `kind` on a person's own account again with the token
-/// it holds, as the box's Seat defaults stand now: Browser streaming reaches its host at the next
-/// start. Every row's stays root's; the owner may read theirs, which their own host reads too.
-/// `None` when the file holds no token, `Some(true)` when it changed.
+/// Writes the environment file again for a row of `kind` on the owner's or a person's own
+/// account. It keeps the token the file holds and takes the box's Seat defaults as they stand
+/// now. So a change to Browser streaming reaches the row's host at its next start.
+///
+/// Every row's file stays root's. The owner may read the file of the owner's row, which the
+/// owner's own host reads too. Returns `None` when the file holds no token, and `Some(true)`
+/// when the file changed.
 fn rewrite_env(
     inner: &Inner,
     seat: &Seat,

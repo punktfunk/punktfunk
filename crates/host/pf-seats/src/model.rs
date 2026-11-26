@@ -408,9 +408,12 @@ impl RowKind {
         }
     }
 
-    /// Whether `account` can be this kind's: a made row's by [`validate_account`], the Linux
-    /// owner's and a Linux person's by [`valid_owner_account`], the latter on an ordinary uid, a
-    /// Windows person's by the SAM rule with a local user's SID.
+    /// Whether `account` is a valid account name for a row of this kind:
+    ///
+    /// - a made row: by [`validate_account`]
+    /// - the Linux owner's row and a Linux person's row: by [`valid_owner_account`]. A person's row
+    ///   also needs an ordinary uid.
+    /// - a Windows person's row: by the SAM naming rule, with the SID of a local user
     fn check(&self, account: &str) -> Result<(), ValidationError> {
         let linux = || {
             valid_owner_account(account)

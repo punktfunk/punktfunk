@@ -209,10 +209,15 @@ pub fn revoke(account: &str) {
     }
 }
 
-/// Relays again every pad systemd kept across a supervisor restart, a uinput pad recorded for
-/// the udev helper again ([`record_kept`]), and watches again every served USB socket, each holding its
-/// seat's slot again so the caps hold. The other kept fds are the caller's. First thing at
-/// start: until then the kept fds would leak into a child.
+/// Picks up what systemd kept across a supervisor restart:
+///
+/// - every pad is relayed again, and a uinput pad is recorded for the udev helper again
+///   ([`record_kept`])
+/// - every served USB socket is watched again
+///
+/// Each one holds its seat's slot again, so the caps per seat still hold. The other kept fds
+/// are the caller's. This runs first thing at start: until it has, the kept fds would leak into
+/// a child.
 pub fn resume() -> Vec<(String, OwnedFd)> {
     let _ = std::fs::remove_dir_all(RELAYED);
     let pad_broker::Kept {
@@ -543,10 +548,11 @@ fn create(
     run_relay(&name, account, kind, index, pad, ours);
 }
 
-/// `kind` built for `account`, with the record that vouches for it to the udev helper: a uhid
-/// pad's written under its stamp's token before the pad exists, a uinput pad's once the kernel
-/// names it. Drop the record after the pad. A PlayStation pad's MAC carries `seat`, and its
-/// name `gamepad_only`.
+/// Builds a pad of `kind` for `account`, with the record that tells the udev helper whose pad
+/// it is. A uhid pad's record is written under the token of the pad's stamp, before the pad
+/// exists. A uinput pad's record is written once the kernel has named the device. Drop the
+/// record after the pad. A PlayStation pad's MAC carries `seat`, and its name carries
+/// `gamepad_only`.
 fn build_recorded(
     kind: PadKind,
     index: u8,

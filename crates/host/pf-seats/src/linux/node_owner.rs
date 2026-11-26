@@ -196,14 +196,17 @@ impl InputId {
     }
 }
 
-/// The lend records' rule for the node at `devpath`, with sysfs at `sys` and the records in
-/// `records` (`None` when they can't be trusted). A node on a real USB bus whose device a
-/// record names by either of its keys, and not a twin of it, goes to the live holder's account.
-/// A parked pad's node,
-/// and a keyboard or mouse node of any lent pad, is root's alone: a boot keyboard or mouse
-/// interface, or input udev classes as keyboard or mouse and not as joystick. So is the
-/// device's own node, which speaks raw USB: its holder could take a keyboard interface from the
-/// kernel through it.
+/// The verdict from the lend records for the node at `devpath`. `sys` is sysfs. `records` holds
+/// the lend records, or is `None` when they can't be trusted.
+///
+/// - A node on a real USB bus goes to the live holder's account when a record names its device
+///   by either of the device's keys, and the device is not a twin of the recorded one.
+/// - A parked pad's node is root's alone.
+/// - A keyboard or mouse node of any lent pad is root's alone. That is a boot keyboard or boot
+///   mouse interface, or an input node that udev classes as keyboard or mouse and not as
+///   joystick.
+/// - The device's own node is root's alone too. It speaks raw USB, and through it the holder
+///   could take a keyboard interface from the kernel.
 pub fn judge_lent(sys: &Path, records: Option<&Path>, devpath: &str, input: InputId) -> Verdict {
     let Some(records) = records else {
         return Verdict::Nobody;
@@ -259,10 +262,12 @@ fn device_under<'a>(devpath: &'a str, under: &str) -> Option<&'a str> {
     rest.split('/').next().filter(|name| !name.is_empty())
 }
 
-/// The account a uhid pad's token names, when the HID device `hid` holds the token's bind: once
-/// bound, only that device does; until then, the first to ask that no lower-numbered HID device
-/// with the token precedes. The kernel numbers a HID device as it adds it, and a copy can read
-/// the token only once the real one is added.
+/// The account that a uhid pad's token names, when the HID device `hid` holds the bind of that
+/// token. Once the token is bound, only the bound device holds it. Until then the first device
+/// to ask holds it, provided no HID device with a lower number carries the same token.
+///
+/// The kernel numbers a HID device when it adds it, and a copy can read the token only after
+/// the real device is added. So the real device always has the lower number.
 fn uhid_account(sys: &Path, dir: &Path, hid: &str) -> Option<String> {
     let devices = sys.join(made_devices::UHID_DEVICES);
     let number = made_devices::hid_number(hid)?;
@@ -461,9 +466,9 @@ mod tests {
         Verdict::Seat(account.into())
     }
 
-    /// A uinput device is a seat's when the supervisor recorded its kernel name, whatever its
-    /// stamp says; a stamped one it didn't record is nobody's, and an unstamped one is left to
-    /// the distro's rules.
+    /// A uinput device belongs to a seat when the supervisor recorded its kernel name, whatever its
+    /// stamp says. A stamped device that the supervisor didn't record belongs to nobody. An
+    /// unstamped device is left to the distro's rules.
     #[test]
     fn a_uinput_device_passes_by_the_name_the_supervisor_recorded() {
         let tree = Tree::new();
@@ -527,9 +532,9 @@ mod tests {
         );
     }
 
-    /// A stamp without a record, with a record of another token, or in the old form that named
-    /// the account, is nobody's; an unstamped uhid device, such as a Bluetooth pad's, is left to
-    /// the distro's rules.
+    /// A stamped node belongs to nobody when its stamp has no record, has a record of another
+    /// token, or is in the old form that named the account. An unstamped uhid device, such as a
+    /// Bluetooth pad's, is left to the distro's rules.
     #[test]
     fn a_uhid_stamp_without_its_record_is_refused() {
         let tree = Tree::new();

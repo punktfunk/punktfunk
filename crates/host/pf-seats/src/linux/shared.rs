@@ -230,15 +230,20 @@ fn check_owned(path: &Path, forbidden: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The shared games library: group `punktfunk-games`, setgid, with a default ACL so a file one
-/// seat creates is writable by the others. Every seat writes in it, so each folder is opened
-/// through the one above it without following a link, and changed through its own handle;
-/// `setfacl` gets each as `/proc/<pid>/fd/<n>`, which names that folder whatever its path holds.
+/// Prepares the shared games library. It has the group `punktfunk-games`, is setgid, and has a
+/// default ACL, so a file that one seat creates is writable by the other seats.
 ///
-/// `games` is sticky, so a seat can't replace `steamapps`, and closed to other users: only the
-/// group reads the tree. A link or file a seat leaves where a bind target belongs is removed.
-/// Run at each seat start: a unit's `BindPaths=` names the targets, and a planted link would send
-/// the mount somewhere else.
+/// Every seat writes in this tree, so root trusts no path in it. Each folder is opened through
+/// the folder above it, without following a link, and is changed through its own handle.
+/// `setfacl` gets each folder as `/proc/<pid>/fd/<n>`, which names that folder whatever its
+/// path holds.
+///
+/// - `games` is sticky, so a seat can't replace `steamapps`. It is closed to other users: only
+///   the group reads the tree.
+/// - A link or a file that a seat left where a bind target belongs is removed.
+///
+/// This runs at each seat start. A unit's `BindPaths=` names the targets, and a planted link
+/// would send the mount somewhere else.
 pub(super) fn ensure_games(state: &Path, gid: u32) -> Result<(), BackendError> {
     let io = |what: &str, e| io_err("games_dir", what, e);
     let top = safe_open::dir(state).map_err(|e| io("open the state directory", e))?;
@@ -486,11 +491,14 @@ pub(super) fn ensure_person_dirs(
         .map_err(|e| io("set the mode of", &config, e))
 }
 
-/// The seat's private directories, owned by its user and in place before its unit starts: a
-/// missing bind source fails the unit with `226/NAMESPACE`. Then `saves/out` and `saves/in`,
-/// where its saves cross to and from the owner's plugins: the seat user's, `0770`, with an ACL
-/// entry and a default one for the box owner's uid `owner`, so no other seat reaches them. What
-/// is in any of them stays.
+/// Makes the seat's private directories, owned by the seat's user. They must exist before the
+/// seat's unit starts: a missing bind source fails the unit with `226/NAMESPACE`.
+///
+/// Then makes `saves/out` and `saves/in`, where the seat's saves cross to and from the owner's
+/// plugins. Both belong to the seat's user, mode `0770`, with an ACL entry and a default ACL
+/// entry for `owner`, the box owner's uid. So no other seat reaches them.
+///
+/// Whatever is already in any of these directories stays.
 pub(super) fn ensure_seat_dirs(
     state: &Path,
     id: &SeatId,
@@ -970,10 +978,15 @@ fn seat_profile(box_dir: &Path, id: &SeatId) -> Option<String> {
     lock_holder(box_dir, id, false).flatten()
 }
 
-/// The profile whose lock seat `id` follows, from the door's `profiles.json` as
-/// [`seat_profile`] reads it: its own, or with `owner` the owner's, the first on the box's own
-/// session, whose lock every profile sharing that desktop opens with. `None` when the file
-/// doesn't read; `Some(None)` when no profile with a valid id plays there.
+/// The profile whose lock seat `id` follows. It comes from the door's `profiles.json`, read as
+/// [`seat_profile`] reads it.
+///
+/// - Without `owner`: the seat's own profile.
+/// - With `owner`: the owner's profile, which is the first profile on the box's own session.
+///   Every profile that shares that desktop opens with that profile's lock.
+///
+/// Returns `None` when the file can't be read, and `Some(None)` when no profile with a valid id
+/// plays there.
 fn lock_holder(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Option<String>> {
     #[derive(serde::Deserialize)]
     struct File {
@@ -995,10 +1008,13 @@ fn lock_holder(box_dir: &Path, id: &SeatId, owner: bool) -> Option<Option<String
     Some(id.map(str::to_owned))
 }
 
-/// What the door's lock file ([`profile_locks::FILE`]) gives seat `id` at `now`: the devices its pairing
-/// list admits, `None` for every paired one, and the lock copy its host reads, without any PIN,
-/// `None` for none. A lock file that is there and doesn't read admits nobody, and so does a
-/// `profiles.json` that doesn't read while anything is locked.
+/// What the door's lock file ([`profile_locks::FILE`]) means for seat `id` at `now`. Two values:
+///
+/// - the devices that the seat's pairing list lets on, or `None` for every paired device
+/// - the copy of the lock that the seat's host reads, without any PIN, or `None` for no lock
+///
+/// A lock file that exists and can't be read lets nobody on. So does a `profiles.json` that
+/// can't be read while anything is locked.
 fn lock_filter(
     box_dir: &Path,
     id: &SeatId,
@@ -2307,8 +2323,9 @@ mod tests {
         assert!(listing(&trust).is_empty());
     }
 
-    /// A link, a file where a folder belongs, a name that is no profile id, and a store that is
-    /// a link, a folder or over its cap never cross; the rest of the layer still follows.
+    /// These never cross into the copy: a link, a file where a folder belongs, a name that is not
+    /// a profile id, and a store that is a link, a folder or over its size cap. The rest of the
+    /// layer is still copied.
     #[test]
     fn hostile_profile_entries_are_not_copied() {
         let temp = tempfile::tempdir().unwrap();

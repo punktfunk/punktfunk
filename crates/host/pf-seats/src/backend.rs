@@ -157,12 +157,16 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(no_lending())
     }
 
-    /// Hands each of `keys` to the holder `ledger` names now, the desk when no row lends it, and
-    /// ends what its last holder had open. The service saved `ledger` first and holds `ops`.
+    /// Hands each pad in `keys` to the holder that `ledger` names now, or to the desk when no row
+    /// holds it, and closes what the last holder had open. The service saved `ledger` first and
+    /// holds `ops`.
     ///
-    /// Between changes the backend keeps each row's pads level with its seat on its own: live
-    /// before [`Self::start`] runs anything of the seat's, parked once [`Self::stop`] or a
-    /// failure ends it ([`Self::reconcile`]), the desk's again after [`Self::remove`].
+    /// Between such changes the backend keeps each row's pads in step with the row's seat by
+    /// itself:
+    ///
+    /// - live before [`Self::start`] runs anything of the seat's
+    /// - parked once [`Self::stop`] or a failure ends the seat ([`Self::reconcile`])
+    /// - the desk's again after [`Self::remove`]
     fn settle_pads(&self, _ledger: &Ledger, _keys: &[String]) -> Result<(), BackendError> {
         Err(no_lending())
     }
