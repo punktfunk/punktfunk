@@ -384,8 +384,8 @@ pub(super) fn browser(box_dir: &Path) -> Browser {
 
 /// Writes the environment file for `seat`, a row of `kind` on `passwd`'s account, root's `0600`:
 /// it holds a secret, and the unit's root commands take their environment from it. The owner's
-/// own user unit reads theirs too, through [`reader_acl`] for their uid. `true` when the file
-/// changed.
+/// own user unit reads theirs too, through [`shared::reader_acl`] for their uid. `true` when the
+/// file changed.
 pub(super) fn write_env(
     seat: &Seat,
     kind: SeatAccount,
@@ -400,23 +400,12 @@ pub(super) fn write_env(
     let written = write_if_changed(&path, &text, 0o600)
         .map_err(|e| io("write the seat environment file", e))?;
     if kind == SeatAccount::Owner {
-        let (acl, flags) = (reader_acl(passwd.uid), rustix::fs::XattrFlags::empty());
+        let acl = shared::reader_acl(passwd.uid, false);
+        let flags = rustix::fs::XattrFlags::empty();
         rustix::fs::lsetxattr(&path, shared::ACL_ACCESS, &acl, flags)
             .map_err(|e| io("let the owner read the environment file", e.into()))?;
     }
     Ok(written)
-}
-
-/// The access ACL of a file only root writes and `uid` may read.
-fn reader_acl(uid: u32) -> Vec<u8> {
-    use shared::{ACL_GROUP_OBJ, ACL_MASK, ACL_NO_ID, ACL_OTHER, ACL_USER, ACL_USER_OBJ};
-    shared::acl_bytes(&[
-        (ACL_USER_OBJ, 6, ACL_NO_ID),
-        (ACL_USER, 4, uid),
-        (ACL_GROUP_OBJ, 0, ACL_NO_ID),
-        (ACL_MASK, 4, ACL_NO_ID),
-        (ACL_OTHER, 0, ACL_NO_ID),
-    ])
 }
 
 /// Writes the environment file and the drop-ins for `seat`, a row of `kind` on `passwd`'s
@@ -1142,7 +1131,7 @@ mod tests {
         };
         let none = u32::MAX;
         assert_eq!(
-            reader_acl(1000),
+            shared::reader_acl(1000, false),
             [
                 2u32.to_le_bytes().to_vec(),
                 entry(0x01, 6, none),
@@ -1172,7 +1161,7 @@ mod tests {
         let meta = std::fs::metadata(&path).unwrap();
         assert_eq!((meta.uid(), meta.gid()), (0, 0));
         assert!(!write_if_changed(&path, "X=\"1\"\n", 0o600).unwrap());
-        let acl = reader_acl(1000);
+        let acl = shared::reader_acl(1000, false);
         let flags = rustix::fs::XattrFlags::empty();
         match rustix::fs::lsetxattr(&path, shared::ACL_ACCESS, &acl, flags) {
             Err(rustix::io::Errno::NOTSUP) => {}
