@@ -146,10 +146,17 @@ impl PadState for crate::hori_proto::HoriState {
     }
 }
 
-/// Motion lives inside the opaque raw report, so there is nothing to neutralize or clear.
+/// A mirrored report carries its own motion; only the typed fallback's gyro is watched. A
+/// reclaimed slot drops both.
 impl PadState for crate::triton_proto::TritonState {
     fn neutral() -> Self {
         Self::neutral()
+    }
+    fn neutralize_gyro(&mut self) -> bool {
+        Self::neutralize_gyro(self)
+    }
+    fn clear_rich(&mut self) {
+        Self::clear_rich(self)
     }
 }
 
