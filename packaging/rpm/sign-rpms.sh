@@ -66,7 +66,9 @@ for rpm in "${RPMS[@]}"; do
   rpmsign --define "_gpg_name $KEYID" --addsign "$rpm"
 done
 
-# Verify locally so a bad signature fails the build before publishing.
-rpm --import <(gpg --export --armor "$KEYID")
+# Verify locally so a bad signature fails the build before publishing. The key goes through a
+# file: rpm 4.20 (openSUSE) imports nothing from a pipe, and fails with "import read failed(0)".
+gpg --export --armor "$KEYID" > "$GNUPGHOME/signing-key.asc"
+rpm --import "$GNUPGHOME/signing-key.asc"
 rpmkeys --checksig "${RPMS[@]}"
 echo "signed + verified ${#RPMS[@]} RPM(s) with key $KEYID"
