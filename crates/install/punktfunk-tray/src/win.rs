@@ -68,6 +68,7 @@ const IDM_LOGS: usize = 0x0105;
 const IDM_EXIT: usize = 0x0106;
 const IDM_PAIRING: usize = 0x0107;
 const IDM_DISPLAYS: usize = 0x0108;
+const IDM_UPDATE: usize = 0x0109;
 
 /// Resource ordinals from `build.rs`.
 fn icon_ordinal(status: &TrayStatus) -> u16 {
@@ -468,6 +469,9 @@ fn show_menu(hwnd: HWND) {
         if let Some(label) = status.release_label() {
             add(IDM_DISPLAYS, &label, false, Some(win_theme::GLYPH_DISPLAY));
         }
+        if let Some(label) = status.update_label() {
+            add(IDM_UPDATE, &label, false, Some(win_theme::GLYPH_DOWNLOAD));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         // Shield = this item opens a UAC prompt (`punktfunk-host.exe service …`).
         if can_control {
@@ -688,6 +692,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 IDM_OPEN_WEB => open_console(hwnd),
                 IDM_PAIRING => open_web_console(hwnd, "pairing"),
                 IDM_DISPLAYS => open_web_console(hwnd, "displays"),
+                IDM_UPDATE => open_web_console(hwnd, crate::status::UPDATE_PAGE),
                 IDM_START => {
                     let _ = elevate_service(hwnd, "start");
                 }

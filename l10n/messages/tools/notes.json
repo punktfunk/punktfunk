@@ -338,6 +338,7 @@
 	"tray_unit_stop": "Linux tray submenu item: stop this one service.",
 	"tray_unit_restart": "Linux tray submenu item: restart this one service (not the computer).",
 	"tray_approve_pairing": "Tray menu item while a device waits for approval; opens the console's pairing page.",
+	"tray_update_to": "Tray menu item while a newer host is out; opens the console's Host page, where the update starts. {version}: the new version number, such as 0.49.0.",
 	"tray_start_host": "Tray menu item: start the stopped host (and on Linux its console and plugin runner).",
 	"tray_start_at_login": "Linux tray checkbox: start the tray when you log in.",
 	"tray_exit": "Tray menu item: close the tray icon; the host keeps running.",

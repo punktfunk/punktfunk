@@ -36,6 +36,7 @@ pub const GLYPH_DISPLAY: u16 = 0xE7F4;
 pub const GLYPH_SHIELD: u16 = 0xE7EF;
 pub const GLYPH_FOLDER: u16 = 0xE8B7;
 pub const GLYPH_POWER: u16 = 0xE7E8;
+pub const GLYPH_DOWNLOAD: u16 = 0xE896;
 
 type FnSetPreferredAppMode = unsafe extern "system" fn(mode: i32) -> i32;
 type FnVoid = unsafe extern "system" fn();
