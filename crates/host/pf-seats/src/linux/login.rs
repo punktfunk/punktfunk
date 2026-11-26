@@ -272,9 +272,13 @@ impl Person {
         })
     }
 
-    /// `program` in a child that takes this process's descriptors 0 to 2 and no other, the
-    /// session's environment `env`, no blocked signal, the core limit `core` when there is one to
-    /// give back, then the person's groups, gid and uid, in that order, and no way back to root.
+    /// Runs `program` in a child that has no way back to root. The child gets:
+    ///
+    /// - this process's descriptors 0 to 2 and no other,
+    /// - the session's environment `env`,
+    /// - no blocked signal,
+    /// - the core limit `core`, when there is one to give back,
+    /// - then the person's groups, gid and uid, set in that order.
     fn spawn(
         &self,
         program: &Path,
@@ -519,15 +523,21 @@ mod tests {
         assert_eq!(libc::WEXITSTATUS(status), 0, "SIGTERM blocked in the child");
     }
 
-    /// The built helper as `punktfunk-seat@.service` runs it, as root, through this package's PAM
-    /// file over the box's `login` stack, with this test as the supervisor. The session child is
-    /// the person with their groups, no capability, descriptors 0 to 2 alone, `/` as its
-    /// directory and the unit's environment plus the person's names, and no copy of the password
-    /// in its or the helper's argv and environment, or in the helper's log; the helper keeps no
-    /// core limit and forwards a stop. A wrong password, a locked, an expired and a must-change
-    /// account, a missing PAM file, a missing `seat-session` and no password at all each end it
-    /// before a session; a `seat-session` the person can't run ends it with the session closed.
-    /// Makes and removes the account `pfwallet`, the group `pfwalletg`,
+    /// Runs the built helper the way `punktfunk-seat@.service` runs it: as root, through this
+    /// package's PAM file over the box's `login` stack, with this test in the supervisor's place.
+    ///
+    /// - The session child is the person, with the person's groups and no capability. It has only
+    ///   descriptors 0 to 2, `/` as its directory, and the unit's environment plus the person's
+    ///   names.
+    /// - No copy of the password is in the argv or the environment of the child or of the helper,
+    ///   or in the helper's log.
+    /// - The helper keeps no core limit and forwards a stop.
+    /// - Each of these ends the helper before a session: a wrong password, a locked account, an
+    ///   expired account, an account that must change its password, a missing PAM file, a missing
+    ///   `seat-session`, and no password at all.
+    /// - A `seat-session` that the person can't run ends the helper with the session closed.
+    ///
+    /// It makes and removes the account `pfwallet`, the group `pfwalletg`,
     /// `/etc/pam.d/punktfunk-seat`, the login socket and the row's runtime directory.
     #[cfg(target_os = "linux")]
     #[test]

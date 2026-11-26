@@ -188,12 +188,18 @@ pub(super) fn render_env(
     out
 }
 
-/// The drop-in that gives the unit an empty `/run/media` holding the shared games folder at
-/// [`libraries::games_view`], its private prefix directories over both of that folder's paths,
-/// the owner's libraries and granted roots ([`libraries`]), and the supervisor's uinput proxy as
-/// `/dev/uinput`.
-/// A SteamOS-mode Steam adopts every mounted drive holding a `steamapps` as a library, and the
-/// drive as mounted is the owner's alone. Without the proxy the unit starts all the same.
+/// Renders the drop-in with a made seat's bind mounts. It gives the unit an empty `/run/media`
+/// that holds:
+///
+/// - the shared games folder, at [`libraries::games_view`],
+/// - the seat's private prefix directories, over both paths of that folder,
+/// - the owner's libraries and granted roots ([`libraries`]).
+///
+/// It also puts the supervisor's uinput proxy at `/dev/uinput`. Without the proxy the unit
+/// starts all the same.
+///
+/// `/run/media` starts empty because a Steam in SteamOS mode adopts every mounted drive that
+/// holds a `steamapps` folder as a library, and a drive as mounted belongs to the owner alone.
 pub(super) fn render_binds(
     state: &Path,
     id: &SeatId,
@@ -728,9 +734,9 @@ mod tests {
         assert!(render_class().contains("XDG_SESSION_CLASS=background"));
     }
 
-    /// Only the owner's row is a `background` session and only a made seat gets the binds; a
-    /// person's row gets neither, so it runs as the unit's `user` class and a drop-in either
-    /// left from an earlier start is removed.
+    /// Only the owner's row is a `background` session, and only a made seat gets the binds. A
+    /// person's row gets neither, so it runs in the unit's `user` class. A drop-in of either kind
+    /// that an earlier start left is removed.
     #[test]
     fn each_row_kind_gets_its_own_drop_ins_and_no_other() {
         let state = Path::new("/var/lib/punktfunk-seats");

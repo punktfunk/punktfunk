@@ -913,10 +913,13 @@ pub(super) mod tests {
         assert!(status.unwrap().success(), "{program} {args:?}");
     }
 
-    /// Against the box's own `login` stack, in this process and through the `pam-check` child of
-    /// the built `punktfunk-seats`, which must agree: the right password passes, a wrong one is
-    /// refused with the wrong-password code, and a locked, an expired and a must-change account
-    /// are each refused. Makes and removes the account `pfpamcheck`, so it needs root.
+    /// Checks a password against the box's own `login` stack in two ways, which must agree: in this
+    /// process, and through the `pam-check` child of the built `punktfunk-seats`.
+    ///
+    /// The right password passes. A wrong one is refused with the wrong-password code. A locked
+    /// account, an expired account and an account that must change its password are each refused.
+    ///
+    /// It makes and removes the account `pfpamcheck`, so it needs root.
     #[test]
     #[ignore = "needs root, libpam, the login service and a built punktfunk-seats; makes the account pfpamcheck"]
     fn the_login_stack_decides() {

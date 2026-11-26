@@ -188,9 +188,10 @@ impl Drop for Hold {
     }
 }
 
-/// Takes back what `account` holds once its seat stopped: each relay and USB socket is shut
-/// down, so its relay reads the seat hanging up and drops the pad, and `vhci_hcd` drops the USB
-/// device, whose pad server then exits. A process that outlived the seat keeps none of them.
+/// Takes back what `account` holds, once its seat has stopped. Each relay socket and each USB
+/// socket of the account is shut down. The relay then reads that the seat hung up, and drops the
+/// pad. `vhci_hcd` drops the USB device, and the device's pad server exits. So a process that
+/// outlived the seat keeps none of them.
 pub fn revoke(account: &str) {
     let held = holds();
     let mine: Vec<&OwnedFd> = held

@@ -917,11 +917,13 @@ impl Door {
         }
     }
 
-    /// The door's account sits in its own group, checked at every door start and every on: an
-    /// account with any other primary group moves, with the files that group owned, the door's
-    /// directory, which the door changes itself, and the library copy, which is root's. `strict`
-    /// is an on's: a failed step ends the switch. A door start's tries every step and fails only
-    /// with the library's.
+    /// Puts the door's account in a group of its own. This runs at every door start and at every
+    /// on. An account with any other primary group is moved, together with the files that group
+    /// owned: the door's directory, which the door changes itself, and the library copy, which is
+    /// root's.
+    ///
+    /// `strict` is for an on: a failed step ends the switch. A door start is not strict. It tries
+    /// every step and fails only when the library copy's step fails.
     fn door_account_group(&self, strict: bool) -> Result<(), Stop> {
         if !door_exists() {
             return Ok(());

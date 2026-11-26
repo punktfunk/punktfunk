@@ -292,13 +292,17 @@ impl AccountManager {
         self.credentials.store(&seat.id, &credential)
     }
 
-    /// Gives an adopted `seat`'s account back by `sid`, the row's SID, so a renamed account gets
-    /// it back too: the console deny off unless the account held it before adopt, out of
-    /// [`SEATS_GROUP`], out of Remote Desktop Users when adopt put it there, the blob gone, the
-    /// Steam launchers undone. Never deletes the account or its profile, and never acts by name.
-    /// Every step runs and treats "already gone" as done; the first failure is the answer, so
-    /// Remove can run again. When the name is gone or holds another account, the SID's steps
-    /// only warn.
+    /// Gives the account of an adopted `seat` back to its person. It acts by `sid`, the row's SID,
+    /// and never by name, so a renamed account is released too. The steps:
+    ///
+    /// - take the console deny off, unless the account had it before the adopt
+    /// - remove the account from [`SEATS_GROUP`]
+    /// - remove it from Remote Desktop Users, when the adopt put it there
+    /// - delete the password blob, and undo the Steam launchers
+    ///
+    /// It never deletes the account or its profile. Every step runs, and "already gone" counts as
+    /// done. The first failure is the answer, so Remove can run again. When the name is gone or
+    /// holds another account, a failure in the SID's steps only warns.
     fn release(&self, seat: &Seat, sid: &str) -> WinResult<()> {
         let present = sid_string(&seat.account).is_some_and(|found| found == sid);
         let mut results = with_sid(sid, |sid| {

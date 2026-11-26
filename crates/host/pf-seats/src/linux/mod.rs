@@ -290,11 +290,14 @@ impl Tracked {
     }
 }
 
-/// Whether an account no ledger row names is what a stopped create left under `state`: its seat
-/// directory is here and its seat never started. A create makes that directory before the
-/// account, so an account without one belongs to a state directory that isn't mounted or was
-/// emptied, where every seat would look abandoned; it is kept, the last pointer to that seat's
-/// files. The token directory exists once a seat has started, and one that can't be read counts.
+/// Whether an account that no ledger row names was left by a create that stopped halfway: the
+/// account's seat directory exists under `state`, and its seat never started.
+///
+/// A create makes the seat directory before the account. So an account with no seat directory
+/// belongs to a state directory that isn't mounted, or was emptied, where every seat would look
+/// abandoned. Such an account is kept: it is the last pointer to that seat's files.
+///
+/// A seat that has started has a token directory. One that can't be read counts as there.
 fn reapable(state: &Path, id: &SeatId) -> bool {
     let here = matches!(shared::seat_dir(state, id).try_exists(), Ok(true));
     let started = !matches!(shared::host_dir(state, id).try_exists(), Ok(false));
@@ -453,10 +456,12 @@ impl Inner {
         Ok(fresh)
     }
 
-    /// `seat`'s copies for `passwd`'s reader, written under the copy lock. The owner's are the recorded
-    /// account's alone: its trust copy, the box's library from its home and its environment file,
-    /// with a fresh token when the file holds none; a host that is up keeps the token it started
-    /// with. `true` when the owner's environment file changed.
+    /// Writes `seat`'s copies for the reader of `passwd`, under the copy lock. Returns `true` when
+    /// the owner's environment file changed.
+    ///
+    /// The owner's row is written only for the recorded owner account. It gets its trust copy, the
+    /// box's library copied from the owner's home, and its environment file. An environment file
+    /// with no token gets a fresh one. A host that is up keeps the token it started with.
     fn copies(
         &self,
         seat: &Seat,
@@ -1723,12 +1728,18 @@ impl LinuxBackend {
 }
 
 /// The sync thread. Every [`TRUST_TICK`] it brings what the seats read up to date with the box,
-/// one job after another: the box's library copy under the copy lock, the console's certificate
-/// in Firefox, each running seat's copies and the
-/// desk yield of a row on a person's own account, a made seat's missed libraries every
-/// [`REACH_EVERY`], the games folder's ACL mask. Each job's memory is a local here, handed to it.
-/// The owner's row stays listed while its host is the owner's own, which reads the same copy. Ends
-/// when the backend is dropped.
+/// one job after another:
+///
+/// 1. the box's library copy, under the copy lock
+/// 2. the console's certificate in Firefox
+/// 3. each running seat's copies, and the desk yield of a row on the owner's or a person's own
+///    account
+/// 4. every [`REACH_EVERY`], the libraries that a made seat's Steam missed
+/// 5. the ACL mask of the games folder
+///
+/// What a job remembers between runs is a local variable here, handed to the job. The owner's
+/// row stays listed while its host is the owner's own host, which reads the same copy. The
+/// thread ends when the backend is dropped.
 fn sync_loop(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut reach_at = Instant::now();
@@ -1808,10 +1819,13 @@ fn sync_seat(inner: &Inner, id: &SeatId, tracked: &Tracked, failing: &mut HashSe
     true
 }
 
-/// A running seat's trust copy, whose pairing list follows who a person's row, or a locked
-/// profile's lock, admits as presence runs out; then the environment file of a row on a person's
-/// own account; then, for a seat other than the owner's, the box's library in its trust copy.
-/// The first failure ends it.
+/// Refreshes what one running seat reads. The first failure ends it.
+///
+/// 1. The seat's trust copy. For a person's row or a locked profile, its pairing list holds only
+///    the devices that the row or the profile's lock still lets on, so it shrinks as presence
+///    runs out.
+/// 2. The environment file, for a row on the owner's or a person's own account.
+/// 3. The box's library in the seat's trust copy, for every seat but the owner's.
 fn refresh_copies(
     inner: &Inner,
     guard: &mut CopyGuard<'_>,
@@ -1872,14 +1886,18 @@ fn acl_due(dirty: bool, seat_up: bool, since: Duration) -> bool {
     dirty || (seat_up && since >= ACL_EVERY)
 }
 
-/// The one choice of how a person's cold start opens their session: through the login helper,
-/// with the password the person proved the start with, so what their own login unlocks with it
-/// unlocks here too; without one, or once the helper is `off`, as systemd's `PAMName=` opens
-/// it. With SELinux on, the helper runs in PID 1's context, the one systemd's own PAM child
-/// has: pam_selinux computes the session's context from the caller's, so every user gets what
-/// the plain start gives them, a confined one included. That needs the login socket to carry the
-/// context too ([`login_password::Label::Init`]); without it, the plain start. A switch for the wallet
-/// login goes here.
+/// Decides how a person's cold start opens their session. Nothing else decides it.
+///
+/// - With the password that the person proved the start with: through the login helper. Then
+///   whatever the person's own login unlocks with that password is unlocked here too.
+/// - With no password, or once the helper is `off`: the plain start, where systemd's `PAMName=`
+///   opens the session.
+///
+/// With SELinux on, the helper runs in the context of PID 1, which is the context that systemd's
+/// own PAM child has. pam_selinux computes the session's context from its caller's context. So
+/// every user, a confined one included, gets what the plain start gives them. For that the
+/// login socket must carry the context too ([`login_password::Label::Init`]). Without it, the
+/// start is the plain one. A switch for the wallet login goes here.
 fn login_with<'a>(
     password: Option<&'a Secret>,
     label: &login_password::Label,

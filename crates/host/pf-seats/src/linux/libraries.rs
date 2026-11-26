@@ -727,9 +727,10 @@ fn remove_empty_dirs(root: &Path) {
     let _ = std::fs::remove_dir(root);
 }
 
-/// Every directory a library's binds name, and the seat's copy of each of its [`Spot`]s, before
-/// the unit starts: a missing one fails it with `226/NAMESPACE`, and none can be made inside the
-/// idmapped mount, where root has no id. Sets the library's [`make_anchor`] folder.
+/// Makes, before the unit starts, every directory that a library's binds name, and the seat's
+/// copy of each of the library's [`Spot`]s. A missing directory fails the unit with
+/// `226/NAMESPACE`. None can be made inside the idmapped mount, where root has no id. Also sets
+/// the library's [`make_anchor`] folder.
 fn prepare(
     state: &Path,
     id: &SeatId,

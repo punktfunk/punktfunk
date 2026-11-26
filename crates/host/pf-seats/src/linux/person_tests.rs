@@ -502,9 +502,10 @@ fn a_start_through_the_login_helper_reads_its_end() {
     }
 }
 
-/// The login drop-in runs the helper as root (`!`: the unit's `User=` stays, only the switch to
-/// it is skipped) with no restart, in the SELinux context it is given, and carries no secret; a
-/// path a unit file can't hold verbatim gets none.
+/// The login drop-in runs the helper as root, with no restart, in the SELinux context it is
+/// given, and it carries no secret. The `!` prefix does the root part: the unit's `User=` stays,
+/// and only the switch to that user is skipped. A path that a unit file can't hold verbatim
+/// gets no drop-in.
 #[test]
 fn the_login_drop_in_runs_the_helper_and_nothing_else() {
     let helper = Path::new("/usr/libexec/punktfunk/punktfunk-seats");

@@ -464,9 +464,10 @@ impl WindowsBackend {
     }
 }
 
-/// Steam's streaming speakers driver, which a seat's sound device binds, is on disk, or already
-/// bound to a sound device whose INF Windows still holds: the host mints a seat's from either,
-/// as `pf_audio`'s `discover_driver` does, so Steam itself may be gone.
+/// Whether Steam's streaming speakers driver, which a seat's sound device binds, is available.
+/// It is when the driver is on disk, or is already bound to a sound device whose INF Windows
+/// still holds. The host makes a seat's sound device from either, as `pf_audio`'s
+/// `discover_driver` does, so Steam itself may be gone.
 fn seat_sound() -> bool {
     let staged = std::env::var_os("CommonProgramFiles(x86)")
         .map(PathBuf::from)

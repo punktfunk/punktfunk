@@ -311,9 +311,10 @@ pub(super) fn ensure_copy(session: u32, account: &str, seat_id: &str, share: boo
     }
 }
 
-/// Point every usual start of Steam on the seat at its copy `exe` under the seat's IPC name:
-/// the seat's `SeatSteam` key, which the box's shared shortcuts read through the tray, its
-/// autostart line, then its `steam://` handler, whose classes hive loads a moment after logon.
+/// Points every usual start of Steam on the seat at the seat's copy, `exe`, under the seat's IPC
+/// name. In order: the seat's `SeatSteam` key, which the box's shared shortcuts read through
+/// the tray, then the seat's autostart line, then the seat's `steam://` handler. The handler is
+/// written on a thread of its own: its classes hive loads a moment after logon.
 fn ensure_launchers(account: &str, seat_id: &str, exe: &Path) {
     let Some(sid) = accounts::sid_string(account) else {
         tracing::warn!(account, "seat account has no SID; steam launchers skipped");

@@ -910,10 +910,16 @@ const DELETE: [&str; 17] = [
     "getent passwd ACCOUNT",
 ];
 
-/// A made seat's delete: the foreign-user check first, then the seat is untracked before its unit
-/// stops, its user is ended and the proxy hook lets go, the account goes with its home, the
-/// seat's directories go, and its lent pad is the desk's again. `/proc` decides when the user is
-/// gone, so this runs where Linux does.
+/// A made seat's delete, in order:
+///
+/// 1. the foreign-user check
+/// 2. the seat is untracked, and only then its unit stops
+/// 3. the seat's user is ended, and the proxy hook lets go
+/// 4. the account is removed with its home
+/// 5. the seat's directories are removed
+/// 6. the seat's lent pad belongs to the desk again
+///
+/// `/proc` decides when the user is gone, so this test runs only on Linux.
 #[test]
 #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc, which only Linux has")]
 fn a_made_seat_s_delete_runs_exactly_these() {
@@ -1025,10 +1031,10 @@ const START_HOST: &str = "setpriv --reuid UID --regid UID --init-groups env \
      XDG_RUNTIME_DIR=/run/user/UID systemctl --user start punktfunk-host.service \
      punktfunk-kde-session.service";
 
-/// Seats outlive the supervisor, so its start finds the owner's row with its unit maybe up: the
-/// row is written again and tracked for as long as it exists, a stop leaving it tracked, and the
-/// owner's own host restarts onto files that changed. A made seat's row and a person's, in the
-/// same ledger, get nothing.
+/// Seats outlive the supervisor. So when the supervisor starts, it may find the owner's row with
+/// the row's unit already up. It writes the row's files again and tracks the row for as long as
+/// the row exists; a stop leaves it tracked. The owner's own host restarts onto files that
+/// changed. A made seat's row and a person's row in the same ledger get none of this.
 #[test]
 #[ignore = "needs root: hands the trust copy to the owner and writes under /run"]
 fn the_owner_row_is_tracked_after_a_supervisor_restart() {

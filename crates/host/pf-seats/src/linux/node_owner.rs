@@ -54,9 +54,12 @@ fn lends_installed() -> bool {
         .is_some_and(|text| text.contains("pads/lent"))
 }
 
-/// The doctor's rows for seat pads: the udev rule for seat pads and its line for lent desk pads, the broker's
-/// socket, and `/dev/cuse`, which a seat's uinput proxy is made through and which must be root's
-/// alone: whoever opens it can serve a seat's node first.
+/// The doctor's rows for seat pads:
+///
+/// - the udev rule for seat pads, and its line for lent desk pads
+/// - the pad broker's socket
+/// - `/dev/cuse`, through which a seat's uinput proxy is made. It must be root's alone, because
+///   whoever can open it can serve a seat's node before the supervisor does.
 pub fn diagnostics() -> Vec<Diagnostic> {
     let row = |ok: bool, code: &str, good: &str, bad: &str| Diagnostic {
         level: if ok {
@@ -221,10 +224,15 @@ pub fn judge_lent(sys: &Path, records: Option<&Path>, devpath: &str, input: Inpu
     }
 }
 
-/// The udev helper's rule for the node at `devpath`, with sysfs at `sys` and the supervisor's records
-/// in `records` (`None` when they can't be trusted). A stamped node is a seat's only when its
-/// device is one a record names: a uinput device by its kernel name, a uhid pad by the token in
-/// its stamp, bound to the first HID device that carries it. The stamp never names the seat.
+/// The udev helper's verdict for the node at `devpath`. `sys` is sysfs. `records` holds the
+/// supervisor's device records, or is `None` when they can't be trusted.
+///
+/// A stamped node goes to a seat only when a record names its device:
+///
+/// - a uinput device, by its kernel name
+/// - a uhid pad, by the token in its stamp, bound to the first HID device that carries the token
+///
+/// The stamp itself never names the seat.
 pub fn judge(sys: &Path, records: Option<&Path>, devpath: &str) -> Verdict {
     if !stamped(&sys.join(devpath.trim_start_matches('/'))) {
         return Verdict::Nobody;
@@ -483,9 +491,9 @@ mod tests {
         assert_eq!(tree.judge(&real), Verdict::Refused, "a withdrawn record");
     }
 
-    /// A uhid pad's token binds the first HID device that carries it, and only its nodes pass:
-    /// a copy numbered higher is refused before the bind and after, and so is a device that
-    /// carries the token once the bound one is gone.
+    /// A uhid pad's token is bound to the first HID device that carries it, and only that device's
+    /// nodes pass. A copy with a higher number is refused, before the bind and after it. So is any
+    /// device that carries the token after the bound device is gone.
     #[test]
     fn a_uhid_pad_passes_by_its_token_bound_to_the_lowest_device() {
         let tree = Tree::new();
