@@ -802,7 +802,7 @@ fn a_made_seat_s_provision_runs_exactly_these() {
 }
 
 /// A made seat never yields to its user at the machine, though they have a session there: its
-/// account is the supervisor's, nobody else's. The keep-level thread is not even offered the row,
+/// account is the supervisor's, nobody else's. The sync thread is not even offered the row,
 /// since only a row on someone's own account is tracked with a guest to yield to.
 #[test]
 fn a_made_seat_never_yields_to_the_desk() {
@@ -1066,10 +1066,7 @@ fn the_owner_row_is_tracked_after_a_supervisor_restart() {
     assert_eq!(warm, expect(&prepare, "pfowner", OWNER_UID));
     let tracked = tracked.expect("the owner's row is tracked");
     assert_eq!((tracked.kind, tracked.uid), (Own::Owner, OWNER_UID));
-    assert!(
-        tracked.guest.is_some(),
-        "the keep-level thread can yield it"
-    );
+    assert!(tracked.guest.is_some(), "the sync thread can yield it");
     assert_eq!(others, [None, None]);
     assert_eq!(after_stop.as_deref(), Some("pfowner"));
 }

@@ -17,11 +17,12 @@
 //! What runs beside a unit rises and falls in [`Inner::cross`] alone, by [`beside`]'s table:
 //! copies, lent pads, the binary's uinput proxy ([`LinuxBackend::on_unit`]), the pad broker's
 //! admission ([`LinuxBackend::running_account`]) and a person's presence ([`devices`]). The
-//! copy writers' lock is a [`level::Level`], the only way to a device list. [`fence`] gives
-//! udev the user each pad belongs to.
+//! lock every writer of a seat's copied files takes is [`copy_lock::CopyLock`], which is also
+//! the only way to a device list. [`fence`] gives udev the user each pad belongs to.
 
 mod accounts;
 mod beside;
+mod copy_lock;
 mod devices;
 pub mod door;
 #[cfg(test)]
@@ -31,7 +32,6 @@ mod firefox;
 mod flatpak;
 pub mod handover;
 pub mod lent;
-mod level;
 mod libraries;
 pub mod login;
 mod logind;
@@ -63,7 +63,7 @@ use crate::secret::Secret;
 use crate::service::SeatService;
 use crate::unlock::DeviceList;
 use beside::{Act, Beside, Edge, Ring};
-use level::{CopyLocks, Level};
+use copy_lock::{CopyGuard, CopyLock};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -109,9 +109,9 @@ pub fn check_owner(account: &str, on: bool) -> Result<(), BackendError> {
 const START_TIMEOUT: Duration = Duration::from_secs(90);
 /// How often a running seat's trust copy is compared with the box's.
 const TRUST_TICK: Duration = Duration::from_secs(2);
-/// How long an ask to level the box's library now waits for the copy writers. The door gives up
-/// on its ask after two seconds (`socket.rs`), and a longer wait holds a socket connection.
-const LEVEL_WAIT: Duration = Duration::from_millis(1500);
+/// How long a request to sync the box's library now waits for the copy lock. The door gives up
+/// on its request after two seconds (`socket.rs`), and a longer wait holds a socket connection.
+const LIBRARY_SYNC_WAIT: Duration = Duration::from_millis(1500);
 /// How often the games folder's ACL mask is repaired while a seat runs.
 const ACL_EVERY: Duration = Duration::from_secs(600);
 /// How often a made seat's Steam log is read for library folders Steam couldn't open.
@@ -182,8 +182,8 @@ struct Inner {
     hook: OnceLock<UnitHook>,
     /// The prerequisite checks `Seating` last answered with, and when they ran.
     checks: Mutex<Option<(Instant, Vec<Diagnostic>)>>,
-    /// The copy writers' level and the device lists behind it ([`level`]).
-    locks: CopyLocks,
+    /// The lock every writer of a seat's copied files takes, and the device lists it guards.
+    copy_lock: CopyLock,
     /// The password of a start through the login helper, while it waits for the helper.
     handover: handover::Handover,
     /// Set once a login helper tripped ([`LOGIN_TRIPPED`]): no helper until the supervisor
@@ -254,7 +254,7 @@ impl Own {
     }
 }
 
-/// What the keep-level thread and the pad broker need of a running seat.
+/// What the sync thread and the pad broker need to know about a running seat.
 #[derive(Clone, Debug)]
 struct Tracked {
     kind: Own,
@@ -309,12 +309,12 @@ fn unix_now() -> i64 {
 /// `f` over `id`'s held device list, loaded on first use, with the lists' lock held throughout.
 fn with_devices<T>(
     inner: &Inner,
-    level: &mut Level<'_>,
+    guard: &mut CopyGuard<'_>,
     id: &SeatId,
     f: impl FnOnce(&mut devices::Held, i64) -> Result<T, BackendError>,
 ) -> Result<T, BackendError> {
     let now = unix_now();
-    let mut all = level.devices();
+    let mut all = guard.devices();
     let held = all
         .entry(id.clone())
         .or_insert_with(|| devices::load(&inner.state, id, now));
@@ -325,11 +325,11 @@ fn with_devices<T>(
 /// then the trust copy's pairing list follows who is admitted.
 fn edit_devices(
     inner: &Inner,
-    level: &mut Level<'_>,
+    guard: &mut CopyGuard<'_>,
     id: &SeatId,
     edit: &mut dyn FnMut(&mut DeviceList, i64),
 ) -> Result<DeviceList, BackendError> {
-    with_devices(inner, level, id, |held, now| {
+    with_devices(inner, guard, id, |held, now| {
         let mut next = held.list.clone();
         next.expire(now);
         edit(&mut next, now);
@@ -342,8 +342,8 @@ fn edit_devices(
 }
 
 /// A person's session ended: so has every presence on its row.
-fn end_presence(inner: &Inner, level: &mut Level<'_>, id: &SeatId) {
-    if let Err(error) = edit_devices(inner, level, id, &mut |list, _| list.end_presence()) {
+fn end_presence(inner: &Inner, guard: &mut CopyGuard<'_>, id: &SeatId) {
+    if let Err(error) = edit_devices(inner, guard, id, &mut |list, _| list.end_presence()) {
         tracing::warn!(seat = %id, %error, "presence not ended");
     }
 }
@@ -351,11 +351,11 @@ fn end_presence(inner: &Inner, level: &mut Level<'_>, id: &SeatId) {
 /// A person's trust copy for `reader`, its pairing list holding only the devices admitted now.
 fn person_trust(
     inner: &Inner,
-    level: &mut Level<'_>,
+    guard: &mut CopyGuard<'_>,
     id: &SeatId,
     reader: shared::Reader,
 ) -> Result<bool, BackendError> {
-    with_devices(inner, level, id, |held, now| {
+    with_devices(inner, guard, id, |held, now| {
         let mut next = held.list.clone();
         if next.expire(now) {
             held.commit(&inner.state, id, next.clone())?;
@@ -369,13 +369,13 @@ fn person_trust(
 /// inside the unit falls first, so the pad broker refuses its user while it ends; then the unit
 /// stops, a made seat's user ends so nothing it started under its own manager survives, and what
 /// runs outside falls ([`beside::act`]). A row on a person's own account ends nothing else and
-/// signals none of their processes. A unit that was never started is fine. `held`: the level a
-/// removal holds across the stop.
+/// signals none of their processes. A unit that was never started is fine. `held`: the copy lock
+/// that a delete holds across the stop.
 fn stop_unit(
     inner: &Inner,
     seat: &Seat,
     edge: Edge,
-    mut held: Option<&mut Level<'_>>,
+    mut held: Option<&mut CopyGuard<'_>>,
 ) -> Result<(), BackendError> {
     let account = &seat.account;
     let unit = session::unit(account);
@@ -401,7 +401,7 @@ fn stop_unit(
 impl Inner {
     /// Performs what `edge` asks of the `ring` side of `seat`'s unit ([`beside::crossing`]): the
     /// one place a beside resource rises or falls. `user` is the row's account, which every rising
-    /// act needs. An act that needs the level runs under `held`, else under its own. `true` when
+    /// act needs. An act that needs the copy lock runs under `held`, or takes the lock itself. `true` when
     /// the owner's copies changed its environment file.
     fn cross(
         &self,
@@ -409,7 +409,7 @@ impl Inner {
         user: Option<&accounts::Passwd>,
         edge: Edge,
         ring: Ring,
-        mut held: Option<&mut Level<'_>>,
+        mut held: Option<&mut CopyGuard<'_>>,
     ) -> Result<bool, BackendError> {
         let kind = Own::of(&seat.kind);
         let user =
@@ -436,8 +436,8 @@ impl Inner {
                     running.remove(&seat.id);
                 }
                 (Beside::Presence, Act::Down) => {
-                    self.locks.under(held.as_deref_mut(), |level| {
-                        end_presence(self, level, &seat.id);
+                    self.copy_lock.with(held.as_deref_mut(), |guard| {
+                        end_presence(self, guard, &seat.id);
                     });
                 }
                 // `beside_acts_table` holds that the table asks for no other.
@@ -447,7 +447,7 @@ impl Inner {
         Ok(fresh)
     }
 
-    /// `seat`'s copies for `passwd`'s reader, under the level. The owner's are the recorded
+    /// `seat`'s copies for `passwd`'s reader, written under the copy lock. The owner's are the recorded
     /// account's alone: its trust copy, the box's library from its home and its environment file,
     /// with a fresh token when the file holds none; a host that is up keeps the token it started
     /// with. `true` when the owner's environment file changed.
@@ -456,21 +456,21 @@ impl Inner {
         seat: &Seat,
         kind: Own,
         passwd: &accounts::Passwd,
-        held: Option<&mut Level<'_>>,
+        held: Option<&mut CopyGuard<'_>>,
     ) -> Result<bool, BackendError> {
         let (box_dir, state, id) = (&self.box_dir, &self.state, &seat.id);
         let reader = Tracked::of(seat, passwd).reader;
         if kind == Own::Owner {
             accounts::require_recorded(state, &seat.account)?;
         }
-        self.locks.under(held, |level| match kind {
+        self.copy_lock.with(held, |guard| match kind {
             Own::Seat => {
                 shared::refresh_trust(box_dir, state, id, reader)?;
                 shared::refresh_seat_library(box_dir, state, id, reader)?;
                 Ok(false)
             }
             Own::Person => {
-                person_trust(self, level, id, reader)?;
+                person_trust(self, guard, id, reader)?;
                 shared::refresh_seat_library(box_dir, state, id, reader)?;
                 Ok(false)
             }
@@ -560,8 +560,8 @@ fn door_reader(inner: &Inner) -> Option<shared::Reader> {
     Some(shared::Reader::group(gid))
 }
 
-/// Brings the box's library level with the owner's, once the owner's row is known. Returns
-/// whether anything changed.
+/// Copies the owner's library into the box's library copy, once the owner's row is known.
+/// Returns whether anything changed.
 fn refresh_box_library(inner: &Inner) -> Result<bool, BackendError> {
     let home = inner
         .owner
@@ -606,7 +606,7 @@ impl LinuxBackend {
             stops: Mutex::default(),
             hook: OnceLock::new(),
             checks: Mutex::new(None),
-            locks: CopyLocks::default(),
+            copy_lock: CopyLock::default(),
             handover: handover::Handover::default(),
             helper_off: AtomicBool::new(false),
             login_label: OnceLock::new(),
@@ -614,13 +614,13 @@ impl LinuxBackend {
         });
         let weak = Arc::downgrade(&inner);
         std::thread::Builder::new()
-            .name("seats-level".into())
-            .spawn(move || keep_level(weak))
+            .name("seats-sync".into())
+            .spawn(move || sync_loop(weak))
             .map_err(|e| err("thread", format!("start the trust thread: {e}")))?;
         Ok(Self { inner })
     }
 
-    /// A backend over `box_dir` and `state`, with no thread keeping it level. Its sysfs, udev
+    /// A backend over `box_dir` and `state`, with no sync thread. Its sysfs, udev
     /// database and lend records lie under `state`.
     #[cfg(test)]
     fn detached(box_dir: &Path, state: &Path) -> Self {
@@ -636,7 +636,7 @@ impl LinuxBackend {
                 stops: Mutex::default(),
                 hook: OnceLock::new(),
                 checks: Mutex::new(None),
-                locks: CopyLocks::default(),
+                copy_lock: CopyLock::default(),
                 handover: handover::Handover::default(),
                 helper_off: AtomicBool::new(false),
                 login_label: OnceLock::new(),
@@ -679,8 +679,8 @@ impl LinuxBackend {
             .iter()
             .filter(|s| Own::of(&s.kind) == Own::Person)
         {
-            let mut level = self.inner.locks.level();
-            let written = with_devices(&self.inner, &mut level, &seat.id, |held, _| {
+            let mut guard = self.inner.copy_lock.lock();
+            let written = with_devices(&self.inner, &mut guard, &seat.id, |held, _| {
                 let admitted = held.list.admitted();
                 shared::rewrite_admitted(
                     &self.inner.box_dir,
@@ -1081,8 +1081,8 @@ impl PlatformBackend for LinuxBackend {
         if Own::of(&seat.kind) != Own::Person {
             return Err(err("not_a_person", "only a person's row lists devices"));
         }
-        let mut level = self.inner.locks.level();
-        edit_devices(&self.inner, &mut level, &seat.id, edit)
+        let mut guard = self.inner.copy_lock.lock();
+        edit_devices(&self.inner, &mut guard, &seat.id, edit)
     }
 
     fn box_fingerprint(&self) -> Result<[u8; 32], BackendError> {
@@ -1128,13 +1128,13 @@ impl PlatformBackend for LinuxBackend {
     /// list included, and nothing of the account does. Once its files are gone, the row's lent
     /// pads are the desk's again.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
-        let mut level = self.inner.locks.level();
+        let mut guard = self.inner.copy_lock.lock();
         let kind = Own::of(&seat.kind);
         // Before the unit is stopped: ending a stranger's sessions is not removing a seat.
         if kind.ours() {
             accounts::refuse_foreign(&seat.account, &seat.id)?;
         }
-        stop_unit(&self.inner, seat, Edge::Released, Some(&mut level))?;
+        stop_unit(&self.inner, seat, Edge::Released, Some(&mut guard))?;
         if seat.kind.is_owner() {
             let mut owner = self.inner.owner.lock().unwrap_or_else(|e| e.into_inner());
             if owner
@@ -1148,10 +1148,10 @@ impl PlatformBackend for LinuxBackend {
             }
         }
         let removed = self.remove_files(&seat.account, &seat.id, kind.ours());
-        level.devices().remove(&seat.id);
+        guard.devices().remove(&seat.id);
         if removed.is_ok() {
             self.inner
-                .cross(seat, None, Edge::Gone, Ring::Outer, Some(&mut level))?;
+                .cross(seat, None, Edge::Gone, Ring::Outer, Some(&mut guard))?;
         }
         removed
     }
@@ -1318,8 +1318,8 @@ impl PlatformBackend for LinuxBackend {
                 });
             }
             if kind == Own::Person {
-                let mut level = self.inner.locks.level();
-                let unreadable = with_devices(&self.inner, &mut level, &seat.id, |held, _| {
+                let mut guard = self.inner.copy_lock.lock();
+                let unreadable = with_devices(&self.inner, &mut guard, &seat.id, |held, _| {
                     Ok(held.unreadable.clone())
                 })?;
                 if let Some(cause) = unreadable {
@@ -1388,7 +1388,7 @@ impl PlatformBackend for LinuxBackend {
     }
 
     fn level_library(&self) -> Result<bool, BackendError> {
-        let Some(_level) = self.inner.locks.level_within(LEVEL_WAIT) else {
+        let Some(_guard) = self.inner.copy_lock.lock_within(LIBRARY_SYNC_WAIT) else {
             return Err(err(
                 "busy",
                 "another change holds the copies; the next tick levels the library",
@@ -1492,7 +1492,7 @@ impl LinuxBackend {
     }
 
     /// `seat`'s unit up from cold, a row of `kind` on `passwd`'s account: a fresh token, the
-    /// unit's files under `level`, then the unit. A unit already up keeps its token, which its
+    /// unit's files under the copy lock, then the unit. A unit already up keeps its token, which its
     /// host read when it started, and nothing here runs. `password` is a person's, for
     /// [`Self::person_login`]; the login drop-in's guard comes back for the caller to hold while
     /// it waits.
@@ -1523,9 +1523,9 @@ impl LinuxBackend {
         };
         let (state, browser) = (&self.inner.state, session::browser(&self.inner.box_dir));
         let shown = shares.as_ref();
-        let level = self.inner.locks.level();
+        let guard = self.inner.copy_lock.lock();
         session::write_unit_files(seat, kind, passwd, state, &token, shown, &browser)?;
-        drop(level);
+        drop(guard);
         let (written, password) = match kind {
             Own::Person => self.person_login(seat, password)?,
             Own::Owner | Own::Seat => (None, None),
@@ -1661,13 +1661,14 @@ impl LinuxBackend {
     }
 }
 
-/// Keeps every running seat level with the box, every [`TRUST_TICK`], one job after another: the
-/// box's library under `level`, the console's certificate in Firefox, each seat's copies and the
+/// The sync thread. Every [`TRUST_TICK`] it brings what the seats read up to date with the box,
+/// one job after another: the box's library copy under the copy lock, the console's certificate
+/// in Firefox, each running seat's copies and the
 /// desk yield of a row on a person's own account, a made seat's missed libraries every
 /// [`REACH_EVERY`], the games folder's ACL mask. Each job's memory is a local here, handed to it.
 /// The owner's row stays listed while its host is the owner's own, which reads the same copy. Ends
 /// when the backend is dropped.
-fn keep_level(inner: Weak<Inner>) {
+fn sync_loop(inner: Weak<Inner>) {
     let mut acl_at = Instant::now();
     let mut reach_at = Instant::now();
     let mut failing: HashSet<SeatId> = HashSet::new();
@@ -1677,12 +1678,12 @@ fn keep_level(inner: Weak<Inner>) {
     loop {
         std::thread::sleep(TRUST_TICK);
         let Some(inner) = inner.upgrade() else { return };
-        let level = inner.locks.level();
+        let guard = inner.copy_lock.lock();
         let library = refresh_box_library(&inner);
-        drop(level);
+        drop(guard);
         once_per_outage(library, &mut library_failing, "box library not copied");
         once_per_outage(
-            firefox::level(&inner.box_dir),
+            firefox::sync(&inner.box_dir),
             &mut firefox_failing,
             "console certificate not installed for Firefox",
         );
@@ -1694,7 +1695,7 @@ fn keep_level(inner: Weak<Inner>) {
             .map(|(id, tracked)| (id.clone(), tracked.clone()))
             .collect();
         for (id, tracked) in &seats {
-            if !level_seat(&inner, id, tracked, &mut failing) {
+            if !sync_seat(&inner, id, tracked, &mut failing) {
                 continue;
             }
             if let Some((seat, _)) = &tracked.guest {
@@ -1721,24 +1722,19 @@ fn once_per_outage<T, E: std::fmt::Display>(result: Result<T, E>, failing: &mut 
     }
 }
 
-/// Refreshes `id`'s copies ([`refresh_copies`]) under the level lock, so a removal never sees
+/// Refreshes `id`'s copies ([`refresh_copies`]) under the copy lock, so a delete never sees
 /// them written back. A seat removed since `tracked` was read is left alone, and this returns
 /// `false`: its files are gone and stay gone. A failure is logged once per outage: `failing` holds
 /// the seats whose last refresh failed.
-fn level_seat(
-    inner: &Inner,
-    id: &SeatId,
-    tracked: &Tracked,
-    failing: &mut HashSet<SeatId>,
-) -> bool {
-    let mut level = inner.locks.level();
+fn sync_seat(inner: &Inner, id: &SeatId, tracked: &Tracked, failing: &mut HashSet<SeatId>) -> bool {
+    let mut guard = inner.copy_lock.lock();
     let tracked_now = inner.running.lock().unwrap_or_else(|e| e.into_inner());
     if !tracked_now.contains_key(id) {
         return false;
     }
     drop(tracked_now);
-    let refreshed = refresh_copies(inner, &mut level, id, tracked);
-    drop(level);
+    let refreshed = refresh_copies(inner, &mut guard, id, tracked);
+    drop(guard);
     match refreshed {
         Ok(()) => {
             failing.remove(id);
@@ -1757,13 +1753,13 @@ fn level_seat(
 /// The first failure ends it.
 fn refresh_copies(
     inner: &Inner,
-    level: &mut Level<'_>,
+    guard: &mut CopyGuard<'_>,
     id: &SeatId,
     tracked: &Tracked,
 ) -> Result<(), BackendError> {
     let (box_dir, state, reader) = (&inner.box_dir, &inner.state, tracked.reader);
     match tracked.kind {
-        Own::Person => person_trust(inner, level, id, reader)?,
+        Own::Person => person_trust(inner, guard, id, reader)?,
         Own::Owner => shared::refresh_owner_trust(box_dir, state, id, reader)?,
         Own::Seat => shared::refresh_trust(box_dir, state, id, reader)?,
     };
@@ -2060,7 +2056,7 @@ mod tests {
         );
     }
 
-    /// A made seat as the keep-level thread holds it, its copies for this process's group.
+    /// A made seat as the sync thread holds it, its copies for this process's group.
     fn made_tracked() -> (SeatId, Tracked) {
         let seat = Seat {
             id: SeatId::parse("0123456789abcdef0123456789abcd0a").unwrap(),
@@ -2106,7 +2102,7 @@ mod tests {
         String::from_utf8_lossy(&lines.lock().unwrap()).into_owned()
     }
 
-    /// A seat removed since the keep-level thread listed the running ones gets none of its copies
+    /// A seat deleted since the sync thread listed the running ones gets none of its copies
     /// written back; one still running gets them.
     #[test]
     fn a_removed_seat_s_copies_are_not_written_back() {
@@ -2115,18 +2111,18 @@ mod tests {
         let (id, tracked) = made_tracked();
         let trust = shared::trust_dir(state.path(), &id);
         let mut failing = HashSet::new();
-        assert!(!level_seat(&backend.inner, &id, &tracked, &mut failing));
+        assert!(!sync_seat(&backend.inner, &id, &tracked, &mut failing));
         assert!(!trust.exists(), "a removed seat's copy stays gone");
         backend.track(&id, tracked.clone());
-        assert!(level_seat(&backend.inner, &id, &tracked, &mut failing));
+        assert!(sync_seat(&backend.inner, &id, &tracked, &mut failing));
         assert!(trust.is_dir());
         assert!(failing.is_empty());
     }
 
-    /// A person's row refreshed by the keep-level thread reaches its device list through the level
+    /// A person's row refreshed by the sync thread reaches its device list through the copy lock
     /// the refresh holds, and its trust copy is written.
     #[test]
-    fn a_person_s_copies_are_refreshed_under_the_held_level() {
+    fn a_person_s_copies_are_refreshed_under_the_held_lock() {
         let (box_dir, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let backend = backend(box_dir.path(), state.path());
         let uid = rustix::process::getuid().as_raw();
@@ -2153,10 +2149,15 @@ mod tests {
         let tracked = Tracked::of(&seat, &passwd);
         backend.track(&seat.id, tracked.clone());
         let mut failing = HashSet::new();
-        assert!(level_seat(&backend.inner, &seat.id, &tracked, &mut failing));
+        assert!(sync_seat(&backend.inner, &seat.id, &tracked, &mut failing));
         assert!(failing.is_empty());
         assert!(shared::trust_dir(state.path(), &seat.id).is_dir());
-        assert!(backend.inner.locks.level().devices().contains_key(&seat.id));
+        assert!(backend
+            .inner
+            .copy_lock
+            .lock()
+            .devices()
+            .contains_key(&seat.id));
     }
 
     /// A trust copy that keeps failing is logged when it starts to, not at every tick, and again
@@ -2176,7 +2177,7 @@ mod tests {
             if broken {
                 std::fs::write(&trust, "").unwrap();
             }
-            let kept = || assert!(level_seat(&backend.inner, &id, &tracked, &mut failing));
+            let kept = || assert!(sync_seat(&backend.inner, &id, &tracked, &mut failing));
             let lines = logged(kept);
             (
                 lines.matches("trust copy not refreshed").count(),

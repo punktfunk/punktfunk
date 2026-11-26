@@ -116,6 +116,7 @@ actions out. `windows/supervisor.rs` performs the actions. Start with `step.rs`.
 | `linux/pam.rs`, `login.rs`, `handover.rs` | A person's password: checked, then used for one login |
 | `linux/door.rs` | The root verb that switches the door on and off |
 | `linux/safe_open.rs` | How root reads files in a folder another user can write |
+| `linux/copy_lock.rs` | The lock every writer of a seat's copied files takes |
 | `windows/step.rs`, `supervisor.rs` | A Windows seat's lifecycle: the rule, and the OS side |
 | `windows/accounts.rs`, `credentials.rs` | Seat accounts and their sealed passwords |
 | `windows/enable.rs`, `switch.rs` | Turning seats on and off for the machine |

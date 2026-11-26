@@ -36,7 +36,7 @@ fn targets() -> Vec<(PathBuf, &'static str)> {
 
 /// Installs the certificate of the console in `box_dir` for every Firefox on the box. A door that
 /// has none yet changes nothing; one [`checked`] refuses is an error.
-pub(super) fn level(box_dir: &Path) -> std::io::Result<()> {
+pub(super) fn sync(box_dir: &Path) -> std::io::Result<()> {
     let Some((pem, _)) = safe_open::read(&box_dir.join("native-cert.pem"), 64 * 1024)? else {
         return Ok(());
     };

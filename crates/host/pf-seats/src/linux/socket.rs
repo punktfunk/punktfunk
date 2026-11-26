@@ -37,8 +37,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 /// A Flatpak install downloads hundreds of megabytes.
 const FLATPAK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-/// The supervisor levels the box's library on its own every two seconds (`linux/mod.rs`), so an
-/// ask for it now is worth no longer a wait.
+/// The supervisor syncs the box's library copy on its own every two seconds (`linux/mod.rs`), so
+/// a request to sync it now is not worth a longer wait.
 const LEVEL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Root, or the `punktfunk` user when it exists. With no such user only root is let in.
