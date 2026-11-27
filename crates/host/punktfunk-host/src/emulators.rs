@@ -177,10 +177,7 @@ fn box_flatpak(entry: &hermir::Entry) -> Option<&str> {
 /// root; every seat sees it and keeps its own data in `~/.var/app`. A Flatpak of this account's
 /// own goes, its data stays, so `flatpak run` never picks the stale copy.
 fn install_box_wide(h: &Hermir, id: &str, app: &str) -> hermir::Result<Installed> {
-    let version = match supervisor(id, Command::InstallFlatpak { id: app.into() })? {
-        CommandResult::Flatpak { version, .. } => version,
-        other => return Err(place(id, format!("the seat supervisor answered {other:?}"))),
-    };
+    let version = box_wide_install(id, app)?;
     let emulator = h.emulator(id)?;
     let own = emulator.managed()?;
     if own.is_some_and(|r| r.installation != Some(hermir::FlatpakInstallation::System))
@@ -204,6 +201,123 @@ fn install_box_wide(h: &Hermir, id: &str, app: &str) -> hermir::Result<Installed
     let _lock = h.store().lock()?;
     h.store().record(row.clone())?;
     Ok(row)
+}
+
+/// `app` installed box-wide, or updated when it is there; the version Flatpak reports after.
+fn box_wide_install(id: &str, app: &str) -> hermir::Result<Option<String>> {
+    match supervisor(id, Command::InstallFlatpak { id: app.into() })? {
+        CommandResult::Flatpak { version, .. } => Ok(version),
+        other => Err(place(id, format!("the seat supervisor answered {other:?}"))),
+    }
+}
+
+/// A day: these emulators release often, and a check costs one lookup per copy.
+const UPDATE_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// The first pass waits out the host's start; a pass that finds someone playing waits this long.
+const UPDATE_WAIT: Duration = Duration::from_secs(15 * 60);
+
+/// Held by an update and by a launch's prepare: a launch never starts a copy being replaced.
+static UPDATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn updating() -> std::sync::MutexGuard<'static, ()> {
+    UPDATING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Keeps every managed copy on its channel's newest release: a pass a day, never while a stream
+/// or a desk game runs.
+pub fn keep_updated() {
+    let spawned = std::thread::Builder::new()
+        .name("emulator-updates".into())
+        .spawn(|| loop {
+            std::thread::sleep(UPDATE_WAIT);
+            if crate::session_status::count() > 0 || !crate::desk::snapshot().is_empty() {
+                continue;
+            }
+            update_all();
+            std::thread::sleep(UPDATE_EVERY);
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "emulator update thread did not start");
+    }
+}
+
+/// One pass over the managed copies. A box-wide Flatpak updates through the seat supervisor, any
+/// other copy through hermir. An AppImage or archive waits while a process runs from its folder,
+/// whose files the update replaces; a Flatpak updates beside a running copy.
+fn update_all() {
+    let h = match open() {
+        Ok(h) => h,
+        Err(error) => return tracing::warn!(%error, "emulators not checked for updates"),
+    };
+    for entry in h.catalog().entries() {
+        let id = entry.id.as_str();
+        let Ok(emulator) = h.emulator(id) else {
+            continue;
+        };
+        let row = match emulator.managed() {
+            Ok(Some(row)) => row,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(emulator = %id, %error, "emulator not checked for an update");
+                continue;
+            }
+        };
+        let _held = updating();
+        let updated = match &row.exe {
+            hermir::Exe::FlatpakRun(app)
+                if row.installation == Some(hermir::FlatpakInstallation::System) =>
+            {
+                update_box_wide(&h, id, app, &row)
+            }
+            hermir::Exe::FlatpakRun(_) => emulator.update(&hermir::progress::Quiet),
+            _ if in_use(id) => {
+                tracing::info!(emulator = %id, "emulator update waits: a copy is running");
+                continue;
+            }
+            _ => emulator.update(&hermir::progress::Quiet),
+        };
+        let was = row.version.as_deref().unwrap_or("?");
+        match updated {
+            Ok(Some(new)) => {
+                let now = new.version.as_deref().unwrap_or("?");
+                tracing::info!(emulator = %id, from = was, to = now, "emulator updated");
+            }
+            Ok(None) => tracing::debug!(emulator = %id, version = was, "emulator up to date"),
+            Err(error) => tracing::warn!(emulator = %id, %error, "emulator not updated"),
+        }
+    }
+}
+
+/// A box-wide Flatpak's update, recorded when the version Flatpak reports moved.
+fn update_box_wide(
+    h: &Hermir,
+    id: &str,
+    app: &str,
+    row: &Installed,
+) -> hermir::Result<Option<Installed>> {
+    let version = box_wide_install(id, app)?;
+    if version == row.version {
+        return Ok(None);
+    }
+    let fresh = Installed {
+        version,
+        installed_at: jiff::Timestamp::now().to_string(),
+        ..row.clone()
+    };
+    let _lock = h.store().lock()?;
+    h.store().record(fresh.clone())?;
+    Ok(Some(fresh))
+}
+
+/// Whether a process this host can see runs from `id`'s folder.
+fn in_use(id: &str) -> bool {
+    let spec = crate::library::DetectSpec {
+        install_dir: Some(home_of(id)),
+        ..Default::default()
+    };
+    !crate::procscan::Scanner::system()
+        .find(&spec, None)
+        .is_empty()
 }
 
 /// One Flatpak change by the seat supervisor; its refusal is `id`'s, in its words.
@@ -1380,6 +1494,8 @@ pub(crate) fn prepare_launch(
         update_check: Some(false),
         ..Default::default()
     };
+    // An update in flight finishes first: its copy is half replaced until then.
+    let _held = updating();
     match prepare_as(
         Some(library_id),
         &mut held,

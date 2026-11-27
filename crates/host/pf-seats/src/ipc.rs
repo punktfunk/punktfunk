@@ -84,8 +84,8 @@ pub enum Command {
         id: SeatId,
         password: Secret,
     },
-    /// Linux: Flathub's app `id`, installed for every account on the box. The box owner may
-    /// send it too.
+    /// Linux: Flathub's app `id`, installed for every account on the box, or updated when it is
+    /// there. The box owner may send it too.
     InstallFlatpak {
         id: String,
     },
