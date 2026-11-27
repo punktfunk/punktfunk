@@ -208,12 +208,14 @@ final class LibraryCollationTests: XCTestCase {
         }
         struct BrowsableCase: Decodable { let name: String; let ids: [String]?; let expect: Bool }
         struct OrderCase: Decodable { let name: String; let titles: [String]; let expect: [String] }
+        struct BadgeCase: Decodable { let store: String; let platform: String?; let out: String }
 
         let version: Int
         let library: [GameEntry]
         let sortTitle: [TitleCase]
         let titleOrder: [OrderCase]
         let storeLabels: [String: String]
+        let badgeLabels: [BadgeCase]
         let sortKeys: [SortKeyCase]
         let cases: [Case]
         let filtered: [FilteredCase]
@@ -224,6 +226,7 @@ final class LibraryCollationTests: XCTestCase {
             case sortTitle = "sort_title"
             case titleOrder = "title_order"
             case storeLabels = "store_labels"
+            case badgeLabels = "badge_labels"
             case sortKeys = "sort_keys"
             case worthBrowsing = "worth_browsing"
         }
@@ -270,6 +273,9 @@ final class LibraryCollationTests: XCTestCase {
         }
         for (store, label) in file.storeLabels {
             XCTAssertEqual(entry("x", "X", store: store).storeLabel, label, "storeLabel(\(store))")
+        }
+        for c in file.badgeLabels {
+            XCTAssertEqual(entry("x", "X", store: c.store, platform: c.platform).badgeLabel, c.out, "badgeLabel(\(c.store), \(c.platform ?? "nil"))")
         }
         for c in file.sortKeys {
             XCTAssertEqual(LibrarySortKey(stored: c.stored).stored, c.key, "parse(\(c.stored))")

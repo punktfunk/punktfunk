@@ -18,7 +18,9 @@ use super::style::*;
 use super::{AppCtx, AsyncSetState, Dest, Msg, Screen, Shell, Svc, Target};
 use pf_client_core::collate::{GroupBy, SortKey};
 use pf_client_core::hide;
-use pf_client_core::library::{self, initials, store_label, GameEntry, LibraryError, DESKTOP_ID};
+use pf_client_core::library::{
+    self, badge_label, initials, store_label, GameEntry, LibraryError, DESKTOP_ID,
+};
 use pf_client_core::library_layout as layout;
 use pf_client_core::library_rows::{self as rows, Caption, Row, Tile};
 use pf_client_core::orchestrate::HostTarget;
@@ -882,7 +884,7 @@ fn poster(cx: &Rc<RowCx>, tile: Tile, caption: Caption, width: f64) -> View {
             (false, false) => Pill::Neutral,
         };
         layers.push(
-            pill(pal, store_label(&g.store), kind)
+            pill(pal, badge_label(&g.store, g.platform.as_deref()), kind)
                 .horizontal_alignment(HorizontalAlignment::Left)
                 .vertical_alignment(VerticalAlignment::Top)
                 .margin(uniform(6.0))

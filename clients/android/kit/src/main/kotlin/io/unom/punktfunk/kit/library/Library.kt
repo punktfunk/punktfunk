@@ -175,6 +175,14 @@ data class GameEntry(
      */
     val storeLabel: Say get() = storeName ?: say(R.string.lib_store_other)
 
+    /**
+     * The poster badge. A `custom` entry names its [platform] where it has one: an emulator's ROM
+     * reads "Wii", not "Custom". Every other store keeps [storeLabel]. Same rule as
+     * `pf_client_core::library::badge_label`.
+     */
+    val badgeLabel: Say get() =
+        platform?.trim()?.takeIf { store == "custom" && it.isNotEmpty() }?.let(Say::Text) ?: storeLabel
+
     /** Whether [store] is an id this build has a name for; an unknown one reads as "Game". */
     val hasStoreName: Boolean get() = storeName != null
 

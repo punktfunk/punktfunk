@@ -210,6 +210,15 @@ pub fn store_label(store: &str) -> &'static str {
     store_key_label(store_key(store))
 }
 
+/// The poster badge. A `custom` entry names its platform where it has one: an emulator's
+/// ROM reads `Wii`, not "Custom". Every other store keeps its brand.
+pub fn badge_label<'a>(store: &str, platform: Option<&'a str>) -> &'a str {
+    match platform.map(str::trim) {
+        Some(p) if store == "custom" && !p.is_empty() => p,
+        _ => store_label(store),
+    }
+}
+
 /// [`store_key`] of a store this build does not know.
 pub(crate) const UNKNOWN_STORE: &str = "Game";
 const CUSTOM_STORE: &str = "Custom";

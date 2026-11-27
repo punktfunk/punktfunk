@@ -7,7 +7,7 @@ use super::{LibraryMsg, View};
 use adw::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
-use pf_client_core::library::{initials, store_label, GameEntry};
+use pf_client_core::library::{badge_label, initials, store_label, GameEntry};
 use pf_l10n::{client, common};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -303,7 +303,8 @@ impl Poster {
             p.caption.set_label(text.as_deref().unwrap_or("\u{a0}"));
             set_class(p.face.upcast_ref(), "pf-launcher", launcher);
             p.badge.set_visible(true);
-            p.badge.set_label(store_label(&g.store));
+            p.badge
+                .set_label(badge_label(&g.store, g.platform.as_deref()));
             set_class(p.badge.upcast_ref(), "pf-launcher", launcher);
             p.running
                 .set_visible(view.running.borrow().contains_key(&g.id));

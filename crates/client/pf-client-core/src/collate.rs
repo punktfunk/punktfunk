@@ -330,7 +330,7 @@ pub fn worth_browsing<T: Collatable>(games: &[T]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::store_label;
+    use crate::library::{badge_label, store_label};
 
     const EVERY_SORT: [SortKey; 6] = SortKey::ALL;
 
@@ -560,6 +560,17 @@ mod tests {
                 store_label(store),
                 label.as_str().expect("label"),
                 "store_label({store:?})"
+            );
+        }
+        for case in file["badge_labels"].as_array().expect("badge_labels") {
+            let (store, platform) = (
+                case["store"].as_str().expect("store"),
+                case["platform"].as_str(),
+            );
+            assert_eq!(
+                badge_label(store, platform),
+                case["out"].as_str().expect("out"),
+                "badge_label({store:?}, {platform:?})"
             );
         }
         for case in file["sort_keys"].as_array().expect("sort_keys") {
