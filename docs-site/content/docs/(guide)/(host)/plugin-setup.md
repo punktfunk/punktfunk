@@ -15,6 +15,10 @@ on its first launch with its updates and DLC, and its saves go back to the serve
 **Libretro** for box art and details, and **SteamGridDB** with an API key for the games Libretro
 has no art for.
 
+The host keeps the emulators it installed up to date, once a day while nobody is playing. In a
+stream, an emulator still at its own resolution renders at the multiple that fills your screen; a
+resolution you set in the emulator stays. Lichii's own update prompt stays closed in a launch.
+
 On a box with seats, each seat plays these games with the box's emulators and keeps its own saves;
 [Profiles](/docs/profiles#on-linux) names the exceptions on Linux. On Windows, RPCS3, Snes9x and
 Supermodel keep one set for everyone. So does an emulator installed while seats were off or by an
