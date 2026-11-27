@@ -25,6 +25,7 @@ mod checks;
 mod copy_lock;
 mod devices;
 pub mod door_switch;
+pub mod emulators;
 #[cfg(test)]
 mod fake;
 mod firefox;
@@ -955,6 +956,14 @@ impl PlatformBackend for LinuxBackend {
 
     fn remove_flatpak(&self, id: &str, purge: bool) -> Result<(), BackendError> {
         flatpak::remove(id, purge)
+    }
+
+    fn install_emulator(&self, id: &str) -> Result<String, BackendError> {
+        emulators::install(id)
+    }
+
+    fn remove_emulator(&self, id: &str) -> Result<(), BackendError> {
+        emulators::remove(id)
     }
 
     fn desk_pads(&self, ledger: &Ledger) -> Result<Vec<PresentPad>, BackendError> {

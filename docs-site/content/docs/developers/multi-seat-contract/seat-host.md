@@ -67,9 +67,9 @@ owner's runs none of the box's plugins, and of the box's library lists and launc
 it can start as its own user:
 `steam_appid` with an id that fits 32 bits and `steam_ui`, with its own Steam, and `emulator`,
 with a copy it can run and a game file it can read. The seat answers every change to the box's
-library with 409. The owner's host installs a Flathub emulator box-wide through `install_flatpak`, so every
-seat runs it with its own config and saves in `~/.var/app/<id>`; which emulators stay the
-owner's is in [Profiles](/docs/profiles#on-linux). At a launch the seat installs the RetroArch
+library with 409. The owner's host installs a Flathub emulator box-wide through `install_flatpak`
+and an archive one through `install_emulator`, so every seat runs it with its own config and saves
+in its home; which emulators stay the owner's is in [Profiles](/docs/profiles#on-linux). At a launch the seat installs the RetroArch
 core the entry names into its own RetroArch and places the firmware from its library copy.
 
 ## Its own runner's titles

@@ -38,7 +38,7 @@ is closed unanswered.
 |---|---|
 | `list`, `create`, `start`, `stop`, `delete`, `doctor`, `seating`, `enable`, `disable` | Both. On Linux `enable` answers like `seating`, and `disable` is refused: seats are on while the daemon runs. |
 | `adopt`, `credential` | Windows: [a seat on an existing account](/docs/developers/multi-seat-contract/windows#a-seat-on-an-existing-account) |
-| `adopt_owner`, `install_flatpak`, `remove_flatpak` | Linux: [the owner's row](/docs/developers/multi-seat-contract/door), box-wide Flatpaks |
+| `adopt_owner`, `install_flatpak`, `remove_flatpak`, `install_emulator`, `remove_emulator` | Linux: [the owner's row](/docs/developers/multi-seat-contract/door), box-wide Flatpaks and emulators |
 | `pads`, `lend`, `take_back` | Lent controllers, on [Linux](/docs/developers/multi-seat-contract/linux#lent-controllers) and on [Windows](/docs/developers/multi-seat-contract/windows#lent-controllers). Each answers `pads`. |
 | `adopt_user`, `unlock`, `unlock_state`, `challenge`, `left`, `sign_out`, `devices` | Linux: [a seat on a person's own account](/docs/developers/multi-seat-contract/own-account) |
 

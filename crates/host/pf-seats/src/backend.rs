@@ -144,6 +144,17 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Err(no_flatpaks())
     }
 
+    /// Install the catalog emulator `id`, already checked, for every account on the box, or
+    /// update it, and answer hermir's row for the copy as JSON.
+    fn install_emulator(&self, _id: &str) -> Result<String, BackendError> {
+        Err(no_box_emulators())
+    }
+
+    /// Remove the box-wide emulator `id`, already checked.
+    fn remove_emulator(&self, _id: &str) -> Result<(), BackendError> {
+        Err(no_box_emulators())
+    }
+
     /// Every game controller plugged into the box that may be lent, and every plugged-in one a
     /// row of `ledger` holds.
     fn desk_pads(&self, _ledger: &Ledger) -> Result<Vec<PresentPad>, BackendError> {
@@ -238,6 +249,10 @@ pub struct Adopted {
 
 fn no_flatpaks() -> BackendError {
     BackendError::new("not_supported", "box-wide Flatpaks are Linux's")
+}
+
+fn no_box_emulators() -> BackendError {
+    BackendError::new("not_supported", "box-wide emulator installs are Linux's")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

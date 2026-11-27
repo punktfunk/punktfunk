@@ -102,10 +102,11 @@ What turning it on does:
   starts.
 - **Your library is the box's.** Every profile's apps list the games your own host found. A
   profile with a desktop of its own plays your Steam games with its own Steam, and ROM Manager
-  games with the box's emulators and its own saves. RPCS3, shadPS4, KytyPS5, Vita3K and Xenia
-  Canary play on your desktop only. So does an emulator installed while seats were off or by an
-  earlier version, until you reinstall it under **Library** → **Sources** → **Emulators**. Your
-  own custom emulators and games from other launchers play on your desktop only.
+  games with the box's emulators and its own saves. An emulator installed while seats were off
+  or by an earlier version plays on your desktop only until you reinstall it under **Library** →
+  **Sources** → **Emulators**. RPCS3, shadPS4, KytyPS5, Vita3K and Xenia Canary move over on
+  their own at the host's daily update check. Your own custom emulators and games from other
+  launchers play on your desktop only.
   Change the library on your own **Library** page; another seat's is read only.
 - **A seat has Game Mode too.** **Return to Gaming Mode** on a seat's desktop opens Steam's Game
   Mode on that seat, and Steam's **Switch to Desktop** goes back. The stream carries on, and

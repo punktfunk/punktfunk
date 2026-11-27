@@ -39,7 +39,7 @@ const MAX_CONNECTIONS: usize = 8;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// A start waits up to `START_TIMEOUT` (`linux/mod.rs`) on the server, so a client waits longer.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
-/// A Flatpak install downloads hundreds of megabytes.
+/// A Flatpak or emulator install downloads hundreds of megabytes.
 const FLATPAK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// The supervisor syncs the box's library copy on its own every two seconds (`linux/sync.rs`), so
 /// a request to sync it now is not worth a longer wait.
@@ -51,7 +51,7 @@ pub fn peer_allowed(peer_uid: u32, punktfunk_uid: Option<u32>) -> bool {
 }
 
 /// Whether `peer_uid` may send `command`: anything as a peer [`peer_allowed`] lets in, a
-/// box-wide Flatpak change as the box owner `owner_uid`, nothing otherwise.
+/// box-wide Flatpak or emulator change as the box owner `owner_uid`, nothing otherwise.
 pub fn command_allowed(
     peer_uid: u32,
     punktfunk_uid: Option<u32>,
@@ -62,7 +62,10 @@ pub fn command_allowed(
         || (owner_uid == Some(peer_uid)
             && matches!(
                 command,
-                Command::InstallFlatpak { .. } | Command::RemoveFlatpak { .. }
+                Command::InstallFlatpak { .. }
+                    | Command::RemoveFlatpak { .. }
+                    | Command::InstallEmulator { .. }
+                    | Command::RemoveEmulator { .. }
             ))
 }
 
@@ -281,7 +284,10 @@ fn socket_acl(group: u16, owner: Option<u32>) -> Vec<u8> {
 /// the start it may make.
 fn answer_within(command: &Command) -> Duration {
     match command {
-        Command::InstallFlatpak { .. } | Command::RemoveFlatpak { .. } => FLATPAK_TIMEOUT,
+        Command::InstallFlatpak { .. }
+        | Command::RemoveFlatpak { .. }
+        | Command::InstallEmulator { .. }
+        | Command::RemoveEmulator { .. } => FLATPAK_TIMEOUT,
         Command::Unlock { .. } => super::pam::CHECK_TIMEOUT + ANSWER_TIMEOUT,
         Command::SyncLibrary => SYNC_TIMEOUT,
         _ => ANSWER_TIMEOUT,
@@ -321,10 +327,11 @@ mod tests {
         assert!(!peer_allowed(975, Some(972)), "a seat user is not the door");
     }
 
-    /// The box owner may ask for box-wide Flatpaks and nothing else; root and the door may ask
-    /// for anything; a seat user, or an owner while no owner row is prepared, for nothing.
+    /// The box owner may ask for box-wide Flatpaks and emulators and nothing else; root and the
+    /// door may ask for anything; a seat user, or an owner while no owner row is prepared, for
+    /// nothing.
     #[test]
-    fn the_box_owner_may_change_flatpaks_and_nothing_else() {
+    fn the_box_owner_may_change_box_wide_software_and_nothing_else() {
         let install = Command::InstallFlatpak {
             id: "net.pcsx2.PCSX2".into(),
         };
@@ -342,8 +349,10 @@ mod tests {
                 id: crate::model::SeatId::parse("01".repeat(16)).unwrap(),
             },
         ];
+        let emulator = Command::InstallEmulator { id: "rpcs3".into() };
+        let unemulator = Command::RemoveEmulator { id: "rpcs3".into() };
         let (door, owner) = (Some(972), Some(1000));
-        for command in [&install, &remove] {
+        for command in [&install, &remove, &emulator, &unemulator] {
             assert!(command_allowed(1000, door, owner, command));
             assert!(command_allowed(0, door, owner, command));
             assert!(command_allowed(972, door, owner, command));

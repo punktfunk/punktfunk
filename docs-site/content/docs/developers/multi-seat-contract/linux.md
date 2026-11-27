@@ -38,6 +38,26 @@ through them. Both answer `flatpak {id, version}`. An id is reverse-DNS: letters
 `.`, `_` and `-`, at least one dot, at most 255 bytes, no leading `-`; any other is refused
 before `flatpak` runs. One change runs at a time: a second meanwhile answers `conflict`.
 
+## Box-wide emulators
+
+`install_emulator {id}` installs a catalog emulator's archive build, an AppImage or an archive
+from its GitHub releases, under `emulators/` in the state directory, or updates it when it is
+there. `remove_emulator {id}` removes it. Both answer `emulator {id, row}`: `row` is hermir's
+record of the copy as JSON, and a removal has none.
+
+The system user `punktfunk-emulators` owns that folder, mode `0755`, and runs each change. The
+daemon makes the user at the first install and runs `punktfunk-seats install-emulator <id>` as it
+through `setpriv`. No download runs as root, nor an AppImage that unpacks itself, and neither the
+owner nor a seat can change what another account runs. hermir installs only a download it checks
+against the sha256 GitHub publishes. Whatever modes a release was packed with, each file of a copy
+ends up readable by every account, writable by `punktfunk-emulators` alone and never setuid. Run
+as root, the verb refuses.
+
+Each account finds the copies there (hermir's `machine_prefix`) and keeps its config and saves in
+its own home. A change waits while a process runs a program from the copy's folder: it answers
+`emulator_running`. An id is `[a-z0-9-]`, 1 to 64 bytes, no leading `-`. One change runs at a
+time: a second meanwhile answers `conflict`.
+
 ## The user
 
 Its comment is `punktfunk-seat=<id>`, and the daemon touches or deletes only an

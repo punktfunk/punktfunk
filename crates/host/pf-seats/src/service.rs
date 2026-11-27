@@ -59,6 +59,8 @@ pub struct SeatService<B> {
     changing: Mutex<Option<Change>>,
     /// Held by the one box-wide Flatpak change allowed at a time.
     flatpak: Mutex<()>,
+    /// Held by the one box-wide emulator change allowed at a time.
+    emulator: Mutex<()>,
 }
 
 /// A change to one seat's unit or account, and whether a stop has reached it as a start.
@@ -88,6 +90,7 @@ impl<B: PlatformBackend> SeatService<B> {
             challenges: Mutex::new(Challenges::default()),
             changing: Mutex::new(None),
             flatpak: Mutex::new(()),
+            emulator: Mutex::new(()),
         })
     }
 
@@ -134,6 +137,12 @@ impl<B: PlatformBackend> SeatService<B> {
             Command::RemoveFlatpak { id, purge } => {
                 self.flatpak(&id, |b| b.remove_flatpak(&id, purge).map(|()| None))
             }
+            Command::InstallEmulator { id } => {
+                self.emulator(&id, |b| b.install_emulator(&id).map(Some))
+            }
+            Command::RemoveEmulator { id } => {
+                self.emulator(&id, |b| b.remove_emulator(&id).map(|()| None))
+            }
             Command::Unlock { id, device, proof } => self.unlock(&id, &device, proof),
             Command::UnlockState { id, fingerprint } => self.unlock_state(&id, &fingerprint),
             Command::Challenge { id, fingerprint } => self.challenge(&id, &fingerprint),
@@ -150,6 +159,36 @@ impl<B: PlatformBackend> SeatService<B> {
                 .map(|changed| CommandResult::Synced { changed })
                 .map_err(ApiError::from),
         }
+    }
+
+    /// A box-wide emulator change for `id`, checked before `run` sees it, one at a time as a
+    /// Flatpak change is ([`Self::flatpak`]). `run` answers hermir's row for the copy.
+    fn emulator(
+        &self,
+        id: &str,
+        run: impl FnOnce(&B) -> Result<Option<String>, BackendError>,
+    ) -> Result<CommandResult, ApiError> {
+        if !crate::ipc::valid_emulator_id(id) {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                "not a catalog emulator id",
+            ));
+        }
+        let _one = match self.emulator.try_lock() {
+            Ok(one) => one,
+            Err(std::sync::TryLockError::Poisoned(one)) => one.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(ApiError::new(
+                    ErrorCode::Conflict,
+                    "another emulator change is running",
+                ));
+            }
+        };
+        let row = run(&self.backend)?;
+        Ok(CommandResult::Emulator {
+            id: id.to_owned(),
+            row,
+        })
     }
 
     /// A box-wide Flatpak change for `id`, checked before `run` sees it. It holds neither the
