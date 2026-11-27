@@ -35,7 +35,9 @@ mod gpu;
 mod hello;
 #[cfg(windows)]
 mod logfile;
+// The delay-load hook that runs the Windows App Runtime bootstrap on Windows 10.
 #[cfg(windows)]
+mod package_dependency;
 #[cfg(windows)]
 mod shell_window;
 #[cfg(windows)]

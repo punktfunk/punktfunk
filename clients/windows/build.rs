@@ -24,6 +24,15 @@ fn main() {
         std::fs::create_dir_all(&assets).expect("create the staged Assets directory");
         std::fs::copy(font, assets.join("lucide.ttf")).expect("stage the Lucide icon font");
 
+        // reactor imports two package-dependency functions Windows 10 lacks. Delay-loading
+        // their API set lets the shell start there; src/package_dependency.rs answers the miss.
+        for arg in [
+            "/DELAYLOAD:api-ms-win-appmodel-runtime-l1-1-5.dll",
+            "delayimp.lib",
+        ] {
+            println!("cargo:rustc-link-arg-bin=punktfunk-client-windows={arg}");
+        }
+
         let icon = "../../packaging/windows/branding/punktfunk.ico";
         println!("cargo:rerun-if-changed={icon}");
         winresource::WindowsResource::new()
