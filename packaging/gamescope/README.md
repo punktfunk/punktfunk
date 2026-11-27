@@ -63,6 +63,8 @@ The patches here add the missing half, and nothing else. See
 | `0050-punktfunk-stamp-pfhdr41.patch` | Stamp `+pfhdr41`, so a banner shows whether the box has `0049` | **No** — ours only, as `0005` |
 | `0051-layer-let-Proton-s-fullscreen-hack-scale-a-game-in-i.patch` | Proton's fullscreen hack scales a DPI-scaled window with a compute pass that views every game image as BGRA8 sRGB and writes an 8-bit BGRA swapchain. The layer offers more formats, so an HDR10 game came out as noise and an RGBA8 game with red and blue swapped. From that swapchain to its last view the layer corrects what Proton creates on the thread: an HDR colorspace gets the layer's own format, each view gets the game image's format, and where that has no sRGB view the pass stores what it samples. A 10-bit SDR game is still stored in Proton's 8 bits | **Yes** — upstream's layer gives Proton the same formats |
 | `0052-punktfunk-stamp-pfhdr42.patch` | Stamp `+pfhdr42`, so a banner shows whether the box has `0051` | **No** — ours only, as `0005` |
+| `0053-wlserver-announce-the-modifiers-of-keys-injected-ove.patch` | A key from the EIS server reached the seat as a key alone, so the seat never announced Shift, Ctrl or Caps Lock for it. Xwayland up to 24.1 worked the modifiers out from the keys; Xwayland 26 takes them from the compositor alone, as 24.1.5 did, and every letter a remote client typed arrived lowercase. The EIS server has the seat's stub keyboard keep the state of its keys in the session keymap and announce each change | **Yes** — every EIS client types lowercase under Xwayland 26 |
+| `0054-punktfunk-stamp-pfhdr43.patch` | Stamp `+pfhdr43`, so a banner shows whether the box has `0053` | **No** — ours only, as `0005` |
 
 ### Why the headless patch matters
 
@@ -181,10 +183,11 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr40` | …and on Intel a planar capture dmabuf takes a tiled modifier its consumer accepts; the host offers them from this level |
 | `+pfhdr41` | …and an HDR P010 capture writes full range when its consumer names it; `+pfhdr40` hands an HDR session packed 10-bit (no new capability) |
 | `+pfhdr42` | …and the WSI layer corrects Proton's fullscreen hack for a game that is not BGRA8; `+pfhdr41` shows such a game in a DPI-scaled prefix with wrong colours (no new capability) |
+| `+pfhdr43` | …and a key injected over EIS carries its modifiers; under Xwayland 26 `+pfhdr42` types every letter lowercase (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.17.0.pfhdr42-1`; its build checks the complete upstream version and capability level.
+`3.17.0.pfhdr43-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 
@@ -371,6 +374,22 @@ for adaptive_sync in (False, True):
         raise SystemExit("FAIL: the CLI framerate limit did not pace FIFO presents")
 PY
 ```
+
+### Injected modifiers regression
+
+`check-injected-modifiers.py` presses Shift, Ctrl and Caps Lock over a session's EIS socket and
+reads the modifier state its X server stamps on key events. It needs an X11 window with the
+keyboard, so give the staged binary one. gamescope logs its Wayland display and its X display;
+the EIS socket is the Wayland display's name with `-ei`:
+
+```sh
+PATH="$STAGE/usr/lib/punktfunk/gamescope:$PATH" "$STAGE/usr/bin/punktfunk-gamescope" \
+    --backend headless -W 1280 -H 720 -r 60 -- vkcube --wsi xcb &
+python3 "$PF/packaging/gamescope/check-injected-modifiers.py" \
+    "$XDG_RUNTIME_DIR/gamescope-1-ei" :2
+```
+
+Under Xwayland 26 a build below `+pfhdr43`, and upstream's, fails every "sets" line.
 
 ## Rebase policy
 

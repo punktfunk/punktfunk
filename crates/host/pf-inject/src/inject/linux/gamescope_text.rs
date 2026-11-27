@@ -3,8 +3,9 @@
 //!
 //! gamescope types each string against its session keymap: it holds and announces the
 //! modifiers a character's level needs, and gives a character the keymap lacks a spare key
-//! in a keymap of its own. Its EIS server only presses keys and never announces modifiers,
-//! so a Shift-level character (a digit on AZERTY) can't be typed there.
+//! in a keymap of its own. Upstream's EIS server only presses keys and announces no
+//! modifiers, so a Shift-level character (a digit on AZERTY) can't be typed there. Ours
+//! announces them from `+pfhdr43`; text takes this one route on every build.
 //!
 //! The protocol rides gamescope's Wayland socket, which its EIS socket is named after
 //! (`<display>-ei`). That is a second connection beside EIS: [`TextPipe::type_char`] waits

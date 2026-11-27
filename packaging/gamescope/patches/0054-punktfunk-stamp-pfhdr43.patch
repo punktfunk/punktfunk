@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Fri, 27 Nov 2026 19:40:21 +0100
+Subject: [PATCH 54/54] punktfunk: stamp pfhdr43
+
+A banner shows whether the box announces the modifiers of injected keys.
+---
+ src/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index c423208..64a9b77 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -235,7 +235,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr40 — …and a planar capture dmabuf takes a tiled modifier its consumer accepts, on Intel
+ #   +pfhdr41 — …and an HDR P010 capture writes full range when its consumer names it
+ #   +pfhdr42 — …and the WSI layer corrects Proton's fullscreen hack for a game that is not BGRA8
+-version_tag = vcs_tag + '+pfhdr42' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr43 — …and a key injected over EIS carries its modifiers
++version_tag = vcs_tag + '+pfhdr43' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
