@@ -4,7 +4,7 @@
     "clients/android/native": 70,
     "clients/apple/native": 18,
     "clients/linux": 2,
-    "clients/windows": 2,
+    "clients/windows": 4,
     "crates/client/pf-client-core": 15,
     "crates/client/pf-client-video": 26,
     "crates/client/pf-console-ui": 1,

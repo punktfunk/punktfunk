@@ -28,7 +28,7 @@ struct DelayLoadInfo {
     proc_name: *const c_char,
 }
 
-type DliHook = unsafe extern "system" fn(u32, *const DelayLoadInfo) -> *const c_void;
+type DliHook = extern "system" fn(u32, Option<&DelayLoadInfo>) -> *const c_void;
 
 // delayimp.lib reads this symbol after a failed delay-load; this definition replaces its null.
 #[unsafe(no_mangle)]
@@ -36,23 +36,17 @@ type DliHook = unsafe extern "system" fn(u32, *const DelayLoadInfo) -> *const c_
 #[allow(non_upper_case_globals)]
 static __pfnDliFailureHook2: DliHook = delay_load_failed;
 
-unsafe extern "system" fn delay_load_failed(
-    notify: u32,
-    info: *const DelayLoadInfo,
-) -> *const c_void {
-    match notify {
+/// The helper passes a `DelayLoadInfo` that stays live for the call; `Option<&T>` has the
+/// nullable pointer's ABI.
+extern "system" fn delay_load_failed(notify: u32, info: Option<&DelayLoadInfo>) -> *const c_void {
+    match (notify, info) {
         // Any module will do: its lookup misses next and comes back as DLI_FAIL_GET_PROC.
         // SAFETY: a null name returns the exe's own handle, valid for the process lifetime.
-        DLI_FAIL_LOAD_LIB => (unsafe { GetModuleHandleW(None) }) as *const c_void,
-        DLI_FAIL_GET_PROC => {
-            // SAFETY: the helper passes a live DelayLoadInfo. With `import_by_name` set,
-            // `proc_name` is a NUL-terminated name in the exe's import table.
-            let name = unsafe {
-                if (*info).import_by_name == 0 {
-                    return null();
-                }
-                CStr::from_ptr((*info).proc_name)
-            };
+        (DLI_FAIL_LOAD_LIB, _) => (unsafe { GetModuleHandleW(None) }) as *const c_void,
+        (DLI_FAIL_GET_PROC, Some(info)) if info.import_by_name != 0 => {
+            // SAFETY: with `import_by_name` set, `proc_name` is a NUL-terminated name in the
+            // exe's import table.
+            let name = unsafe { CStr::from_ptr(info.proc_name) };
             match name.to_bytes() {
                 b"TryCreatePackageDependency" => try_create_package_dependency as *const c_void,
                 b"AddPackageDependency" => add_package_dependency as *const c_void,
@@ -65,10 +59,11 @@ unsafe extern "system" fn delay_load_failed(
 
 /// Stands in for `TryCreatePackageDependency`, with reactor's signature: the helper writes
 /// this function into reactor's import slot. `PACKAGE_VERSION` passes as its `u64` on x64 and
-/// arm64. The bootstrap DLL adds a runtime of at least `min_version`; reactor names no other
+/// arm64; reactor's out-pointer is the address of a local, so it arrives as `Option<&mut>`.
+/// The bootstrap DLL adds a runtime of at least `min_version`; reactor names no other
 /// framework, so the remaining arguments go unread.
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn try_create_package_dependency(
+extern "system" fn try_create_package_dependency(
     _user: *mut c_void,
     _family: PCWSTR,
     min_version: u64,
@@ -76,27 +71,31 @@ unsafe extern "system" fn try_create_package_dependency(
     _lifetime_kind: i32,
     _lifetime_artifact: PCWSTR,
     _options: i32,
-    dependency_id: *mut *mut u16,
+    dependency_id: Option<&mut *mut u16>,
 ) -> HRESULT {
-    // SAFETY: reactor passes the address of a local PWSTR; null leaves it nothing to free.
-    unsafe { *dependency_id = null_mut() };
+    // Null leaves reactor nothing to free.
+    if let Some(id) = dependency_id {
+        *id = null_mut();
+    }
     bootstrap(min_version)
 }
 
 /// Stands in for `AddPackageDependency`: the bootstrap already added the runtime, so there is
-/// no context and no package name to return.
-unsafe extern "system" fn add_package_dependency(
+/// no context and no package name to return. Both out-pointers are addresses of reactor's
+/// locals.
+extern "system" fn add_package_dependency(
     _dependency_id: PCWSTR,
     _rank: i32,
     _options: i32,
-    context: *mut *mut c_void,
-    package_full_name: *mut *mut u16,
+    context: Option<&mut *mut c_void>,
+    package_full_name: Option<&mut *mut u16>,
 ) -> HRESULT {
-    // SAFETY: reactor passes the addresses of two locals. It frees the name with HeapFree,
-    // which accepts null.
-    unsafe {
+    if let Some(context) = context {
         *context = null_mut();
-        *package_full_name = null_mut();
+    }
+    // reactor frees the name with HeapFree, which accepts null.
+    if let Some(name) = package_full_name {
+        *name = null_mut();
     }
     HRESULT(0)
 }
