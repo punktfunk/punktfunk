@@ -201,12 +201,18 @@ so Windows starts it at the scale it picks for a monitor that size. With **Match
 is the device's whole screen. A device that does not report its screen's size gets a screen sized
 at 96 DPI, which keeps a TV at its couch scale.
 
+A Linux desktop takes a scale, not a size. A KDE Plasma, GNOME, niri, Hyprland or Sway host
+starts the streamed screen at the scale that fits your device's screen: 150% for a 27-inch 4K
+monitor. A scale you set as the table says stays. A device that does not report its screen's size
+starts at 100%.
+
 | Host | How |
 |---|---|
 | **Windows** | Set scaling in Settings while streaming; Windows remembers it per device. |
 | **KDE Plasma** | Set it in System Settings while streaming; KWin reapplies it per device. |
 | **GNOME** | Set it in Settings while streaming; the host saves it per device and reapplies it. |
 | **niri** | Pick **Scale its screen at** in the device's **Display settings…**; the screen starts at it. |
+| **Hyprland** | Not supported; the streamed screen starts at the scale that fits your device. |
 | **Sway** | Not supported; set the scale in your sway config. |
 | **Umbriel** | Not supported; the streamed screen is always at scale 1. |
 | **mango** | Not supported; the streamed screen runs at scale 1 unless a mango monitor rule names it. |

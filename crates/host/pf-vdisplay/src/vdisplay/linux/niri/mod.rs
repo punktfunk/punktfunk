@@ -254,6 +254,8 @@ pub struct NiriDisplay {
     /// The output the last `create` or recast used: the next `create` carries its workspace
     /// over, and `apply_position` places it.
     prev_output: Option<String>,
+    /// The size the picture has on the client's glass ([`VirtualDisplay::set_display_mm`]).
+    display_mm: Option<(u16, u16)>,
 }
 
 impl Drop for NiriDisplay {
@@ -274,8 +276,17 @@ impl NiriDisplay {
             join_live: false,
             pending_undo: Vec::new(),
             prev_output: None,
+            display_mm: None,
         })
     }
+}
+
+/// Whether niri brought `name` up at scale 1. Any other scale is a rule in niri's config.
+fn unscaled(name: &str) -> bool {
+    let outputs = ipc::outputs().unwrap_or_default();
+    let ours = outputs.into_iter().find(|o| o.name == name);
+    ours.and_then(|o| o.logical)
+        .is_some_and(|l| crate::panel_scale::same(l.scale, 1.0))
 }
 
 impl VirtualDisplay for NiriDisplay {
@@ -306,6 +317,10 @@ impl VirtualDisplay for NiriDisplay {
 
     fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
         self.topology = topology;
+    }
+
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.display_mm = mm;
     }
 
     fn topology(&self) -> Option<crate::policy::Topology> {
@@ -431,10 +446,15 @@ impl VirtualDisplay for NiriDisplay {
                 "niri: the virtual output came up at another size — streaming what it has"
             );
         }
-        if let Some(scale) = crate::policy::prefs()
+        // The operator's scale for this device, else the one that fits the client's glass.
+        let picked = crate::policy::prefs()
             .get()
-            .scale_for(crate::policy::fp_hex(self.client_fp).as_deref())
-        {
+            .scale_for(crate::policy::fp_hex(self.client_fp).as_deref());
+        let fits = || {
+            crate::panel_scale::for_panel((width, height), self.display_mm)
+                .filter(|_| unscaled(&name))
+        };
+        if let Some(scale) = picked.or_else(fits) {
             desktop::apply_scale(&name, scale);
         }
         focus_output(&name);

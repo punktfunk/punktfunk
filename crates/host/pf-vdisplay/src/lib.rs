@@ -831,6 +831,11 @@ pub mod registry;
 pub(crate) mod layout;
 pub use layout::desktop_extent;
 
+// The scale that fits a client's screen. Only the Linux backends call it; its tests run anywhere.
+#[cfg(any(target_os = "linux", test))]
+#[path = "vdisplay/panel_scale.rs"]
+pub(crate) mod panel_scale;
+
 /// Concrete topology (never [`policy::Topology::Auto`]). `Auto` is **extend**
 /// under a `PUNKTFUNK_COMPOSITOR` pin (host is not the sole desktop), else
 /// **exclusive** (promote the virtual output to sole).

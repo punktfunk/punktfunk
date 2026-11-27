@@ -334,10 +334,11 @@ pub trait VirtualDisplay: Send {
     /// EDID. Default no-op: Windows pf-vdisplay mints per-monitor EDIDs from it and Hyprland
     /// writes it into its HDR monitor rule.
     fn set_client_hdr(&mut self, _hdr: Option<pf_frame::HdrMeta>) {}
-    /// The size the picture has on the client's glass, in millimetres: the next
-    /// [`create`](Self::create) declares that panel, so the OS scales the desktop as it would
-    /// on it. `None` keeps the backend's own size. Default no-op: Windows pf-vdisplay and macOS
-    /// read it.
+    /// The size the picture has on the client's glass, in millimetres. Windows and macOS
+    /// declare that panel at the next [`create`](Self::create) and scale the desktop as they
+    /// would on it. A Linux compositor takes no size, so its backend starts the screen at the
+    /// scale `panel_scale::for_panel` answers. `None` keeps the backend's own size and scale.
+    /// Default no-op: gamescope, mango and Umbriel.
     fn set_display_mm(&mut self, _mm: Option<(u16, u16)>) {}
     /// Stream negotiated HDR (10-bit BT.2020/PQ, `bit_depth >= 10` in Welcome). Distinct from
     /// [`set_client_hdr`](Self::set_client_hdr) (panel volume for EDID). Default no-op; gamescope

@@ -549,7 +549,8 @@ fn sized_scale_key_for(
 /// `RecordVirtual` EDIDs (fresh serial, no override). Windows files a scale under the exact
 /// EDID, which changes with the mode, the refresh rate and the client's panel. On both the
 /// host stores the scale and its backend reapplies it. KDE keeps the scale once the id is
-/// stable.
+/// stable, the host's own included: the `kwin:<output>` and `kwin` keys are the scales the
+/// host set last, on that output and on any, which tell them from one the player set.
 pub(crate) struct ScaleMap {
     path: PathBuf,
     map: std::collections::BTreeMap<String, f64>,
@@ -604,7 +605,8 @@ impl ScaleMap {
     }
 }
 
-/// Process-wide scale map, loaded once. The Mutter backend and the Windows manager use it.
+/// Process-wide scale map, loaded once. The Mutter and KWin backends and the Windows manager
+/// use it.
 pub(crate) fn scales() -> &'static Mutex<ScaleMap> {
     static MAP: OnceLock<Mutex<ScaleMap>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(ScaleMap::load()))
