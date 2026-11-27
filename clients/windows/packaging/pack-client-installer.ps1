@@ -11,7 +11,8 @@
   %LOCALAPPDATA%\Programs\Punktfunk path is what fixes all three.
 
   Steps:
-    1. stage the runtime file set from -LayoutDir (drops AppxManifest.xml + the tile Assets),
+    1. stage the runtime file set from -LayoutDir (drops AppxManifest.xml + the tile Assets)
+       and add the Windows App Runtime bootstrap DLL from NuGet,
     2. sign the four exes and SDL3.dll individually (the MSIX only signs its container),
     3. zip the stage -> the portable build,
     4. pack the unelevated client wizard over the same stage, sign the setup.exe,
@@ -75,6 +76,22 @@ foreach ($f in $required) {
     if (-not (Test-Path $src)) { throw "missing '$f' in $LayoutDir (did pack-msix.ps1 run first?)" }
     Copy-Item $src (Join-Path $stage $f) -Force
 }
+# The Windows App Runtime bootstrap. An unpackaged shell on Windows 10 adds the runtime through
+# it (src/package_dependency.rs); Windows 11 and the MSIX never load it.
+$foundation = 'Microsoft.WindowsAppSDK.Foundation/2.6.4'
+$foundationSha256 = 'D23B968700025000F93D38107708A9771B18DBE0FAE57E9843C310556CF84091'
+$bootstrapDll = 'Microsoft.WindowsAppRuntime.Bootstrap.dll'
+$nupkg = Join-Path $OutDir 'windowsappsdk-foundation.nupkg'
+Invoke-WebRequest "https://www.nuget.org/api/v2/package/$foundation" -OutFile $nupkg
+if ((Get-FileHash $nupkg -Algorithm SHA256).Hash -ne $foundationSha256) {
+    throw "$foundation does not match its pinned SHA-256"
+}
+$nupkgDir = Join-Path $OutDir 'windowsappsdk-foundation'
+New-Item -ItemType Directory -Force -Path $nupkgDir | Out-Null
+& "$env:SystemRoot\System32\tar.exe" -xf $nupkg -C $nupkgDir "runtimes/win-$Arch/native/$bootstrapDll"
+if ($LASTEXITCODE -ne 0) { throw "extract $bootstrapDll for $Arch from $foundation ($LASTEXITCODE)" }
+Copy-Item (Join-Path $nupkgDir "runtimes\win-$Arch\native\$bootstrapDll") (Join-Path $stage $bootstrapDll) -Force
+
 $licSrc = Join-Path $LayoutDir 'licenses'
 if (-not (Test-Path $licSrc)) { throw "missing licenses\ in $LayoutDir (did pack-msix.ps1 run first?)" }
 Copy-Item $licSrc (Join-Path $stage 'licenses') -Recurse -Force

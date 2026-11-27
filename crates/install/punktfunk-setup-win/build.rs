@@ -17,6 +17,17 @@ fn main() {
             "cargo:rustc-link-arg-bin=punktfunk-setup-win=/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"
         );
 
+        // reactor imports two package-dependency functions Windows 10 lacks. A self-contained
+        // wizard never calls them; delay-loading their API set lets it start there.
+        for bin in ["punktfunk-setup-win", "punktfunk-setup-client"] {
+            for arg in [
+                "/DELAYLOAD:api-ms-win-appmodel-runtime-l1-1-5.dll",
+                "delayimp.lib",
+            ] {
+                println!("cargo:rustc-link-arg-bin={bin}={arg}");
+            }
+        }
+
         // The branded icon, ordinal 1 (the client's pattern): Apps & features + the taskbar.
         let icon = "../../../packaging/windows/branding/punktfunk.ico";
         println!("cargo:rerun-if-changed={icon}");

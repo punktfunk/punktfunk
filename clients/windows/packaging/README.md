@@ -37,6 +37,10 @@ package dependency. Under MSIX package identity the manifest's `<PackageDependen
 satisfies it. It is a full-trust Win32 app because it owns raw D3D11, Win32 low-level input hooks,
 WASAPI and SDL3.
 
+**Windows 10.** The dynamic package dependency API arrived with Windows 11, so the shell and the
+wizard delay-load it. Unpackaged on Windows 10, the shell adds the runtime through
+`Microsoft.WindowsAppRuntime.Bootstrap.dll` instead; the installer and the zip ship it.
+
 ## Versioning
 
 MSIX requires a strictly 4-part numeric version:
