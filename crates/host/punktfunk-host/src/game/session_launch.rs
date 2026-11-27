@@ -22,6 +22,9 @@ pub(crate) struct LaunchOwner {
     pub profile: Option<crate::events::ProfileRef>,
     /// The pads an emulator's players are bound to.
     pub pads: Pads,
+    /// The stream's picture, which an emulator's render scale fills. `None` at the desk, whose
+    /// screen the player set the emulator up for.
+    pub screen: Option<hermir::Size>,
 }
 
 impl LaunchOwner {
@@ -127,7 +130,7 @@ pub(crate) fn prepare(
         crate::emulators::exchange::after_hold(t.game.id.as_deref());
         // After the holds: they stage the firmware this places.
         if let Some(id) = t.game.id.as_deref() {
-            let held = crate::emulators::prepare_launch(id, &owner.pads);
+            let held = crate::emulators::prepare_launch(id, &owner.pads, owner.screen);
             if let Some(c) = claim.as_mut() {
                 c.bind(held);
             }
@@ -512,6 +515,7 @@ mod tests {
                 roster: None,
                 device: None,
             },
+            screen: None,
         }
     }
 

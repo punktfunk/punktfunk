@@ -937,10 +937,10 @@ fn bindings() -> std::sync::MutexGuard<'static, Bindings> {
     BINDINGS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Puts the emulators' own bindings back after a game, file by file, when they are the exiting
-/// launch's (`held`, from its [`prepare_launch`]) or no launch's: a later launch's prepare
-/// already put this one's back and wrote its own. Forced: an emulator rewrites its config on
-/// exit, and that is no edit of the player's. Nothing outstanding is a quiet no-op.
+/// Puts the emulators' own bindings and settings back after a game, file by file, when they are
+/// the exiting launch's (`held`, from its [`prepare_launch`]) or no launch's: a later launch's
+/// prepare already put this one's back and wrote its own. Forced: an emulator rewrites its config
+/// on exit, and that is no edit of the player's. Nothing outstanding is a quiet no-op.
 pub fn revert_players(held: Option<u64>) {
     let Ok(h) = open() else { return };
     let mut out = bindings();
@@ -984,12 +984,22 @@ pub fn prepare(
         roster: None,
         device: None,
     };
-    prepare_as(None, &mut None, id, platform, firmware_dir, Some(&pads))
+    let session = hermir::Patch::default();
+    prepare_as(
+        None,
+        &mut None,
+        id,
+        platform,
+        firmware_dir,
+        Some(&pads),
+        session,
+    )
 }
 
 /// [`prepare`], its bindings `owner`'s: the library id of the launch they are for. `held` gets
 /// the count that names them before anything is written. `pads` are the players': a session's
 /// seat as [`session_players`] does, the desk's as [`desk_patch`]; `None` writes no players.
+/// `session` is the rest of the launch's patch, written and reverted with the players.
 fn prepare_as(
     owner: Option<&str>,
     held: &mut Option<u64>,
@@ -997,6 +1007,7 @@ fn prepare_as(
     platform: Option<&str>,
     firmware_dir: Option<&Path>,
     pads: Option<&Pads>,
+    session: hermir::Patch,
 ) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
     let h = open()?;
     // A game that ended without a lease reporting it (its session took the nested gamescope
@@ -1042,12 +1053,21 @@ fn prepare_as(
         Some(Pads::Desk(pads)) => desk_patch(pads),
         None => hermir::Patch::default(),
     };
+    let patch = hermir::Patch {
+        players: players.players,
+        connected: players.connected,
+        ..session
+    };
     emulator
         .copies()?
         .iter()
         .map(|copy| {
             let mut prepared = emulator.prepare(copy, platform, &firmware)?;
-            prepared.steps.extend(emulator.apply(copy, &players)?.steps);
+            let applied = emulator.apply(copy, &patch)?;
+            for k in applied.knobs.iter().filter(|k| k.knob != "players") {
+                tracing::info!(emulator = %id, knob = %k.knob, support = ?k.support, note = k.note.as_deref().unwrap_or(""), "emulator setting for the launch");
+            }
+            prepared.steps.extend(applied.steps);
             Ok((copy.exe.to_string(), prepared))
         })
         .collect()
@@ -1312,11 +1332,16 @@ pub fn in_catalog(id: &str) -> bool {
 /// Before an `emulator` entry starts: the RetroArch core it names when this host's RetroArch
 /// lacks it, and on Windows readable by the player, every copy past its first-run questions, the
 /// platform's firmware from the plugin's `firmware/<platform>` when it staged some, and the
-/// launch's `pads` as players (a session's, or the desk's from `desk_pads`), which only this
-/// launch's exit reverts: their count comes back, for [`revert_players`]. What it did goes to the
-/// log. A stream's launch waits for the client's pads, at most [`SETTLE_ALL`], and never on the
-/// rest to succeed.
-pub(crate) fn prepare_launch(library_id: &str, pads: &Pads) -> Option<u64> {
+/// launch's `pads` as players (a session's, or the desk's from `desk_pads`). The emulator's own
+/// update check goes off, and a stream's `screen` sets the render scale of a copy still at 1×.
+/// Only this launch's exit reverts them: their count comes back, for [`revert_players`]. What it
+/// did goes to the log. A stream's launch waits for the client's pads, at most [`SETTLE_ALL`],
+/// and never on the rest to succeed.
+pub(crate) fn prepare_launch(
+    library_id: &str,
+    pads: &Pads,
+    screen: Option<hermir::Size>,
+) -> Option<u64> {
     let entry = crate::library::entry_for_library_id(library_id)?;
     let spec = entry.launch.as_ref().filter(|s| s.kind == "emulator")?;
     let arg = |name: &str| {
@@ -1347,6 +1372,14 @@ pub(crate) fn prepare_launch(library_id: &str, pads: &Pads) -> Option<u64> {
         .zip(platform)
         .and_then(|(provider, platform)| staged_firmware(provider, platform));
     let mut held = None;
+    let session = hermir::Patch {
+        video: screen.map(|output| hermir::Video {
+            output: Some(output),
+            ..Default::default()
+        }),
+        update_check: Some(false),
+        ..Default::default()
+    };
     match prepare_as(
         Some(library_id),
         &mut held,
@@ -1354,6 +1387,7 @@ pub(crate) fn prepare_launch(library_id: &str, pads: &Pads) -> Option<u64> {
         platform,
         staged.as_ref().map(handover::Scratch::path),
         Some(pads),
+        session,
     ) {
         Ok(copies) => {
             for (exe, prepared) in copies {

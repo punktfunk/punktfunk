@@ -199,6 +199,10 @@ pub(super) async fn launch_session(
             roster: Some(controls.pads.clone()),
             device: controls.fingerprint.clone(),
         },
+        screen: Some(hermir::Size {
+            width: n.welcome.mode.width,
+            height: n.welcome.mode.height,
+        }),
     };
     #[cfg(test)]
     super::tests::fail_at_launch(&conn, scope.life())?;

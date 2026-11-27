@@ -2425,6 +2425,7 @@ fn a_refused_launch_runs_none_of_its_prep() {
             roster: None,
             device: None,
         },
+        screen: None,
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
