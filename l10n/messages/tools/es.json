@@ -394,6 +394,7 @@
 	"tray_unit_stop": "Detener",
 	"tray_unit_restart": "Reiniciar",
 	"tray_approve_pairing": "Aprobar solicitud de emparejamiento…",
+	"tray_update_to": "Actualizar a {version}…",
 	"tray_start_host": "Iniciar host",
 	"tray_start_at_login": "Ejecutar al iniciar sesión",
 	"tray_exit": "Salir de la bandeja",

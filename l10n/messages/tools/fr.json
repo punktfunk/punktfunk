@@ -394,6 +394,7 @@
 	"tray_unit_stop": "Arrêter",
 	"tray_unit_restart": "Redémarrer",
 	"tray_approve_pairing": "Approuver la demande d’association…",
+	"tray_update_to": "Mettre à jour vers {version}…",
 	"tray_start_host": "Démarrer l’hôte",
 	"tray_start_at_login": "Démarrer à la connexion",
 	"tray_exit": "Quitter l’icône",

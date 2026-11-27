@@ -105,6 +105,7 @@
 	"android_companion_group_host": "Host",
 	"android_companion_group_leave": "Sair",
 	"android_companion_armed_a11y": "Aguardando confirmação — pressione novamente",
+	"android_key_held_a11y": "Mantida pressionada",
 	"android_companion_trackpad_hint": "Toque para clicar · dois dedos rolam · toque com dois dedos faz clique direito",
 	"android_companion_show_controller": "Mostrar o controle",
 	"android_pad_group_gamepads": "Controles",
