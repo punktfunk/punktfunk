@@ -1,5 +1,6 @@
 package io.unom.punktfunk.kit.library
 
+import io.unom.punktfunk.kit.Say
 import io.unom.punktfunk.kit.library.LibraryGroupKey.Launchers
 import io.unom.punktfunk.kit.library.LibraryGroupKey.Platform
 import io.unom.punktfunk.kit.library.LibraryGroupKey.Store
@@ -119,6 +120,17 @@ class LibraryCollationTest {
     fun storeNamesAgreeWithTheLabelTable() {
         for ((store, label) in storeLabels) {
             assertEquals(store, label != "Game", entry("x", store = store).hasStoreName)
+        }
+    }
+
+    @Test
+    fun badgeLabelsMatchTheVectors() {
+        for (c in vectors.getJSONArray("badge_labels").objects()) {
+            val e = entry("x", store = c.getString("store"), platform = c.optText("platform"))
+            val got = e.badgeLabel
+            // A message has no words off-device: it must be the store's own label, worded by the table.
+            val words = (got as? Say.Text)?.value ?: storeLabels.getValue(e.store).also { assertEquals(e.storeLabel, got) }
+            assertEquals(c.toString(), c.getString("out"), words)
         }
     }
 

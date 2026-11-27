@@ -618,7 +618,7 @@ fn order(games: &mut [LibraryGame]) {
 /// The desktop tile's id and mark, and the store→label table. All live in `pf-client-core`,
 /// so the GTK and WinUI dialogs read the same ones; re-exported because the screens name
 /// them through this module.
-pub use pf_client_core::library::{initials, store_label, DESKTOP_ICON, DESKTOP_ID};
+pub use pf_client_core::library::{badge_label, initials, store_label, DESKTOP_ICON, DESKTOP_ID};
 
 /// Each installable title's download and menu row from the last `/status` read. True when
 /// one changed.

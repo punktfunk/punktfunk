@@ -55,6 +55,14 @@
     "steam": "Steam", "custom": "Custom", "heroic": "Heroic", "lutris": "Lutris",
     "epic": "Epic", "gog": "GOG", "xbox": "Xbox", "weird": "Game", "": "Game"
   },
+  "badge_labels": [
+    {"store": "custom", "platform": "Wii", "out": "Wii"},
+    {"store": "custom", "platform": " SNES ", "out": "SNES"},
+    {"store": "custom", "platform": "  ", "out": "Custom"},
+    {"store": "custom", "platform": null, "out": "Custom"},
+    {"store": "steam", "platform": "PC", "out": "Steam"},
+    {"store": "weird", "platform": "PS2", "out": "Game"}
+  ],
   "sort_keys": [
     {"stored": "host", "key": "host"},
     {"stored": "title", "key": "title"},

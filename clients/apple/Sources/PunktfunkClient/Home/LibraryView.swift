@@ -1299,7 +1299,7 @@ struct GameCard: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                StoreBadge(label: game.storeLabel, isLauncher: game.isLauncher)
+                StoreBadge(label: game.badgeLabel, isLauncher: game.isLauncher)
             }
             // Opposite corner from the store badge so the two never collide on a narrow tile.
             .overlay(alignment: .topTrailing) {

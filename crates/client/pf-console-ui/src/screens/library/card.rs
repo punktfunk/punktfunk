@@ -7,7 +7,7 @@
 //! tile, the section heading and the focused-title band sit here too.
 
 use super::art::draw_poster_placeholder;
-use crate::library::{store_label, LibraryGame, DESKTOP_ID};
+use crate::library::{badge_label, LibraryGame, DESKTOP_ID};
 use crate::model::HostRow;
 use crate::theme::{art_sampling, fill, Fonts, Frame, PanelStroke, W};
 use skia_safe::{Canvas, Color4f, Image, Matrix, RRect, Rect, TileMode};
@@ -203,7 +203,7 @@ pub(super) fn store_badge(
         return;
     }
     let s = if big { 1.15 } else { 1.0 };
-    let label = store_label(&game.store);
+    let label = badge_label(&game.store, game.platform.as_deref());
     let size = 11.0 * k * s;
     let tw = f64::from(fonts.measure(label, W::SemiBold, size));
     let (bw, bh, inset) = (tw + 14.0 * k * s, 19.0 * k * s, 7.0 * k * s);

@@ -797,7 +797,7 @@ private fun TouchPoster(
     val download = tiles.downloads[game.id]
     val files = InstallAction.forTitle(game.install, download, tiles.grants)
     val badge = TileBadge.forTitle(game.install, download)
-    val store = game.storeLabel.asString()
+    val store = game.badgeLabel.asString()
     val storeDescription = stringResource(
         if (game.isLauncher) R.string.lib_store_opens_a11y else R.string.lib_store_from_a11y,
         store,

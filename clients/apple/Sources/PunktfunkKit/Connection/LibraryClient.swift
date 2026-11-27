@@ -120,6 +120,14 @@ public struct GameEntry: Codable, Hashable, Identifiable, Sendable {
     /// (`pf_client_core::library::store_label`).
     public var storeLabel: String { storeName ?? String(localized: L10n.libStoreOther) }
 
+    /// The poster badge. A `custom` entry names its `platform` where it has one: an emulator's ROM
+    /// reads "Wii", not "Custom". Every other store keeps `storeLabel`. Same rule as
+    /// `pf_client_core::library::badge_label`.
+    public var badgeLabel: String {
+        let p = platform?.trimmingCharacters(in: .whitespaces) ?? ""
+        return store == "custom" && !p.isEmpty ? p : storeLabel
+    }
+
     /// Whether `store` is an id this build has a name for; an unknown one reads as "Game".
     var hasStoreName: Bool { storeName != nil }
 
