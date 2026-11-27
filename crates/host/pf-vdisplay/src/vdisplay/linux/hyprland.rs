@@ -156,16 +156,19 @@ pub struct HyprlandDisplay {
     hdr: bool,
     /// The client panel's volume, the HDR head's mastering target when known.
     client_hdr: Option<pf_frame::HdrMeta>,
+    /// The size the picture has on the client's glass ([`VirtualDisplay::set_display_mm`]).
+    display_mm: Option<(u16, u16)>,
     /// The last `create`'s head and its rule, which [`apply_position`] re-issues at a place.
     ///
     /// [`apply_position`]: VirtualDisplay::apply_position
     placed: Option<Placed>,
 }
 
-/// One head's monitor rule: name, mode, colour, and the place a reload re-applies.
+/// One head's monitor rule: name, mode, scale, colour, and the place a reload re-applies.
 struct Placed {
     name: String,
     mode: Mode,
+    scale: f64,
     colour: Option<HdrRule>,
     at: Position,
 }
@@ -198,6 +201,7 @@ impl HyprlandDisplay {
             join_live: false,
             hdr: false,
             client_hdr: None,
+            display_mm: None,
             placed: None,
         })
     }
@@ -271,7 +275,7 @@ impl VirtualDisplay for HyprlandDisplay {
             return;
         };
         *p.at.lock().unwrap_or_else(|e| e.into_inner()) = Some((x, y));
-        if let Err(e) = set_monitor_rule(&p.name, p.mode, p.colour, Some((x, y))) {
+        if let Err(e) = set_monitor_rule(&p.name, p.mode, p.scale, p.colour, Some((x, y))) {
             tracing::warn!(output = %p.name, x, y, error = %format!("{e:#}"), "hyprland: head did not move");
         }
     }
@@ -331,6 +335,10 @@ impl VirtualDisplay for HyprlandDisplay {
 
     fn hw_cursor(&self) -> bool {
         self.hw_cursor
+    }
+
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.display_mm = mm;
     }
 
     fn set_client_hdr(&mut self, hdr: Option<pf_frame::HdrMeta>) {
@@ -419,9 +427,13 @@ impl VirtualDisplay for HyprlandDisplay {
             .with_context(|| format!("waiting for headless output {name} to appear"))?;
 
         // Client mode is also the frame clock: a headless output is timer-paced from it.
-        let colour =
-            apply_monitor_rule(&name, mode, self.hdr.then(|| HdrRule::new(self.client_hdr)))
-                .with_context(|| format!("set monitor rule for {name}"))?;
+        let scale = clean_scale(
+            crate::panel_scale::for_panel((mode.width, mode.height), self.display_mm),
+            mode,
+        );
+        let hdr = self.hdr.then(|| HdrRule::new(self.client_hdr));
+        let colour = apply_monitor_rule(&name, mode, scale, hdr)
+            .with_context(|| format!("set monitor rule for {name}"))?;
 
         // Portal fd stays off this output so the registry can linger the named
         // head. [`session_cast_for`] hands the fd to the session, not the pool.
@@ -463,11 +475,12 @@ impl VirtualDisplay for HyprlandDisplay {
         self.placed = Some(Placed {
             name: name.clone(),
             mode,
+            scale,
             colour,
             at: at.clone(),
         });
         let output_keepalive = OutputKeepalive {
-            _reload: watch_config_reloads(name.clone(), mode, colour, at),
+            _reload: watch_config_reloads(name.clone(), mode, scale, colour, at),
             _output: output,
         };
         let keepalive: Box<dyn Send> = match direct_cast {
@@ -540,13 +553,14 @@ fn start_cast(name: &str, hw_cursor: bool) -> Result<CastParts> {
 /// One subscription, not polling, so an idle session costs nothing — and one
 /// socket, so the window list rides this reader rather than opening a second.
 ///
-/// The head's own rule only: mode, colour and place. A reload also undoes
+/// The head's own rule only: mode, scale, colour and place. A reload also undoes
 /// `topology: exclusive` head disables, but re-disabling them here races teardown's
 /// [`restore_heads`] (`hyprctl reload` to re-light): the watcher and that restore do not
 /// share a lifetime.
 fn watch_config_reloads(
     name: String,
     mode: Mode,
+    scale: f64,
     colour: Option<HdrRule>,
     at: Position,
 ) -> Option<ReloadWatcher> {
@@ -590,7 +604,7 @@ fn watch_config_reloads(
                 "hyprland: config reloaded — re-applying the streamed head's monitor rule"
             );
             let place = *at.lock().unwrap_or_else(|e| e.into_inner());
-            if let Err(e) = set_monitor_rule(&name, mode, colour, place) {
+            if let Err(e) = set_monitor_rule(&name, mode, scale, colour, place) {
                 // Errors only when the head has no framebuffer — gone after a
                 // reload (teardown, or compositor restart). Stop.
                 tracing::warn!(
@@ -1551,11 +1565,16 @@ fn monitor_format(name: &str) -> Option<String> {
 /// [`set_monitor_rule`], HDR first. A compositor that rejects the colour keys, or backs
 /// them with an 8-bit framebuffer, gets the SDR rule instead; the latch tells the next
 /// handshake, and this session ends at its first HDR capture with the reconnect advice.
-fn apply_monitor_rule(name: &str, mode: Mode, colour: Option<HdrRule>) -> Result<Option<HdrRule>> {
+fn apply_monitor_rule(
+    name: &str,
+    mode: Mode,
+    scale: f64,
+    colour: Option<HdrRule>,
+) -> Result<Option<HdrRule>> {
     let Some(rule) = colour else {
-        return set_monitor_rule(name, mode, None, None).map(|()| None);
+        return set_monitor_rule(name, mode, scale, None, None).map(|()| None);
     };
-    let lit = match set_monitor_rule(name, mode, Some(rule), None) {
+    let lit = match set_monitor_rule(name, mode, scale, Some(rule), None) {
         Ok(()) => monitor_format(name).is_some_and(|f| ten_bit_format(&f)),
         Err(e) => {
             tracing::debug!(output = %name, error = %format!("{e:#}"), "HDR monitor rule rejected");
@@ -1571,7 +1590,53 @@ fn apply_monitor_rule(name: &str, mode: Mode, colour: Option<HdrRule>) -> Result
          offers SDR until it restarts"
     );
     pf_frame::hdr::note_hdr_capture_failed(pf_frame::hdr::HdrSource::VirtualOutput);
-    set_monitor_rule(name, mode, None, None).map(|()| None)
+    set_monitor_rule(name, mode, scale, None, None).map(|()| None)
+}
+
+/// The scale Hyprland takes for `mode` without a warning on screen, nearest `fits`: a count
+/// of 120ths that divides both sides into whole pixels. 1 when `fits` is `None` or no such
+/// scale lies within a quarter of it.
+fn clean_scale(fits: Option<f64>, mode: Mode) -> f64 {
+    let Some(fits) = fits else {
+        return 1.0;
+    };
+    // Hyprland's own test, in its arithmetic: a side over the scale, compared as doubles.
+    let whole = |n: u32| {
+        let scale = f64::from(n) / 120.0;
+        (f64::from(mode.width) / scale).fract() == 0.0
+            && (f64::from(mode.height) / scale).fract() == 0.0
+    };
+    let near = (fits * 120.0).round() as u32;
+    (0..=30)
+        .flat_map(|off| [near.saturating_sub(off), near + off])
+        .find(|n| *n > 120 && whole(*n))
+        .map_or(1.0, |n| f64::from(n) / 120.0)
+}
+
+/// The monitor rule for `name` as `hyprctl keyword monitor` takes it, then as `hyprctl eval`.
+fn rule_forms(
+    name: &str,
+    mode: Mode,
+    scale: f64,
+    colour: Option<HdrRule>,
+    at: Option<(i32, i32)>,
+) -> (String, String) {
+    // Hyprland reads the rate as a decimal: `@59.940` runs the head at 59.94 Hz.
+    let hz = punktfunk_core::config::hz_decimal(mode.millihz().max(1000));
+    let pos = at.map_or_else(|| "auto".to_string(), |(x, y)| format!("{x}x{y}"));
+    let spec = format!(
+        "{name},{}x{}@{hz},{pos},{scale}{}",
+        mode.width,
+        mode.height,
+        colour.map(|c| c.hyprlang()).unwrap_or_default()
+    );
+    let lua = format!(
+        "hl.monitor{{ output = \"{name}\", mode = \"{}x{}@{hz}\", position = \"{pos}\", scale = {scale}{} }}",
+        mode.width,
+        mode.height,
+        colour.map(|c| c.lua()).unwrap_or_default()
+    );
+    (spec, lua)
 }
 
 /// Set the client's exact mode on `name`, both config eras.
@@ -1581,29 +1646,17 @@ fn apply_monitor_rule(name: &str, mode: Mode, colour: Option<HdrRule>) -> Result
 /// `hyprctl eval 'hl.monitor{…}'` when `keyword` is rejected or its mode never takes effect.
 /// Either way, confirm the output adopted the mode — some forms print `ok` for a command
 /// they ignored. A headless output starts at 0×0; if neither form yields a
-/// usable size, the compositor could not back the mode. `colour` appends the
-/// HDR keys to both forms; `at` places the head, `None` lets Hyprland (`auto`).
+/// usable size, the compositor could not back the mode. `scale` is one [`clean_scale`]
+/// answered. `colour` appends the HDR keys to both forms; `at` places the head, `None`
+/// lets Hyprland (`auto`).
 fn set_monitor_rule(
     name: &str,
     mode: Mode,
+    scale: f64,
     colour: Option<HdrRule>,
     at: Option<(i32, i32)>,
 ) -> Result<()> {
-    // Hyprland reads the rate as a decimal: `@59.940` runs the head at 59.94 Hz.
-    let hz = punktfunk_core::config::hz_decimal(mode.millihz().max(1000));
-    let pos = at.map_or_else(|| "auto".to_string(), |(x, y)| format!("{x}x{y}"));
-    let spec = format!(
-        "{name},{}x{}@{hz},{pos},1{}",
-        mode.width,
-        mode.height,
-        colour.map(|c| c.hyprlang()).unwrap_or_default()
-    );
-    let lua = format!(
-        "hl.monitor{{ output = \"{name}\", mode = \"{}x{}@{hz}\", position = \"{pos}\", scale = 1{} }}",
-        mode.width,
-        mode.height,
-        colour.map(|c| c.lua()).unwrap_or_default()
-    );
+    let (spec, lua) = rule_forms(name, mode, scale, colour, at);
     let keyword: Vec<&str> = vec!["keyword", "monitor", &spec];
     let eval: Vec<&str> = vec!["eval", &lua];
     // hyprctl reports rejection in the output text. Keep it, so the failure below
@@ -1649,11 +1702,12 @@ fn set_monitor_rule(
         // points at the compositor failing to back the mode.
         _ => bail!(
             "headless output {name} never got a framebuffer (stayed 0x0) after the monitor rule for \
-             {}x{}@{hz}. hyprctl said: {said}. If a form was accepted, the compositor couldn't back \
+             {}x{}@{}. hyprctl said: {said}. If a form was accepted, the compositor couldn't back \
              the mode — likely a headless GBM/dmabuf allocation failure in the GPU driver. Check \
              the Hyprland log.",
             mode.width,
-            mode.height
+            mode.height,
+            punktfunk_core::config::hz_decimal(mode.millihz().max(1000))
         ),
     }
 }
@@ -2544,6 +2598,39 @@ mod tests {
         refresh_hz: 60,
         refresh_mhz: 0,
     };
+
+    #[test]
+    fn a_fitted_scale_divides_the_mode_into_whole_pixels() {
+        let at = |width, height| Mode {
+            width,
+            height,
+            ..MODE
+        };
+        assert_eq!(clean_scale(None, at(3840, 2160)), 1.0);
+        assert_eq!(clean_scale(Some(1.5), at(3840, 2160)), 1.5);
+        assert_eq!(clean_scale(Some(1.25), at(1920, 1080)), 1.25);
+        // 1.75 leaves 2194.29 pixels across: 200/120 is the nearest that does not.
+        assert_eq!(clean_scale(Some(1.75), at(3840, 2160)), 200.0 / 120.0);
+        // 1.5 leaves 1706.67 across 2560: 1.6 gives 1600x900.
+        assert_eq!(clean_scale(Some(1.5), at(2560, 1440)), 1.6);
+        // No clean scale within a quarter of 1.5: 1366 has too few divisors.
+        assert_eq!(clean_scale(Some(1.5), at(1366, 768)), 1.0);
+        // 250/120 divides 850 on paper, but 850 / (250.0 / 120.0) is 407.99999999999994.
+        assert_eq!(clean_scale(Some(2.25), at(850, 600)), 2.0);
+    }
+
+    #[test]
+    fn the_rule_states_the_scale_in_both_forms() {
+        let (spec, lua) = rule_forms("PF-1", MODE, 1.0, None, None);
+        assert_eq!(spec, "PF-1,1920x1080@60,auto,1");
+        assert!(lua.ends_with("position = \"auto\", scale = 1 }"), "{lua}");
+        let (spec, lua) = rule_forms("PF-1", MODE, 1.25, None, Some((1920, 0)));
+        assert_eq!(spec, "PF-1,1920x1080@60,1920x0,1.25");
+        assert!(
+            lua.ends_with("position = \"1920x0\", scale = 1.25 }"),
+            "{lua}"
+        );
+    }
 
     /// A fake `hyprctl`: logs each call to `$HOME/hyprctl.log`, refuses `output create`, lists
     /// no monitor, and answers a remove with `$HOME/remove-answer`.

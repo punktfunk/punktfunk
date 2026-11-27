@@ -113,6 +113,27 @@ pub struct WlrootsDisplay {
     join_live: bool,
     /// The last `create`'s head, which [`apply_position`](VirtualDisplay::apply_position) moves.
     last_output: Option<String>,
+    /// The size the picture has on the client's glass ([`VirtualDisplay::set_display_mm`]).
+    display_mm: Option<(u16, u16)>,
+}
+
+/// Put `name` at `scale`, the one that fits the client's glass, when sway brought it up at
+/// scale 1. Any other scale is an `output` rule in the sway config and stays.
+fn fit_scale(name: &str, scale: f64) {
+    let heads = list_monitors().unwrap_or_default();
+    let unscaled = |m: &crate::monitors::PhysicalMonitor| {
+        m.connector == name && crate::panel_scale::same(m.scale, 1.0)
+    };
+    if !heads.iter().any(unscaled) {
+        return;
+    }
+    match swaymsg(&["output", name, "scale", &scale.to_string()]) {
+        Ok(_) => tracing::info!(output = %name, scale, "sway: output scaled to fit the client"),
+        Err(e) => tracing::warn!(
+            output = %name, scale, error = %format!("{e:#}"),
+            "sway kept the output at scale 1"
+        ),
+    }
 }
 
 /// A parked ScreenCast of `name`: node, portal fd, and the guard that closes it.
@@ -143,6 +164,7 @@ impl WlrootsDisplay {
             handoff_cast: false,
             join_live: false,
             last_output: None,
+            display_mm: None,
         })
     }
 
@@ -186,6 +208,10 @@ impl VirtualDisplay for WlrootsDisplay {
 
     fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
         self.topology = topology;
+    }
+
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.display_mm = mm;
     }
 
     fn topology(&self) -> Option<crate::policy::Topology> {
@@ -341,6 +367,11 @@ impl VirtualDisplay for WlrootsDisplay {
             .with_context(|| format!("swaymsg output {name} mode --custom {m}"))?;
         swaymsg(&["output", &name, "enable"])
             .with_context(|| format!("swaymsg output {name} enable"))?;
+        if let Some(scale) =
+            crate::panel_scale::for_panel((mode.width, mode.height), self.display_mm)
+        {
+            fit_scale(&name, scale);
+        }
 
         focus_output(&name);
 

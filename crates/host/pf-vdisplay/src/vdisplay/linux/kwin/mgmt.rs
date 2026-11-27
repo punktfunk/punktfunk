@@ -1308,6 +1308,28 @@ pub(crate) fn set_position(
     Ok(())
 }
 
+/// Put our output `ours` at `scale` on `sess`, the create's [`watch`]. KWin files the scale
+/// under the output's name and brings it back on every later create.
+pub(crate) fn set_scale(
+    sess: Option<&mut Session>,
+    ours: &str,
+    scale: f64,
+) -> Result<(), Declined> {
+    let deadline = Instant::now() + OP_BUDGET;
+    let sess = ready(sess, Op::Scale, deadline)?;
+    let proxy = newest_named(sess.state.devices.values(), ours)
+        .and_then(|d| d.proxy.clone())
+        .ok_or_else(|| Declined::Unresolved(ours.to_string()))?;
+    let config = sess.new_config();
+    config.scale(&proxy, scale);
+    let ok = sess.apply(&config, deadline);
+    config.destroy();
+    if !ok {
+        return Err(Declined::Unconfirmed(sess.state.failure_reason.clone()));
+    }
+    Ok(())
+}
+
 /// Advertised mode proxy matching a captured `"WxH@Hz"` (Hz rounded). `None` if
 /// the spec is empty or no mode matches — caller then enables without a mode.
 fn find_mode(sess: &Session, dev: &DeviceState, spec: &str) -> Option<DeviceMode> {

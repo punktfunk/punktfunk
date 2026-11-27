@@ -118,6 +118,8 @@ pub struct KwinDisplay {
     /// `wl_output.name` of the last `create` (`Virtual-<name>`): what a joiner streams and
     /// what [`apply_position`](VirtualDisplay::apply_position) resolves.
     join_name: Option<String>,
+    /// The size the picture has on the client's glass ([`VirtualDisplay::set_display_mm`]).
+    display_mm: Option<(u16, u16)>,
 }
 
 impl Drop for KwinDisplay {
@@ -195,6 +197,10 @@ impl VirtualDisplay for KwinDisplay {
 
     fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
         self.topology = topology;
+    }
+
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.display_mm = mm;
     }
 
     fn topology(&self) -> Option<crate::policy::Topology> {
@@ -454,6 +460,8 @@ impl VirtualDisplay for KwinDisplay {
             let ran = crate::kwin::mgmt::settle_rate(mgmt.as_mut(), &our_prefix, dims, want);
             (dims, exact, mode.refresh_hz, ran.unwrap_or(BIRTH_MHZ))
         };
+        // Before the topology: it places outputs by their scaled size.
+        fit_scale(mgmt.as_mut(), &our_prefix, final_dims, self.display_mm);
         self.apply_topology(mgmt.as_mut(), &name, &our_prefix, final_dims, &pre_enabled);
         self.watch = mgmt;
         let mut out = VirtualOutput::owned(
@@ -467,6 +475,54 @@ impl VirtualDisplay for KwinDisplay {
         out.input_output = Some(our_prefix);
         Ok(out)
     }
+}
+
+/// Scale-map key of the scale the host set last on any KWin output.
+const LAST_SCALE_KEY: &str = "kwin";
+
+/// Start our output at the scale that fits the client's glass, unless the player scaled it.
+/// KWin files a scale under an output's name and brings it back, the host's own included,
+/// so the scale map keeps what the host set: any other scale on the output is the player's.
+fn fit_scale(
+    mut sess: Option<&mut mgmt::Session>,
+    ours: &str,
+    dims: (u32, u32),
+    display_mm: Option<(u16, u16)>,
+) {
+    let Some((.., at)) = mgmt::actual_dims(sess.as_deref_mut(), ours) else {
+        return;
+    };
+    let key = format!("kwin:{ours}");
+    let (here, last) = {
+        let scales = crate::identity::scales().lock().unwrap();
+        (scales.get(&key), scales.get(LAST_SCALE_KEY))
+    };
+    let fits = crate::panel_scale::for_panel(dims, display_mm);
+    let Some(want) = scale_to_set(at, here, last, fits) else {
+        return;
+    };
+    if let Err(why) = mgmt::set_scale(sess, ours, want) {
+        tracing::warn!(ours, want, at, %why, "KWin kept the output's scale");
+        return;
+    }
+    let fitted = fits.is_some();
+    tracing::info!(ours, scale = want, fitted, "KWin: output scale set");
+    let mut scales = crate::identity::scales().lock().unwrap();
+    scales.set(&key, want);
+    scales.set(LAST_SCALE_KEY, want);
+}
+
+/// The scale to put our output at, or `None` to leave it. `at` is the scale KWin gave the
+/// output, `fits` the scale the client's glass wants. `here` is the scale the host set last
+/// on an output of this name (`None`: never, so KWin's own 1). `last` is the scale it set
+/// last on any output: KWin files one scale for all its virtual outputs until two exist at
+/// once, so another output's scale can come back on this one. Any other scale is the
+/// player's and stays.
+fn scale_to_set(at: f64, here: Option<f64>, last: Option<f64>, fits: Option<f64>) -> Option<f64> {
+    use crate::panel_scale::same;
+    let want = fits.unwrap_or(1.0);
+    let ours = same(at, here.unwrap_or(1.0)) || last.is_some_and(|l| same(at, l));
+    (ours && !same(at, want)).then_some(want)
 }
 
 /// The rate KWin gives a virtual output it creates, in millihertz.
@@ -1340,7 +1396,36 @@ fn await_created(
 
 #[cfg(test)]
 mod tests {
-    use super::{mode_satisfies, to_relight, union_restore, MANAGED_PREFIX};
+    use super::{mode_satisfies, scale_to_set, to_relight, union_restore, MANAGED_PREFIX};
+
+    #[test]
+    fn the_host_scales_only_an_output_it_or_kwin_scaled_last() {
+        // (KWin's scale, the host's on this name, the host's last, what fits) → what to set.
+        let h = Some(1.5);
+        let cases = [
+            ((1.0, None, None, Some(1.5)), Some(1.5)), // KWin's own 1: fit it
+            ((1.5, h, h, Some(1.5)), None),            // the host's 1.5 came back
+            ((1.5, h, h, Some(2.5)), Some(2.5)),       // another device on that output
+            ((1.5, h, h, None), Some(1.0)),            // a device that states no size
+            ((1.0, None, None, None), None),
+            ((1.25, None, None, Some(1.5)), None), // set before the host scaled anything
+            ((2.0, h, h, Some(1.5)), None),        // changed since the host's 1.5
+            ((1.0, h, h, Some(1.5)), None),        // put back to 100 % by hand
+            // KWin brought another output's scale back on this name.
+            ((1.5, None, h, Some(2.5)), Some(2.5)),
+            ((1.5, Some(2.5), h, Some(2.5)), Some(2.5)),
+            ((2.0, None, h, Some(2.5)), None),
+            // A new name beside a scaled one starts at KWin's own 1.
+            ((1.0, None, h, Some(2.5)), Some(2.5)),
+        ];
+        for ((at, here, last, fits), want) in cases {
+            assert_eq!(
+                scale_to_set(at, here, last, fits),
+                want,
+                "{at} {here:?} {last:?} {fits:?}"
+            );
+        }
+    }
 
     /// KWin's stored setup can disable physicals between create and the exclusive
     /// apply's enumeration. The pre-create snapshot must reach the restore list;
@@ -1426,6 +1511,60 @@ mod tests {
             .filter(|n| !n.starts_with(MANAGED_PREFIX))
             .collect();
         assert_eq!(to_disable, vec!["eDP-1"]);
+    }
+
+    /// A 13-inch client's 1080p picture wants 1.25. The host sets it, finds it again on the
+    /// next create, and leaves a scale set since alone. Needs what the test below needs.
+    #[test]
+    #[ignore = "needs a live KWin and PipeWire; run with --ignored"]
+    fn live_kwin_fits_the_scale_and_keeps_one_set_by_hand() {
+        use super::{mgmt, KwinDisplay, Mode, VirtualDisplay};
+        let name = format!("Virtual-{}", super::VOUT_NAME);
+        let mode = Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+            refresh_mhz: 0,
+        };
+        let scale = || mgmt::actual_dims(mgmt::watch().as_mut(), &name).map(|d| d.3);
+        let by_hand = |s| mgmt::set_scale(mgmt::watch().as_mut(), &name, s).expect("set");
+        // KWin re-applies its stored setup once the predecessor is gone.
+        let gone = |out| {
+            drop(out);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        };
+        let mut vd = KwinDisplay::new().unwrap();
+
+        // Whatever an earlier run left, the host owns the output at 1.
+        let out = vd.create(mode).expect("create");
+        by_hand(1.0);
+        for key in [format!("kwin:{name}").as_str(), super::LAST_SCALE_KEY] {
+            crate::identity::scales().lock().unwrap().set(key, 1.0);
+        }
+        gone(out);
+
+        vd.set_display_mm(Some((286, 179)));
+        let out = vd.create(mode).expect("create");
+        assert_eq!(scale(), Some(1.25), "fitted");
+        gone(out);
+        let out = vd.create(mode).expect("create");
+        assert_eq!(scale(), Some(1.25), "KWin brought the host's scale back");
+        by_hand(2.0);
+        gone(out);
+        let out = vd.create(mode).expect("create");
+        assert_eq!(scale(), Some(2.0), "a scale set by hand stays");
+        gone(out);
+        vd.set_display_mm(None);
+        let out = vd.create(mode).expect("create");
+        assert_eq!(scale(), Some(2.0), "also for a device that states no size");
+        by_hand(1.25);
+        gone(out);
+        let _out = vd.create(mode).expect("create");
+        assert_eq!(
+            scale(),
+            Some(1.0),
+            "back at the host's scale, it follows the device"
+        );
     }
 
     /// Live mid-stream mode switches: each create runs while its predecessor still holds

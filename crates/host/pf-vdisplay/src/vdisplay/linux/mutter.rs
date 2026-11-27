@@ -87,6 +87,8 @@ pub struct MutterDisplay {
     /// The last `create`'s connector (`Meta-N`), set by its session thread once
     /// identified. A joiner records that connector.
     join_name: Option<crate::backend::JoinName>,
+    /// The size the picture has on the client's glass ([`VirtualDisplay::set_display_mm`]).
+    display_mm: Option<(u16, u16)>,
 }
 
 impl MutterDisplay {
@@ -99,6 +101,7 @@ impl MutterDisplay {
             last_slot: None,
             join_live: false,
             join_name: None,
+            display_mm: None,
         })
     }
 }
@@ -136,6 +139,10 @@ impl VirtualDisplay for MutterDisplay {
 
     fn set_topology(&mut self, topology: Option<crate::policy::Topology>) {
         self.topology = topology;
+    }
+
+    fn set_display_mm(&mut self, mm: Option<(u16, u16)>) {
+        self.display_mm = mm;
     }
 
     fn topology(&self) -> Option<crate::policy::Topology> {
@@ -194,11 +201,10 @@ impl VirtualDisplay for MutterDisplay {
             (mode.width, mode.height),
             crate::policy::Identity::Shared,
         );
-        // What the desktop last settled on for this device, else what the operator set for
-        // it (§6.3 P2). Learned beats configured: once someone has scaled the screen by
-        // hand, that is the answer, and Mutter mints a fresh EDID serial every session so
-        // its own monitors.xml never rematches to say so.
-        let remembered_scale = crate::identity::scales()
+        // The scale someone gave this device's screen by hand in the desktop, else the one
+        // the operator set for the device, else the one that fits the client's glass. Mutter
+        // mints a fresh EDID serial every session, so its monitors.xml never brings one back.
+        let saved = crate::identity::scales()
             .lock()
             .unwrap()
             .get(&scale_key)
@@ -207,8 +213,11 @@ impl VirtualDisplay for MutterDisplay {
                     .get()
                     .scale_for(crate::policy::fp_hex(self.client_fp).as_deref())
             });
+        let fits = crate::panel_scale::for_panel((mode.width, mode.height), self.display_mm);
+        let remembered_scale = saved.or(fits);
         if let Some(scale) = remembered_scale {
-            tracing::info!(scale, "mutter: reapplying the client's saved display scale");
+            let fitted = saved.is_none();
+            tracing::info!(scale, fitted, "mutter: starting the client's screen scaled");
         }
         let (setup_tx, setup_rx) = std::sync::mpsc::channel::<Result<Reported, String>>();
         let stop = Arc::new(AtomicBool::new(false));

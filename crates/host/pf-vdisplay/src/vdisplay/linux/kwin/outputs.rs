@@ -22,6 +22,7 @@ pub(crate) const CUSTOM_MODES_SINCE: u32 = 18;
 pub(crate) enum Op {
     Topology,
     Position,
+    Scale,
     CustomMode,
     Reenable,
     List,
@@ -372,7 +373,13 @@ mod tests {
                 needs: 18
             })
         );
-        for op in [Op::Topology, Op::Position, Op::Reenable, Op::List] {
+        for op in [
+            Op::Topology,
+            Op::Position,
+            Op::Scale,
+            Op::Reenable,
+            Op::List,
+        ] {
             assert_eq!(gate(op, Some((1, true))), Ok(()), "{op:?}");
         }
     }
