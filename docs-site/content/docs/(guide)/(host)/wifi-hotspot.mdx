@@ -3,8 +3,8 @@ title: Wi-Fi hotspot
 description: Let a Linux host open its own Wi-Fi for your phone while it streams, and move the stream onto it without stopping.
 ---
 
-Give your phone a Wi-Fi link straight to a Linux host, with no router in between: the host turns
-its hotspot on when your phone starts a stream and off after it ends.
+Give your phone a Wi-Fi link straight to a Linux host, with no router in between. The host can
+turn its hotspot on when your phone starts a stream and off after it ends.
 
 ```mermaid A stream moving onto the hotspot
 graph LR
@@ -17,7 +17,19 @@ graph LR
 - **A Wi-Fi adapter that can host a network.** Turning the hotspot on the first time tells you.
 - **NetworkManager**, which most desktop distributions use. Its command is `nmcli`.
 
+<Callout type="warn">
+On a host that reaches your router over Wi-Fi, [Create the hotspot](#create-the-hotspot) cuts
+that connection: NetworkManager runs one network on an adapter at a time. Open the hotspot with a
+tool that runs it beside the connection, such as
+[linux-wifi-hotspot](https://github.com/lakinduakash/linux-wifi-hotspot), then go to
+[Stream over it](#stream-over-it).
+</Callout>
+
 ## Create the hotspot
+
+A hotspot the host already has, from your desktop's Wi-Fi settings, works too. Skip to
+[Let Punktfunk through](#let-punktfunk-through), and use its name from `nmcli connection show`
+where this page says `pf-hotspot`.
 
 1. Find the Wi-Fi adapter's name in the `DEVICE` column. It is `wlp3s0` on this page:
 
@@ -44,11 +56,13 @@ graph LR
    nmcli device wifi show-password ifname wlp3s0
    ```
 
-4. Turn it off again. From here on, a stream turns it on:
+4. Choose when the hotspot is on. It is on now:
 
-   ```sh
-   nmcli connection down pf-hotspot
-   ```
+   | The hotspot is on | How |
+   |---|---|
+   | When you turn it on | `nmcli connection up pf-hotspot`; `nmcli connection down pf-hotspot` turns it off |
+   | Whenever the host is on | `nmcli connection modify pf-hotspot connection.autoconnect yes` |
+   | While your phone streams | The hooks in [Turn it on with each stream](#turn-it-on-with-each-stream) |
 
 ## Let Punktfunk through
 
@@ -81,6 +95,11 @@ sudo ufw route allow in on wlp3s0 out on enp4s0
 </Tab>
 </Tabs>
 
+## Stream over it
+
+With your phone on the hotspot, start the stream as always. The phone keeps using the host's
+usual address: the host is the hotspot's router and answers there too.
+
 ## Turn it on with each stream
 
 In the console, open **Automation** → **Add hook** ([Events & hooks](/docs/automation#hooks)) and
@@ -100,6 +119,8 @@ under **Client name**, and pick **Run a command** under **Then**.
    sleep 20; if punktfunk-host ctl status --json | grep -q '"active_sessions":0'; then nmcli connection down pf-hotspot; fi
    ```
 
+When the hotspot turns off, the phone goes back to your home Wi-Fi.
+
 ## Move a stream onto it
 
 1. Start the stream on your phone over your home Wi-Fi, as always.
@@ -112,23 +133,19 @@ under **Client name**, and pick **Run a command** under **Then**.
 On an iPhone or iPad, switch in Control Center: leaving the app for Settings ends the stream.
 </Callout>
 
-The phone keeps using the host's usual address: the host is the hotspot's router and answers
-there too. When the stream ends, the hotspot turns off and the phone goes back to your home Wi-Fi.
-
-## Keep it on all the time
-
-Instead of the two hooks, the hotspot can start with the host. Join it before you stream:
-
-```sh
-nmcli connection modify pf-hotspot connection.autoconnect yes
-```
-
 ## Troubleshooting
+
+### The host went offline when the hotspot turned on
+
+The host reaches your router over Wi-Fi, and the hotspot took its adapter. On the host,
+`nmcli connection down pf-hotspot` brings the connection back. [What you need](#what-you-need)
+names a tool that keeps it.
 
 ### The phone joined the hotspot, then the stream stopped
 
 The firewall blocks Punktfunk on the hotspot. Add the rules in
-[Let Punktfunk through](#let-punktfunk-through).
+[Let Punktfunk through](#let-punktfunk-through). A hotspot that NetworkManager doesn't run takes
+the rules in [Ports & firewall](/docs/ports#enable-the-profiles) instead.
 
 ### The hotspot doesn't turn on with a stream
 
