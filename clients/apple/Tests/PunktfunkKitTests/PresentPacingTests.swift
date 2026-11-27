@@ -641,6 +641,137 @@ final class PresentPacingTests: XCTestCase {
             adaptiveSync: true, priority: .latency, pacing: .glass))
     }
 
+    func testDisplaySyncOnlyFullscreenOnAnAdaptiveSyncMonitorFromMacOS27() {
+        func sync(
+            env: String? = nil, os: Int = 27, fullscreen: Bool = true, anyInterval: Bool = true
+        ) -> Bool {
+            Stage2Pipeline.displaySync(
+                env: env, osMajor: os, fullscreen: fullscreen, anyInterval: anyInterval)
+        }
+        XCTAssertTrue(sync())
+        XCTAssertTrue(sync(os: 28))
+        XCTAssertFalse(sync(os: 26))
+        XCTAssertFalse(sync(fullscreen: false), "a window, or one nobody sees")
+        XCTAssertFalse(sync(anyInterval: false), "a ProMotion or fixed panel")
+        XCTAssertFalse(sync(env: "0"))
+        XCTAssertTrue(sync(env: "1", os: 26, fullscreen: false, anyInterval: false))
+    }
+
+    func testOnlyAnAdaptiveSyncMonitorRefreshesAtAnyInterval() {
+        XCTAssertTrue(PanelInfo(minHz: 48, maxHz: 240).refreshesAtAnyInterval)
+        XCTAssertFalse(
+            PanelInfo(minHz: 24, maxHz: 120, granularity: 1.0 / 240).refreshesAtAnyInterval,
+            "ProMotion steps")
+        XCTAssertFalse(PanelInfo(minHz: 60, maxHz: 60).refreshesAtAnyInterval, "a fixed panel")
+        XCTAssertFalse(PanelInfo(minHz: 0, maxHz: 0).refreshesAtAnyInterval, "an unknown panel")
+    }
+
+    func testFullscreenNeedsAReportFromTheViewAndAWindowThatShows() {
+        let pacer = ScanoutPacer()
+        XCTAssertFalse(pacer.isFullscreen, "the probing default is not a report")
+        pacer.setDirectPossible(true, now: 0)
+        XCTAssertTrue(pacer.isFullscreen)
+        pacer.setVisible(false)
+        XCTAssertFalse(pacer.isFullscreen, "on another Space")
+        pacer.setVisible(true)
+        XCTAssertTrue(pacer.isFullscreen)
+        pacer.setDirectPossible(false, now: 1)
+        XCTAssertFalse(pacer.isFullscreen)
+    }
+
+    func testOnlyAPlainRepeatFromAVideoDecoderRepeatsThePicture() {
+        let repeatBit = PunktfunkConnection.userFlagRepeat
+        XCTAssertTrue(Stage2Pipeline.repeatsPicture(flags: repeatBit, wavelet: false))
+        XCTAssertFalse(Stage2Pipeline.repeatsPicture(flags: 0, wavelet: false))
+        XCTAssertFalse(
+            Stage2Pipeline.repeatsPicture(flags: repeatBit, wavelet: true),
+            "any PyroWave frame may heal the one before it")
+        for endsLoss in [
+            PunktfunkConnection.flagSOF, PunktfunkConnection.userFlagRecoveryPoint,
+            PunktfunkConnection.userFlagRecoveryAnchor,
+        ] {
+            XCTAssertFalse(
+                Stage2Pipeline.repeatsPicture(flags: repeatBit | endsLoss, wavelet: false))
+        }
+    }
+
+    func testRepeatSkipShowsARepeatOnlyForAStillPicture() {
+        var skip = RepeatSkip()
+        let hold = 1.0 / 48
+        func repeatSkipped(
+            at now: CFTimeInterval, dropped: Int = 0, synced: Bool = true,
+            hold: CFTimeInterval = hold
+        ) -> Bool {
+            skip.skips(
+                repeatsPicture: true, dropped: dropped, synced: synced, now: now,
+                longestHold: hold)
+        }
+        func newPicture(at now: CFTimeInterval) {
+            XCTAssertFalse(
+                skip.skips(
+                    repeatsPicture: false, dropped: 0, synced: true, now: now,
+                    longestHold: hold))
+            skip.presented(at: now)
+        }
+
+        XCTAssertFalse(repeatSkipped(at: 10), "the session's first frame, even a repeat")
+        skip.presented(at: 10)
+        // A 20 fps game on a host that repeats every 6 ms.
+        newPicture(at: 10.200)
+        XCTAssertTrue(repeatSkipped(at: 10.206))
+        XCTAssertTrue(repeatSkipped(at: 10.244))
+        newPicture(at: 10.250)
+        // The picture goes still.
+        XCTAssertTrue(repeatSkipped(at: 10.340), "90 ms after the last new picture")
+        XCTAssertFalse(repeatSkipped(at: 10.351), "still for 100 ms")
+        skip.presented(at: 10.351)
+        XCTAssertTrue(repeatSkipped(at: 10.357), "6 ms after the last present")
+        XCTAssertFalse(repeatSkipped(at: 10.363), "half the longest hold after it")
+        skip.presented(at: 10.363)
+        XCTAssertFalse(repeatSkipped(at: 10.365, synced: false), "an unsynced present")
+        XCTAssertFalse(repeatSkipped(at: 10.365, hold: 0), "an unknown panel, still picture")
+    }
+
+    func testRepeatSkipNeverHidesAPictureThePanelHasNotShown() {
+        var skip = RepeatSkip()
+        let hold = 1.0 / 48
+        func take(_ repeatsPicture: Bool, at now: CFTimeInterval, dropped: Int = 0) -> Bool {
+            skip.skips(
+                repeatsPicture: repeatsPicture, dropped: dropped, synced: true, now: now,
+                longestHold: hold)
+        }
+        XCTAssertFalse(take(false, at: 10))
+        skip.presented(at: 10)
+        XCTAssertFalse(
+            take(true, at: 10.006, dropped: 1), "the store dropped a frame before this repeat")
+        skip.presented(at: 10.006)
+        // A new picture is taken and its render fails: nothing reaches the panel.
+        XCTAssertFalse(take(false, at: 10.020))
+        XCTAssertFalse(take(true, at: 10.026), "the picture before this repeat never showed")
+        skip.presented(at: 10.026)
+        XCTAssertTrue(take(true, at: 10.032), "now it has")
+    }
+
+    func testStoreCountsTheFramesDroppedBeforeATake() {
+        let store = FrameStore<Int>(policy: .newestWins)
+        store.submit(1)
+        XCTAssertEqual(store.take(), 1)
+        XCTAssertEqual(store.droppedBeforeLastTake, 0)
+        store.submit(2)
+        store.submit(3)
+        XCTAssertEqual(store.take(), 3)
+        XCTAssertEqual(store.droppedBeforeLastTake, 1)
+        store.submit(4)
+        store.submit(5)
+        XCTAssertEqual(store.droppedBeforeLastTake, 1, "fixed by the take, not by later submits")
+        XCTAssertEqual(store.take(), 5)
+        XCTAssertEqual(store.droppedBeforeLastTake, 1)
+        XCTAssertNil(store.take())
+        store.submit(6)
+        XCTAssertEqual(store.take(), 6)
+        XCTAssertEqual(store.droppedBeforeLastTake, 0)
+    }
+
     func testAdaptiveSlotRegimeUsesSparseImmediateAndDenseSlots() {
         var sparse = AdaptiveSlotRegime()
         XCTAssertTrue(sparse.update(ptsNs: 1_000_000_000))

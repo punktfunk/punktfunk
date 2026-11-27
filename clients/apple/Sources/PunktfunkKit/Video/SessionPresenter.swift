@@ -277,7 +277,10 @@ final class SessionPresenter {
     /// The screen verdict the running pipeline chose its pacing from, and its live source.
     private var builtAdaptive = false
     /// The window's Direct verdict (`setDirectPossible`), re-applied to each pipeline built.
-    private var directPossible = true
+    /// nil until a view reports one: the pipeline then keeps its own probing default.
+    private var directPossible: Bool?
+    /// Whether the window is in front (`setWindowVisible`), re-applied like the verdict.
+    private var windowVisible = true
     private var adaptiveSync: () -> Bool = { false }
     /// The window, scene and display around the layer, for the wedge line. Main thread.
     var surfaceState: (() -> String)?
@@ -372,7 +375,8 @@ final class SessionPresenter {
                 metalLayer = metal
             }
             stage2 = pipeline
-            pipeline.setDirectPossible(directPossible)
+            if let directPossible { pipeline.setDirectPossible(directPossible) }
+            pipeline.setWindowVisible(windowVisible)
             #if os(visionOS)
             pipeline.setCurve(curve)
             #endif
@@ -580,6 +584,14 @@ final class SessionPresenter {
     func setDirectPossible(_ possible: Bool) {
         directPossible = possible
         stage2?.setDirectPossible(possible)
+    }
+
+    /// Whether the window is in front: it shows on a screen, in the active app. Any other
+    /// window gets no synced present: the system holds each one until the window shows
+    /// again. Main thread.
+    func setWindowVisible(_ visible: Bool) {
+        windowVisible = visible
+        stage2?.setWindowVisible(visible)
     }
 
     /// `onPresentWedged`'s cure, hopped to MAIN, by `WedgePolicy`: a fresh pipeline, presenter

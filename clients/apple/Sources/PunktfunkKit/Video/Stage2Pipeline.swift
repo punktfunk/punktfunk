@@ -6,7 +6,8 @@
 // Metal rendering is driven by decoded-frame arrival. The ordinary display link supplies a clock,
 // retries transient drawable misses, and polls the decoded path's displayed IOSurface; deadline
 // pacing instead owns a CAMetalDisplayLink. macOS keeps displaySyncEnabled off because
-// synchronized out-of-band presents can starve its drawable pool.
+// synchronized out-of-band presents can starve its drawable pool in a composited window; a
+// fullscreen window on an Adaptive-Sync monitor syncs, or its flips tear.
 //
 // The pump, VideoToolbox callback, and Metal render loop run on separate threads. Start, stop, and
 // ordinary display-link ticks run on main. Shared stores and clocks are lock-guarded; presenter
@@ -82,6 +83,10 @@ public final class FrameStore<Frame>: @unchecked Sendable {
     private var prerolled = false
     /// Every submission this session, for the render thread's own rate measure.
     private var total = 0
+    /// Frames that left the store untaken since the last take, and that count as of the last
+    /// take (`droppedBeforeLastTake`).
+    private var dropped = 0
+    private var droppedAtTake = 0
     /// Smoothness accounting for the pf-present line: frames dropped by a full buffer, and
     /// runs-dry that re-armed preroll.
     private var overflowDrops = 0
@@ -108,14 +113,19 @@ public final class FrameStore<Frame>: @unchecked Sendable {
         lock.lock()
         if keepsTwo {
             frames.append(f)
-            if frames.count > 2 { frames.removeFirst() }
+            if frames.count > 2 {
+                frames.removeFirst()
+                dropped += 1
+            }
         } else if isFifo {
             frames.append(f)
             if frames.count > capacity {
                 frames.removeFirst() // oldest goes — bounded latency, the newest keeps flowing
                 overflowDrops += 1
+                dropped += 1
             }
         } else {
+            dropped += frames.count
             frames = [f] // newest wins; the replaced frame is the intended drop point
         }
         total += 1
@@ -126,6 +136,21 @@ public final class FrameStore<Frame>: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return total
+    }
+
+    /// How many frames left the store untaken between the take before the last one and the
+    /// last one. Fixed by that take, so a submit racing this read cannot change it.
+    var droppedBeforeLastTake: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return droppedAtTake
+    }
+
+    /// Close the drop count for a frame a take hands out. Lock held.
+    private func handOut(_ f: Frame) -> Frame {
+        droppedAtTake = dropped
+        dropped = 0
+        return f
     }
 
     /// Take-and-reset the smoothness counters (the pf-present `qDrop`/`qDry` stats).
@@ -141,7 +166,7 @@ public final class FrameStore<Frame>: @unchecked Sendable {
     func take() -> Frame? {
         lock.lock()
         defer { lock.unlock() }
-        if keepsTwo { return frames.isEmpty ? nil : frames.removeFirst() }
+        if keepsTwo { return frames.isEmpty ? nil : handOut(frames.removeFirst()) }
         if isFifo {
             if !prerolled {
                 guard frames.count >= capacity else { return nil } // still building headroom
@@ -152,11 +177,11 @@ public final class FrameStore<Frame>: @unchecked Sendable {
                 prerolled = false
                 return nil
             }
-            return frames.removeFirst()
+            return handOut(frames.removeFirst())
         }
-        let f = frames.first
+        guard let f = frames.first else { return nil }
         frames.removeAll(keepingCapacity: true)
-        return f
+        return handOut(f)
     }
 
     /// Cadence-driven take: hand back the oldest frame only once its DUE time has arrived, so the
@@ -175,7 +200,7 @@ public final class FrameStore<Frame>: @unchecked Sendable {
         defer { lock.unlock() }
         guard let oldest = frames.first else { return nil }
         if let at = due(oldest), at > now { return nil } // held — not due yet
-        return frames.removeFirst()
+        return handOut(frames.removeFirst())
     }
 
     /// Return a frame the render thread took but could not present (no drawable yet, or a
@@ -313,6 +338,42 @@ struct PresentPolicy: Equatable {
     }
 }
 
+/// Which host repeats a synced panel shows. A repeat re-sends the picture the host sent last.
+/// On a synced adaptive panel every present is a refresh, and a repeat between two pictures of
+/// a running game refreshes the panel just before the next picture lands. So a repeat goes out
+/// only for a still picture (`stillAfter`), and then no closer than half the panel's longest
+/// hold: the panel refreshes steadily, and the repeat lands before the panel refreshes by
+/// itself. While a picture the panel never showed may be waiting behind a repeat, that repeat
+/// always goes out. Render-thread confined. Internal for tests.
+struct RepeatSkip {
+    /// A picture counts as still once no new one came for this long: under ten a second.
+    static let stillAfter: CFTimeInterval = 0.1
+
+    private var lastPresentAt: CFTimeInterval = 0
+    private var lastNewPictureAt: CFTimeInterval = 0
+    /// A picture taken or dropped since the last present has yet to reach the panel.
+    private var unshownPicture = true
+
+    /// Whether to drop the frame just taken instead of presenting it. `repeatsPicture` is
+    /// `Stage2Pipeline.repeatsPicture`, `dropped` the frames the store dropped before this
+    /// take (`FrameStore.droppedBeforeLastTake`), `longestHold` 0 for an unknown panel.
+    mutating func skips(
+        repeatsPicture: Bool, dropped: Int, synced: Bool, now: CFTimeInterval,
+        longestHold: CFTimeInterval
+    ) -> Bool {
+        if !repeatsPicture || dropped > 0 { unshownPicture = true }
+        guard synced, !unshownPicture else { return false }
+        return now - lastNewPictureAt < Self.stillAfter || now - lastPresentAt < longestHold / 2
+    }
+
+    /// The frame just taken reached Metal at `now`.
+    mutating func presented(at now: CFTimeInterval) {
+        if unshownPicture { lastNewPictureAt = now }
+        lastPresentAt = now
+        unshownPicture = false
+    }
+}
+
 /// Arrival and glass pacing's slot bookkeeping, owned by the render thread: the display-link
 /// target the last present booked and the adaptive regime. At most one frame enters each link
 /// slot, so a wake whose target is the booked one waits for the next. The shell reads the
@@ -354,8 +415,9 @@ struct ArrivalSlots {
         return (target, isBooked(target))
     }
 
-    /// What to do with a frame taken at `now`. The regime sees every frame, so its interval
-    /// survives Direct stretches. `nextVsync` is asked only when the plan needs the grid; a
+    /// What to do with a frame taken at `now`. The regime sees every frame the thread goes on
+    /// to present, a repeat `RepeatSkip` dropped excluded, so its interval survives Direct
+    /// stretches. `nextVsync` is asked only when the plan needs the grid; a
     /// stale grid yields no target and presents at once.
     mutating func plan(
         ptsNs: UInt64, dueMediaTime: CFTimeInterval?, now: CFTimeInterval,
@@ -1773,12 +1835,46 @@ public final class Stage2Pipeline {
         env.flatMap(Int.init).flatMap { (2...3).contains($0) ? $0 : nil } ?? 3
     }
 
+    /// Whether the macOS layer syncs its flips to the panel. A fullscreen window on an
+    /// Adaptive-Sync monitor scans out Direct, where an unsynced flip lands mid-scan and tears;
+    /// synced, the panel starts a refresh per frame. `fullscreen` is the window's state as its
+    /// view reports it, in front: never the `ScanoutPacer` mode, where fast synced content
+    /// reads as composited, and never a covered window or one whose app is leaving the front,
+    /// whose synced presents wait until it shows again. `anyInterval` keeps a ProMotion panel,
+    /// which steps between fixed intervals, on its unsynced path. macOS 26 stays unsynced
+    /// too: there a synced present in a composited window waits for unrelated damage.
+    /// Everywhere else sync stays off (see `MetalVideoPresenter.make`).
+    /// `PUNKTFUNK_DISPLAY_SYNC=0|1` forces it for an A/B.
+    nonisolated static func displaySync(
+        env: String?, osMajor: Int, fullscreen: Bool, anyInterval: Bool
+    ) -> Bool {
+        switch env {
+        case "0": return false
+        case "1": return true
+        default: return osMajor >= 27 && fullscreen && anyInterval
+        }
+    }
+
+    /// Whether a frame only re-sends the picture before it, so a panel that shows that picture
+    /// loses nothing without the frame. The host marked it a repeat. It is no keyframe and no
+    /// recovery point: those end a loss, after which the panel may still show an older
+    /// picture. And it is no PyroWave frame: there any next frame heals a damaged one, and the
+    /// client cannot tell that one arrived damaged.
+    nonisolated static func repeatsPicture(flags: UInt32, wavelet: Bool) -> Bool {
+        let endsLoss = PunktfunkConnection.flagSOF | PunktfunkConnection.userFlagRecoveryPoint
+            | PunktfunkConnection.userFlagRecoveryAnchor
+        return !wavelet && flags & PunktfunkConnection.userFlagRepeat != 0
+            && flags & endsLoss == 0
+    }
+
     /// Arrival and glass pacing's present half (stage-2/3 — see `PresentPacing`): one render
     /// thread, one present per wake. Decoded frames are the primary wake; display-link ticks
     /// retry a put-back frame and refresh the vsync grid `policy` schedules against. Under
     /// `policy.directGate`, `ScanoutPacer` picks per frame between an immediate present and the
     /// adaptive slot, and every presented callback wakes the thread too. `ArrivalSlots` decides
-    /// each wake's slot; the thread reads the clocks and gates and applies the plan.
+    /// each wake's slot; the thread reads the clocks and gates and applies the plan. A fullscreen
+    /// Adaptive-Sync monitor gets synced presents (`displaySync`), without needless repeats
+    /// (`RepeatSkip`).
     ///
     /// The thread owns every layer format/colour/drawable interaction (see MetalVideoPresenter's
     /// threading notes); with displaySyncEnabled on, nextDrawable's up-to-a-frame wait lands here
@@ -1802,9 +1898,14 @@ public final class Stage2Pipeline {
         let scanout: ScanoutPacer? = policy.directGate ? self.scanout : nil
         let rateHint = frameRateHint
         let takeReady = makeTakeReady()
+        #if os(macOS)
+        let syncEnv = ProcessInfo.processInfo.environment["PUNKTFUNK_DISPLAY_SYNC"]
+        let osMajor = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        #endif
         let renderThread = Thread {
             defer { renderStopped.signal() }
             var slots = ArrivalSlots(policy: policy)
+            var repeats = RepeatSkip()
             let nextVsync = { vsyncClock.nextVsync(after: $0) }
             let gatedWake = {
                 debugStats.gatedWake()
@@ -1851,6 +1952,28 @@ public final class Stage2Pipeline {
                     debugStats.flushIfDue(ring: ring, gate: gate)
                     return
                 }
+                let panel = rateHint.panel()
+                #if os(macOS)
+                let synced = Stage2Pipeline.displaySync(
+                    env: syncEnv, osMajor: osMajor,
+                    fullscreen: scanout?.isFullscreen == true,
+                    anyInterval: panel.refreshesAtAnyInterval)
+                #else
+                let synced = false
+                #endif
+                // A repeat of the picture on the panel is dropped here, not presented.
+                var wavelet = false
+                if case .planar = frame.image { wavelet = true }
+                if repeats.skips(
+                    repeatsPicture: Stage2Pipeline.repeatsPicture(
+                        flags: frame.flags, wavelet: wavelet),
+                    dropped: ring.droppedBeforeLastTake, synced: synced,
+                    now: CACurrentMediaTime(),
+                    longestHold: panel.minHz > 0 ? 1 / panel.minHz : 0) {
+                    gate?.release()
+                    debugStats.flushIfDue(ring: ring, gate: gate)
+                    return
+                }
                 let plan = slots.plan(
                     ptsNs: frame.ptsNs, dueMediaTime: frame.dueMediaTime,
                     now: CACurrentMediaTime(), fixedTarget: fixed.target, direct: direct,
@@ -1861,6 +1984,11 @@ public final class Stage2Pipeline {
                     gatedWake()
                     return
                 }
+                #if os(macOS)
+                if presenter.layer.displaySyncEnabled != synced {
+                    presenter.layer.displaySyncEnabled = synced
+                }
+                #endif
                 let renderStarted = CACurrentMediaTime()
                 let issuedNs = Stage2Pipeline.realtimeNs(forDisplayLinkTimestamp: renderStarted)
                 scanout?.issued(at: renderStarted, direct: direct)
@@ -1895,7 +2023,8 @@ public final class Stage2Pipeline {
                     ring.putBack(frame)
                 } else {
                     slots.presented(slot: slotTarget)
-                    if direct { debugStats.directPresent() }
+                    repeats.presented(at: renderStarted)
+                    debugStats.issuedPresent(direct: direct, synced: synced)
                 }
                 debugStats.flushIfDue(ring: ring, gate: gate)
             } }
@@ -2349,6 +2478,12 @@ public final class Stage2Pipeline {
     /// then (MAIN).
     public func setDirectPossible(_ possible: Bool) {
         scanout.setDirectPossible(possible)
+    }
+
+    /// Whether the window is in front: it shows on a screen, in the active app. Any other
+    /// window gets no synced present (MAIN).
+    public func setWindowVisible(_ visible: Bool) {
+        scanout.setVisible(visible)
     }
 
     /// Forward the layout-derived drawable pixel size to the presenter (MAIN thread — see

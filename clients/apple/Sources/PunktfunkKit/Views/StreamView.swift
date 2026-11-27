@@ -445,6 +445,26 @@ public final class StreamLayerView: NSView {
             self?.layoutPresenter()
             self?.noteScreen()
         })
+        // Another Space, a window on top, the display asleep: the picture is not showing.
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            self?.pushWindowVisible()
+        })
+        // The app hears it is losing focus before a switch to another Space starts, and that
+        // the window is covered only after it ended. A synced present issued in between
+        // waits a second for a display that no longer shows it.
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.willResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.pushWindowVisible(appActive: false)
+        })
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.pushWindowVisible(appActive: true)
+        })
+        pushWindowVisible()
         attemptPendingCapture()
     }
 
@@ -1252,6 +1272,13 @@ public final class StreamLayerView: NSView {
         guard possible != directPossible else { return }
         directPossible = possible
         presenter.setDirectPossible(possible)
+    }
+
+    /// Tell the presenter whether the window is in front: it shows on a screen and its app is
+    /// the active one. With no window it is not.
+    private func pushWindowVisible(appActive: Bool = NSApp.isActive) {
+        let shows = window?.occlusionState.contains(.visible) ?? false
+        presenter.setWindowVisible(shows && appActive)
     }
 
     /// Aspect-fit the stage-2 metal sublayer to the view; refresh contentsScale on a
