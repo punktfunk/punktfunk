@@ -30,7 +30,8 @@ pub fn home_of(id: &str) -> PathBuf {
 pub(crate) mod exchange;
 
 /// hermir on [`prefix`]. With seats on the box a copy serves every account: a Linux Flatpak goes
-/// into the system installation, a Windows archive keeps each account's data in its profile. The
+/// into the system installation, a Linux archive into the box's folder ([`machine_prefix`]), and
+/// a Windows archive keeps each account's data in its profile. The
 /// SYSTEM host on Windows resolves that data in the session player's profile, and keeps what its
 /// own `apply` changed under [`state_dir`], so a seat's revert never touches another's bindings.
 pub fn open() -> hermir::Result<Hermir> {
@@ -56,8 +57,19 @@ fn open_in(account: Option<&Path>) -> hermir::Result<Hermir> {
             hermir::FlatpakInstallation::User
         },
         state_dir: state_dir(),
+        machine_prefix: machine_prefix(),
         ..Options::default()
     })
+}
+
+/// The folder where the seat supervisor keeps a Linux box's archive emulators for every account
+/// ([`install_box_archive`]); `None` without seats.
+fn machine_prefix() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    if box_wide() {
+        return Some(pf_seats::linux::emulators::dir());
+    }
+    None
 }
 
 /// A Linux host on a box with seats, the owner's row included: its Flatpaks are the box's.
@@ -124,10 +136,10 @@ pub fn offered(id: &str) -> hermir::Result<bool> {
 }
 
 /// Installs (or reinstalls) `id` and makes its folder exist, so the grant that follows has a
-/// directory to land on even when the copy itself is a Flatpak. On a Linux box with seats a
-/// Flatpak goes in box-wide ([`install_box_wide`]); an AppImage or archive stays this account's.
-/// Players may write in [`home_of`] only, set before hermir writes its manifests beside it.
-/// `progress` hears a download; a box-wide Flatpak reports none.
+/// directory to land on even when the copy itself is a Flatpak. On a Linux box with seats every
+/// copy is box-wide: a Flatpak through [`install_box_wide`], an AppImage or archive through
+/// [`install_box_archive`]. Players may write in [`home_of`] only, set before hermir writes its
+/// manifests beside it. `progress` hears a download; a box-wide copy reports none.
 pub fn install(id: &str, progress: &dyn hermir::progress::Progress) -> hermir::Result<Installed> {
     let h = open()?;
     let emulator = h.emulator(id)?;
@@ -135,6 +147,7 @@ pub fn install(id: &str, progress: &dyn hermir::progress::Progress) -> hermir::R
     crate::plugins::open_for_players(&home);
     let row = match box_flatpak(emulator.entry()).filter(|_| box_wide()) {
         Some(app) => install_box_wide(&h, id, app)?,
+        None if box_wide() => install_box_archive(&h, id)?,
         None => emulator.install(progress)?,
     };
     std::fs::create_dir_all(&home).map_err(|e| hermir::Error::Io {
@@ -146,8 +159,8 @@ pub fn install(id: &str, progress: &dyn hermir::progress::Progress) -> hermir::R
     Ok(row)
 }
 
-/// Removes the managed copy where its row says it went: a box-wide Flatpak through the seat
-/// supervisor, which purges root's data of it and never a person's.
+/// Removes the managed copy where its row says it went: a box-wide copy through the seat
+/// supervisor, which purges root's data of a Flatpak and never a person's.
 pub fn remove(id: &str, purge: bool) -> hermir::Result<()> {
     let h = open()?;
     let emulator = h.emulator(id)?;
@@ -158,6 +171,11 @@ pub fn remove(id: &str, purge: bool) -> hermir::Result<()> {
             ..
         }) => {
             supervisor(id, Command::RemoveFlatpak { id: app, purge })?;
+            let _lock = h.store().lock()?;
+            h.store().forget(id)
+        }
+        Some(row) if boxed(&row) => {
+            supervisor(id, Command::RemoveEmulator { id: id.into() })?;
             let _lock = h.store().lock()?;
             h.store().forget(id)
         }
@@ -203,6 +221,48 @@ fn install_box_wide(h: &Hermir, id: &str, app: &str) -> hermir::Result<Installed
     Ok(row)
 }
 
+/// `id`'s archive build installed for every account by the seat supervisor, or updated when it
+/// is there, and recorded here as the supervisor answered it, so it updates and shows like a
+/// copy of this account's own. This account's own copy goes; its data is in this account's home.
+fn install_box_archive(h: &Hermir, id: &str) -> hermir::Result<Installed> {
+    let row = match supervisor(id, Command::InstallEmulator { id: id.into() })? {
+        CommandResult::Emulator { row: Some(row), .. } => row,
+        other => return Err(place(id, format!("the seat supervisor answered {other:?}"))),
+    };
+    let row: Installed = serde_json::from_str(&row)
+        .map_err(|e| place(id, format!("the seat supervisor's row: {e}")))?;
+    if row.emulator != id || !boxed(&row) {
+        return Err(place(
+            id,
+            "the seat supervisor's row names another copy".into(),
+        ));
+    }
+    let emulator = h.emulator(id)?;
+    if emulator.managed()?.is_some_and(|own| !boxed(&own))
+        && let Err(error) = emulator.remove(false)
+    {
+        tracing::warn!(emulator = %id, %error, "own copy not removed beside the box-wide one");
+    }
+    let _lock = h.store().lock()?;
+    h.store().record(row.clone())?;
+    Ok(row)
+}
+
+/// Whether `row`'s program is in its emulator's own folder under [`machine_prefix`].
+fn boxed(row: &Installed) -> bool {
+    boxed_in(row, machine_prefix().as_deref())
+}
+
+fn boxed_in(row: &Installed, prefix: Option<&Path>) -> bool {
+    let (hermir::Exe::Path(exe), Some(prefix)) = (&row.exe, prefix) else {
+        return false;
+    };
+    let climbs = exe
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir));
+    !climbs && exe.starts_with(prefix.join(&row.emulator).join("app"))
+}
+
 /// `app` installed box-wide, or updated when it is there; the version Flatpak reports after.
 fn box_wide_install(id: &str, app: &str) -> hermir::Result<Option<String>> {
     match supervisor(id, Command::InstallFlatpak { id: app.into() })? {
@@ -241,9 +301,10 @@ pub fn keep_updated() {
     }
 }
 
-/// One pass over the managed copies. A box-wide Flatpak updates through the seat supervisor, any
+/// One pass over the managed copies. A box-wide copy updates through the seat supervisor, any
 /// other copy through hermir. An AppImage or archive waits while a process runs from its folder,
-/// whose files the update replaces; a Flatpak updates beside a running copy.
+/// whose files the update replaces; a Flatpak updates beside a running copy. On a Linux box with
+/// seats an archive copy of this account's own moves box-wide, so every seat can play it.
 fn update_all() {
     let h = match open() {
         Ok(h) => h,
@@ -270,10 +331,12 @@ fn update_all() {
                 update_box_wide(&h, id, app, &row)
             }
             hermir::Exe::FlatpakRun(_) => emulator.update(&hermir::progress::Quiet),
-            _ if in_use(id) => {
+            // The seat supervisor holds a box-wide copy's update back itself.
+            _ if !boxed(&row) && in_use(id) => {
                 tracing::info!(emulator = %id, "emulator update waits: a copy is running");
                 continue;
             }
+            _ if box_wide() => update_box_archive(&h, id, &row),
             _ => emulator.update(&hermir::progress::Quiet),
         };
         let was = row.version.as_deref().unwrap_or("?");
@@ -307,6 +370,14 @@ fn update_box_wide(
     let _lock = h.store().lock()?;
     h.store().record(fresh.clone())?;
     Ok(Some(fresh))
+}
+
+/// A box-wide archive copy's update, which the seat supervisor holds back while anyone plays
+/// it; `Some` when the release moved or the copy moved box-wide.
+fn update_box_archive(h: &Hermir, id: &str, row: &Installed) -> hermir::Result<Option<Installed>> {
+    let fresh = install_box_archive(h, id)?;
+    let moved = !boxed(row) || fresh.release != row.release || fresh.version != row.version;
+    Ok(moved.then_some(fresh))
 }
 
 /// Whether a process this host can see runs from `id`'s folder.
@@ -2547,9 +2618,47 @@ mod tests {
         assert_eq!(channel("pcsx2"), Some("net.pcsx2.PCSX2"));
         assert_eq!(channel("retroarch"), Some("org.libretro.RetroArch"));
         assert_eq!(channel("supermodel"), Some("com.supermodel3.Supermodel"));
-        for own in ["rpcs3", "shadps4", "vita3k", "xenia-canary"] {
+        for own in ["rpcs3", "shadps4", "vita3k", "xenia-canary", "kytyps5"] {
             assert_eq!(channel(own), None, "{own}");
         }
+    }
+
+    /// The owner's host records the supervisor's row only when its program is in that
+    /// emulator's own folder of the box's: not another's, not one reached through `..`.
+    #[test]
+    fn only_a_row_inside_its_own_box_folder_is_recorded() {
+        let prefix = Path::new("/var/lib/punktfunk-seats/emulators");
+        let row = |emulator: &str, exe: &str| Installed {
+            emulator: emulator.into(),
+            channel: "github".into(),
+            exe: hermir::Exe::Path(exe.into()),
+            version: None,
+            release: None,
+            sha256: None,
+            verified: hermir::Verified::Published,
+            kept: Vec::new(),
+            installation: None,
+            shared: true,
+            installed_at: String::new(),
+        };
+        let own = row(
+            "rpcs3",
+            "/var/lib/punktfunk-seats/emulators/rpcs3/app/AppRun",
+        );
+        assert!(boxed_in(&own, Some(prefix)));
+        assert!(!boxed_in(&own, None), "a box without seats has none");
+        let other = row(
+            "rpcs3",
+            "/var/lib/punktfunk-seats/emulators/vita3k/app/AppRun",
+        );
+        assert!(!boxed_in(&other, Some(prefix)));
+        let climbs = "/var/lib/punktfunk-seats/emulators/rpcs3/app/../../../../../tmp/x";
+        assert!(!boxed_in(&row("rpcs3", climbs), Some(prefix)));
+        let flatpak = Installed {
+            exe: hermir::Exe::FlatpakRun("net.rpcs3.RPCS3".into()),
+            ..own.clone()
+        };
+        assert!(!boxed_in(&flatpak, Some(prefix)));
     }
 
     #[test]

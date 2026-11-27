@@ -11,6 +11,8 @@
 //! - `pam-check`: the password check, run in a child process so libpam never loads into the
 //!   daemon.
 //! - `login`: the main process of a seat unit that opens a person's session with their password.
+//! - `install-emulator` / `remove-emulator`: one box-wide emulator change, run as the account
+//!   that owns them ([`emulators`]).
 //!
 //! The pad broker ([`pads`]) and each seat's `/dev/uinput` stand-in ([`uinput`]) are part of the
 //! daemon too. They are in this crate and not in `pf-seats` because they link `pf-inject`. The
@@ -32,6 +34,8 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(target_os = "linux")]
 mod cuse;
+#[cfg(target_os = "linux")]
+mod emulators;
 #[cfg(target_os = "linux")]
 mod pads;
 #[cfg(target_os = "linux")]
@@ -72,6 +76,8 @@ mod linux {
         \x20 serve-usb                   a seat's USB pad server, which the supervisor starts\n\
         \x20 pam-check <account>         the supervisor's password check: password on stdin, a code out\n\
         \x20 login <account>             a seat unit's login helper, which the supervisor starts\n\
+        \x20 install-emulator <id>       a box-wide emulator install, which the supervisor runs\n\
+        \x20 remove-emulator <id>        a box-wide emulator removal, which the supervisor runs\n\
         \x20 loopback <account>          a made seat's own address for Steam's UI link (ExecStartPost)\n\
         \x20 mount-share <check> <mount> <options> <source> <stage>\n\
         \x20                             mounts an owner's folder for a seat (ExecStartPre)\n";
@@ -86,6 +92,12 @@ mod linux {
             if verb == pf_seats::linux::loopback::VERB {
                 return ExitCode::from(pf_seats::linux::loopback::run(account));
             }
+        }
+        // No flags here: the supervisor checked the id and runs this as the emulators' account.
+        if let [verb, id] = args.as_slice()
+            && let Some(code) = crate::emulators::run(verb, id)
+        {
+            return code;
         }
         // No flags here: the user is data from a door unit's instance name.
         if let [verb, rest @ ..] = args.as_slice()
@@ -297,6 +309,9 @@ mod linux {
             CommandResult::Synced { changed } => println!("changed={changed}"),
             CommandResult::Flatpak { id, version } => {
                 println!("{id} {}", version.as_deref().unwrap_or("-"));
+            }
+            CommandResult::Emulator { id, row } => {
+                println!("{id} {}", row.as_deref().unwrap_or("-"));
             }
             CommandResult::Doctor { report } => {
                 for d in &report.diagnostics {

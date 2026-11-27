@@ -166,6 +166,9 @@ objc2-io-kit = "0.3"
 ash = "0.38"
 # The vendored parser snapshot the decode crates share.
 cros-codecs = { path = "crates/codec/pf-bitstream/vendor/cros-codecs" }
+# Managed emulators, for the host and the seat supervisor's box-wide installs. Pinned to a commit
+# until it is on crates.io.
+hermir = { git = "https://github.com/unom-io/hermir", rev = "f70b80d35a79f08b38a2f10d8e31f9a4871a7a33" }
 
 # The `unsafe` discipline the `packaging/windows/drivers/*` crates also run, extended to the
 # workspace. `unsafe fn` marks a CONTRACT the caller must uphold; it is not a licence for the whole

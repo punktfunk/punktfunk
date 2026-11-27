@@ -95,6 +95,16 @@ pub enum Command {
         id: String,
         purge: bool,
     },
+    /// Linux: the catalog emulator `id`'s archive build, installed for every account on the
+    /// box, or updated when it is there. The box owner may send it too.
+    InstallEmulator {
+        id: String,
+    },
+    /// Linux: a box-wide emulator removed; each account's own data of it stays. The box owner
+    /// may send it too.
+    RemoveEmulator {
+        id: String,
+    },
     /// Linux, a person's row: let `device` onto it with `proof`, starting the session when the
     /// proof may. Answers `unlocked` only while the session runs and the device is admitted.
     Unlock {
@@ -272,6 +282,16 @@ pub fn valid_flatpak_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+/// A catalog emulator id the supervisor passes on as a word: `[a-z0-9-]`, 1 to 64 bytes, and
+/// no leading `-`, which a program would read as an option.
+pub fn valid_emulator_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && !id.starts_with('-')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
     pub schema_version: u32,
@@ -319,6 +339,12 @@ pub enum CommandResult {
         id: String,
         #[serde(default)]
         version: Option<String>,
+    },
+    /// A box-wide emulator change done: hermir's row for the copy as JSON, `None` once removed.
+    Emulator {
+        id: String,
+        #[serde(default)]
+        row: Option<String>,
     },
     /// The device is admitted and the session runs; `started` when this unlock started it.
     Unlocked {
@@ -958,6 +984,40 @@ mod tests {
             serde_json::to_string(&Needs::Password).unwrap(),
             r#""password""#
         );
+    }
+
+    /// The box-wide emulator commands and their answer as the box host and the supervisor
+    /// share them.
+    #[test]
+    fn the_emulator_frames_round_trip() {
+        for (command, wire) in [
+            (
+                Command::InstallEmulator { id: "rpcs3".into() },
+                r#"{"type":"install_emulator","id":"rpcs3"}"#,
+            ),
+            (
+                Command::RemoveEmulator {
+                    id: "xenia-canary".into(),
+                },
+                r#"{"type":"remove_emulator","id":"xenia-canary"}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<Command>(wire).unwrap(), command);
+        }
+        let removed: CommandResult =
+            serde_json::from_str(r#"{"kind":"emulator","id":"rpcs3"}"#).unwrap();
+        let none = CommandResult::Emulator {
+            id: "rpcs3".into(),
+            row: None,
+        };
+        assert_eq!(removed, none);
+        for good in ["rpcs3", "xenia-canary", "kytyps5"] {
+            assert!(valid_emulator_id(good), "{good}");
+        }
+        for bad in ["", "-rf", "RPCS3", "a/b", "../x", "a b", &"a".repeat(65)] {
+            assert!(!valid_emulator_id(bad), "{bad}");
+        }
     }
 
     /// The Flatpak commands and their answer as the box host and the supervisor share them.
