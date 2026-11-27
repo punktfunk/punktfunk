@@ -648,10 +648,9 @@ public final class MetalVideoPresenter {
         layer.framebufferOnly = true
         layer.isOpaque = true
         #if os(macOS)
-        // displaySyncEnabled must stay false: on macOS 26 a synced present reaches glass only when
-        // the window is composited, so on a static scene presents queue, every drawable stays held
-        // and `nextDrawable()` sleeps. The present is scheduled at the link's target time instead
-        // (`presentAtMediaTime` in `render`).
+        // Off until the render thread decides otherwise (`Stage2Pipeline.displaySync`): on
+        // macOS 26 a synced present in a composited window waits for unrelated damage, so
+        // presents queue and `nextDrawable()` sleeps.
         layer.displaySyncEnabled = false
         #endif
         // The drawable is rendered at the LAYER's pixel size (set per-frame in `render`), so the

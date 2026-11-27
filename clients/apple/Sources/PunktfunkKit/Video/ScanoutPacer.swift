@@ -46,8 +46,14 @@ final class ScanoutPacer: @unchecked Sendable {
     private var switchedAt = -CFTimeInterval.infinity
     private var backoff = ScanoutPacer.baseBackoff
     private var switches = 0
-    /// The window is fullscreen; `setDirectPossible` keeps it.
+    /// The window is fullscreen; `setDirectPossible` keeps it. True until a view reports, so
+    /// the first frames probe Direct.
     private var directPossible = true
+    /// A view reported the window's state through `setDirectPossible`.
+    private var reported = false
+    /// The window is in front (`setVisible`): it shows on a screen, in the active app. Any
+    /// other window holds each synced present.
+    private var visible = true
 
     /// The mode for a frame issued now; a due probe turns `composited` into `direct` here.
     func mode(now: CFTimeInterval) -> Mode {
@@ -106,10 +112,27 @@ final class ScanoutPacer: @unchecked Sendable {
     func setDirectPossible(_ possible: Bool, now: CFTimeInterval = CACurrentMediaTime()) {
         lock.lock()
         defer { lock.unlock() }
+        reported = true
         guard possible != directPossible else { return }
         directPossible = possible
         backoff = Self.baseBackoff
         if possible, current == .composited { switchLocked(to: .direct, now: now) }
+    }
+
+    /// Whether a view reported the window fullscreen and it is in front: the window state a
+    /// synced present needs. The probing default does not count, so a window whose
+    /// view never reports is not fullscreen here.
+    var isFullscreen: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return reported && directPossible && visible
+    }
+
+    /// Whether the window is in front. Probing does not read it.
+    func setVisible(_ inFront: Bool) {
+        lock.lock()
+        visible = inFront
+        lock.unlock()
     }
 
     /// Mode switches since the last call, for the pf-present line.

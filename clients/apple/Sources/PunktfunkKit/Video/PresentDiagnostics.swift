@@ -83,6 +83,9 @@ public struct PanelInfo: Equatable, Sendable {
     }
 
     public var isAdaptive: Bool { maxHz - minHz > 0.5 }
+    /// An adaptive panel that refreshes at any interval in its range, as an Adaptive-Sync
+    /// monitor does. A ProMotion panel steps between fixed intervals (`granularity` > 0).
+    public var refreshesAtAnyInterval: Bool { isAdaptive && granularity == 0 }
     /// The shortest refresh interval, seconds; 0 when unknown.
     public var minInterval: Double { maxHz > 0 ? 1 / maxHz : 0 }
 
@@ -336,8 +339,10 @@ final class PresentDebugStats: @unchecked Sendable {
     private let linkPeriod: () -> CFTimeInterval
     /// The hosting panel, read live per line — a window can move to another screen.
     private let panel: () -> PanelInfo
-    /// The Direct gate: presents it issued this window (`direct=`), and its mode switches.
+    /// Presents the Direct gate issued this window (`direct=`), presents synced to the panel
+    /// (`synced=`), and the gate's mode switches.
     private var directPresents = 0
+    private var syncedPresents = 0
     private let scanoutSwitches: () -> Int
 
     init(
@@ -353,8 +358,14 @@ final class PresentDebugStats: @unchecked Sendable {
         self.scanoutSwitches = scanoutSwitches
     }
 
-    /// One present issued through the Direct gate.
-    func directPresent() { lock.lock(); directPresents += 1; lock.unlock() }
+    /// One present on arrival or glass pacing: issued through the Direct gate, synced to the
+    /// panel, both or neither.
+    func issuedPresent(direct: Bool, synced: Bool) {
+        lock.lock()
+        if direct { directPresents += 1 }
+        if synced { syncedPresents += 1 }
+        lock.unlock()
+    }
 
     /// Decoder output, every frame on every pacing — before the re-anchor gate and the store.
     func decoded(isRepeat: Bool) {
@@ -503,16 +514,16 @@ final class PresentDebugStats: @unchecked Sendable {
         let line = String(
             format: "pf-present pace=%@ linkMs=%.2f decoded=%d ok=%d fail=%d empty=%d "
                 + "gated=%d noDrawable=%d dropped=%d qDrop=%d qDry=%d maxRenderMs=%.1f "
-                + "inflightMax=%d forced=%d direct=%d scanSwitch=%d "
+                + "inflightMax=%d forced=%d direct=%d synced=%d scanSwitch=%d "
                 + "glassDeltaMs p50=%.2f max=%.2f n=%d "
                 + "latchMs p50=%.2f max=%.2f vendLeadMs p50=%.2f max=%.2f",
             pace(), linkPeriod() * 1000,
             decoded, ok, failed, empty, gated, noDrawable, dropped,
             smoothing.overflowDrops, smoothing.underflows, maxRenderMs, inflightMax,
-            gate?.drainForced() ?? 0, directPresents, scanoutSwitches(),
+            gate?.drainForced() ?? 0, directPresents, syncedPresents, scanoutSwitches(),
             p50, dMax, deltas.count, latchP50, latchMax,
             vendP50, vendMax) + glassLine + cadenceLine
-        directPresents = 0
+        directPresents = 0; syncedPresents = 0
         decoded = 0; decodedRepeats = 0; shownRepeats = 0
         ok = 0; failed = 0; empty = 0; dropped = 0; gated = 0; noDrawable = 0
         maxRenderMs = 0
