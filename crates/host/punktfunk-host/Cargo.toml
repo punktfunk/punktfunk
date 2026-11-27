@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 # Managed emulators: install, detect, remove. Pinned to a commit until it is on crates.io.
-hermir = { git = "https://github.com/unom-io/hermir", rev = "ae3344866cd2b415493880f86aa1f4cac9908904" }
+hermir = { git = "https://github.com/unom-io/hermir", rev = "7e6ac1bc8f3175d9816c2d0b8f77fc791b477a59" }
 # AC-3 / E-AC-3 encoder for the `0xD4` passthrough plane. Pinned to a commit until it is on
 # crates.io. Default features only: never `joc`.
 omur = { git = "https://github.com/unom-io/omur", rev = "18981af0cd66380b06cbf520ce340f51a195cc8c" }
