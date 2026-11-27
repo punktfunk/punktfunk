@@ -105,6 +105,7 @@
 	"android_companion_group_host": "Host",
 	"android_companion_group_leave": "Salir",
 	"android_companion_armed_a11y": "Pendiente de confirmar — pulsa de nuevo",
+	"android_key_held_a11y": "Mantenida",
 	"android_companion_trackpad_hint": "Toca para hacer clic · dos dedos desplazan · un toque con dos dedos hace clic derecho",
 	"android_companion_show_controller": "Mostrar el mando",
 	"android_pad_group_gamepads": "Mandos",

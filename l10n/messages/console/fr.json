@@ -328,6 +328,7 @@
 	"console_webos_stop_confirm": "Arrêter le streaming",
 	"console_webos_audio_failed": "Impossible de démarrer l’audio : {error}",
 	"console_webos_decoder_failed": "Le décodeur vidéo a échoué — session terminée",
+	"console_webos_decoder_blocked": "Ce téléviseur empêche l’application d’accéder à son décodeur vidéo. La solution se trouve dans le README de l’application.",
 	"console_overlay_present_frames": "affichage : {frames} images, {missed} manquées",
 	"console_overlay_holding_keyframe": "en attente d’une image clé",
 	"console_switch_applet_mode": "Ouvert depuis l’Album, Punktfunk dispose de peu de mémoire et peut se fermer — maintenez {button} en lançant un jeu pour l’ouvrir avec toute la mémoire.",

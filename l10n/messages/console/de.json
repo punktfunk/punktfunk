@@ -340,6 +340,7 @@
 	"console_webos_stop_confirm": "Streaming beenden",
 	"console_webos_audio_failed": "Audio konnte nicht gestartet werden: {error}",
 	"console_webos_decoder_failed": "Videodecoder ausgefallen – Sitzung beendet",
+	"console_webos_decoder_blocked": "Dieser Fernseher lässt die App nicht an seinen Videodecoder. Wie du das behebst, steht in der README der App.",
 	"console_overlay_present_frames": "Ausgabe: {frames} Frames, {missed} verpasst",
 	"console_overlay_holding_keyframe": "wartet auf einen Keyframe",
 	"console_switch_applet_mode": "Aus dem Album geöffnet, hat Punktfunk wenig Speicher und kann sich schließen – halte beim Starten eines Spiels {button} gedrückt, um Punktfunk mit vollem Speicher zu öffnen.",

@@ -394,6 +394,7 @@
 	"tray_unit_stop": "Arresta",
 	"tray_unit_restart": "Riavvia",
 	"tray_approve_pairing": "Approva richiesta di associazione…",
+	"tray_update_to": "Aggiorna a {version}…",
 	"tray_start_host": "Avvia host",
 	"tray_start_at_login": "Avvia all’accesso",
 	"tray_exit": "Chiudi l’icona di notifica",

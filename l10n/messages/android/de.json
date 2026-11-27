@@ -105,6 +105,7 @@
 	"android_companion_group_host": "Host",
 	"android_companion_group_leave": "Verlassen",
 	"android_companion_armed_a11y": "Bereit – erneut drücken",
+	"android_key_held_a11y": "Eingerastet",
 	"android_companion_trackpad_hint": "Tippen: Klick · Zwei Finger: Scrollen · Mit zwei Fingern tippen: Rechtsklick",
 	"android_companion_show_controller": "Controller zeigen",
 	"android_pad_group_gamepads": "Controller",

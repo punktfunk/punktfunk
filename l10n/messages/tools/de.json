@@ -436,6 +436,7 @@
 	"tray_unit_stop": "Stoppen",
 	"tray_unit_restart": "Neu starten",
 	"tray_approve_pairing": "Kopplungsanfrage freigeben…",
+	"tray_update_to": "Auf {version} aktualisieren…",
 	"tray_start_host": "Host starten",
 	"tray_start_at_login": "Bei der Anmeldung starten",
 	"tray_exit": "Tray beenden",

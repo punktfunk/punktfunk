@@ -105,6 +105,7 @@
 	"android_companion_group_host": "Hôte",
 	"android_companion_group_leave": "Quitter",
 	"android_companion_armed_a11y": "En attente de confirmation — appuyez à nouveau",
+	"android_key_held_a11y": "Maintenue",
 	"android_companion_trackpad_hint": "Touchez pour cliquer · deux doigts pour défiler · touchez à deux doigts pour un clic droit",
 	"android_companion_show_controller": "Afficher la manette",
 	"android_pad_group_gamepads": "Manettes",

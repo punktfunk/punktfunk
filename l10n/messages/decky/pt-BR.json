@@ -71,7 +71,7 @@
 	"decky_force_stop_hint": "Encerra uma transmissão que parou de responder.",
 	"decky_force_stop": "Forçar parada",
 	"decky_trust_refused": "{host} já está salvo com outra identidade. Remova o host no app Punktfunk antes de confiar nele de novo.",
-	"decky_trust_outdated": "Atualize o cliente Punktfunk para usar Solicitar acesso",
+	"decky_trust_outdated": "Atualize o cliente Punktfunk para solicitar acesso",
 	"decky_client_unreachable": "Não foi possível alcançar o cliente Punktfunk — ele ainda está instalado?",
 	"decky_trust_save_failed": "Não foi possível salvar {host}",
 	"decky_trust_approve_toast": "Aprove este dispositivo no console web de {host}",
