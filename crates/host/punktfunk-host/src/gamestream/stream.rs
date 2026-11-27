@@ -357,6 +357,10 @@ fn run(
                 roster: None,
                 device: None,
             },
+            screen: Some(hermir::Size {
+                width: cfg.width,
+                height: cfg.height,
+            }),
         };
         // The entry's own `apps.json` prep, then its library entry's when that entry is what
         // launches: a hidden title's steps don't run. `PF_APP_TITLE` and the `PF_STREAM_*`

@@ -1892,6 +1892,7 @@ mod tests {
                     roster: None,
                     device: None,
                 },
+                screen: None,
             },
             launch_outcome: unbounded_channel().0,
             frame_map: Default::default(),

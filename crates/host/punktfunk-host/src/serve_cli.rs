@@ -295,6 +295,10 @@ pub(crate) fn prepare_serve(args: ServeArgs) -> Result<(mgmt::Options, native::N
     let role = pf_paths::seat::role();
     let gamestream =
         pf_host_config::config().gamestream && !role.is_door() && !role.follows_contract();
+    // One host per box keeps the managed emulators current: the one that installs them.
+    if !role.is_door() && !role.follows_contract() {
+        crate::emulators::keep_updated();
+    }
     let native = native::NativeServe {
         webtransport_bind: browser_bind(
             role,

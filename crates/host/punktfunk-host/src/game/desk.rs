@@ -380,6 +380,7 @@ fn launch_owner(profile: Option<ProfileRef>, pads: Vec<hermir::PadRef>) -> Launc
         preset: None,
         profile,
         pads: Pads::Desk(pads),
+        screen: None,
     }
 }
 
@@ -1004,6 +1005,7 @@ pub(crate) mod lease_tests {
                 display_name: "Owner".into(),
             }),
             pads: Pads::Desk(Vec::new()),
+            screen: None,
         }
     }
 

@@ -9,8 +9,9 @@ use crate::backend::BackendError;
 const FLATHUB: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 const CODE: &str = "flatpak_failed";
 
-/// Installs the app `id` from Flathub, adding the remote first if the box lacks it, and answers
-/// the version it reports. `--app` refuses an id that names a runtime, as [`remove`] does.
+/// Installs the app `id` from Flathub, or updates it when it is there, adding the remote first if
+/// the box lacks it, and answers the version it reports. `--app` refuses an id that names a
+/// runtime, as [`remove`] does.
 pub(super) fn install(id: &str) -> Result<Option<String>, BackendError> {
     run(
         CODE,
@@ -30,6 +31,7 @@ pub(super) fn install(id: &str) -> Result<Option<String>, BackendError> {
             "install",
             "--system",
             "--app",
+            "--or-update",
             "-y",
             "--noninteractive",
             "flathub",
@@ -80,7 +82,7 @@ mod tests {
         super::install("net.pcsx2.PCSX2").unwrap();
         assert_eq!(
             fake::calls()[1],
-            "flatpak install --system --app -y --noninteractive flathub net.pcsx2.PCSX2"
+            "flatpak install --system --app --or-update -y --noninteractive flathub net.pcsx2.PCSX2"
         );
     }
 
