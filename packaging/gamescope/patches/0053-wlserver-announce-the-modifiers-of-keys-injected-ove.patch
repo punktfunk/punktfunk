@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: unom <packages@unom.io>
+Date: Fri, 27 Nov 2026 19:40:21 +0100
+Subject: [PATCH 53/54] wlserver: announce the modifiers of keys injected over
+ EIS
+
+A key from the EIS server goes to the seat as a key alone. The stub
+keyboard that carries it never learns that Shift is held, so the seat
+never announces a modifier for it. A real keyboard, and the Wayland
+backend that forwards its parent's modifiers, do announce them.
+
+Xwayland up to 24.1 worked the modifiers out from the keys by itself.
+Xwayland 26 leaves that to the compositor, as 24.1.5 did: Shift, Ctrl
+and Caps Lock from a remote client then change nothing, and every
+letter arrives lowercase.
+
+The EIS server now has the stub keep the state of its keys in the
+session keymap and announce each change. A press that repeats a held key
+is counted once, so the key's release still clears it.
+---
+ src/InputEmulation.cpp |  2 +-
+ src/wlserver.cpp       | 22 +++++++++++++++++++++-
+ src/wlserver.hpp       |  2 +-
+ 3 files changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/src/InputEmulation.cpp b/src/InputEmulation.cpp
+index 5412b01..f976700 100644
+--- a/src/InputEmulation.cpp
++++ b/src/InputEmulation.cpp
+@@ -212,7 +212,7 @@ namespace gamescope
+                 case EIS_EVENT_KEYBOARD_KEY:
+                 {
+                     wlserver_lock();
+-                    wlserver_key( eis_event_keyboard_get_key( pEisEvent ), eis_event_keyboard_get_key_is_press( pEisEvent ), ++s_uSequence );
++                    wlserver_key( eis_event_keyboard_get_key( pEisEvent ), eis_event_keyboard_get_key_is_press( pEisEvent ), ++s_uSequence, true );
+                     wlserver_unlock();
+                 }
+                 break;
+diff --git a/src/wlserver.cpp b/src/wlserver.cpp
+index c8448eb..7420d3c 100644
+--- a/src/wlserver.cpp
++++ b/src/wlserver.cpp
+@@ -79,6 +79,7 @@
+ #include "gpuvis_trace_utils.h"
+ 
+ #include <algorithm>
++#include <bitset>
+ #include <cfloat>
+ #include <list>
+ #include <set>
+@@ -2813,7 +2814,11 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press
+ 	return false;
+ }
+ 
+-void wlserver_key( uint32_t key, bool press, uint32_t time )
++// Keys the stub's xkb_state holds down. A press repeating one would count twice there
++// and outlive its release.
++static std::bitset<KEY_CNT> s_TrackedKeys;
++
++void wlserver_key( uint32_t key, bool press, uint32_t time, bool bTrackModifiers )
+ {
+ 	assert( wlserver_is_lock_held() );
+ 
+@@ -2826,6 +2831,21 @@ void wlserver_key( uint32_t key, bool press, uint32_t time )
+ 		wlr_seat_keyboard_notify_key( wlserver.wlr.seat, time, key, press );
+ 	}
+ 
++	// A source that sends keys and no modifiers has the stub work them out from the
++	// keys, as a keyboard does. A client may take modifiers from the compositor alone.
++	if ( bTrackModifiers && keyboard->xkb_state && key < KEY_CNT && s_TrackedKeys[ key ] != press )
++	{
++		s_TrackedKeys[ key ] = press;
++		if ( xkb_state_update_key( keyboard->xkb_state, key + 8, press ? XKB_KEY_DOWN : XKB_KEY_UP ) )
++		{
++			wlserver_keyboard_modifiers(
++				xkb_state_serialize_mods( keyboard->xkb_state, XKB_STATE_MODS_DEPRESSED ),
++				xkb_state_serialize_mods( keyboard->xkb_state, XKB_STATE_MODS_LATCHED ),
++				xkb_state_serialize_mods( keyboard->xkb_state, XKB_STATE_MODS_LOCKED ),
++				xkb_state_serialize_layout( keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE ) );
++		}
++	}
++
+ 	bump_input_counter();
+ }
+ 
+diff --git a/src/wlserver.hpp b/src/wlserver.hpp
+index 270a772..d969fc3 100644
+--- a/src/wlserver.hpp
++++ b/src/wlserver.hpp
+@@ -281,7 +281,7 @@ void wlserver_unlock(bool flush = true);
+ bool wlserver_is_lock_held(void);
+ 
+ void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain = true );
+-void wlserver_key( uint32_t key, bool press, uint32_t time );
++void wlserver_key( uint32_t key, bool press, uint32_t time, bool bTrackModifiers = false );
+ void wlserver_keyboard_modifiers( uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group );
+ void wlserver_keyboard_release_modifiers();
+ void wlserver_set_keyboard_layout( const char *pszLayout );
