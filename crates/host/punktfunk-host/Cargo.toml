@@ -119,6 +119,8 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 # Blocking HTTP: cover art, downloads, webhooks, the plugin store, updates and `ctl`. `ureq` is
 # small + sync (no tokio here) and bundles webpki roots (no system cert dependency).
 ureq = { workspace = true, features = ["gzip"] }
+# Parses a cover URL as a browser does. Already in the tree through wtransport.
+url = "2.5"
 rcgen = { workspace = true }
 # ⚠ Do not float this back below 0.18: 0.16 pulls `thiserror` 1.0 into the host graph (via
 # asn1-rs 0.6 / der-parser 9 / oid-registry 0.7). `cargo tree -p punktfunk-host -i thiserror@1`
