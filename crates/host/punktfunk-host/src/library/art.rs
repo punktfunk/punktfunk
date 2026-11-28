@@ -46,8 +46,9 @@ enum Fetch {
     Refused,
 }
 
-/// Fetch one cover. `data:` decodes inline; `http(s)` reads at most [`MAX_ART_BYTES`] decoded and
-/// accepts a declared image on 200 only. Sniffing decides the stored type; `etag` makes it
+/// Fetch one cover. `data:` decodes inline; `http(s)` is parsed as a browser parses an `<img>`
+/// source (a raw space becomes `%20`), reads at most [`MAX_ART_BYTES`] decoded and accepts a
+/// declared image on 200 only. Sniffing decides the stored type; `etag` makes it
 /// conditional. Redirects are refused so an artwork URL cannot aim the host at an internal
 /// endpoint. Logs carry only the origin: userinfo, paths and queries can hold CDN credentials.
 /// Blocking (`ureq`) — call off the async runtime.
@@ -78,6 +79,10 @@ fn fetch_art(url: &str, etag: Option<&str>) -> Fetch {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Fetch::Refused;
     }
+    // A URL with no request form is a bad URL, not an unreachable CDN: refuse it, never retry it.
+    let Ok(request_url) = url::Url::parse(url) else {
+        return Fetch::Refused;
+    };
     let log_url = crate::hooks::webhook_origin(url);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(10)))
@@ -86,7 +91,7 @@ fn fetch_art(url: &str, etag: Option<&str>) -> Fetch {
         .http_status_as_error(false)
         .build()
         .into();
-    let mut req = agent.get(url);
+    let mut req = agent.get(request_url.as_str());
     if let Some(tag) = etag {
         req = req.header("If-None-Match", tag);
     }
@@ -844,6 +849,32 @@ mod tests {
             fetch_art("data:image/png;base64,", None),
             Fetch::Refused
         ));
+        assert!(matches!(fetch_art("https://", None), Fetch::Refused));
+    }
+
+    /// RomM stamps its covers `?ts=2026-11-06 14:47:04`. A browser sends the space as `%20`;
+    /// the store does too, or every such cover 404s.
+    #[test]
+    fn a_cover_url_with_a_raw_space_is_fetched_as_a_browser_would() {
+        let store = tempfile::tempdir().expect("temp store");
+        let _env = store_in(store.path());
+        let (base, seen, server) = stub_cdn(vec![png_response()]);
+        let url = format!("{base}?ts=2026-11-06 14:47:04");
+
+        assert_eq!(
+            stored_remote_art(&url).expect("the space is encoded").0,
+            PNG
+        );
+        server.join().expect("the stub answered one request");
+        let head = seen.lock().unwrap_or_else(|e| e.into_inner())[0].clone();
+        assert!(
+            head.starts_with("GET /cover.png?ts=2026-11-06%2014:47:04 "),
+            "{head}"
+        );
+        assert!(store
+            .path()
+            .join(format!("{}.png", art_key(&url)))
+            .is_file());
     }
 
     /// Exclusions are the load-bearing half: two `/`-leading shapes are emitted by the host

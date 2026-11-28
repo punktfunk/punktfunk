@@ -4678,6 +4678,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "ureq",
+ "url",
  "utoipa",
  "utoipa-axum",
  "utoipa-scalar",
