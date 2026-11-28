@@ -478,6 +478,7 @@ pub(crate) async fn decide_plugin_access(
 /// The install `plugin`'s row on `path` asks for, then `grant`: the folder exists by then, and a
 /// failed download leaves the row for another try with its failure beside it. Listed as a walk
 /// with its download until the grant is in, so a console that got the 202 can follow it.
+/// Installs allowed together run one at a time.
 fn install_then<G>(
     st: &MgmtState,
     plugin: &str,
@@ -498,6 +499,9 @@ where
     async move {
         let meter = walk.meter();
         let done = blocking("emulator_manager", move || {
+            // hermir refuses a second install at once, so the next row waits for its turn here.
+            static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(id) = &emulator {
                 crate::emulators::install(id, &meter)?;
             }
