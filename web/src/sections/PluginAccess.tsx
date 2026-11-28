@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { apiErrorMessage } from "@/lib/errors";
 import { usePerson } from "@/lib/person";
 import { isStringArray, useLocalPref } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
@@ -62,6 +63,7 @@ export const usePluginAccess = () => {
 	const [allowing, setAllowing] = useState<{
 		plugin: string;
 		paths: string[];
+		installs: string[];
 	} | null>(null);
 	const emulators = useGetEmulators({
 		query: {
@@ -70,12 +72,27 @@ export const usePluginAccess = () => {
 			),
 		},
 	});
-	// The emulator or cores a yes installs first, which the dialog names instead of access.
-	const install =
-		allowing &&
-		installOf(access.data, allowing.plugin, allowing.paths, (id) =>
-			emulatorName(emulators.data, id),
-		);
+	// The dialog names an install instead of access, and lists several.
+	const installs = allowing?.installs ?? [];
+	const install = installs[0];
+	const copy =
+		installs.length > 1
+			? {
+					title: m.plugin_access_install_all_confirm_title(),
+					body: m.plugin_access_install_all_confirm_body(),
+					submit: m.plugin_access_install_all(),
+				}
+			: install
+				? {
+						title: m.plugin_access_install_confirm_title({ name: install }),
+						body: m.plugin_access_install_confirm_body({ name: install }),
+						submit: m.plugin_access_install(),
+					}
+				: {
+						title: m.plugin_access_confirm_title(),
+						body: m.plugin_access_confirm_body(),
+						submit: m.plugin_access_allow(),
+					};
 	const run = async (
 		plugin: string,
 		paths: string[],
@@ -101,7 +118,15 @@ export const usePluginAccess = () => {
 		decision: AccessDecision,
 	) => {
 		if (decision === "allow" && !person) {
-			setAllowing({ plugin, paths });
+			// What each path installs first is named now: a row leaves the list once its
+			// install is in, which can be under the open dialog.
+			const installs = paths.flatMap(
+				(path) =>
+					installOf(access.data, plugin, path, (id) =>
+						emulatorName(emulators.data, id),
+					) ?? [],
+			);
+			setAllowing({ plugin, paths, installs });
 			return;
 		}
 		try {
@@ -118,19 +143,9 @@ export const usePluginAccess = () => {
 		<PasswordConfirmDialog
 			open={allowing !== null}
 			id="plugin-access-password"
-			title={
-				install
-					? m.plugin_access_install_confirm_title({ name: install })
-					: m.plugin_access_confirm_title()
-			}
-			body={
-				install
-					? m.plugin_access_install_confirm_body({ name: install })
-					: m.plugin_access_confirm_body()
-			}
-			submitLabel={
-				install ? m.plugin_access_install() : m.plugin_access_allow()
-			}
+			title={copy.title}
+			body={copy.body}
+			submitLabel={copy.submit}
 			busyLabel={
 				install ? m.plugin_access_installing() : m.plugin_access_allowing()
 			}
@@ -140,11 +155,25 @@ export const usePluginAccess = () => {
 					: m.plugin_access_decision_failed()
 			}
 			onSubmit={async (password) => {
-				if (allowing)
-					await run(allowing.plugin, allowing.paths, "allow", password);
+				if (!allowing) return;
+				const { plugin, paths } = allowing;
+				await run(plugin, paths.slice(0, 1), "allow", password);
+				// The first answer proved the password. The host takes seconds to answer each
+				// install, so the rest follow with the dialog closed.
+				run(plugin, paths.slice(1), "allow", password).catch((e) =>
+					toast.error(apiErrorMessage(e) ?? m.plugin_access_decision_failed()),
+				);
 			}}
 			onClose={() => setAllowing(null)}
-		/>
+		>
+			{installs.length > 1 && (
+				<ul className="max-h-60 list-disc space-y-1 overflow-y-auto pl-5 text-sm">
+					{installs.map((name) => (
+						<li key={name}>{name}</li>
+					))}
+				</ul>
+			)}
+		</PasswordConfirmDialog>
 	);
 	return {
 		access,
@@ -159,17 +188,17 @@ export const usePluginAccess = () => {
 const emulatorName = (list: EmulatorStatus[] | undefined, id: string) =>
 	list?.find((e) => e.id === id)?.name ?? id;
 
-/** What a yes on `plugin`'s `paths` installs first: an emulator's name, or the cores'. */
+/** What a yes on `plugin`'s `path` installs first: an emulator's name, or the cores'. */
 const installOf = (
 	rows: PluginAccessSnapshot[] | undefined,
 	plugin: string,
-	paths: string[],
+	path: string,
 	name: (id: string) => string,
 ): string | undefined => {
 	const asked =
 		rows
 			?.find((row) => row.plugin === plugin)
-			?.pending.filter((row) => paths.includes(row.path)) ?? [];
+			?.pending.filter((row) => row.path === path) ?? [];
 	const emulator = asked.find((row) => row.emulator)?.emulator;
 	const cores = asked.flatMap((row) => (row.core ? [row.core] : []));
 	return emulator ? name(emulator) : cores.join(", ") || undefined;
@@ -315,6 +344,12 @@ export const PendingAccess: FC<{
 		access.walks?.find((walk) => walk.path === path);
 	const failedAt = (path: string) =>
 		access.failed?.find((failure) => failure.path === path);
+	// One yes for every row at once: the folders when all are read-only, else the installs
+	// not yet running.
+	const installs = rows.filter(
+		(row) => (row.emulator || row.core) && !walkAt(row.path),
+	);
+	const all = allowAll ? rows : installs.length > 1 ? installs : [];
 	const [asked, setAsked] = useState<string>();
 	return (
 		<div className="mt-3 space-y-2 border-t pt-3">
@@ -459,7 +494,7 @@ export const PendingAccess: FC<{
 					</div>
 				);
 			})}
-			{allowAll && (
+			{all.length > 0 && (
 				<div className="flex justify-end">
 					<Button
 						size="sm"
@@ -467,12 +502,14 @@ export const PendingAccess: FC<{
 						disabled={busy}
 						onClick={() =>
 							onDecide(
-								access.pending.map((row) => row.path),
+								all.map((row) => row.path),
 								"allow",
 							)
 						}
 					>
-						{m.plugin_access_allow_all()}
+						{allowAll
+							? m.plugin_access_allow_all()
+							: m.plugin_access_install_all()}
 					</Button>
 				</div>
 			)}

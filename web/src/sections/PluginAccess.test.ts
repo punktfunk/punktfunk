@@ -99,6 +99,33 @@ test("an install shows its download while it runs, and its failure until the nex
 	expect(failed).toContain(">Install</button>");
 });
 
+test("several installs not yet running start on one yes", () => {
+	const app = (id: string) => `/e/${id}/app`;
+	const ask = (id: string) => ({ path: app(id), write: false, emulator: id });
+	const asks = (...rows: object[]) =>
+		({
+			plugin: "rom-manager",
+			grants: [],
+			denied: [],
+			pending: rows,
+		}) as unknown as PluginAccessSnapshot;
+	const two = asks(ask("cemu"), ask("dolphin"));
+	expect(pending(two)).toContain(">Install all</button>");
+	expect(pending(asks(ask("cemu")))).not.toContain("Install all");
+	// A folder beside them is not part of it, and keeps Allow all away.
+	const mixed = pending(asks(...two.pending, { path: "/roms", write: false }));
+	expect(mixed).toContain(">Install all</button>");
+	expect(mixed).not.toContain("Allow all");
+	// One of the two already runs, so a single install is left to start.
+	const walks = [
+		{ path: app("cemu"), removing: false, seconds: 3, installing: true },
+	];
+	expect(pending({ ...two, walks })).not.toContain("Install all");
+	// Folders alone keep their own button.
+	const folders = pending(asks({ path: "/a", write: false }, { path: "/b" }));
+	expect(folders).toContain(">Allow all</button>");
+});
+
 test("a source counts the folders it can't read apart from what it asks to install", () => {
 	const at = (path: string, extra = {}) => ({ path, write: false, ...extra });
 	const access = (...rows: object[]) =>
